@@ -36,11 +36,12 @@ session:
 
 lifecycle:
   maxConcurrent: 1
-  maxDurationMs: 60000
+  maxDurationMs: 120000
 
 runtimeInject:
   # backfillCoverage 可选：未注入时 handler 跳过覆盖回写（协调器仍可自记 pending）
-  requires: ['memoryStore', 'sessionStore', 'constitution', 'backfillCoverage']
+  # eventBus 可选：memory.stored 增量信号（未注入时静默跳过）
+  requires: ['memoryStore', 'sessionStore', 'constitution', 'backfillCoverage', 'eventBus']
 
 observability:
   eventPrefix: memory.steward.backfill
@@ -48,4 +49,5 @@ observability:
 metadata:
   config:
     maxCandidatesPerSession: 8
+    maxTokens: 8192
     maxEvidenceChars: 8000

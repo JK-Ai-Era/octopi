@@ -148,7 +148,7 @@ Runner.handle
 
 - Builder `build()` mounts the Assembler by default; assembly failure falls back to the old string concatenation
 - Without an explicit `.summarize()`, the Builder auto-mounts `createProviderSummarize` with the primary model
-- `config-bridge` / capabilities resolution chain: **`models.level.summary`** → `contextEngine.summaryModel` → mini → standard → primary model
+- `config-bridge` / capabilities resolution chain: **`models.level.mini`** (overridable via `summary.modelLevel`) → `contextEngine.summaryModel` → mini → standard → primary model
 - Auto-summarize can be disabled with `.disableAutoSummarize()`
 - **Skill**: `skillDirectory` or `home/skills` is discovered at build time; every turn injects `<available_skills>`
 - **Memory recall**: `builder.memoryStore`; config-bridge and Gateway build a `SqliteMemoryStore` from `home/agent.db`. **Knowledge**: system only injects the catalog (`builder.knowledgeCatalog`); the catalog is **tagged** `id/name/type/status/scale/location` + `purpose`/`topics`; sources/indexes/exogenous ingest see `docs/knowledge.md`

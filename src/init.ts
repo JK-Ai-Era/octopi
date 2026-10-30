@@ -172,8 +172,6 @@ function generateDefaultConfig(homeDir: string, agentId: string = 'default'): ob
         },
       },
       level: {
-        // summary：summary 能力与内置子系统（wisdom.steward.formation think.model）共用
-        summary: { primary: 'openai/gpt-5-mini' },
         mini: { primary: 'openai/gpt-5-mini' },
         standard: { primary: 'openai/gpt-5.5' },
         pro: { primary: 'openai/gpt-5.5' },

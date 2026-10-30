@@ -115,6 +115,103 @@ describe('SenseEngine schedule source', () => {
   });
 });
 
+describe('SenseEngine trigger throttling', () => {
+  let events: DefaultEventBus;
+  let engine: SenseEngine;
+
+  beforeEach(() => {
+    events = new DefaultEventBus();
+    engine = new SenseEngine({ events, defaultCooldownMs: 0 });
+  });
+
+  afterEach(() => {
+    engine.dispose();
+  });
+
+  it('runOnStart fires one tick right after register', async () => {
+    const onTrigger = vi.fn();
+    engine.register(
+      makeSpec({
+        sense: { source: 'schedule', interval: 100_000, isolation: 'structured', runOnStart: true },
+      }),
+      onTrigger,
+    );
+
+    await sleep(30);
+    expect(onTrigger).toHaveBeenCalledTimes(1);
+    // 首跳不带动后续（interval 100s 未到点）
+    await sleep(30);
+    expect(onTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  it('without runOnStart the first tick waits for interval', async () => {
+    const onTrigger = vi.fn();
+    engine.register(
+      makeSpec({ sense: { source: 'schedule', interval: 100_000, isolation: 'structured' } }),
+      onTrigger,
+    );
+
+    await sleep(60);
+    expect(onTrigger).not.toHaveBeenCalled();
+  });
+
+  it('minEvents accumulates before firing and resets after trigger', async () => {
+    const onTrigger = vi.fn();
+    engine.register(
+      makeSpec({
+        sense: {
+          source: 'eventBus',
+          isolation: 'structured',
+          filter: { events: ['mem.stored'], minEvents: 3 },
+        },
+      }),
+      onTrigger,
+    );
+
+    events.emit({ type: 'mem.stored', timestamp: Date.now(), data: {} } as never);
+    events.emit({ type: 'mem.stored', timestamp: Date.now(), data: {} } as never);
+    await sleep(20);
+    expect(onTrigger).not.toHaveBeenCalled();
+
+    events.emit({ type: 'mem.stored', timestamp: Date.now(), data: {} } as never);
+    await sleep(20);
+    expect(onTrigger).toHaveBeenCalledTimes(1);
+
+    // 触发后计数清零：再来 2 件仍不触发，第 3 件再触发
+    events.emit({ type: 'mem.stored', timestamp: Date.now(), data: {} } as never);
+    events.emit({ type: 'mem.stored', timestamp: Date.now(), data: {} } as never);
+    await sleep(20);
+    expect(onTrigger).toHaveBeenCalledTimes(1);
+    events.emit({ type: 'mem.stored', timestamp: Date.now(), data: {} } as never);
+    await sleep(20);
+    expect(onTrigger).toHaveBeenCalledTimes(2);
+  });
+
+  it('per-subsystem cooldownMs overrides defaultCooldownMs', async () => {
+    const onTrigger = vi.fn();
+    const local = new SenseEngine({ events, defaultCooldownMs: 0 });
+    local.register(
+      makeSpec({
+        sense: {
+          source: 'eventBus',
+          isolation: 'structured',
+          cooldownMs: 200,
+          filter: { events: ['mem.stored'], minEvents: 1 },
+        },
+      }),
+      onTrigger,
+    );
+
+    for (let i = 0; i < 5; i++) {
+      events.emit({ type: 'mem.stored', timestamp: Date.now(), data: {} } as never);
+      await sleep(20);
+    }
+    local.dispose();
+    // 100ms 内 5 连发，cooldownMs=200 → 只触发 1 次（defaultCooldownMs=0 不生效才对）
+    expect(onTrigger).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('validator schedule interval', () => {
   it('rejects schedule without interval', () => {
     const errors = validateSubsystemSpec(

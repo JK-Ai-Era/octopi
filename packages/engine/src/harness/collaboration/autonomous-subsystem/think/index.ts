@@ -15,3 +15,9 @@ export type {
   SubsystemLLMPortChatRequest,
   CreateSubsystemLLMPortOptions,
 } from './llm-port.js';
+export { chatForCompleteOutput } from './completion-guard.js';
+export type {
+  CompletionGuardFailure,
+  CompletionGuardRequest,
+  CompletionGuardResult,
+} from './completion-guard.js';

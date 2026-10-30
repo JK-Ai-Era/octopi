@@ -21,9 +21,14 @@ import type {
 import {
   DEP_LLM_PORT,
   DEP_SUBSYSTEM_PROMPT,
+  chatForCompleteOutput,
   type SubsystemLLMPort,
 } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/index.js';
-import { formAndAdmit, planPromotionCandidates } from '../../../harness/memory/index.js';
+import {
+  formAndAdmit,
+  parseWisdomFormationJson,
+  planPromotionCandidates,
+} from '../../../harness/memory/index.js';
 
 const DEP_WISDOM = 'wisdomStore';
 const DEP_MEMORY = 'memoryStore';
@@ -38,6 +43,8 @@ interface FormationConfig {
   dryRun?: boolean;
   /** T4：晋升候选堆叠阈值（连续/数量） */
   minPromotionStack?: number;
+  /** LLM 生成配额（传参，非业务截断）；缺省 8192 */
+  maxTokens?: number;
 }
 
 function resolveSubsystemPrompt(
@@ -193,24 +200,23 @@ async function handler(
     }
   }
 
-  let llmText = '';
-  try {
-    const res = await llmPort.chat({
+  // maxTokens 只是生成配额（LLM 传参）：截断（finish=length）或解析失败都放大配额重试
+  // 一次，仍失败显式上报——业务完整性优先，禁止静默半截结果
+  const outcome = await chatForCompleteOutput(
+    llmPort,
+    {
       systemPrompt: systemPrompt || undefined,
       messages: [{ role: 'user', content: `${pack.text}${conceptHint}` }],
-      // 温度留空：由模型配置（ModelInfo.temperature）或服务端默认决定
-      maxTokens: 2048,
-    });
-    if (res.finishReason === 'error') {
-      return failOutput(res.content || 'llm chat error', 'llm_error');
-    }
-    llmText = res.content ?? '';
-  } catch (err) {
-    return failOutput(err instanceof Error ? err.message : String(err), 'llm_error');
+      maxTokens: config.maxTokens ?? 8192,
+    },
+    (text) => parseWisdomFormationJson(text),
+  );
+  if (!outcome.ok) {
+    return failOutput(outcome.message, outcome.reason);
   }
 
   const allowedMemoryIds = new Set(pack.memoryIds);
-  const { results, droppedNotes } = await formAndAdmit(llmText, wisdomStore, {
+  const { results, droppedNotes } = await formAndAdmit(outcome.raw, wisdomStore, {
     origin: 'distilled',
     maxItems,
     allowedMemoryIds,

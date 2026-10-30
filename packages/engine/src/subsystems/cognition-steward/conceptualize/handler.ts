@@ -17,6 +17,7 @@ import type { ConceptGraphStore, MemoryStatus } from '@octopi-agent/engine/harne
 import {
   DEP_LLM_PORT,
   DEP_SUBSYSTEM_PROMPT,
+  chatForCompleteOutput,
   type SubsystemLLMPort,
 } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/index.js';
 import {
@@ -30,6 +31,8 @@ const DEP_CONFIG = '__subsystem_config__';
 interface ConceptualizeConfig {
   maxNodesPerProposition?: number;
   maxEdgesPerProposition?: number;
+  /** LLM 生成配额（传参，非业务截断）；缺省 8192 */
+  maxTokens?: number;
 }
 
 function resolveSubsystemPrompt(
@@ -97,26 +100,22 @@ async function handler(
     `contextSlice: ${contextSlice}`,
   ].join('\n');
 
-  let llmText = '';
-  try {
-    const res = await llmPort.chat({
+  // maxTokens 只是生成配额（LLM 传参）：截断（finish=length）或解析失败都放大配额重试
+  // 一次，仍失败显式上报——业务完整性优先，禁止静默半截结果
+  const config = (deps?.[DEP_CONFIG] as ConceptualizeConfig | undefined) ?? {};
+  const outcome = await chatForCompleteOutput(
+    llmPort,
+    {
       systemPrompt: systemPrompt || undefined,
       messages: [{ role: 'user', content: userText }],
-      // 温度留空：由模型配置（ModelInfo.temperature）或服务端默认决定
-      maxTokens: 2048,
-    });
-    if (res.finishReason === 'error') {
-      return failOutput(res.content || 'llm chat error', 'llm_error');
-    }
-    llmText = res.content ?? '';
-  } catch (err) {
-    return failOutput(err instanceof Error ? err.message : String(err), 'llm_error');
+      maxTokens: config.maxTokens ?? 8192,
+    },
+    (text) => parseConceptualizerJson(text),
+  );
+  if (!outcome.ok) {
+    return failOutput(outcome.message, outcome.reason);
   }
-
-  const parsed = parseConceptualizerJson(llmText);
-  if (!parsed) {
-    return failOutput('parse_failed', 'parse_failed');
-  }
+  const parsed = outcome.parsed;
 
   const result = await conceptualizeAndAdmit(
     parsed,

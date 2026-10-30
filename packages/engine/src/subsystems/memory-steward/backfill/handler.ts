@@ -13,6 +13,7 @@ import type { MemoryStore } from '@octopi-agent/engine/harness/memory/types.js';
 import {
   DEP_LLM_PORT,
   DEP_SUBSYSTEM_PROMPT,
+  chatForCompleteOutput,
   type SubsystemLLMPort,
 } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/index.js';
 import { admitCandidates, type StewardCandidate } from '../../../harness/memory/steward-policy.js';
@@ -31,12 +32,15 @@ interface BackfillConfig {
   maxCandidatesPerSession?: number;
   maxEvidenceChars?: number;
   maxSessionsPerRun?: number;
+  /** LLM 生成配额（传参，非业务截断）；缺省 8192 */
+  maxTokens?: number;
 }
 
 type BackfillFailReason =
   | 'llm_port_missing'
   | 'llm_error'
   | 'llm_empty'
+  | 'truncated_output'
   | 'parse_failed';
 
 function extractJsonArray(text: string): unknown[] | null {
@@ -268,66 +272,32 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
     : '';
   const systemPrompt = `${subsystemPrompt}${constitutionBlock}`.trim() || undefined;
 
-  let rawContent = '';
-  try {
-    const res = await llmPort.chat({
+  // maxTokens 只是生成配额（LLM 传参）：截断（finish=length）或解析失败都放大配额重试
+  // 一次，仍失败显式上报——业务完整性优先，禁止静默半截结果
+  const outcome = await chatForCompleteOutput(
+    llmPort,
+    {
       systemPrompt,
       messages: [{
         role: 'user',
         content: `## Session evidence (session=${sessionId})\n${sessionText}\n\nExtract long-term memory propositions. Output strict JSON array only.`,
       }],
-      // 温度留空：由模型配置（ModelInfo.temperature）或服务端默认决定
-      maxTokens: 2048,
-    });
-    if (res.finishReason === 'error') {
-      await markCoverage(deps, {
-        sessionId,
-        agentId,
-        fingerprint: coverageFingerprint,
-        status: 'failed',
-        reason: 'llm_error',
-        trigger: triggerKind,
-      });
-      return failOutput('llm_error', res.content || 'backfill failed: LLM chat error', sessionId, { agentId });
-    }
-    rawContent = res.content ?? '';
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+      maxTokens: config.maxTokens ?? 8192,
+    },
+    (text) => extractJsonArray(text),
+  );
+  if (!outcome.ok) {
     await markCoverage(deps, {
       sessionId,
       agentId,
       fingerprint: coverageFingerprint,
       status: 'failed',
-      reason: 'llm_error',
+      reason: outcome.reason,
       trigger: triggerKind,
     });
-    return failOutput('llm_error', `backfill failed: ${msg}`, sessionId, { agentId });
+    return failOutput(outcome.reason, `backfill failed: ${outcome.message}`, sessionId, { agentId });
   }
-
-  if (!rawContent.trim()) {
-    await markCoverage(deps, {
-      sessionId,
-      agentId,
-      fingerprint: coverageFingerprint,
-      status: 'failed',
-      reason: 'llm_empty',
-      trigger: triggerKind,
-    });
-    return failOutput('llm_empty', 'backfill failed: empty LLM content', sessionId, { agentId });
-  }
-
-  const parsed = extractJsonArray(rawContent);
-  if (!parsed) {
-    await markCoverage(deps, {
-      sessionId,
-      agentId,
-      fingerprint: coverageFingerprint,
-      status: 'failed',
-      reason: 'parse_failed',
-      trigger: triggerKind,
-    });
-    return failOutput('parse_failed', 'backfill failed: response is not a JSON array', sessionId, { agentId });
-  }
+  const parsed = outcome.parsed;
 
   const candidates = parseCandidates(parsed, maxCandidates);
   const result = await admitCandidates(
@@ -335,6 +305,24 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
     candidates,
     `session:${sessionId};via:backfill`,
   );
+
+  // 每条新记忆发 memory.stored（wisdom.steward.formation 等增量触发消费）；
+  // 信号失败不得拖垮 backfill 主流程
+  try {
+    const { emitMemoryStored } = await import('../../../harness/memory/memory-events.js');
+    const eventBus = deps?.eventBus as import('@octopi-agent/core/primitives/event-bus.js').EventBus | undefined;
+    for (const item of result.accepted) {
+      emitMemoryStored(eventBus, {
+        memoryId: item.id,
+        type: item.type,
+        status: item.status,
+        sessionId,
+        agentId,
+      });
+    }
+  } catch {
+    // 模块加载/总线异常：跳过信号，admit 结果照常上报
+  }
 
   await markCoverage(deps, {
     sessionId,

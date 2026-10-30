@@ -107,11 +107,15 @@ export {
   DEP_SUBSYSTEM_PROMPT,
   DEP_RESOLVED_MODEL,
   DEP_RESOLVED_MODELS,
+  chatForCompleteOutput,
 } from './think/index.js';
 export type {
   SubsystemLLMPort,
   SubsystemLLMPortChatRequest,
   CreateSubsystemLLMPortOptions,
+  CompletionGuardFailure,
+  CompletionGuardRequest,
+  CompletionGuardResult,
 } from './think/index.js';
 
 // ── Signal ──

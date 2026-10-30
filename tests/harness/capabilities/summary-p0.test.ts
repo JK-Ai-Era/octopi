@@ -121,43 +121,43 @@ describe('model resolve chain', () => {
   const main = { ...mockProvider(), name: 'main' };
   const cheap = { ...mockProvider(), name: 'cheap' };
 
-  it('优先 models.level.summary', () => {
+  it('缺省走 mini 档', () => {
     const r = resolveSummaryModel({
       providers: new Map([
         ['cheap', cheap],
         ['main', main],
       ]),
       levelMap: {
-        summary: { primary: 'cheap/sum-model' },
-        mini: { primary: 'main/mini-model' },
+        mini: { primary: 'cheap/mini-model' },
       },
       fallbackProvider: main,
     });
-    expect(r.from).toBe('level.summary');
+    expect(r.from).toBe('level');
     expect(r.provider).toBe(cheap);
-    expect(r.model).toBe('sum-model');
+    expect(r.model).toBe('mini-model');
   });
 
-  it('无 summary 档时走 mini', () => {
+  it('显式 modelLevel 档未配置时回退 mini', () => {
     const r = resolveSummaryModel({
       providers: new Map([['main', main]]),
       levelMap: { mini: { primary: 'main/mini-model' } },
+      modelLevel: 'pro',
       fallbackProvider: main,
     });
     expect(r.from).toBe('mini');
   });
 
-  it('pickSummarizeProvider 优先 summary 档', () => {
+  it('pickSummarizeProvider 优先 mini 档', () => {
     const picked = pickSummarizeProvider(
       new Map([['cheap', cheap]]),
       {
-        summary: { primary: 'cheap/sum' },
         mini: { primary: 'cheap/mini' },
+        standard: { primary: 'cheap/std' },
       },
       main,
     );
     expect(picked.provider).toBe(cheap);
-    expect(picked.model).toBe('sum');
+    expect(picked.model).toBe('mini');
   });
 });
 

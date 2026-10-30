@@ -18,7 +18,7 @@
 - `assembler.ts` — DefaultContextAssembler（份额归一化 + priority 纳入）
 - `layers.ts` — 薄适配层（persona/skill/knowledge/memory/cognition/wisdom/runtime）
 - `system-prompt-assembler.ts` — Runner 每轮 system 装配（persona + runtime，已接线）
-- `summarize.ts` — 摘要 provider 挑选（`models.level.summary` → mini → standard → 主模型）；Builder/config 自动挂 `createProviderSummarize`
+- `summarize.ts` — 摘要 provider 挑选（`models.level.mini` → standard → 主模型）；Builder/config 自动挂 `createProviderSummarize`
 
 ### 窗口管理
 - DefaultContextEngine — 消息窗口入口（预算 → 选择 → 路由 → 压缩）；内部状态键默认含 **agentId**（E4）；`structuralCompact` **委托** `capabilities/compact`

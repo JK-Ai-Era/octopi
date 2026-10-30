@@ -316,7 +316,7 @@ export async function handler(input, deps) {
 
 | 引用格式 | 含义 |
 |---------|------|
-| 级别名（`summary` / `mini` / `standard` / `pro`） | `models.level` 的 primary + fallback 链。级别名未配置时**直接报错**（`unresolved_model_level`），不会把别名当模型名发给 provider。 |
+| 级别名（`mini` / `standard` / `pro`；`summary` 仅为保留名，用于 fail-loud） | `models.level` 的 primary + fallback 链。级别名未配置时**直接报错**（`unresolved_model_level`），不会把别名当模型名发给 provider。 |
 | `provider/model` | 调用打到**具名 provider**（`models.providers`）。名字未注册时回退主 provider 并告警。 |
 | 裸模型名 | 主 provider + 该模型名。 |
 | 省略 | 已配置则用 `standard` 级别；否则用主 provider 的 `defaultModel`。 |

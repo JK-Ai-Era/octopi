@@ -151,7 +151,7 @@ export interface ResolveSummaryModelInput {
   legacySummaryModel?: string;
   /** config.summary.model 显式 */
   explicitModel?: string;
-  /** config.summary.modelLevel，默认 'summary' */
+  /** config.summary.modelLevel，默认 'mini' */
   modelLevel?: string;
   /** policy.modelLevel / policy.model */
   policyModelLevel?: string;
@@ -161,7 +161,7 @@ export interface ResolveSummaryModelInput {
 export interface ResolvedSummaryModel {
   provider: ModelProvider;
   model?: string;
-  from: 'policy.model' | 'policy.modelLevel' | 'explicit' | 'level.summary' | 'legacy' | 'mini' | 'standard' | 'fallback';
+  from: 'policy.model' | 'policy.modelLevel' | 'explicit' | 'level' | 'legacy' | 'mini' | 'standard' | 'fallback';
 }
 
 export interface CreateSummaryPortOptions {

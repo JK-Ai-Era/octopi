@@ -1252,18 +1252,32 @@ export class AgentBuilder {
         gates: memCfg?.gates?.maxLength
           ? { maxLength: memCfg.gates.maxLength }
           : undefined,
-        onStored:
-          this._cognitionStore && events
+        onStored: events
             ? (info) => {
-                void import('../memory/cognition-trigger.js')
-                  .then(({ emitConceptualizeRequest }) => {
-                    emitConceptualizeRequest(events, {
+                // 概念化请求只在 cognitionStore 存在时发（否则 conceptualize handler 无 store 会抛错）
+                if (this._cognitionStore) {
+                  void import('../memory/cognition-trigger.js')
+                    .then(({ emitConceptualizeRequest }) => {
+                      emitConceptualizeRequest(events, {
+                        memoryId: info.id,
+                        proposition: info.proposition,
+                        evidence: info.evidence,
+                        memoryType: info.type,
+                        memoryStatus: info.status as 'shadow' | 'active' | 'strengthened',
+                        channel: info.channel,
+                        sessionId: info.sessionId,
+                      });
+                    })
+                    .catch(() => {
+                      // 动态加载失败不阻断 memory 写
+                    });
+                }
+                void import('../memory/memory-events.js')
+                  .then(({ emitMemoryStored }) => {
+                    emitMemoryStored(events, {
                       memoryId: info.id,
-                      proposition: info.proposition,
-                      evidence: info.evidence,
-                      memoryType: info.type,
-                      memoryStatus: info.status as 'shadow' | 'active' | 'strengthened',
-                      channel: info.channel,
+                      type: info.type,
+                      status: info.status,
                       sessionId: info.sessionId,
                     });
                   })
@@ -1502,6 +1516,10 @@ export class AgentBuilder {
       }
       if (this._cognitionStore) {
         subsystemRuntime.registerDependency('conceptGraphStore', this._cognitionStore);
+      }
+      {
+        // eventBus 注入：steward handler 发 memory.stored 等信号用（可选依赖，缺失时静默跳过）
+        subsystemRuntime.registerDependency('eventBus', events);
       }
       {
         const { InMemoryBackfillCoverageStore } = await import('../memory/backfill-coverage.js');

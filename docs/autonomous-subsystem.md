@@ -315,7 +315,7 @@ export async function handler(input, deps) {
 
 | Reference | Meaning |
 |-----------|---------|
-| level alias (`summary` / `mini` / `standard` / `pro`) | `models.level` primary + fallback chain. An alias that is not configured **fails loud** (`unresolved_model_level`) instead of being sent as a model name. |
+| level alias (`mini` / `standard` / `pro`; `summary` is a reserved name kept only for fail-loud) | `models.level` primary + fallback chain. An alias that is not configured **fails loud** (`unresolved_model_level`) instead of being sent as a model name. |
 | `provider/model` | The call goes to the **named provider** (`models.providers`). An unregistered name falls back to the main provider with a warning. |
 | bare model name | Main provider with that model name. |
 | omitted | `standard` level if configured; otherwise the main provider's `defaultModel`. |

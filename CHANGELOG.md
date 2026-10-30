@@ -107,6 +107,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.16 (2026-10-30)
+
+### fix(wisdom): 蒸馏管线零产出四层修复——summary 档撤销 / 输出完整性 / 触发改造
+
+- 背景：wisdom/cognition 蒸馏 21 天零产出（wisdom/concepts/concept_edges 三表全空）。诊断确认是管线四层断裂而非 memory 料不足（手动端到端 formation 已能产出 trial maxim），本条逐层修复。
+- ①模型档撤销：`models.level.summary` 不再定义，统一 `mini` 档（`summary.modelLevel` 可覆盖档名）——压缩摘要走「会话同模型」路线后 summary 档只剩开发歧义；`summary` 保留在 WELLKNOWN_LEVEL_ALIASES 仅作 fail-loud（防止误写档名被当模型名发给 provider）。formation `think.model: summary` → `mini`（原配置必抛 `unresolved_model_level`）。同步 init 脚手架、example、解析链（resolveSummaryModel/pickSummarizeProvider）、docs 双语与 arch 决策记录。
+- ②输出完整性（`maxTokens` 只是 LLM 传参，不是业务截断边界）：新增 `chatForCompleteOutput`（`think/completion-guard.ts`）——`finish=length` 截断或解析失败时放大配额重试一次，仍失败显式上报 `truncated_output`/`parse_failed`/`llm_empty`/`llm_error`，**禁止静默半截结果**。formation / conceptualize / backfill 三个 handler 全部接入（原硬编码 `maxTokens: 2048` 被推理模型 reasoning 吃掉配额 → JSON 半截 → parse 静默失败，为零产出主因之一）；`maxTokens` 进各 `metadata.config`（缺省 8192）。
+- ③formation 触发改造：`interval` 24h→8h 兜底 + `runOnStart` 启动首跳（24h 首跳此前永远跨不过 gateway 重启周期）+ `memory.stored` 增量信号（memory_store 工具 onStored 与 backfill admit 后逐条发射）经 `filter.minEvents: 5` 累积放行 + `cooldownMs` 1h 节流。SenseEngine 新增通用能力：`sense.runOnStart`、`filter.minEvents`（事件累积阈值，触发后清零）、per-subsystem `sense.cooldownMs`。
+- **行为变化**：`sense.cooldownMs` 原为死配置（从未接线），现生效——`wisdom.steward.govern` 已配置的 5min 冷却开始实际拦截事件触发。
+- ④超时对齐：conceptualize `maxDurationMs` 30s→120s（此前 18/28 轮被 30s abort）、formation 60s→120s、backfill 60s→120s（推理模型单轮实测 50~140s）。
+- 验证：全量 3681 测试绿（新增 SenseEngine 节流 4 例）；lint + 测试类型基线 0 新错；arch/check-sync 绿；formation-e2e.mjs 端到端两轮各 `created=2`（trial 落库）。
+- 已知未动（既有断线，另行处理）：conceptualize 的 `maxNodesPerProposition` / `maxEdgesPerProposition` 配置声明未被消费。
+
+---
+
 ## v0.97.15 (2026-10-30)
 
 ### fix(web): 中止态不再冒充「错误」——助手气泡新增「已中止」徽标

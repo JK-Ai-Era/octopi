@@ -35,6 +35,12 @@ interface RegisteredSubsystem {
   spec: SubsystemSpec;
   /** 冷却期配置 */
   cooldown: CooldownEntry;
+  /** 本子系统触发冷却（毫秒）；缺省用全局 defaultCooldownMs */
+  cooldownMs?: number;
+  /** 事件累积触发阈值（filter.minEvents，缺省 1 = 来一件发一件） */
+  minEvents: number;
+  /** 已累积未消费的匹配事件数（触发后清零） */
+  eventCount: number;
   /** 评估函数（编译后的 condition 或 conditionRef） */
   evaluator?: (ctx: SenseContext) => boolean | Promise<boolean>;
   /** 该子系统持有的 EventBus 监听器（unregister 时拆除） */
@@ -119,6 +125,9 @@ export class SenseEngine {
     const entry: RegisteredSubsystem = {
       spec,
       cooldown: { until: 0 },
+      cooldownMs: spec.sense.cooldownMs,
+      minEvents: spec.sense.filter?.minEvents ?? 1,
+      eventCount: 0,
       evaluator,
       disposables: [],
     };
@@ -153,6 +162,14 @@ export class SenseEngine {
         if (typeof entry.scheduleTimer === 'object' && entry.scheduleTimer !== null && 'unref' in entry.scheduleTimer) {
           (entry.scheduleTimer as NodeJS.Timeout).unref?.();
         }
+      }
+      // 启动首跳：注册完成后补一次 tick（长 interval 首跳跨不过进程生命周期时的保底脉搏；
+      // setTimeout(0) 保证 builder 同步注册/依赖注入全部完成后才跑）
+      if (spec.sense.runOnStart) {
+        const starter = setTimeout(() => {
+          void this.onScheduleTick(spec.id, onTrigger);
+        }, 0);
+        starter.unref?.();
       }
     }
   }
@@ -363,6 +380,12 @@ export class SenseEngine {
     const entry = this.subsystems.get(subsystemId);
     if (!entry) return;
 
+    // 累积计数先于冷却检查：冷却期只是不触发，增量照样攒（攒够 minEvents 才放行）
+    entry.eventCount += 1;
+    if (entry.eventCount < entry.minEvents) {
+      return;
+    }
+
     const now = Date.now();
     if (now < entry.cooldown.until || entry.inFlight) {
       return;
@@ -396,7 +419,8 @@ export class SenseEngine {
       }
 
       this.depthTracker.depth++;
-      entry.cooldown.until = Date.now() + this.defaultCooldownMs;
+      entry.cooldown.until = Date.now() + (entry.cooldownMs ?? this.defaultCooldownMs);
+      entry.eventCount = 0;
 
       try {
         onTrigger(ctx);
@@ -441,7 +465,7 @@ export class SenseEngine {
       }
 
       this.depthTracker.depth++;
-      entry.cooldown.until = Date.now() + this.defaultCooldownMs;
+      entry.cooldown.until = Date.now() + (entry.cooldownMs ?? this.defaultCooldownMs);
 
       try {
         onTrigger(ctx);

@@ -122,6 +122,11 @@ export interface SenseFilter {
   condition?: string;
   /** 代码引用（如 "./handler.ts:shouldExtract"），与 condition 互斥 */
   conditionRef?: string;
+  /**
+   * 事件累积触发阈值：每收到一个匹配事件计数 +1，累计达到阈值才评估/触发，
+   * 触发后清零（缺省 1 = 来一件发一件）。用于「增量 N 条才跑一次」的节流。
+   */
+  minEvents?: number;
   /** 该子系统可能产生的事件类型（用于静态循环检测，LLM 子系统建议声明 ['*']） */
   emits?: string[];
 }
@@ -134,6 +139,10 @@ export interface SenseConfig {
   filter?: SenseFilter;
   /** schedule 模式：轮询间隔（毫秒） */
   interval?: number;
+  /** schedule 模式：注册后立即补一次首跳（长 interval 跨不过进程生命周期时的保底脉搏） */
+  runOnStart?: boolean;
+  /** 本子系统的触发冷却（毫秒）；缺省用 SenseEngine 全局 defaultCooldownMs */
+  cooldownMs?: number;
   isolation: IsolationLevel;
   /** isolation=partial 时，可见的字段列表 */
   fields?: ContextField[];

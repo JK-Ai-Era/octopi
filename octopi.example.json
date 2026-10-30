@@ -4,7 +4,6 @@
   "models": {
     "mode": "merge",
     "level": {
-      "summary": { "primary": "openai/gpt-5-mini" },
       "mini": { "primary": "openai/gpt-5-mini" },
       "standard": { "primary": "openai/gpt-5.5" },
       "pro": { "primary": "openai/gpt-5.5" }
@@ -82,7 +81,7 @@
   },
 
   "summary": {
-    "modelLevel": "summary",
+    "modelLevel": "mini",
     "defaultInputBudgetTokens": 24000,
     "safetyMarginTokens": 2000,
     "oversizedStrategy": "map_reduce",

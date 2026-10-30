@@ -149,7 +149,7 @@ Runner.handle
 
 - Builder `build()` 默认挂 Assembler；装配失败回退旧字符串拼接  
 - 未显式 `.summarize()` 时，Builder 用主模型自动挂 `createProviderSummarize`  
-- `config-bridge` / capabilities 解析链：**`models.level.summary`** → `contextEngine.summaryModel` → mini → standard → 主模型  
+- `config-bridge` / capabilities 解析链：**`models.level.mini`**（可用 `summary.modelLevel` 覆盖）→ `contextEngine.summaryModel` → mini → standard → 主模型  
 - 可用 `.disableAutoSummarize()` 关闭自动摘要  
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover，每轮注入 `<available_skills>`  
 - **Memory 召回**：`builder.memoryStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`。**Knowledge**：system 只注入 catalog（`builder.knowledgeCatalog`）；catalog 为**标签化** `id/name/type/status/scale/location` + `purpose`/`topics`；源/索引/外源 ingest 见 `docs/knowledge.md`

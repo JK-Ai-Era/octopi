@@ -4,17 +4,22 @@ description: 从 Memory/Cognition 稳定结构炼制判断范式（maxim；多�
 
 sense:
   source: schedule
-  interval: 86400000
+  # 8h 兜底脉搏；启动首跳 + memory.stored 增量触发补足响应速度
+  interval: 28800000
+  runOnStart: true
+  cooldownMs: 3600000
   filter:
     condition: "true"
-    events: ['wisdom.steward.formation.request']
+    # minEvents 对订阅事件统一累积：攒 5 条新记忆才放行；显式触发请走 trigger API
+    minEvents: 5
+    events: ['wisdom.steward.formation.request', 'memory.stored']
     emits: ['wisdom.steward.formed', 'wisdom.steward.formation.failed']
   isolation: isolated
 
 think:
   implementation: llm
   strategy: single
-  model: summary
+  model: mini
   maxIterations: 1
 
 act:
@@ -38,7 +43,7 @@ session:
 
 lifecycle:
   maxConcurrent: 1
-  maxDurationMs: 60000
+  maxDurationMs: 120000
 
 runtimeInject:
   requires: ['wisdomStore', 'memoryStore']
@@ -52,3 +57,4 @@ metadata:
     minMemorySupport: 2
     minClusterSize: 5
     maxEvidenceChars: 6000
+    maxTokens: 8192

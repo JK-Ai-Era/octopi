@@ -43,7 +43,7 @@ export interface ModelResolverConfig {
   levels: ModelLevelMap;
 }
 
-/** 产品约定的级别名（init/example/docs 均定义）：未配置时给可操作错误，而不是把别名当模型名打给 provider */
+/** 产品约定的级别名（init/example/docs 均定义 mini/standard/pro；summary 为保留别名——历史上曾是摘要档，保留只为把误写的档位名 fail-loud，而不是当模型名发给 provider） */
 const WELLKNOWN_LEVEL_ALIASES = new Set(['summary', 'mini', 'standard', 'pro']);
 
 /**
