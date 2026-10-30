@@ -11,7 +11,8 @@ sense:
   isolation: isolated
 
 think:
-  implementation: llm
+  # code = 调 handler.ts 确定性实现（llm 模式是自由 decide，handler 从未执行——2026-10-30 修复）
+  implementation: code
   strategy: single
   maxIterations: 1
 

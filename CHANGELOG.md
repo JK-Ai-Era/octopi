@@ -107,6 +107,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.18 (2026-10-30)
+
+### fix(wisdom): formation/conceptualize 改走 code 执行路径——handler 确定性实现从未被调度过
+
+- 症状：wisdom 4 条 maxim 全部来自手动 e2e 验证，自动管线零产出；cognition（concepts/concept_edges）持续为空。
+- 根因（配置接线错误）：`ThinkExecutor` 按 `think.implementation` 分派——`code` 调 handler.ts 确定性实现，`llm` 是 LLM 自由 decide（SUBSYSTEM.md 当 decide prompt 输出 signals/acts）。`wisdom.steward.formation` 与 `cognition.steward.conceptualize` 的 config.yaml 均配 `implementation: llm`，**handler.ts（含此前修复的输出完整性/maxTokens 逻辑）在 runtime 从未执行**；历史上 28+2 轮的空 suggest、`failed + messages: []` 全是 LLM decide 残缺输出经 inject 归一化（空 signals → failed）的产物。对照组 memory.steward.backfill 配 `code` 一直正常产出。
+- 修复：两处 config `implementation: llm → code`（`think.model` 保留，handler 的 llmPort 走它）。
+- 附带补触发覆盖缺口：backfill admit 后原本只发 `memory.stored`（formation 消费），backfill 产出的大多数记忆从不触发概念化——现补发 `cognition.conceptualize.request`（`AdmitResult.accepted` 扩 proposition/evidence/channel 载荷）。
+- 已知观察项：runOnStart 首跳在本架构下每次 agent build 都会尝试（非仅 gateway 启动一次），1h cooldownMs 兜底下频率 ≤1/h 且 no_trigger 空跑近零成本；暂不改，观察后如有必要再收口。
+- 验证：build 0 error；全量 3684 绿（memory/subsystem 相关 192 例先行验证）；lint + 测试类型基线 0 新错。
+
+---
+
 ## v0.97.17 (2026-10-30)
 
 ### fix(cli): WebUI 端口认领先验身份——陌生进程不再被误认/误杀

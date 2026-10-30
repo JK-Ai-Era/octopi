@@ -306,16 +306,27 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
     `session:${sessionId};via:backfill`,
   );
 
-  // 每条新记忆发 memory.stored（wisdom.steward.formation 等增量触发消费）；
-  // 信号失败不得拖垮 backfill 主流程
+  // 每条新记忆发 memory.stored（wisdom.steward.formation 增量触发）+
+  // cognition.conceptualize.request（概念化触发）；信号失败不得拖垮 backfill 主流程
   try {
     const { emitMemoryStored } = await import('../../../harness/memory/memory-events.js');
+    const { emitConceptualizeRequest } = await import('../../../harness/memory/cognition-trigger.js');
     const eventBus = deps?.eventBus as import('@octopi-agent/core/primitives/event-bus.js').EventBus | undefined;
     for (const item of result.accepted) {
       emitMemoryStored(eventBus, {
         memoryId: item.id,
         type: item.type,
         status: item.status,
+        sessionId,
+        agentId,
+      });
+      emitConceptualizeRequest(eventBus, {
+        memoryId: item.id,
+        proposition: item.proposition,
+        evidence: item.evidence ?? '',
+        memoryType: item.type as never,
+        memoryStatus: item.status as never,
+        channel: item.channel as never,
         sessionId,
         agentId,
       });

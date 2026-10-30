@@ -258,7 +258,7 @@ export const MAX_ENTRIES_PER_SOURCE = 32;
 export type AdmitRejectReason = string;
 
 export interface AdmitResult {
-  accepted: Array<{ id: string; type: MemoryType; status: string }>;
+  accepted: Array<{ id: string; type: MemoryType; status: string; proposition: string; channel: string; evidence?: string }>;
   rejected: Array<{ reason: AdmitRejectReason; proposition: string; existingId?: string }>;
 }
 
@@ -345,7 +345,7 @@ export async function admitCandidates(
       const idx = live.findIndex((e) => e.id === supersedeTargetId);
       if (idx >= 0) live.splice(idx, 1);
     }
-    accepted.push({ id, type, status });
+    accepted.push({ id, type, status, proposition: c.proposition, channel: c.channel ?? 'model_inference', evidence: c.evidence });
     sourceCount += 1;
     // 同批后续候选可对刚写入条目判重
     live.push({
