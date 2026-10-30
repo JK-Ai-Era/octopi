@@ -107,6 +107,27 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.22 (2026-10-30)
+
+### refactor(tools): 抽出 shared/paths 作为路径包含的单一真相源
+
+- 背景：v0.97.21 修复符号链接逃逸后，同一套「realpath 感知的包含判定」在三个模块各写了一遍 - `plugin-ecosystem/tools/platform.ts`（L2 判定与两个写保护守卫）、`execution-environment/ops-audit.ts`（审计的 underRoots）。坐标一旦不同步就会出现 fail-open 或假阳性，而这正是 0.97.21 里被独立审查抓出来的那类问题。
+- 依赖方向问题：正确做法不是让 `execution-environment` 反向依赖 `plugin-ecosystem/tools`（两个域是平行的），而是把纯机制下沉。`harness/shared/` 已是登记的 foundation 层（`shared/events`、`shared/types`），新增 `shared/paths` 符合其定位。
+- 新增 `packages/engine/src/harness/shared/paths/index.ts`：`realpathAllowMissing`（含悬空链接的 lstat 拦截）、`lexicalUnderRoots`（无 syscall 的纯字符串比较）、`isPathUnderRoots`（两侧 realpath，失败回退词法）。三个函数无产品策略、无默认值。
+- `platform.ts` 删除本地实现并 re-export `isPathUnderRoots`，对外契约不变；两个写保护守卫简化为一次 `isPathUnderRoots` 调用。
+- `ops-audit.ts` 的 `underRoots` 由二十行手写实现改为一次调用，同时消掉该模块对 `realpathSync` / `resolve` / `sep` 的直接依赖。
+- `docs/domains.yaml`：在正式 `foundation:` 块登记 `shared/paths`（首版误改到目录映射区，已纠正），`foundation_count` 3 → 4，「层基建（3）」注释同步；`docs/domains.md` / `docs/domains.zh.md` 的计数与列举双语同步。
+- **顺带收口第四处同类实现**：`resolveReadableToolPath` 的附件分支里还有一段手写前缀判定（`candidate.startsWith(prefix)`），且没有 win32 大小写折叠，与 `lexicalUnderRoots` 的规则不一致。现改用共享原语，并去掉对已 real 路径的二次 `realpath`。
+- **行为变化（此前误称"行为无变化"，此处更正）**，四处，全部是修正方向：
+  1. `isPathUnderRoots` 目标不可解析（悬空链接/链接环）时，原实现用词法回退的**目标**去比 real 的**根**，两套坐标混用，会把根内悬空链接误判为根外；现两侧统一回退词法。该缺陷由新增契约测试发现。
+  2. `isUnderSessionUndoRoot` 有配置根时不再把 `\` 转成 `/`：POSIX 下文件名里的反斜杠不再被误当作目录分隔符（原先会把根外文件误判为根内）；Windows 仍按 `sep` 比较并折叠大小写。
+  3. `ops-audit.underRoots` 由 `realpathSync ?? 词法` 改为 `realpathAllowMissing`：已存在路径结果相同，尚未创建的目标不再混用坐标。
+  4. `resolveReadableToolPath` 附件分支的包含判定补上 win32 大小写折叠。
+- 验证：新增 `tests/harness/shared-paths.test.ts` 19 例（解析、悬空链接、前缀边界、尾分隔符、反斜杠、别名根、cwd 无关）；既有 `path-containment-symlink.test.ts` 19 例保持全绿；全量 3748 passed / 7 skipped；lint、typecheck、`arch/check-sync.sh`、build 绿；`packages/engine/dist/harness/shared/paths/` 正常产出。
+- 仍待办（沿用 0.97.21 的结论）：硬链接不可被 realpath 识别；`O_NOFOLLOW` 未实现，未创建尾段仍可被竞态利用。
+
+---
+
 ## v0.97.21 (2026-10-30)
 
 ### fix(tools): 路径包含改用 realpath——堵住符号链接对读写围栏的双向逃逸

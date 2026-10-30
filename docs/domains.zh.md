@@ -13,7 +13,7 @@
 |----|------|------|--------|
 | **产品域 Domain** | 限界上下文：一域一语言、可独立替换 | **10** | 对外介绍、本文 |
 | **模块 Module** | `packages/engine/src/harness/<dir>/` 实现单元 | 20–30，会增减 | `domains.yaml`、CI |
-| **能力 / 基建** | 横切公用能力、层词表 | 6（能力 3 + 基建 3） | 清单 `kind`，**不计入域数** |
+| **能力 / 基建** | 横切公用能力、层词表 | 7（能力 3 + 基建 4） | 清单 `kind`，**不计入域数** |
 
 **域 ≠ 目录。** 新建目录不自动成域；门面、词表、横切不算域。
 
@@ -30,7 +30,7 @@
    阶段（何时发生）  │  Activation · Run                           │
    能力（对外半边）  │  Context · Extension · Collaboration       │
                     └─────────────────────────────────────────────┘
-   横切/基建（不计数）：Observability · Summary&Compact · events/types
+   横切/基建（不计数）：Observability · Summary&Compact · events/paths/types
 ```
 
 对外口径：

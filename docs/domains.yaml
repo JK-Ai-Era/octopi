@@ -14,7 +14,7 @@ updated: 2026-10-12
 
 product_domain_count: 10
 capability_count: 3
-foundation_count: 3
+foundation_count: 4
 
 # ---------------------------------------------------------------------------
 # 产品域（10）— 对齐宪法本体概念；一域一语言
@@ -243,7 +243,7 @@ capabilities:
     notes: 跨域 Document 抽取 Port（session/knowledge/tools；documents.*）
 
 # ---------------------------------------------------------------------------
-# 层基建（3）— 不计入产品域
+# 层基建（4）— 不计入产品域
 # ---------------------------------------------------------------------------
 foundation:
   - id: events
@@ -257,6 +257,13 @@ foundation:
     name_en: Shared types
     modules:
       - types
+
+  - id: paths
+    name_zh: 路径包含原语
+    name_en: Path containment primitives
+    modules:
+      - paths
+    notes: realpath 感知的包含判定（tools 的 L2 判定与写保护、ops-audit 的记账共用）
 
   - id: harness-entry
     name_zh: 层入口
@@ -331,4 +338,5 @@ module_catalog:
 
   # Foundation
   - { id: shared/events, domain: foundation, kind: foundation }
+  - { id: shared/paths, domain: foundation, kind: foundation }
   - { id: shared/types, domain: foundation, kind: foundation }

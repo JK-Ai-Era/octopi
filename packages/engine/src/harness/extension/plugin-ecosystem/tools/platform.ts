@@ -5,8 +5,16 @@
  * 或硬编码 `/bin/bash` 导致 Windows 行为分裂。
  */
 
-import { accessSync, constants, existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
-import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+
+import {
+  isPathUnderRoots,
+  lexicalUnderRoots,
+  realpathAllowMissing,
+} from '../../../shared/paths/index.js';
+
+export { isPathUnderRoots };
 
 /** 平台 shell 方言 */
 export type ShellKind = 'bash' | 'powershell' | 'cmd';
@@ -37,73 +45,6 @@ export interface ResolveToolPathOptions {
   allowRoots?: string[];
   /** L2 级别；省略 = 不限制 */
   containment?: 'strict' | 'soft' | 'none';
-}
-
-/**
- * Resolve a path that may not exist yet to its real location.
- *
- * `realpathSync` throws ENOENT for missing targets, but creating a new file is
- * a normal operation. Walk up to the deepest existing ancestor, resolve that,
- * and re-append the remaining segments. `resolve()` already folded `..`, so the
- * appended tail cannot introduce a new escape.
- *
- * @param abs - absolute, lexically normalized path
- * @returns real path, or null when no ancestor could be resolved
- */
-function realpathAllowMissing(abs: string): string | null {
-  let current = abs;
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      const real = realpathSync(current);
-      return tail.length ? join(real, ...tail) : real;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
-      // `realpath` fails for a path that does not exist *and* for one that
-      // exists but cannot be resolved (dangling symlink, symlink loop). Only
-      // the first is safe to treat as "a name that will be created": a dangling
-      // link would let the following write follow it out of the root. `lstat`
-      // does not follow the final component, so it separates the two cases.
-      if (existsLstat(current)) return null;
-      const parent = dirname(current);
-      if (parent === current) return null;
-      tail.unshift(basename(current));
-      current = parent;
-    }
-  }
-}
-
-/**
- * Whether anything exists at this path, without following a final symlink.
- *
- * @param path - absolute path
- * @returns true when an entry exists (including a dangling link)
- */
-function existsLstat(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Containment over already-normalized paths (no filesystem access).
- *
- * @param absPath - path already resolved to its real form
- * @param roots - roots already resolved to their real form
- * @returns whether the path is one of the roots or under one
- */
-function lexicalUnderRoots(absPath: string, roots: string[]): boolean {
-  const win = process.platform === 'win32';
-  const norm = (s: string) => (win ? s.toLowerCase() : s);
-  const target = norm(absPath);
-  return roots.some((root) => {
-    const r = norm(root);
-    return target === r || target.startsWith(r.endsWith(sep) ? r : r + sep);
-  });
 }
 
 /**
@@ -172,20 +113,6 @@ export function resolveToolPath(
 }
 
 /**
- * 路径是否落在任一 root 之下（含 root 本身）
- *
- * Compares real paths when they can be resolved, falling back to the lexical
- * form when they cannot. This has to match `resolveToolPath`, which now returns
- * the resolved target: comparing a resolved target against an unresolved root
- * (macOS `/var` → `/private/var`) would report an in-roots write as out-of-roots
- * and turn an automatic, journaled write into a host confirmation prompt.
- */
-export function isPathUnderRoots(absPath: string, roots: string[]): boolean {
-  const real = (s: string) => realpathAllowMissing(resolve(s)) ?? resolve(s);
-  return lexicalUnderRoots(real(absPath), roots.map(real));
-}
-
-/**
  * 只读附件根内解析（OP-15）：相对名优先贴到 attachmentRoots
  *
  * @param rawPath - 工具入参路径
@@ -206,16 +133,19 @@ export function resolveReadableToolPath(
     for (const root of roots) {
       const rootResolved = resolve(root);
       const candidate = resolve(rootResolved, cleaned);
-      const prefix = rootResolved.endsWith(sep) ? rootResolved : rootResolved + sep;
-      if (candidate !== rootResolved && !candidate.startsWith(prefix)) continue;
+      // Lexical guard against `cleaned` climbing out of the root; shares the
+      // win32 case-folding rule with every other containment check.
+      if (candidate !== rootResolved && !lexicalUnderRoots(candidate, [rootResolved])) continue;
       if (!existsSync(candidate)) continue;
       // Attachment roots sit outside the effect roots by design, so they carry
       // their own containment: a link planted in the attachment tree would
       // otherwise be a straight read out of the read-only sandbox.
+      // Both sides are resolved here, so compare lexically rather than making
+      // isPathUnderRoots resolve them a second time.
       const realRoot = realpathAllowMissing(rootResolved);
       const realCandidate = realpathAllowMissing(candidate);
       if (realRoot === null || realCandidate === null) continue;
-      if (!isPathUnderRoots(realCandidate, [realRoot])) continue;
+      if (!lexicalUnderRoots(realCandidate, [realRoot])) continue;
       return realCandidate;
     }
   }
@@ -235,8 +165,7 @@ export function isUnderAttachmentRoot(path: string, attachmentRoots?: string[]):
   // purely lexical comparison against a configured root would report false
   // whenever the root is an alias (macOS /var, symlinked HOME) — turning a
   // write-protection guard into a fail-open. Resolve both sides.
-  const real = (s: string) => realpathAllowMissing(resolve(s)) ?? resolve(s);
-  return lexicalUnderRoots(real(path), attachmentRoots.map(real));
+  return isPathUnderRoots(path, attachmentRoots);
 }
 
 function isExecutableFile(filePath: string): boolean {
@@ -541,21 +470,14 @@ export function defaultPathEnv(): string {
  * @returns whether the path is protected undo ledger
  */
 export function isUnderSessionUndoRoot(target: string, undoRoots?: string[]): boolean {
+  const roots = (undoRoots ?? []).map((r) => r?.trim()).filter(Boolean);
   // Same coordinate problem as isUnderAttachmentRoot: the target arrives as a
   // real path while the configured roots keep their lexical spelling.
-  const real = (s: string) => realpathAllowMissing(resolve(s)) ?? resolve(s);
-  const resolved = real(target);
-  const roots = (undoRoots ?? []).map((r) => r?.trim()).filter(Boolean);
-  const fold = (p: string) =>
-    process.platform === 'win32' ? p.toLowerCase() : p;
-  if (roots.length > 0) {
-    const norm = (p: string) => fold(real(p).replace(/\\/g, '/'));
-    const tNorm = fold(resolved.replace(/\\/g, '/'));
-    return roots.some((root) => {
-      const r = norm(root);
-      return tNorm === r || tNorm.startsWith(r.endsWith('/') ? r : r + '/');
-    });
-  }
-  const norm = fold(resolved.replace(/\\/g, '/'));
-  return /\/sessions\/[^/]+\/undo(\/|$)/i.test(norm);
+  if (roots.length > 0) return isPathUnderRoots(target, roots);
+  // No configured roots: recognise the default layout instead. Resolve first so
+  // a symlinked sessions directory still matches the same rule.
+  const resolved = realpathAllowMissing(resolve(target)) ?? resolve(target);
+  const converted = resolved.replace(/\\/g, '/');
+  const folded = process.platform === 'win32' ? converted.toLowerCase() : converted;
+  return /\/sessions\/[^/]+\/undo(\/|$)/i.test(folded);
 }

@@ -13,7 +13,7 @@
 |----|------|------|--------|
 | **Product Domain** | Bounded context: one language per domain, independently replaceable | **10** | External intro, this doc |
 | **Module** | Implementation unit `packages/engine/src/harness/<dir>/` | 20–30, may change | `domains.yaml`, CI |
-| **Capability / Foundation** | Cross-cutting shared capabilities, layer vocabulary | 6 (capabilities 3 + foundations 3) | Catalog `kind`, **not counted as domains** |
+| **Capability / Foundation** | Cross-cutting shared capabilities, layer vocabulary | 7 (capabilities 3 + foundations 4) | Catalog `kind`, **not counted as domains** |
 
 **Domain ≠ directory.** Creating a directory does not make a domain; facades, vocabularies, and cross-cuts do not count.
 
@@ -30,7 +30,7 @@
    Phase (when)     │  Activation · Run                           │
    Capability       │  Context · Extension · Collaboration       │
    (outward half)   └─────────────────────────────────────────────┘
-   Cross-cut / foundation (not counted): Observability · Summary&Compact · events/types
+   Cross-cut / foundation (not counted): Observability · Summary&Compact · events/paths/types
 ```
 
 External wording:
