@@ -15,7 +15,7 @@ import {
   removeWebUiPidFile,
   getWebUiPidPath,
 } from '../src/cli/helpers.js';
-import { resolveWebUiPort, findPidOnVitePorts, readGatewayPort, readGitStatusPollSeconds } from '../src/cli/webui.js';
+import { resolveWebUiPort, findPidOnVitePorts, findUntrackedWebUiInstance, probeWebUiIdentity, readGatewayPort, readGitStatusPollSeconds } from '../src/cli/webui.js';
 import { gatewayConfigScript, webConfigScript, webUiServeArgs, resolveGatewayApiKey } from '../src/cli/helpers.js';
 import { WebConfigSchema } from '../src/config-schema/webui.js';
 import { spawnDetached, killProcess, findPidOnPort, delay } from '../src/cli/process-utils.js';
@@ -197,6 +197,77 @@ describe('findPidOnVitePorts', () => {
       expect(hit).toEqual({ pid: childPid, port });
     } finally {
       await killProcess(childPid!, { timeoutMs: 3000 });
+    }
+  }, 30_000);
+});
+
+describe('probeWebUiIdentity / findUntrackedWebUiInstance（端口认领前的身份验证）', () => {
+  /** 起一个返回固定 body 的 HTTP 服务，返回监听端口与关闭句柄 */
+  async function serveOnce(body: string, status = 200): Promise<{ port: number; close: () => Promise<void> }> {
+    const { createServer } = await import('node:http');
+    const srv = createServer((req, res) => {
+      if (req.url === '/octopi-config.js') {
+        res.writeHead(status, { 'content-type': 'application/javascript' });
+        res.end(body);
+      } else {
+        res.writeHead(404).end();
+      }
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const addr = srv.address();
+    if (typeof addr === 'string' || addr === null) throw new Error('expected port');
+    return { port: addr.port, close: () => new Promise((r) => srv.close(() => r())) };
+  }
+
+  test('认领指纹：/octopi-config.js 含 __OCTOPI_GATEWAY__', async () => {
+    const s = await serveOnce('window.__OCTOPI_GATEWAY__={"port":18180};\n');
+    try {
+      expect(await probeWebUiIdentity(s.port)).toBe(true);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test('拒绝非 WebUI：无指纹内容 / 404 / 端口无服务', async () => {
+    const html = await serveOnce('<!doctype html><title>some website</title>');
+    const notFound = await serveOnce('', 404);
+    try {
+      expect(await probeWebUiIdentity(html.port)).toBe(false);
+      expect(await probeWebUiIdentity(notFound.port)).toBe(false);
+      // 空闲端口：连接拒绝 → false
+      expect(await probeWebUiIdentity(1)).toBe(false);
+    } finally {
+      await html.close();
+      await notFound.close();
+    }
+  });
+
+  test('findUntrackedWebUiInstance 区分 webui / foreign / 无占用', async () => {
+    // findPidOnPort 排除自身进程：照既有模式用 spawnDetached 起外部 HTTP 进程
+    async function spawnHttpServer(body: string): Promise<{ pid: number; port: number }> {
+      const probe = createTcpServer();
+      await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+      const addr = probe.address();
+      if (typeof addr === 'string' || addr === null) throw new Error('expected port');
+      const port = addr.port;
+      await new Promise<void>((r) => probe.close(() => r()));
+      const pid = spawnDetached(process.execPath, [
+        '-e',
+        `require('http').createServer((req,res)=>{res.writeHead(200,{'content-type':'application/javascript'});res.end(${JSON.stringify(body)});}).listen(${port},'127.0.0.1');`,
+      ]);
+      if (!pid) throw new Error('spawn failed');
+      for (let i = 0; i < 25 && findPidOnPort(port) !== pid; i++) await delay(200);
+      return { pid, port };
+    }
+
+    const webui = await spawnHttpServer('window.__OCTOPI_GATEWAY__=null;\n');
+    const foreign = await spawnHttpServer('<!doctype html><title>vite preview</title>');
+    try {
+      expect(await findUntrackedWebUiInstance(webui.port)).toEqual({ kind: 'webui', pid: webui.pid, port: webui.port });
+      expect(await findUntrackedWebUiInstance(foreign.port)).toEqual({ kind: 'foreign', pid: foreign.pid, port: foreign.port });
+    } finally {
+      await killProcess(webui.pid, { timeoutMs: 3000 });
+      await killProcess(foreign.pid, { timeoutMs: 3000 });
     }
   }, 30_000);
 });

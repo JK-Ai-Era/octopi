@@ -107,6 +107,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.17 (2026-10-30)
+
+### fix(cli): WebUI 端口认领先验身份——陌生进程不再被误认/误杀
+
+- 症状（2026-10-30 实测）：`octopi serve restart` 时 website session 的 web 服务占用 4173（vite preview 默认端口），被 CLI 误认成「未跟踪的 legacy WebUI 实例」——WebUI 静默跳过启动（只警告 appears already running），实际没起来；`octopi webui stop` 走同一认领路径还会**误杀**该陌生进程。
+- 根因：`findPidOnVitePorts` 在期望端口 + legacy 端口（5173/5174/4173）上发现任何活监听进程即认领为 WebUI，不验证身份；且 4173 恰是 vite preview 默认端口，website 开发场景高频误撞。
+- 修复：认领前加 HTTP 指纹探针 `probeWebUiIdentity`（GET `/octopi-config.js` 含 `__OCTOPI_GATEWAY__`——public/ 静态回退与 serve-webui 动态下发均含，vite dev 与 dist 同款）；新增 `findUntrackedWebUiInstance` 区分 `webui`（可认领）/ `foreign`（占用）。**start**：foreign 明确报 "port X occupied by PID Y (not the Web UI)" 并失败退出（soft 模式告警后返回）；**stop**：foreign **拒绝杀**并 fail loud；**status**：端口行带 `(not the Web UI)` 标注。
+- 测试：cli-webui-helpers 新增 3 例（指纹命中 / 无指纹·404·无服务拒绝 / webui-foreign 分类；findPidOnPort 排除自身进程，按既有模式 spawnDetached 外部 HTTP 进程）；全量 3684 绿，lint + 测试类型基线 0 新错。
+
+---
+
 ## v0.97.16 (2026-10-30)
 
 ### fix(wisdom): 蒸馏管线零产出四层修复——summary 档撤销 / 输出完整性 / 触发改造

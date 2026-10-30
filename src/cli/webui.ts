@@ -173,6 +173,48 @@ export function findPidOnVitePorts(expectedPort?: number): { pid: number; port: 
   return null;
 }
 
+/**
+ * WebUI 身份指纹：`/octopi-config.js`（public/ 提供，vite dev 与 dist 静态同款）
+ * 内容必含 `__OCTOPI_GATEWAY__`（静态回退置 null，serve-webui 动态下发改写为端口）。
+ */
+const WEBUI_IDENTITY_MARKER = '__OCTOPI_GATEWAY__';
+
+/**
+ * HTTP 指纹探针：判定端口上的监听者是否 WebUI 实例。
+ *
+ * 命中：GET /octopi-config.js 返回 2xx 且内容含 {@link WEBUI_IDENTITY_MARKER}。
+ * 连接失败 / 非 2xx / 无指纹 → false——**不认领**（端口上的陌生进程不是 WebUI）。
+ *
+ * @param port - 待探测端口
+ * @returns true = WebUI 实例
+ */
+export async function probeWebUiIdentity(port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/octopi-config.js`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) return false;
+    return (await res.text()).includes(WEBUI_IDENTITY_MARKER);
+  } catch {
+    // 连接拒绝/超时/非 HTTP 服务：无法证明是 WebUI，一律不认领
+    return false;
+  }
+}
+
+/**
+ * 发现未被 webui.pid 跟踪的端口占用者，并用 HTTP 指纹判定其身份。
+ *
+ * @param expectedPort - 期望端口（配置/默认），缺省 8180
+ * @returns kind='webui' 可认领的 WebUI 实例；kind='foreign' 占用端口的陌生进程；null 无占用
+ */
+export async function findUntrackedWebUiInstance(
+  expectedPort?: number,
+): Promise<{ kind: 'webui' | 'foreign'; pid: number; port: number } | null> {
+  const hit = findPidOnVitePorts(expectedPort);
+  if (!hit) return null;
+  return { ...(await probeWebUiIdentity(hit.port) ? { kind: 'webui' } : { kind: 'foreign' }), ...hit };
+}
+
 export async function webuiStartCommand(
   configPath?: string,
   options?: WebUiStartOptions,
@@ -186,11 +228,17 @@ export async function webuiStartCommand(
     return;
   }
 
-  // pid 文件缺失/失效，但端口上已有实例：提示而非叠跑第二个 vite
+  // pid 文件缺失/失效，但端口上已有监听：先验身份再定性（不把陌生进程误认成 WebUI）
   const port = resolveWebUiPort(configPath, options?.port);
-  const portHit = findPidOnVitePorts(port);
-  if (portHit) {
-    console.log(`⚠️  Web UI appears already running on port ${portHit.port} (PID: ${portHit.pid})`);
+  const untracked = await findUntrackedWebUiInstance(port);
+  if (untracked?.kind === 'foreign') {
+    console.error(`❌ Port ${untracked.port} is occupied by PID ${untracked.pid} (not the Web UI) — cannot start Web UI.`);
+    console.error('   Free the port (stop that process) or set a different "web.port".');
+    if (soft) return;
+    process.exit(1);
+  }
+  if (untracked) {
+    console.log(`⚠️  Web UI appears already running on port ${untracked.port} (PID: ${untracked.pid})`);
     console.log('   Not tracked in ~/.octopi/webui.pid (started outside CLI?)');
     if (soft) return;
     console.log(`\nUse 'octopi webui stop' to stop it, then start again.`);
@@ -274,11 +322,17 @@ export async function webuiStopCommand(configPath?: string): Promise<void> {
       removeWebUiPidFile();
       pid = undefined;
     }
-    const portHit = findPidOnVitePorts(resolveWebUiPort(configPath));
-    if (portHit) {
-      pid = portHit.pid;
+    const untracked = await findUntrackedWebUiInstance(resolveWebUiPort(configPath));
+    if (untracked?.kind === 'foreign') {
+      // 端口上的陌生进程不是 WebUI：拒绝误杀，fail loud
+      console.error(`❌ Port ${untracked.port} is held by PID ${untracked.pid} (not the Web UI) — refusing to kill it.`);
+      console.error('   Free the port yourself, or stop that process in its own terminal.');
+      process.exit(1);
+    }
+    if (untracked) {
+      pid = untracked.pid;
       source = 'port';
-      console.log(`ℹ️  Adopting untracked Web UI on port ${portHit.port} (PID: ${portHit.pid})`);
+      console.log(`ℹ️  Adopting untracked Web UI on port ${untracked.port} (PID: ${untracked.pid})`);
     }
   }
 
@@ -310,12 +364,14 @@ export async function webuiRestartCommand(configPath?: string, options?: WebUiSt
 export async function webuiStatusCommand(configPath?: string): Promise<void> {
   const record = readWebUiPidRecord();
   const pid = record?.pid;
-  const portHit = findPidOnVitePorts(resolveWebUiPort(configPath));
+  const untracked = await findUntrackedWebUiInstance(resolveWebUiPort(configPath));
+  const portHit = untracked ? { pid: untracked.pid, port: untracked.port } : null;
+  const foreignLabel = untracked?.kind === 'foreign' ? ' (not the Web UI)' : '';
 
   if (!pid) {
     console.log('ℹ️  No Web UI instance found in ~/.octopi/webui.pid.');
-    if (portHit && isProcessAlive(portHit.pid)) {
-      console.log(`   But port ${portHit.port} is LISTENING (PID: ${portHit.pid}) — started outside CLI?`);
+    if (untracked && isProcessAlive(untracked.pid)) {
+      console.log(`   But port ${untracked.port} is LISTENING (PID: ${untracked.pid})${foreignLabel} — started outside CLI?`);
     }
     const configWebDir = readConfigWebDir(configPath);
     const webDist = findWebDist(configPath, configWebDir);
@@ -333,13 +389,13 @@ export async function webuiStatusCommand(configPath?: string): Promise<void> {
     console.log(`  Host:      ${record.host} (${lanOpen ? 'LAN' : 'local only'})`);
   }
   if (record.startedAt) console.log(`  Started:   ${record.startedAt}`);
-  if (portHit) console.log(`  Port:      ${portHit.port} (PID ${portHit.pid})`);
+  if (portHit) console.log(`  Port:      ${portHit.port} (PID ${portHit.pid})${foreignLabel}`);
   console.log();
 
   if (!alive) {
     console.log('  ⚠️  Process is not running. PID file is stale.');
     if (portHit && portHit.pid !== pid && isProcessAlive(portHit.pid)) {
-      console.log(`     Another process holds port ${portHit.port} (PID ${portHit.pid}).`);
+      console.log(`     Another process holds port ${portHit.port} (PID ${portHit.pid})${foreignLabel}.`);
     }
     console.log(`     Run 'octopi webui start' to start a new instance.\n`);
   }
