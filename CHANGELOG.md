@@ -107,6 +107,29 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.23 (2026-10-30)
+
+### feat(tools): 最终组件符号链接守卫 refuseFinalSymlink（P2）
+
+- 背景：v0.97.21 的 realpath 包含判定闭合了「路径本身是链接」的逃逸，但仍留一个窗口——包含检查返回真实路径之后、真正 open/write 之前，最终组件被换成链接。`file_read` 会读到根外内容；`file_write` 更糟：`writeFileAtomic` 先 `realpath` 再 rename，realpath 会把「根内链接」解析成「根外目标」，rename 就落到根外去了。
+- 新策略 `effectPolicy.refuseFinalSymlink`（默认 `false`）。`untrusted` 模式强制 `true`，与 `pathContainment` 的「不可放松」承诺一致：配置写 `false` 也无效。
+- 读取：`shared/paths` 新增 `readFileNoFollow`，以 `O_RDONLY | O_NOFOLLOW` 打开，内核拒绝跟随（`ELOOP`）。
+- 写入：`undo-log.writeFileAtomic` 先 `lstat` 守卫；**拒绝时不再走 realpath**，以原路径为目标，rename 替换的是条目本身。追加路径（`fsAppendFile`）同样守卫。
+- 接口：`ToolFileEffects.writeFile` / `appendFile` 增加可选第三参 `ToolWriteOptions`（向后兼容）；`ToolExecutionContext` 与 Runner 上下文新增 `refuseFinalSymlink`，由 Runner 从解析后的策略注入。
+- 默认值的取舍：`containment` 已把路径解析为真实路径，合法链接在检查阶段就被解析，因此开启的收益只剩上述窗口；而 `containment: 'none'` 下开启会拒掉根内合法链接（pnpm / monorepo 常见）。故默认关闭、按部署显式开启。
+- **能力边界（已在 arch 文档写明）**：只守最终组件。中间路径段（`root/a/b.txt` 的 `a`）仍可被竞态替换，需 dirfd 逐段 `openat` 才能闭合，未实现；硬链接对 realpath 与 lstat 都不可见。
+- 新增 `tests/harness/refuse-final-symlink.test.ts` 15 例：`isFinalSymlink`、`readFileNoFollow`、`file_read`/`file_write`（含 `append`）/`file_copy` 的守卫行为、`soft` 下既有跟随语义不回归、四个预设默认值与 untrusted 不可关闭。
+- **独立审查后的补修（5 项，全部实测成立）**：
+  1. **blocker**：`builder.ts` 的 `RuntimeToolContextProvider.get()` 逐字段抄装上下文，**漏了 `refuseFinalSymlink`** ⇒ 守卫在生产链路从未生效，"untrusted 强制开启"是纸面承诺。根因修复：改为 `...scope.toolRuntime` 展开，杜绝新增字段被静默丢弃（同类字段丢失已发生两次）。
+  2. **major**：`refuseFinalSymlink` 未进 Zod schema（`config-schema/governance.ts`），`z.object` 默认 strip 未知键 ⇒ 配置文件层面根本开不了。已补 schema 并 `npm run generate:schema`（生成器读 `dist`，须先 build）。
+  3. **major**：首版测试是**假绿**——用 `pathContainment: 'strict'`，P1 在守卫之前就拒绝了；effects 桩还静默丢掉第三参。已改为 `soft` + 真实 `TurnFileUndoLog`，并用「禁用守卫必须变红」反证有效性（该反证同时暴露下面第 4 项）。
+  4. **major**：`file_copy` 直接 `copyFile`，绕过 `effects.writeFile`，且 `copyFile` 以 `O_TRUNC` 打开会跟随链接。已在其调用点前置 `isFinalSymlink` 守卫。
+  5. **major**：`O_NOFOLLOW` 是 POSIX-only；Windows 上 `constants.O_NOFOLLOW === undefined`，`0 | undefined === 0` 会**静默退化为跟随**，恰在 `untrusted` 最需要读守卫时失效。已改为缺失时回退 `lstat` 前置检查。
+- 顺带修正测试中的参数名错误：`file_write` 的追加开关是 `append: true`，首版写 `mode: 'append'` 被忽略，那条用例实际测的是覆盖。
+- 验证：全量 **3763 passed / 7 skipped**；typecheck（0 new）、lint、`arch/check-sync.sh`、build 绿。
+
+---
+
 ## v0.97.22 (2026-10-30)
 
 ### refactor(tools): 抽出 shared/paths 作为路径包含的单一真相源

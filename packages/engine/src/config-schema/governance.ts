@@ -63,6 +63,11 @@ export const EffectPolicyConfigSchema = z.object({
   /** 额外事务 root（绝对路径或 ~ 形态）；并入 allowRoots */
   transactionRoots: z.array(ConfigPathSchema).optional(),
   pathContainment: z.enum(['strict', 'soft', 'none']).optional(),
+  /**
+   * 拒绝最终组件为符号链接的文件读写（读写都拒，非跟随）。
+   * 缺省 false；`mode: 'untrusted'` 强制 true 且不可关闭。
+   */
+  refuseFinalSymlink: z.boolean().optional(),
   shellEscape: z.enum(['deny', 'confirm', 'allow']).optional(),
   processLimits: z.boolean().optional(),
   commit: z.enum(['auto', 'manual']).optional(),

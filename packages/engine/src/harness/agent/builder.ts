@@ -166,6 +166,8 @@ export interface ToolContextProvider {
     memoryEffects: import('@octopi-agent/core/types/tools.js').MemoryEffectJournal;
     pathRoots?: string[];
     pathContainment?: 'strict' | 'soft' | 'none';
+    /** 拒绝最终组件为符号链接的文件读写（来自 effectPolicy.refuseFinalSymlink） */
+    refuseFinalSymlink?: boolean;
     confirmEffect?: import('@octopi-agent/core/types/tools.js').ToolExecutionContext['confirmEffect'];
     effectChannel?: 'engine' | 'host-gate';
     /** 提权策略（ops P3/P4，resolved；与 core ToolExecutionContext 同源） */
@@ -204,34 +206,17 @@ class RuntimeToolContextProvider implements ToolContextProvider {
     const unconfigured = createUnconfiguredFileEffects();
     const unconfiguredMemory = createUnconfiguredMemoryEffects();
     if (scope?.toolRuntime) {
+      // Spread rather than copy field by field: this list has already dropped a
+      // newly added security field twice (refuseFinalSymlink, and the gateway's
+      // sibling mapping dropped pathContainment/pathRoots). Enumerating is what
+      // makes that failure possible, and it fails silently because the field is
+      // optional. Everything on RunToolRuntime is context by construction.
       return {
-        sessionId: scope.toolRuntime.sessionId,
-        agentId: scope.toolRuntime.agentId,
+        ...scope.toolRuntime,
         runId: scope.runId,
-        messages: scope.toolRuntime.messages,
         cwd: scope.toolRuntime.cwd ?? this.cwd,
-        attachmentRoots: scope.toolRuntime.attachmentRoots,
         fileEffects: scope.toolRuntime.fileEffects ?? unconfigured,
         memoryEffects: scope.toolRuntime.memoryEffects ?? unconfiguredMemory,
-        pathRoots: scope.toolRuntime.pathRoots,
-        undoRoots: scope.toolRuntime.undoRoots,
-        networkPolicy: scope.toolRuntime.networkPolicy,
-        requireCredentialBindings: scope.toolRuntime.requireCredentialBindings,
-        requireJail: scope.toolRuntime.requireJail,
-        disableJail: scope.toolRuntime.disableJail,
-        homeWrite: scope.toolRuntime.homeWrite,
-        noteSecurityDegraded: scope.toolRuntime.noteSecurityDegraded,
-        recordOpsEvent: scope.toolRuntime.recordOpsEvent,
-        pathContainment: scope.toolRuntime.pathContainment,
-        confirmEffect: scope.toolRuntime.confirmEffect,
-        effectChannel: scope.toolRuntime.effectChannel,
-        escalation: scope.toolRuntime.escalation,
-        dangerousCommands: scope.toolRuntime.dangerousCommands,
-        sessionParticipants: scope.toolRuntime.sessionParticipants,
-        processLimits: scope.toolRuntime.processLimits,
-        shellEscape: scope.toolRuntime.shellEscape,
-        shellJournal: scope.toolRuntime.shellJournal,
-        shellJournalLimit: scope.toolRuntime.shellJournalLimit,
       };
     }
     if (scope) {

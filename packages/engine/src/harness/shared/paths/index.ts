@@ -121,3 +121,59 @@ export function isPathUnderRoots(absPath: string, roots: readonly string[]): boo
   // realpathAllowMissing's null and refuse, which is what containPath does.
   return lexicalUnderRoots(target, lexical);
 }
+
+/**
+ * Whether the final path component is a symbolic link, without following it.
+ *
+ * `lstat` inspects the entry itself, so a dangling link still reports `true` —
+ * which is what a write guard needs: an unresolvable link is exactly the case
+ * where a later open would follow it somewhere unintended.
+ *
+ * @param path - path to inspect
+ * @returns true when the entry exists and is a symlink
+ */
+export function isFinalSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    // ENOENT / ENOTDIR: nothing at that name, so nothing to follow.
+    return false;
+  }
+}
+
+/**
+ * Read a file refusing to traverse a symlink at the final component.
+ *
+ * Resolving containment already returns a real path, so normally the final
+ * component is not a link. If it is one at open time, something replaced it
+ * between the containment check and this open; `O_NOFOLLOW` makes the kernel
+ * refuse instead of following it (`ELOOP`).
+ *
+ * @param path - absolute path, normally already resolved
+ * @param encoding - text encoding
+ * @returns file contents
+ */
+export async function readFileNoFollow(path: string, encoding: 'utf8'): Promise<string> {
+  const { open, constants } = await import('node:fs/promises');
+  // O_NOFOLLOW is POSIX-only. On Windows it is absent, and `0 | undefined` is
+  // `0` — which would silently mean "follow the link", the opposite of intent.
+  // Fall back to an lstat pre-check there: it keeps refusing dangling links
+  // (the common planted case) at the cost of a narrower TOCTOU window.
+  if (constants.O_NOFOLLOW === undefined) {
+    if (isFinalSymlink(path)) {
+      throw new Error(`path_forbidden: "${path}" final component is a symlink (no O_NOFOLLOW on this platform)`);
+    }
+    const handle = await open(path, 'r');
+    try {
+      return await handle.readFile({ encoding });
+    } finally {
+      await handle.close();
+    }
+  }
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    return await handle.readFile({ encoding });
+  } finally {
+    await handle.close();
+  }
+}

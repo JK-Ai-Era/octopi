@@ -49,6 +49,8 @@ export interface RunToolRuntime {
   recordOpsEvent?: (record: { event: string; data: Record<string, unknown> }) => void;
   /** L2 级别 */
   pathContainment?: "strict" | "soft" | "none";
+  /** 拒绝最终组件为符号链接的文件读写（来自 effectPolicy.refuseFinalSymlink） */
+  refuseFinalSymlink?: boolean;
   confirmEffect?: import("@octopi-agent/core/types/tools.js").ToolExecutionContext["confirmEffect"];
   effectChannel?: "engine" | "host-gate";
   /** 提权策略（ops P3/P4，resolved）：priv_exec 匹配面（allowlist 全等 / full 全量） */

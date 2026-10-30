@@ -386,14 +386,14 @@ export class OpsAuditedFileEffects implements ToolFileEffects {
   }
 
   /** @inheritdoc */
-  async writeFile(path: string, data: string | Uint8Array): Promise<void> {
-    await this.inner.writeFile(path, data);
+  async writeFile(path: string, data: string | Uint8Array, options?: { refuseFinalSymlink?: boolean }): Promise<void> {
+    await this.inner.writeFile(path, data, options);
     this.noteWrite('writeFile', path);
   }
 
   /** @inheritdoc */
-  async appendFile(path: string, data: string | Uint8Array): Promise<void> {
-    await this.inner.appendFile(path, data);
+  async appendFile(path: string, data: string | Uint8Array, options?: { refuseFinalSymlink?: boolean }): Promise<void> {
+    await this.inner.appendFile(path, data, options);
     this.noteWrite('appendFile', path);
   }
 

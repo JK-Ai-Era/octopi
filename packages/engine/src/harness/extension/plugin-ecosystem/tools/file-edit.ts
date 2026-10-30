@@ -151,7 +151,7 @@ export function createFileEditTool(): RegisteredTool {
         if (!effects) {
           throw new Error('file_effects_not_configured: file_edit requires ToolExecutionContext.fileEffects');
         }
-        await effects.writeFile(path, newContent);
+        await effects.writeFile(path, newContent, { refuseFinalSymlink: context?.refuseFinalSymlink === true });
       }
 
       return {

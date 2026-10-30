@@ -113,11 +113,20 @@ export interface ToolDefinition {
  * 实现必须在落盘前记 undo，使「编辑重发」可逆放本轮工具文件效应。
  * 禁止提供“只写不记”的旁路实现——回滚能力不得可选。
  */
+/** 写入守卫选项（由 ToolContext.refuseFinalSymlink 派生） */
+export interface ToolWriteOptions {
+  /**
+   * 最终组件若为符号链接则拒绝写入，而不是穿透到链接目标。
+   * 用于闭合「包含检查通过后、落盘前被换成链接」的窗口。
+   */
+  refuseFinalSymlink?: boolean;
+}
+
 export interface ToolFileEffects {
   /** 覆盖/新建写入（整文件字节） */
-  writeFile(path: string, data: string | Uint8Array): Promise<void>;
+  writeFile(path: string, data: string | Uint8Array, options?: ToolWriteOptions): Promise<void>;
   /** 追加写入 */
-  appendFile(path: string, data: string | Uint8Array): Promise<void>;
+  appendFile(path: string, data: string | Uint8Array, options?: ToolWriteOptions): Promise<void>;
   /** 删除前记 before（shell rm / mv）；discard 恢复 */
   recordDelete(path: string, before: string | Uint8Array): Promise<void>;
   /** 标记新建（零 before）；discard 删除 */
@@ -169,6 +178,11 @@ export interface ToolExecutionContext {
    * 路径解析优先命中这些 root；见 arch/knowledge-session-attachments.md §7。
    */
   attachmentRoots?: string[];
+  /**
+   * 拒绝最终组件为符号链接的文件读写（来自 effectPolicy.refuseFinalSymlink）。
+   * 由 Runner 注入；缺省视为 false。
+   */
+  refuseFinalSymlink?: boolean;
   /**
    * 文件效应写入口（L3 undo）。文件写工具必须经此落盘。
    * 由 Runner 注入 TurnFileUndoLog；缺失时文件写工具必须拒绝执行。

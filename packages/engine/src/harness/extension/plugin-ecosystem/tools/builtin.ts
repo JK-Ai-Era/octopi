@@ -43,6 +43,7 @@ import {
   resolveReadableToolPath,
   resolveToolPath,
 } from './platform.js';
+import { readFileNoFollow } from '../../../shared/paths/index.js';
 
 
 /**
@@ -372,7 +373,9 @@ export function createFileReadTool(options?: {
       const limit = (args.limit as number) ?? 2000;
 
       try {
-        const content = await readFile(path, 'utf-8');
+        const content = context?.refuseFinalSymlink
+          ? await readFileNoFollow(path, 'utf8')
+          : await readFile(path, 'utf-8');
         const lines = content.split('\n');
         const totalLines = lines.length;
 
@@ -502,9 +505,9 @@ export function createFileWriteTool(): RegisteredTool {
           throw new Error('file_effects_not_configured: file_write requires ToolExecutionContext.fileEffects');
         }
         if (append) {
-          await effects.appendFile(path, content);
+          await effects.appendFile(path, content, { refuseFinalSymlink: context?.refuseFinalSymlink === true });
         } else {
-          await effects.writeFile(path, content);
+          await effects.writeFile(path, content, { refuseFinalSymlink: context?.refuseFinalSymlink === true });
         }
 
         return {

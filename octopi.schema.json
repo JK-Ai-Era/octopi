@@ -88,6 +88,9 @@
                   "none"
                 ]
               },
+              "refuseFinalSymlink": {
+                "type": "boolean"
+              },
               "shellEscape": {
                 "type": "string",
                 "enum": [
@@ -2854,6 +2857,9 @@
             "soft",
             "none"
           ]
+        },
+        "refuseFinalSymlink": {
+          "type": "boolean"
         },
         "shellEscape": {
           "type": "string",

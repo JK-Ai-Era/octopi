@@ -13,6 +13,7 @@ import {
   isUnderSessionUndoRoot,
 } from './platform.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
+import { isFinalSymlink } from '../../../shared/paths/index.js';
 
 
 function resolveSafePath(
@@ -306,6 +307,12 @@ export function createFileCopyTool(): RegisteredTool {
         await effects.recordCreate(to, after);
       }
       // Binary-safe copy (images, Office, etc.)
+      // `copyFile` opens the destination with O_TRUNC and would follow a symlink
+      // planted at `to`, writing outside the root. It also bypasses
+      // `effects.writeFile`, so the final-component guard must be applied here.
+      if (context?.refuseFinalSymlink === true && isFinalSymlink(to)) {
+        throw new Error(`path_forbidden: "${to}" final component is a symlink (refuseFinalSymlink)`);
+      }
       await copyFile(from, to);
 
       return {

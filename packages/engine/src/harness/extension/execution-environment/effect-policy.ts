@@ -161,6 +161,16 @@ export interface EffectPolicyConfig {
   /** 额外事务 root（绝对路径或 ~ 形态，入口 trim → expand）；并入 allowRoots */
   transactionRoots?: string[];
   pathContainment?: PathContainment;
+  /**
+   * 拒绝最终组件为符号链接的文件读写（缺省 `false`）。
+   *
+   * 包含判定已把路径解析为真实路径，正常情况下最终组件不是链接；若打开时它
+   * 仍是链接，说明检查与使用之间被替换。开启后以 `O_NOFOLLOW` / `lstat`
+   * 拒绝，而不是跟随。`untrusted` 模式强制开启，不受配置放松。
+   *
+   * 代价：`pathContainment: 'none'` 下根内合法链接的读写会被拒。
+   */
+  refuseFinalSymlink?: boolean;
   shellEscape?: ShellEscapePolicy;
   /**
    * Jail network posture (D4-c). Omitted = mode default:
@@ -231,6 +241,8 @@ export interface EffectiveEffectPolicy {
   securityDegraded: SecurityDegradation[];
   toolIsolation: ToolIsolationMode;
   pathContainment: PathContainment;
+  /** 拒绝最终组件为符号链接的文件读写（`untrusted` 强制 true） */
+  refuseFinalSymlink: boolean;
   shellEscape: ShellEscapePolicy;
   /** Resolved jail network posture */
   network: 'open' | 'deny' | 'allowlist';
@@ -290,6 +302,9 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     mode: 'workspace',
     toolIsolation: 'session-subdir',
     pathContainment: 'strict',
+    // containment 已把路径解析为真实路径，合法链接不受影响；需要闭合
+    // 「检查后、落盘前被换成链接」窗口的部署再显式开启。
+    refuseFinalSymlink: false,
     // 无 L4 时无法「只禁越界」：deny = 拒绝 shell 工具（fail-closed）
     shellEscape: 'deny',
     network: 'deny',
@@ -303,6 +318,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     mode: 'project',
     toolIsolation: 'session-subdir',
     pathContainment: 'strict',
+    refuseFinalSymlink: false,
     // 编码 agent 必须有 shell；文件侧靠 L2，shell FS 越界待 L4
     shellEscape: 'allow',
     network: 'open',
@@ -316,6 +332,8 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     mode: 'host',
     toolIsolation: 'none',
     pathContainment: 'none',
+    // containment 关闭时不做 realpath，开启会拒掉根内合法链接，故保持关闭
+    refuseFinalSymlink: false,
     shellEscape: 'allow',
     network: 'open',
     processLimits: true,
@@ -328,6 +346,8 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     mode: 'untrusted',
     toolIsolation: 'session-subdir',
     pathContainment: 'strict',
+    // 不可信输入下强制开启：硬化为不可放松的产品承诺
+    refuseFinalSymlink: true,
     shellEscape: 'deny',
     network: 'deny',
     processLimits: true,
@@ -612,6 +632,11 @@ export function resolveEffectiveEffectPolicy(
     requestedMode === 'untrusted'
       ? 'strict'
       : (config.pathContainment ?? d.pathContainment);
+  // Final-symlink refusal is a hardening, so the untrusted promise turns it on
+  // and config cannot loosen it back off. Elsewhere it stays opt-in: with
+  // containment off, in-root links are a legitimate workflow.
+  const refuseFinalSymlink =
+    requestedMode === 'untrusted' ? true : (config.refuseFinalSymlink ?? d.refuseFinalSymlink);
 
   // untrusted intent residue: keep discard-on-close even when effectiveMode renames
   const onClose =
@@ -627,6 +652,7 @@ export function resolveEffectiveEffectPolicy(
     securityDegraded,
     toolIsolation: config.toolIsolation ?? d.toolIsolation,
     pathContainment,
+    refuseFinalSymlink,
     // degraded untrusted must not leave shell allow as a hole
     shellEscape: toolSurface === 'reduced' ? 'deny' : (config.shellEscape ?? d.shellEscape),
     // untrusted product promise: egress deny is not a config knob (like pathContainment)

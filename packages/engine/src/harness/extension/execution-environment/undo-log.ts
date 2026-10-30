@@ -12,6 +12,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
   appendFile as fsAppendFile,
+  lstat,
   chmod,
   mkdir,
   readFile,
@@ -58,14 +59,38 @@ export function resolveSessionUndoPaths(sessionsDir: string, sessionId: string):
 }
 
 /**
+ * 最终组件为符号链接时拒绝（`refuseFinalSymlink` 开启时）。
+ *
+ * 检查与 fs 调用之间仍有极小窗口：本守卫的作用是把「包含检查 → 落盘」之间的
+ * 长窗口缩到两次相邻 syscall，而不是宣称彻底消除。中间路径段不在覆盖范围内。
+ */
+async function assertFinalNotSymlink(path: string, options?: { refuseFinalSymlink?: boolean }): Promise<void> {
+  if (options?.refuseFinalSymlink !== true) return;
+  const entry = await lstat(path).catch(() => undefined);
+  if (entry?.isSymbolicLink()) {
+    throw new Error(`path_forbidden: "${path}" final component is a symlink (refuseFinalSymlink)`);
+  }
+}
+
+/**
  * 原子覆写文件：tmp + rename，单次完整替换。
  * 防两类撕裂：同路径并发写交错字节、进程中途死掉留半截文件。
  * 语义差异（已接受）：rename 以新 inode 替换目标，断开既有硬链接；
- * symlink 归一到实体（realpath）后落盘，保持 writeFile 穿透链接的语义；
+ * symlink 归一到实体（realpath）后落盘，保持 writeFile 穿透链接的语义
+ * （`refuseFinalSymlink` 开启时不再穿透，改为拒绝）；
  * 既有文件的权限位经 chmod 保留；新建文件走默认 umask。
  */
-async function writeFileAtomic(path: string, data: string | Uint8Array): Promise<void> {
-  const target = await realpath(path).catch(() => path);
+async function writeFileAtomic(
+  path: string,
+  data: string | Uint8Array,
+  options?: { refuseFinalSymlink?: boolean },
+): Promise<void> {
+  // 守卫必须先于任何 realpath：realpath 会跟随链接，把「根内链接」解析成
+  // 「根外目标」，随后 rename 就落到根外去了。拒绝时直接以原路径为目标，
+  // rename 替换的是条目本身，不再穿过链接。
+  const refusing = options?.refuseFinalSymlink === true;
+  await assertFinalNotSymlink(path, options);
+  const target = refusing ? path : await realpath(path).catch(() => path);
   const mode = await stat(target).then((s) => s.mode & 0o7777).catch(() => undefined);
   const tmp = `${target}.octopi-tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
   try {
@@ -261,12 +286,12 @@ export class TurnFileUndoLog implements ToolFileEffects {
     return this.entriesByPath.size;
   }
 
-  async writeFile(path: string, data: string | Uint8Array): Promise<void> {
-    await this.recordWrite(path, data, 'overwrite');
+  async writeFile(path: string, data: string | Uint8Array, options?: { refuseFinalSymlink?: boolean }): Promise<void> {
+    await this.recordWrite(path, data, 'overwrite', options);
   }
 
-  async appendFile(path: string, data: string | Uint8Array): Promise<void> {
-    await this.recordWrite(path, data, 'append');
+  async appendFile(path: string, data: string | Uint8Array, options?: { refuseFinalSymlink?: boolean }): Promise<void> {
+    await this.recordWrite(path, data, 'append', options);
   }
 
   /** 删除前调用：记 before，discard 时恢复 */
@@ -397,6 +422,7 @@ export class TurnFileUndoLog implements ToolFileEffects {
     path: string,
     data: string | Uint8Array,
     mode: 'overwrite' | 'append',
+    options?: { refuseFinalSymlink?: boolean },
   ): Promise<void> {
     if (this.sealed) {
       throw new Error('turn file undo log already sealed');
@@ -452,9 +478,10 @@ export class TurnFileUndoLog implements ToolFileEffects {
     }
 
     if (mode === 'append') {
+      await assertFinalNotSymlink(path, options);
       await fsAppendFile(path, next);
     } else {
-      await writeFileAtomic(path, next);
+      await writeFileAtomic(path, next, options);
     }
     await this.flushLog();
   }

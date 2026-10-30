@@ -501,6 +501,7 @@ export function adaptLoopEvent(
 export class SessionAwareRunner {
   /** 本 Runner 生效的 L2 级别（由 effectPolicy 展开） */
   private effectPathContainment: "strict" | "soft" | "none" = "none";
+  private effectRefuseFinalSymlink = false;
   private effectChannel: "engine" | "host-gate" = "engine";
   private effectAllowRoots: string[] = [];
   /** Effective effectPolicy.mode (for Runtime injection / UI) */
@@ -1262,6 +1263,7 @@ export class SessionAwareRunner {
         );
         const sessionExtraRoots = readSessionEffectOverrides(session.metadata).transactionRoots;
         this.effectPathContainment = eff.pathContainment;
+        this.effectRefuseFinalSymlink = eff.refuseFinalSymlink;
         this.effectChannel = eff.effects;
         this.effectAllowRoots = mergeTransactionRoots(eff.allowRoots, sessionExtraRoots);
         this.effectMode = eff.mode;
@@ -1679,6 +1681,7 @@ export class SessionAwareRunner {
               ? [resolvedToolCwd.cwd]
               : undefined,
           pathContainment: this.effectPathContainment,
+          refuseFinalSymlink: this.effectRefuseFinalSymlink,
           confirmEffect: this.config.confirmEffect,
           effectChannel: this.effectChannel,
           escalation: this.effectEscalation,
