@@ -92,7 +92,7 @@ export function SettingsWorkspace() {
         </div>
       )}
 
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {tab === 'models' ? <ModelSettingsPanel /> : tab === 'agents' ? <AgentSettingsPanel /> : <ConfigBackupPanel />}
       </div>
     </div>

@@ -334,7 +334,8 @@ export function AgentSettingsPanel() {
         </span>
       </div>
 
-      {error && <div className="set-error">{error}</div>}
+      {/* 向导模式下错误显示在底栏（见 set-wizard-footer），避免顶部横幅滚出视野 */}
+      {error && selected !== '__new__' && <div className="set-error">{error}</div>}
       {notice && <div className="set-notice">{notice}</div>}
 
       <div className="set-body">
@@ -447,14 +448,24 @@ export function AgentSettingsPanel() {
                       placeholder="standard 或 openai/gpt-5.5"
                     />
                   </label>
+                </>
+              )}
 
+              {/* 向导操作常驻底栏：创建按钮不随内容滚走；错误就地可见（不再只挂在面板顶部） */}
+              <div className="set-wizard-footer">
+                {error && <div className="small set-footer-error" role="alert">{error}</div>}
+                {wizard.agentsMd ? (
                   <div className="set-actions">
                     <button type="button" className="btn-secondary" onClick={createAgent} disabled={busy}>
                       {busy ? '创建中…' : '创建并生效'}
                     </button>
                   </div>
-                </>
-              )}
+                ) : (
+                  <div className="small muted">
+                    先完成 ④「生成 AGENTS.md 初稿」——创建按钮会出现在这里
+                  </div>
+                )}
+              </div>
             </>
           )}
 

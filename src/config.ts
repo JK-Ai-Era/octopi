@@ -134,24 +134,17 @@ function finalizeNormalizedConfig(validated: unknown): NormalizedHarnessConfig {
  */
 export async function buildFromConfigFile(configPath?: string): Promise<Map<string, import('@octopi-agent/engine/harness/agent/config-bridge.js').BuiltAgent>> {
   const { buildFromConfig } = await import('@octopi-agent/engine/harness/agent/config-bridge.js');
-  const {
-    computeSecurityConfigFingerprint,
-    extractSecurityConfigSlice,
-    createFileSecurityIntegrity,
-  } = await import('@octopi-agent/engine/harness/agent/config-integrity.js');
+  const { createSecurityIntegrityGuard } = await import(
+    '@octopi-agent/engine/harness/agent/config-integrity.js'
+  );
   const filePath = resolveConfigFilePath(configPath);
   const config = loadConfig(filePath);
   // ops P2 §4.3/§8.4：启动期锚定安全字段指纹（取 raw 文件切面，与复核同口径——
-  // 展开 ${VAR} 后的值与文件字面不同，混用会永久误报漂移）。run 起点复核，漂移拒新 run。
-  const anchor = computeSecurityConfigFingerprint(
-    extractSecurityConfigSlice(readFileSync(filePath, 'utf8')),
-  );
+  // 展开 ${VAR} 后的值与文件字面不同，混用会永久误报漂移）。run 起点复核，漂移拒新 run；
+  // 受控写通道（console 管理面）经 guard.reattest 署名重锚定。
   return buildFromConfig(config, {
     runnerConfig: {
-      securityIntegrity: {
-        fingerprint: anchor.fingerprint,
-        recheck: createFileSecurityIntegrity({ configPath: filePath, anchor }),
-      },
+      securityIntegrity: createSecurityIntegrityGuard({ configPath: filePath }),
     },
   });
 }

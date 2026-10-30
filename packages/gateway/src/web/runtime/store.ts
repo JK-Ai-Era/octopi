@@ -317,6 +317,13 @@ export class OctopiRuntimeStore extends EventTarget {
   private subscribedAgents = new Set<string>();
   private currentSession: SessionView | null = null;
   private chat: ChatState = this.createEmptyChat();
+  /**
+   * 已被 closeCurrentSession 显式切走、但仍活跃（run 继续跑）的会话 id。
+   *
+   * M4：这些会话的后台事件必须落缓存，**不得**写进空态 chat。区分「close 后的空态」与
+   * 「初始空态」——后者（从未打开会话）收到的订阅首帧仍进 live，避免破坏既有注入语义。
+   */
+  private detachedSessionIds = new Set<string>();
   private modelCatalog: ModelCatalog = { models: [], agents: [] };
   private sessionModel: SessionModelView | null = null;
   /** 本轮 run 是否仍活跃；用于忽略终态之后迟到的 state=running */
@@ -826,35 +833,64 @@ export class OctopiRuntimeStore extends EventTarget {
   private dropSessionLocal(sessionId: string): void {
     this.conversationCache.delete(sessionId);
     this.subscribedSessions.delete(sessionId);
+    this.detachedSessionIds.delete(sessionId);
     this.sessions = this.sessions.filter((s) => s.id !== sessionId);
     const wasCurrent = this.chat.sessionId === sessionId;
     if (wasCurrent) {
-      this.currentSession = null;
-      this.chat = this.createEmptyChat();
-      this.conversationAdapter.reset();
-      this.historyCursor = undefined;
-      this.historyHasMore = false;
-      this.engineActive = false;
+      this.resetChatState();
     }
     this.dispatch('sessions', new SessionsEvent('sessions', { sessions: this.sessions }));
     if (wasCurrent) {
-      this.dispatch('session', new SessionEvent('session', { session: null }));
-      this.dispatch('chat', new ChatEvent('chat', { conversation: [] }));
-      this.dispatch('conversation', new ConversationEvent('conversation', { items: [] }));
-      this.dispatch('viewMode', new ViewModeEvent('viewMode', { mode: 'history' }));
-      this.dispatch('tool', new ToolEvent('tool', { tools: [] }));
-      this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
-      this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: 'idle' }));
-      this.dispatch('approval', new ApprovalEvent('approval', { approvals: [] }));
-      this.dispatch('questions', new QuestionsEvent('questions', { questions: [] }));
-      this.dispatch(
-        'clientToolCalls',
-        new ClientToolCallsEvent('clientToolCalls', { calls: [] }),
-      );
-      this.dispatch('inspector', new InspectorEvent('inspector', { inspector: {} }));
-      this.dispatch('tasks', new TasksEvent('tasks', { tasks: [] }));
-      this.dispatch('schedules', new SchedulesEvent('schedules', { schedules: [] }));
+      this.dispatchResetEvents();
     }
+  }
+
+  /**
+   * 退回「未选中会话」态（切换 agent 等场景）：当前会话入缓存（在跑 run 继续、
+   * 事件可回放），live chat 重置为空态。与 dropSessionLocal 的 wasCurrent 分支同语义，
+   * 但**不删会话本身**、不清缓存条目——切回该会话时仍可恢复。
+   */
+  closeCurrentSession(): void {
+    if (!this.chat.sessionId) return;
+    // 记录切走的会话（M4）：其后台事件落缓存而非空态
+    this.detachedSessionIds.add(this.chat.sessionId);
+    this.cacheCurrentSession();
+    this.resetChatState();
+    this.dispatchResetEvents();
+  }
+
+  /**
+   * live chat 退回空态（dropSessionLocal / closeCurrentSession 共用，S6：避免六行状态重置
+   * 的两份拷贝在未来给 ChatState 加字段时漏一处）。缓存与订阅不动——在跑 run 继续、
+   * 事件经 applyEvent 落缓存（M4），切回该会话时可恢复。
+   */
+  private resetChatState(): void {
+    this.currentSession = null;
+    this.chat = this.createEmptyChat();
+    this.conversationAdapter.reset();
+    this.historyCursor = undefined;
+    this.historyHasMore = false;
+    this.engineActive = false;
+  }
+
+  /** live chat 重置为空态的事件广播（dropSessionLocal / closeCurrentSession 共用） */
+  private dispatchResetEvents(): void {
+    this.dispatch('session', new SessionEvent('session', { session: null }));
+    this.dispatch('chat', new ChatEvent('chat', { conversation: [] }));
+    this.dispatch('conversation', new ConversationEvent('conversation', { items: [] }));
+    this.dispatch('viewMode', new ViewModeEvent('viewMode', { mode: 'history' }));
+    this.dispatch('tool', new ToolEvent('tool', { tools: [] }));
+    this.dispatch('stream', new StreamEvent('stream', { streaming: false, content: '' }));
+    this.dispatch('runStatus', new RunStatusEvent('runStatus', { status: 'idle' }));
+    this.dispatch('approval', new ApprovalEvent('approval', { approvals: [] }));
+    this.dispatch('questions', new QuestionsEvent('questions', { questions: [] }));
+    this.dispatch(
+      'clientToolCalls',
+      new ClientToolCallsEvent('clientToolCalls', { calls: [] }),
+    );
+    this.dispatch('inspector', new InspectorEvent('inspector', { inspector: {} }));
+    this.dispatch('tasks', new TasksEvent('tasks', { tasks: [] }));
+    this.dispatch('schedules', new SchedulesEvent('schedules', { schedules: [] }));
   }
 
   /**
@@ -934,6 +970,8 @@ export class OctopiRuntimeStore extends EventTarget {
   }
 
   async openSession(sessionId: string): Promise<SessionView> {
+    // 重新打开 = 不再是后台切走的会话（M4：其事件回到 live）
+    this.detachedSessionIds.delete(sessionId);
     const isSameSession = this.chat.sessionId === sessionId;
 
     if (!isSameSession) {
@@ -1643,8 +1681,11 @@ export class OctopiRuntimeStore extends EventTarget {
   }
 
   private applyAccepted(sessionId?: string, delivery?: 'steered' | 'followup' | 'run'): void {
-    // 仅当前会话的 accepted 才更新 UI 状态
-    if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
+    // 后台会话的 accepted 不更新 UI（M4）：有活动会话时非当前会话忽略；空态时仅对已切走的
+    // 会话忽略（初始空态保持既有语义）
+    if (sessionId && sessionId !== this.chat.sessionId) {
+      if (this.chat.sessionId || this.detachedSessionIds.has(sessionId)) return;
+    }
     this.clearSendWatchdog();
     this.engineActive = true;
     if (delivery === 'steered' || delivery === 'followup') {
@@ -1660,8 +1701,11 @@ export class OctopiRuntimeStore extends EventTarget {
     if (!this.chat) return;
     // 会话级运行态是全列表信号（侧栏标识），任何会话的状态都记账
     if (sessionId) this.applySessionRunningState(sessionId, state);
-    // 对话态仅作用于当前会话；其他会话的状态不影响聊天 UI
-    if (sessionId && this.chat.sessionId && sessionId !== this.chat.sessionId) return;
+    // 后台会话不改对话态（M4）：有活动会话时非当前会话忽略；空态时仅对已切走的会话忽略
+    //（否则切走会话的 aborted/error 会把空态 runStatus 打成 error/aborted）
+    if (sessionId && sessionId !== this.chat.sessionId) {
+      if (this.chat.sessionId || this.detachedSessionIds.has(sessionId)) return;
+    }
     switch (state) {
       case 'running':
         // 终态后迟到的 running 不得把 idle 打回 streaming
@@ -1716,9 +1760,15 @@ export class OctopiRuntimeStore extends EventTarget {
     }
 
     const currentSessionId = this.chat.sessionId ?? '';
-
-    // 事件明确属于另一个已打开过的会话：更新其缓存，不影响当前 UI
-    if (currentSessionId && eventSessionId && eventSessionId !== currentSessionId) {
+    // 后台会话判定（M4）：事件属非当前会话 → 落缓存、不影响当前 UI。空态（无活动会话）时
+    // 仅对**已显式切走**的会话（closeCurrentSession 记入 detachedSessionIds）落缓存——原守卫
+    // `currentSessionId && …` 在空态整体失守，会把切走会话在跑 run 的流式/tool 事件写进空态；
+    // 初始空态（从未打开会话）收到的订阅首帧仍进 live，不破坏既有注入语义。
+    const isBackground =
+      !!eventSessionId &&
+      eventSessionId !== currentSessionId &&
+      (currentSessionId !== '' || this.detachedSessionIds.has(eventSessionId));
+    if (isBackground && eventSessionId) {
       this.applyEventToCachedSession(eventSessionId, event);
       return;
     }
@@ -2394,16 +2444,17 @@ export class OctopiRuntimeStore extends EventTarget {
     } else {
       next.push(raw);
     }
+    // 空态时剔除**已切走会话**的审批卡片（M4：否则旧 agent 的 HITL 卡片出现在新 agent
+    // 空态且可点）；初始空态（无已切走会话）保持既有语义
     this.chat.approvals = this.chat.sessionId
       ? next.filter((a) => a.sessionId === this.chat.sessionId)
-      : next;
+      : next.filter((a) => !this.detachedSessionIds.has(a.sessionId));
     this.dispatch('approval', new ApprovalEvent('approval', { approvals: this.chat.approvals }));
   }
 
   private applyClientToolCallEvent(event: AgentEventEnvelope): void {
     const raw = event.data?.call as ClientToolCallDto | undefined;
     if (!raw?.id) return;
-
     const idx = this.chat.clientToolCalls.findIndex((c) => c.id === raw.id);
     const next = [...this.chat.clientToolCalls];
     if (raw.state === 'pending') {
@@ -2415,9 +2466,10 @@ export class OctopiRuntimeStore extends EventTarget {
       // 终态（send_file/html_ui 回放）也要进列表，避免重启后卡片丢失
       next.push(raw);
     }
+    // 空态时剔除已切走会话的卡片（M4，与 applyApprovalEvent 同理）
     this.chat.clientToolCalls = this.chat.sessionId
       ? next.filter((c) => c.sessionId === this.chat.sessionId)
-      : next;
+      : next.filter((c) => !this.detachedSessionIds.has(c.sessionId));
     // 内存上限，防止长会话无界增长
     if (this.chat.clientToolCalls.length > 200) {
       this.chat.clientToolCalls = this.chat.clientToolCalls.slice(-200);

@@ -815,23 +815,15 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   }
   const gatewayConfig = toGatewayConfig(config);
   // ops P2 §4.3/§8.4：daemon 持安全字段启动锚，run 起点复核，漂移拒新 run
-  // （取 raw 文件切面与复核同口径；agent 改写自身配置 = 自提权面）
+  // （取 raw 文件切面与复核同口径；agent 改写自身配置 = 自提权面）。
+  // console 受控写（config-apply）经 guard.reattest 署名重锚定，见「WebUI 署名通道」。
   {
-    const {
-      computeSecurityConfigFingerprint,
-      extractSecurityConfigSlice,
-      createFileSecurityIntegrity,
-    } = await import('@octopi-agent/engine/harness/agent/config-integrity.js');
-    const { readFileSync } = await import('node:fs');
+    const { createSecurityIntegrityGuard } = await import(
+      '@octopi-agent/engine/harness/agent/config-integrity.js'
+    );
     const { resolveConfigFilePath } = await import('../config.js');
     const filePath = resolveConfigFilePath(configPath);
-    const anchor = computeSecurityConfigFingerprint(
-      extractSecurityConfigSlice(readFileSync(filePath, 'utf8')),
-    );
-    gatewayConfig.securityIntegrity = {
-      fingerprint: anchor.fingerprint,
-      recheck: createFileSecurityIntegrity({ configPath: filePath, anchor }),
-    };
+    gatewayConfig.securityIntegrity = createSecurityIntegrityGuard({ configPath: filePath });
   }
   // AgentRuntime 构造参数在 toGatewayConfig 已带上；此处仅防御显式覆盖
   if (config.agentRuntime) {

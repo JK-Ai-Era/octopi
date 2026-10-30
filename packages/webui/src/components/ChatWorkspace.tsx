@@ -785,6 +785,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  /** 切换 agent 联动中（防双击并发切换） */
+  const [switchingAgent, setSwitchingAgent] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'left' | 'right'>('chat');
   const [showAllSessions, setShowAllSessions] = useState(false);
 
@@ -1392,6 +1394,54 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
     }
   };
 
+  /**
+   * 切换 agent：会话列表 + 中部窗口 + 右栏 + store 活动会话全量联动。
+   *
+   * 只 setAgentId 会让左栏列表（客户端过滤）看似同步、而中部/右栏仍绑旧会话，
+   * 且 store.chat 仍指旧会话（此时发送会静默串台）。联动语义：打开该 agent
+   * 最近会话；无会话则退回「未选中」空态（新建会话起点）。
+   */
+  const selectAgent = async (id: string) => {
+    if (id === agentId || switchingAgent) return;
+    const store = storeRef.current;
+    if (!store) {
+      setAgentId(id);
+      return;
+    }
+    setActionError(null);
+    setSwitchingAgent(true);
+    const prevAgentId = agentId;
+    try {
+      const list = await store.refreshSessions(id);
+      const latest = [...list].sort(
+        (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
+      )[0];
+      // 成功拉到该 agent 的会话列表后才切换 UI agentId
+      setAgentId(id);
+      if (latest) {
+        // S7：目标会话已打开则跳过（refreshSessions 的 sessions 事件监听器可能已自动打开）
+        if (store.getState().chat.sessionId !== latest.id) {
+          stickToBottomRef.current = true;
+          await openSession(latest.id);
+        }
+      } else {
+        store.closeCurrentSession();
+        clearActiveSessionUi();
+        setViewMode('history');
+      }
+    } catch (error) {
+      // M5：切换失败必须退到空态并回滚 agentId——否则 UI 显示新 agent 而 store.chat 仍指
+      // 旧会话，此时发送会静默串台（正是本 bug 的定义）
+      setActionError(error instanceof Error ? error.message : String(error));
+      store.closeCurrentSession();
+      clearActiveSessionUi();
+      setViewMode('history');
+      setAgentId(prevAgentId);
+    } finally {
+      setSwitchingAgent(false);
+    }
+  };
+
   const branchFromIndex = async (beforeIndex: number) => {
     const store = storeRef.current;
     const parent = activeSessionId;
@@ -1752,7 +1802,8 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                   <button
                     key={a.id}
                     className={`btn-secondary agent-btn ${agentId === a.id ? 'agent-btn-selected' : ''}`}
-                    onClick={() => setAgentId(a.id)}
+                    onClick={() => void selectAgent(a.id)}
+                    disabled={switchingAgent}
                   >
                     <div style={{ fontWeight: 600 }}>{a.id}</div>
                     <div className="small muted">{a.model.model}</div>

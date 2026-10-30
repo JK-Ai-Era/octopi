@@ -1388,7 +1388,11 @@ button.ctx-band {
   gap: 16px;
   padding: 20px 24px;
   overflow-y: auto;
-  height: 100%;
+  /* 滚动链加固：flex+min-height 对齐 .app-main，不依赖父级百分比高度解析。
+     父契约：宿主（SettingsWorkspace 的 wrapper）必须是 flex 列容器——.set-panel 依赖
+     flex:1 拿到确定高度并内部滚动；ModelSettingsPanel / ConfigBackupPanel 复用本类同理 */
+  flex: 1;
+  min-height: 0;
 }
 .set-header {
   display: flex;
@@ -1511,6 +1515,22 @@ button.ctx-band {
 .set-actions {
   display: flex;
   gap: 8px;
+}
+/* 向导常驻底栏：钉在滚动视口底部，创建按钮/校验错误始终可见 */
+.set-wizard-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 10px 0 2px;
+  background: var(--color-bg, #f6f7f9);
+  border-top: 1px solid var(--border, #d8dbe0);
+}
+.set-footer-error {
+  color: var(--color-error, #b91c1c);
 }
 .set-levels {
   border-top: 1px solid var(--border, #d8dbe0);

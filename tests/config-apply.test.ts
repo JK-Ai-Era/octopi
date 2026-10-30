@@ -42,6 +42,7 @@ interface GatewayStub {
   resetRuntimeConfig: ReturnType<typeof vi.fn>;
   getRegisteredAgents: ReturnType<typeof vi.fn>;
   getAgentDefinition: ReturnType<typeof vi.fn>;
+  reattestSecurityConfig: ReturnType<typeof vi.fn>;
 }
 
 function makeGatewayStub(): GatewayStub {
@@ -60,6 +61,8 @@ function makeGatewayStub(): GatewayStub {
       home: undefined,
       persona: { name: id, description: '', systemPrompt: '' },
     })),
+    // 宿主未接线守卫 = undefined（不触发 config.reattest 审计）
+    reattestSecurityConfig: vi.fn(() => undefined),
   };
 }
 
@@ -325,6 +328,104 @@ describe('ConfigApplyService — agent CRUD（P2）', () => {
     expect(agentFiles.scaffold).not.toHaveBeenCalled();
   });
 
+  it('agent 增删改：安全切面写后署名重锚定（ops P2 §8.4「WebUI 署名通道」）', async () => {
+    const before = service.read();
+    await apply.createAgent({ agent: { id: 'helper', model: 'standard' }, agentsMd: '# h', hash: before.hash });
+    const mid = service.read();
+    await apply.updateAgent('helper', { tools: { allow: ['shell'] } }, mid.hash);
+    const later = service.read();
+    await apply.deleteAgent('helper', later.hash);
+    expect(gateway.reattestSecurityConfig).toHaveBeenCalledTimes(3);
+  });
+
+  it('reattest 抛错：降级 warning、不阻断已完成的热应用（fail-closed 由守卫维持）', async () => {
+    gateway.reattestSecurityConfig.mockImplementation(() => {
+      throw new Error('boom');
+    });
+    const before = service.read();
+    const result = await apply.createAgent({
+      agent: { id: 'helper', model: 'standard' },
+      agentsMd: '# h',
+      hash: before.hash,
+    });
+    expect(result.affectedAgents).toEqual(['helper']);
+    expect((result.warnings ?? []).some((w: string) => /re-attest failed/.test(w))).toBe(true);
+  });
+
+  it('reattest 有结果：审计落 config.reattest（署名确认独立成账）', async () => {
+    gateway.reattestSecurityConfig.mockReturnValue({
+      previousFingerprint: 'aaa',
+      fingerprint: 'bbb',
+      changed: ['agents'],
+    });
+    const audits: Array<{ action: string }> = [];
+    apply = new ConfigApplyService({
+      gateway: gateway as unknown as Gateway,
+      configAdmin: service,
+      providerFactory: (async (name: string) => ({ name })) as never,
+      agentFiles: agentFiles as never,
+      agentDefFactory: (rawEntry) => ({ id: String(rawEntry.id) }) as never,
+      unknownKeys: { detect: () => [], parsePath: (p) => [p] },
+      auditSink: (entry) => audits.push(entry),
+    });
+    const before = service.read();
+    await apply.createAgent({ agent: { id: 'helper', model: 'standard' }, agentsMd: '# h', hash: before.hash });
+    const entry = audits.find((a) => a.action === 'config.reattest');
+    expect(entry).toBeDefined();
+  });
+
+  it('M1 接线：agent 写后 reattest 传入写后 hash + agents 白名单', async () => {
+    const before = service.read();
+    const result = await apply.createAgent({
+      agent: { id: 'helper', model: 'standard' },
+      agentsMd: '# h',
+      hash: before.hash,
+    });
+    expect(gateway.reattestSecurityConfig).toHaveBeenCalledWith({
+      expectHash: result.hash,
+      allowedChanged: ['agents'],
+    });
+  });
+
+  it('§4.3.1：createAgent 携带 effectPolicy 禁区子字段 → 预构造阶段拒绝，盘与文件态都不动', async () => {
+    const before = service.read();
+    await expect(
+      apply.createAgent({
+        agent: { id: 'evil', model: 'standard', effectPolicy: { mode: 'host', jail: 'none' } },
+        agentsMd: '# x',
+        hash: before.hash,
+      }),
+    ).rejects.toThrow(/not eligible for hot-apply/);
+    // 盘不动（未提交）、无 scaffold、无 reattest
+    const agents = (service.read().raw.agents as Array<{ id: string }> | undefined) ?? [];
+    expect(agents.some((a) => a.id === 'evil')).toBe(false);
+    expect(agentFiles.scaffold).not.toHaveBeenCalled();
+    expect(gateway.reattestSecurityConfig).not.toHaveBeenCalled();
+  });
+
+  it('§4.3.1：updateAgent 提交 jail → 拒绝；只提交 mode → 放行（历史遗留安全字段不阻断）', async () => {
+    const before = service.read();
+    await apply.createAgent({ agent: { id: 'helper', model: 'standard' }, agentsMd: '# h', hash: before.hash });
+    const mid = service.read();
+    await expect(
+      apply.updateAgent('helper', { effectPolicy: { escalation: 'full' } }, mid.hash),
+    ).rejects.toThrow(/not eligible for hot-apply/);
+    // 只改 mode（安全组）放行
+    const ok = await apply.updateAgent('helper', { effectPolicy: { mode: 'project' } }, mid.hash);
+    expect(ok.applied).toBe('next-run');
+  });
+
+  it('反向不变量：provider 写不触发 reattest（S8：非安全切面写不扩大洗白面）', async () => {
+    const before = service.read();
+    await apply.upsertProvider(
+      'p1',
+      { baseUrl: 'https://x.example.com/v1', apiKey: 'sk-x', api: 'openai-completions', models: [{ id: 'm' }] },
+      before.hash,
+    );
+    await apply.updateLevels({ standard: { primary: 'p1/m' } }, service.read().hash);
+    expect(gateway.reattestSecurityConfig).not.toHaveBeenCalled();
+  });
+
   it('updateAgent：浅合并——未展示字段（home/delegation）不丢（P1 input 透传教训回归锚）', async () => {
     // 预置带隐藏字段的条目
     const before = service.read();
@@ -577,6 +678,32 @@ describe('ConfigApplyService — P3（护栏/回滚/审计/模板）', () => {
     expect('temp' in providers.providers).toBe(false);
     expect(gateway.resetRuntimeConfig).toHaveBeenCalledTimes(1);
     expect(auditEntries.some((e) => e.action === 'config.rollback')).toBe(true);
+  });
+
+  it('M3：rollback 顶层 effectPolicy 变化 → restart-required + 不重锚（保留漂移逼重启）', async () => {
+    // 1. 产生一个「无顶层 effectPolicy」的备份
+    const before = service.read();
+    await apply.upsertProvider(
+      'temp',
+      { baseUrl: 'https://t3.example.com/v1', apiKey: 'sk-t3', api: 'openai-completions', models: [{ id: 'm' }] },
+      before.hash,
+    );
+    const backups = apply.listBackups();
+    const target = backups[backups.length - 1]!; // 最旧 = 无 effectPolicy 的初始态
+
+    // 2. 当前注入顶层 effectPolicy（模拟宿主直接写、运行时已生效）
+    const mid = service.read();
+    await service.write((raw) => {
+      raw.effectPolicy = { mode: 'host' };
+    }, mid.hash);
+
+    // 3. 回滚到无 effectPolicy 的备份 → 顶层安全段变化：报 restart-required 且不重锚
+    //（否则守卫被重锚会掩盖「文件已回滚、运行时未回滚」的静默降级）
+    const now = service.read();
+    const result = await apply.rollbackTo(target.path, now.hash);
+    expect(result.applied).toBe('restart-required');
+    expect(gateway.reattestSecurityConfig).not.toHaveBeenCalled();
+    expect(auditEntries.some((e) => e.action === 'config.rollback.attest_skipped')).toBe(true);
   });
 
   it('另存为模板：AGENTS.md → 自定义模板（含安全组推荐）', async () => {

@@ -107,6 +107,33 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.19 (2026-10-30)
+
+### fix(gateway,engine): WebUI 建/改 agent 后新 run 被 security_config_drift 拒——console 受控写署名通道落地
+
+- 症状：Settings 面板新建 agent 后回 playground 发消息无响应，重启服务才恢复；日志 `security_config_drift ... restart required to re-attest`。影响面不限新建——改 agent 模型/安全组/tools、下线、配置回滚都会让**所有** agent 的新 run 被拒。
+- 根因：ops P2 漂移守卫（runner 每 run 复核 octopi.json 安全切面指纹，含 agents[]）与 config-hot-reload P2 agent CRUD 撞车——WebUI 写 agents 切面即指纹漂移，此前只能靠重启重新锚定。
+- 修复（§8.4「WebUI 署名通道」落地）：engine 新增 `createSecurityIntegrityGuard`（可重锚定守卫）；config-apply 在 agent 增删改/回滚写盘成功后重锚定指纹。两道校验防署名被滥用：写后 hash 与盘上不符（TOCTOU）拒；变化字段超出本次写声明范围（既存篡改）拒。署名失败降级 warning + `config.reattest.failed` 落账，守卫维持漂移态（fail-closed）。
+- §4.3.1 补全：ApplyEngine 此前未实现「安全字段不进热应用」的拒绝，全靠漂移守卫无意兜底。补 `EFFECT_POLICY_HOT_BLOCKED_KEYS`（jail/onJailUnavailable/privilegedAck/effects/escalation/审计开关/dangerousCommands）+ `plugins` 拒绝热改并提示「需重启 + 宿主确认」；`mode`（WebUI 安全组）保留热应用。
+- 回滚：顶层 effectPolicy/security/plugins 纳入 restart-required；顶层安全段变化时不重锚，避免掩盖「文件已回滚、运行时未回滚」。
+- **breaking note**：console/WebUI 的 agent 配置写现在会**自动重新锚定**安全指纹（等价宿主署名），不再需要重启；绕过 console 直改 octopi.json 仍判漂移、拒新 run 直至重启。§4.3.1 禁区字段（jail/escalation/审计开关/plugins 等）经 console 热改会被拒绝并提示需重启确认。
+- 验证：全量套件 3704 passed；lint + 测试类型基线 0 新错；build 绿。
+
+### fix(webui): playground 切换 agent 后中部/右栏不同步且可能串台
+
+- 症状：点不同 agent 只有左栏会话列表更新，中部对话窗口与右栏不变；store 活动会话仍指旧会话，切到新 agent 后直接发送会静默串台。
+- 根因：agent 按钮只 `setAgentId`；左栏是客户端过滤（看似同步），中/右栏绑 `activeSessionId` 无人联动，store 活动会话未重绑。
+- 修复：新增 `selectAgent`（刷新会话列表 → 打开最近会话 / 无会话退回未选中空态）；store 新增 `closeCurrentSession()`（不删会话，仅退回空态）；切换失败回滚 agentId 防串台；用 `detachedSessionIds` 区分「切走后的空态」与「初始空态」——切走会话的后台流式/审批/客户端工具事件落缓存不污染空态。
+- 验证：`tests/web/runtime-close-current-session.test.ts` 5 例（含后台事件不污染空态）；全量套件绿。
+
+### fix(webui): 新建 agent 向导「创建并生效」按钮不可见
+
+- 症状：向导填完拉到底仍看不到创建按钮。
+- 根因：创建按钮仅在「生成 AGENTS.md 初稿」后渲染且无提示；校验错误横幅在面板顶部（下方滚动时不可见）。
+- 修复：向导操作区改 sticky 底栏——创建按钮常驻可见；未生成初稿显示引导文案；错误底栏内联显示（`role="alert"`）。滚动链从百分比高度改 `flex+min-height:0`，不依赖父级百分比解析。
+
+---
+
 ## v0.97.18 (2026-10-30)
 
 ### fix(wisdom): formation/conceptualize 改走 code 执行路径——handler 确定性实现从未被调度过

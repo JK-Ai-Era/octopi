@@ -118,15 +118,32 @@ export interface SessionAwareRunnerConfig {
   killSwitchPath?: string;
   /**
    * 安全配置漂移守卫（ops P2 §4.3/§8.4 拍板：漂移拒新 run）。
-   * 宿主注入（通常 `createFileSecurityIntegrity`）；未注入 = 无守卫（库嵌入自担）。
+   * 宿主注入（通常 `createSecurityIntegrityGuard`）；未注入 = 无守卫（库嵌入自担）。
    */
   securityIntegrity?: {
-    /** 启动期锚定的安全字段指纹（审计记录的「旧摘要」） */
+    /** 启动期锚定的安全字段指纹（审计记录的「旧摘要」；reattest 后为最新锚） */
     fingerprint: string;
     /** 复核当前安全配置（宿主实现，通常重读配置文件） */
     recheck: () =>
       | import('../agent/config-integrity.js').SecurityConfigDrift
       | Promise<import('../agent/config-integrity.js').SecurityConfigDrift>;
+    /**
+     * 受控写署名确认（ops P2 §8.4「WebUI 署名通道」）：console 管理面写盘成功后
+     * 重新锚定指纹。未提供 = 只有重启能重新锚定。宿主实现（`createSecurityIntegrityGuard`）。
+     *
+     * 调用方**必须**传 `expectHash`（写后 hash）与 `allowedChanged`（本次写声明的字段范围）：
+     * guard 据此拒绝 TOCTOU 与白洗（评审 M1）。
+     */
+    reattest?: (options: {
+      /** 写后原文 hash；与盘上现状不符 = 有第三方写入，拒绝重锚 */
+      expectHash: string;
+      /** 允许变化的顶层安全字段；超出范围 = 既存篡改，拒绝重锚 */
+      allowedChanged: string[];
+    }) => {
+      previousFingerprint: string;
+      fingerprint: string;
+      changed: string[];
+    };
   };
   /**
    * 工具效应隔离策略（宪法 I5）
@@ -1193,9 +1210,9 @@ export class SessionAwareRunner {
             data: { ...driftData },
           });
           throw new Error(
-            `security_config_drift: security-relevant config changed on disk (changed: ${integrity.changed.join(', ')}); ` +
-              `restart required to re-attest (restart adopts what is on disk — treat the human restart as the attestation act; ` +
-              `automated attestation lands with the ConfigService write-back)`,
+            `security_config_drift: security-relevant config changed on disk outside the console channel (changed: ${integrity.changed.join(', ')}); ` +
+              `restart required to re-attest (restart adopts what is on disk — treat the human restart as the attestation act). ` +
+              `Console/WebUI config writes re-attest automatically; this drift means the file was edited directly, bypassing the console`,
           );
         }
         // ops P5 kill switch：宿主侧急停哨兵——run 准入即拒（不依赖 LLM 判断/agent 合作）

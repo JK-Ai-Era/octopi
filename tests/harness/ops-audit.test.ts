@@ -19,9 +19,12 @@ import {
 import {
   computeSecurityConfigFingerprint,
   createFileSecurityIntegrity,
+  createSecurityIntegrityGuard,
   diffSecurityConfigFingerprint,
   extractSecurityConfigSlice,
+  EFFECT_POLICY_HOT_BLOCKED_KEYS,
 } from '@octopi-agent/engine/harness/agent/config-integrity.js';
+import { computeConfigHash } from '@octopi-agent/engine/config-admin/patch.js';
 import type { ToolFileEffects } from '@octopi-agent/core/types/tools.js';
 
 const tmp = mkdtempSync(join(tmpdir(), 'ops-audit-test-'));
@@ -280,5 +283,146 @@ describe('安全配置指纹与漂移（§8.4）', () => {
     expect(unreadable.ok).toBe(false);
     expect(unreadable.changed[0]).toContain('config unreadable');
     expect(unreadable.currentFingerprint).toBe('<unreadable>');
+  });
+});
+
+describe('可重锚定守卫（console 受控写署名确认，§8.4「WebUI 署名通道」）', () => {
+  it('受控写后漂移 → reattest 重锚定 → recheck 恢复 ok；fingerprint 为活视图', () => {
+    const path = join(tmp, 'guard-octopi.json');
+    writeFileSync(path, JSON.stringify({ agents: [{ id: 'a1', effectPolicy: { mode: 'workspace' } }] }));
+    const guard = createSecurityIntegrityGuard({ configPath: path });
+    const bootFingerprint = guard.fingerprint;
+    expect(guard.recheck().ok).toBe(true);
+
+    // 模拟 console 受控写：新增 agent（agents 切面变化）
+    writeFileSync(
+      path,
+      JSON.stringify({
+        agents: [
+          { id: 'a1', effectPolicy: { mode: 'workspace' } },
+          { id: 'a2', effectPolicy: { mode: 'project' } },
+        ],
+      }),
+    );
+    const drift = guard.recheck();
+    expect(drift.ok).toBe(false);
+    expect(drift.changed).toContain('agents');
+
+    const result = guard.reattest();
+    expect(result.previousFingerprint).toBe(bootFingerprint);
+    expect(result.changed).toContain('agents');
+    expect(guard.fingerprint).toBe(result.fingerprint);
+    expect(guard.fingerprint).not.toBe(bootFingerprint);
+    expect(guard.recheck().ok).toBe(true);
+  });
+
+  it('连续 reattest：previousFingerprint 滚动为上次锚', () => {
+    const path = join(tmp, 'guard-reattest-chain.json');
+    writeFileSync(path, JSON.stringify({ agents: [{ id: 'a1' }] }));
+    const guard = createSecurityIntegrityGuard({ configPath: path });
+    writeFileSync(path, JSON.stringify({ agents: [{ id: 'a1' }, { id: 'a2' }] }));
+    const first = guard.reattest();
+    writeFileSync(path, JSON.stringify({ agents: [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }] }));
+    const second = guard.reattest();
+    expect(second.previousFingerprint).toBe(first.fingerprint);
+    expect(second.fingerprint).not.toBe(first.fingerprint);
+  });
+
+  it('reattest 时文件不可读：抛错且锚不换（fail-closed 保持）', () => {
+    const path = join(tmp, 'guard-unreadable.json');
+    writeFileSync(path, JSON.stringify({ agents: [{ id: 'a1' }] }));
+    const guard = createSecurityIntegrityGuard({ configPath: path });
+    const boot = guard.fingerprint;
+    unlinkSync(path);
+    expect(() => guard.reattest()).toThrow();
+    expect(guard.fingerprint).toBe(boot);
+  });
+
+  it('M1-TOCTOU：expectHash 与盘上现状不符 → 拒绝重锚（锚不换，fail-closed）', () => {
+    const path = join(tmp, 'guard-toctou.json');
+    const v1 = JSON.stringify({ agents: [{ id: 'a1' }] });
+    writeFileSync(path, v1);
+    const guard = createSecurityIntegrityGuard({ configPath: path });
+    const boot = guard.fingerprint;
+
+    // console 写盘后、reattest 前有第三方写入（agents 段被改）
+    writeFileSync(path, JSON.stringify({ agents: [{ id: 'a1', effectPolicy: { mode: 'host' } }] }));
+    // 调用方手里仍是**它自己那次写**的 hash（v1）
+    const myWriteHash = computeConfigHash(v1);
+    expect(() => guard.reattest({ expectHash: myWriteHash, allowedChanged: ['agents'] })).toThrow(
+      /changed on disk since the console write/,
+    );
+    expect(guard.fingerprint).toBe(boot);
+    // 守卫仍判漂移（第三方改动未被署名）
+    expect(guard.recheck().ok).toBe(false);
+  });
+
+  it('M1-白洗：本次写范围外的安全字段变化 → 拒绝重锚（既存篡改不被无关写洗白）', () => {
+    const path = join(tmp, 'guard-whitewash.json');
+    // agent 先直改顶层 effectPolicy（自提权面），此刻已漂移
+    const tampered = JSON.stringify({
+      effectPolicy: { mode: 'host', jail: 'none' },
+      agents: [{ id: 'a1' }],
+    });
+    writeFileSync(path, tampered);
+    const guard = createSecurityIntegrityGuard({ configPath: path });
+    // 从启动锚（未篡改）开始：模拟 boot 后被改
+    const path2 = join(tmp, 'guard-whitewash2.json');
+    writeFileSync(path2, JSON.stringify({ effectPolicy: { mode: 'host' }, agents: [{ id: 'a1' }] }));
+    const guard2 = createSecurityIntegrityGuard({ configPath: path2 });
+    const boot2 = guard2.fingerprint;
+
+    // 篡改 effectPolicy.jail（范围外）
+    const afterTamper = JSON.stringify({
+      effectPolicy: { mode: 'host', jail: 'none' },
+      agents: [{ id: 'a1' }],
+    });
+    writeFileSync(path2, afterTamper);
+    // 一次**只声明改 agents**的 console 写：hash 与盘上一致（模拟 TOCTOU 已过），
+    // 但 changed 含范围外的 effectPolicy.jail → 必须拒绝，不能把篡改一起署名
+    expect(() =>
+      guard2.reattest({ expectHash: computeConfigHash(afterTamper), allowedChanged: ['agents'] }),
+    ).toThrow(/outside this write's scope changed/);
+    expect(guard2.fingerprint).toBe(boot2);
+    void guard;
+  });
+
+  it('M1-放行：hash 一致 + changed ⊆ 白名单 → 重锚成功', () => {
+    const path = join(tmp, 'guard-allow.json');
+    writeFileSync(path, JSON.stringify({ agents: [{ id: 'a1' }] }));
+    const guard = createSecurityIntegrityGuard({ configPath: path });
+    const boot = guard.fingerprint;
+
+    const afterWrite = JSON.stringify({ agents: [{ id: 'a1' }, { id: 'a2' }] });
+    writeFileSync(path, afterWrite);
+    const result = guard.reattest({
+      expectHash: computeConfigHash(afterWrite),
+      allowedChanged: ['agents'],
+    });
+    expect(result.changed).toEqual(['agents']);
+    expect(guard.fingerprint).toBe(result.fingerprint);
+    expect(guard.fingerprint).not.toBe(boot);
+    expect(guard.recheck().ok).toBe(true);
+  });
+
+  it('EFFECT_POLICY_HOT_BLOCKED_KEYS：§4.3.1 明列安全闸在禁区；普通旋钮可热改（判据锁）', () => {
+    // WebUI「安全组」四选一 = mode，必须能热改（否则新建 agent 向导失效）
+    expect(EFFECT_POLICY_HOT_BLOCKED_KEYS).not.toContain('mode');
+    // §4.3.1 明列的安全闸 + ops P4 减速带全部在禁区
+    for (const key of [
+      'jail',
+      'onJailUnavailable',
+      'privilegedAck',
+      'escalation',
+      'effects',
+      'opsAudit',
+      'dangerousCommands',
+    ]) {
+      expect(EFFECT_POLICY_HOT_BLOCKED_KEYS).toContain(key);
+    }
+    // 普通配置旋钮（虽在指纹内）允许热改——#5 锚测试依赖 shellEscape 保留语义
+    for (const key of ['shellEscape', 'untrustedAdmission', 'pathContainment', 'network']) {
+      expect(EFFECT_POLICY_HOT_BLOCKED_KEYS).not.toContain(key);
+    }
   });
 });

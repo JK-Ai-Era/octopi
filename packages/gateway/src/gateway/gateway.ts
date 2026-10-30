@@ -1559,6 +1559,30 @@ export class Gateway {
   }
 
   /**
+   * console 受控写署名确认（ops P2 §8.4「WebUI 署名通道」）：config-apply 写盘成功后
+   * 重新锚定安全指纹——console API 是带鉴权的宿主管理面，等价于人工重启的署名动作。
+   * 边界：绕过 console API 直改配置文件仍判漂移（拒新 run 不变）。
+   *
+   * @returns 旧→新指纹与变化字段；宿主未接线守卫时 undefined
+   */
+  reattestSecurityConfig(options: {
+    /** 写后原文 hash（防 TOCTOU） */
+    expectHash: string;
+    /** 本次写声明允许变化的顶层安全字段（防白洗） */
+    allowedChanged: string[];
+  }):
+    | { previousFingerprint: string; fingerprint: string; changed: string[] }
+    | undefined {
+    const guard = this.config.securityIntegrity;
+    if (!guard?.reattest) return undefined;
+    const result = guard.reattest(options);
+    console.log(
+      `[Gateway] Security config re-attested via console apply（changed: ${result.changed.join(', ') || '无'}，${result.previousFingerprint.slice(0, 8)} → ${result.fingerprint.slice(0, 8)}）`,
+    );
+    return result;
+  }
+
+  /**
    * 热替换 provider（L2）：注册表替换 + 影子同步 + 失效引用它的 agent 构建。
    *
    * @param provider - 新 provider 实例（同名替换）

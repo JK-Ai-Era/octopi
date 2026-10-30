@@ -9,6 +9,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Gateway } from './gateway.js';
+import { EFFECT_POLICY_HOT_BLOCKED_KEYS } from '@octopi-agent/engine/harness/agent/config-integrity.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { AgentDefinition } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
 import {
@@ -80,6 +81,8 @@ export interface ConfigAuditEntry {
   hashAfter?: string;
   /** 回滚锚点（备份路径） */
   backupPath?: string;
+  /** 重锚定指纹对（`config.reattest`：旧→新，§8.4 审计要求「旧→新摘要」） */
+  fingerprints?: { previous: string; current: string };
 }
 
 /** 自定义角色模板存取端口（daemon 注入 FileRoleTemplateStore） */
@@ -174,6 +177,86 @@ export class ConfigApplyService {
       console.warn(`[config-audit] sink failed: ${String(err)}`);
     }
     console.log(`[config-audit] ${action}${extra?.target ? ` ${extra.target}` : ''} — ${summary}`);
+  }
+
+  /**
+   * console 受控写署名确认（ops P2 §8.4「WebUI 署名通道」）。
+   *
+   * attestation 描述的是**盘上刚落定的文件**，不是内存注册表——因此必须紧跟写盘之后、
+   * 热应用（scaffold/register/invalidate）之前调用（评审 S1）：热应用失败不应撤销已落盘
+   * 的署名，否则会出现「写盘成功却全站拒 run 直至重启」的更糟失败模式。
+   *
+   * 两道校验（guard 内，评审 M1）：`expectHash` 防 TOCTOU（重锚前有第三方写入）；
+   * `allowedChanged` 防白洗（本次写范围外的安全字段变化 = 既存篡改/越权，拒绝署名）。
+   *
+   * 任一校验不符 → 守卫维持漂移态（fail-closed：新 run 仍拒，重启兜底），降级为 warning
+   * + `config.reattest.failed` 落账（评审 S2），不回滚已落定的写盘。
+   *
+   * 并发写：后到的 reattest 因 `expectHash` 不符被拒（fail-closed），不会跨写换锚——
+   * S5 的交错正确性由 M1 的 hash 校验覆盖。
+   *
+   * @param written - 本次写盘结果（hash 用于 TOCTOU 校验 + 审计锚点）
+   * @param allowedChanged - 本次写声明允许变化的顶层安全字段
+   * @param target - 触发本次写的对象（审计用）
+   * @returns 并入 ConfigApplyResult 的 warnings（重锚定失败时附原因）
+   */
+  private reattestAfterSecurityWrite(
+    written: { hash: string; backupPath?: string; warnings?: string[] },
+    allowedChanged: string[],
+    target?: string,
+  ): string[] {
+    let result: { previousFingerprint: string; fingerprint: string; changed: string[] } | undefined;
+    try {
+      result = this.deps.gateway.reattestSecurityConfig({
+        expectHash: written.hash,
+        allowedChanged,
+      });
+    } catch (err) {
+      const msg = `security re-attest failed（守卫保持漂移，新 run 仍拒直至重启确认）: ${err instanceof Error ? err.message : String(err)}`;
+      console.warn(`[config-apply] ${msg}`);
+      // S2：署名失败是安全事件，必须落账（否则事后无法区分「署名成功」与「持续漂移」）
+      this.audit('config.reattest.failed', msg, { hashAfter: written.hash, target });
+      return [...(written.warnings ?? []), msg];
+    }
+    if (!result) return written.warnings ?? [];
+    this.audit(
+      'config.reattest',
+      `console 受控写署名确认：安全指纹重锚定（changed: ${result.changed.join(', ') || '无'}，hostAttested=true）`,
+      {
+        hashAfter: written.hash,
+        backupPath: written.backupPath,
+        target,
+        fingerprints: { previous: result.previousFingerprint, current: result.fingerprint },
+      },
+    );
+    return written.warnings ?? [];
+  }
+
+  /**
+   * §4.3.1 拒绝逻辑（评审 M2 补全）：安全字段不进热应用。
+   *
+   * agent 条目的 `effectPolicy` 里只有 `mode` 允许热改（WebUI「安全组」选择）；其余
+   * 子字段（jail/escalation/审计开关/network/危险命令减速带…）与 `plugins` 一律拒绝并
+   * 提示「需重启 + 宿主确认」。此前 ApplyEngine 未实现此拒绝，全靠漂移守卫**无意**兜底
+   * （改了也因 drift 拒 run 直到重启）；本修复让 mode 真正热生效，因此必须把禁区显式
+   * 立起来，否则 console 会成为绕过 §4.3.1 的第二条提权通道。
+   *
+   * @param entry - 待写入的 agents[] 条目（createAgent / updateAgent 合并后）
+   * @throws 含禁区字段时抛错（预构造阶段，盘与文件态都不动）
+   */
+  private assertHotApplyAllowed(entry: Record<string, unknown>): void {
+    const ep = (entry.effectPolicy ?? {}) as Record<string, unknown>;
+    const blocked = Object.keys(ep).filter((k) => EFFECT_POLICY_HOT_BLOCKED_KEYS.includes(k));
+    if (blocked.length > 0) {
+      throw new Error(
+        `security fields not eligible for hot-apply: effectPolicy.${blocked.join(', effectPolicy.')} — 需重启 + 宿主确认（arch/ops-privileged-mode.md §4.3.1）`,
+      );
+    }
+    if (entry.plugins !== undefined) {
+      throw new Error(
+        `security fields not eligible for hot-apply: plugins — 需重启 + 宿主确认（arch/ops-privileged-mode.md §4.3.1）`,
+      );
+    }
   }
 
   /**
@@ -385,6 +468,9 @@ export class ConfigApplyService {
     if (!entry.workspace) entry.workspace = paths.workspace;
     if (!entry.skillDirectory) entry.skillDirectory = paths.skillDirectory;
 
+    // §4.3.1：安全字段不进热应用（预构造阶段拒绝，盘与文件态都不动）
+    this.assertHotApplyAllowed(entry);
+
     // 预构造（失败即中止，盘与文件态都不动）
     const previewRaw = { ...snapshot.raw, agents: [...rawAgents, entry] };
     const def = this.deps.agentDefFactory(entry, previewRaw);
@@ -395,6 +481,9 @@ export class ConfigApplyService {
       agents.push(entry);
       raw.agents = agents;
     }, req.hash);
+
+    // S1：署名紧跟写盘（attestation 描述盘上文件，非内存注册表；热应用失败不撤销署名）
+    const warnings = this.reattestAfterSecurityWrite(written, ['agents'], agentId);
 
     // 文件态（写盘成功后；agentsMd 仅在 AGENTS.md 缺失时写，不覆盖既有 persona）
     await this.deps.agentFiles.scaffold(agentId, {
@@ -416,7 +505,7 @@ export class ConfigApplyService {
       applied: 'next-run',
       affectedAgents: [agentId],
       backupPath: written.backupPath,
-      warnings: written.warnings,
+      warnings,
     };
   }
 
@@ -448,7 +537,9 @@ export class ConfigApplyService {
     const old = rawAgents.find((a) => a.id === agentId);
     if (!old) throw new Error(`agent not found: ${agentId}`);
 
-    // 字段级合并（预计算一次；写入与构造用同一结果，两侧永不分歧）
+    // §4.3.1：安全字段不进热应用。判据是**本次提交字段**（agentEntry）而非合并结果——
+    // old 里历史遗留的安全字段（重启生效写入的）不应阻断「只改 mode」这类合法热改。
+    this.assertHotApplyAllowed(agentEntry);
     const mergedEntry: Record<string, unknown> = { ...old };
     for (const [key, value] of Object.entries(agentEntry)) {
       if (value === null) {
@@ -484,6 +575,8 @@ export class ConfigApplyService {
       agents[idx] = mergedEntry;
     }, expectedHash);
 
+    // S1：署名紧跟写盘（热应用失败不撤销署名）
+    const warnings = this.reattestAfterSecurityWrite(written, ['agents'], agentId);
     this.deps.gateway.registerAgent(def);
     await this.deps.gateway.invalidateAgentBuild(agentId);
     this.audit('agent.update', `更新 agent 字段：${Object.keys(agentEntry).join(', ')}`, {
@@ -497,7 +590,7 @@ export class ConfigApplyService {
       applied: 'next-run',
       affectedAgents: [agentId],
       backupPath: written.backupPath,
-      warnings: written.warnings,
+      warnings,
     };
   }
 
@@ -523,6 +616,8 @@ export class ConfigApplyService {
       }
       agents.splice(idx, 1);
     }, expectedHash);
+    // S1：署名紧跟写盘（热应用失败不撤销署名）
+    const warnings = this.reattestAfterSecurityWrite(written, ['agents'], agentId);
     this.deps.gateway.removeAgent(agentId);
     this.audit('agent.delete', `下线 agent（home/persona 保留）`, {
       target: agentId,
@@ -535,7 +630,7 @@ export class ConfigApplyService {
       applied: 'next-run',
       affectedAgents: [],
       backupPath: written.backupPath,
-      warnings: written.warnings,
+      warnings,
     };
   }
 
@@ -629,13 +724,19 @@ export class ConfigApplyService {
     const backupRaw = JSON.parse(backupText) as Record<string, unknown>;
     const beforeRaw = this.deps.configAdmin.read().raw;
 
-    // L3 段对比（#4）：channels/web/knowledge/embedding 不在热应用覆盖内 → 重启才生效
+    // L3 段对比（#4）：channels/web/knowledge/embedding 不在热应用覆盖内 → 重启才生效。
+    // 顶层 effectPolicy/security/plugins 同理（M3）：resetRuntimeConfig 只重置
+    // providers/agents/levels，**顶层安全策略运行时不改**——回滚若动了它们必须报
+    // restart-required，否则「文件已回滚、运行时未回滚」会被误报成 next-run。
     const l3Of = (r: Record<string, unknown>): string =>
       JSON.stringify({
         channels: r.channels ?? null,
         web: r.web ?? null,
         knowledge: r.knowledge ?? null,
         embedding: ((r.models as Record<string, unknown> | undefined)?.embedding ?? null),
+        effectPolicy: r.effectPolicy ?? null,
+        security: r.security ?? null,
+        plugins: r.plugins ?? null,
       });
     const l3Changed = l3Of(backupRaw) !== l3Of(beforeRaw);
     // 变更段摘要（#7：高危段回滚要留痕，含 effectPolicy 放宽）
@@ -661,6 +762,26 @@ export class ConfigApplyService {
       Object.assign(raw, backupRaw);
     }, expectedHash);
 
+    // M3 + S1：署名紧跟写盘。顶层安全段（effectPolicy/security/plugins）随回滚变化时
+    // **不重锚**——运行时顶层策略不随 resetRuntimeConfig 更新，重锚会掩盖「文件已回滚、
+    // 运行时未回滚」的静默降级；保留漂移态让守卫继续拒 run，逼重启 + 宿主确认。
+    const topLevelSecurityChanged = ['effectPolicy', 'security', 'plugins'].some(
+      (k) => JSON.stringify(backupRaw[k] ?? null) !== JSON.stringify(beforeRaw[k] ?? null),
+    );
+    let warnings: string[];
+    if (topLevelSecurityChanged) {
+      const msg =
+        '顶层安全段（effectPolicy/security/plugins）随回滚变化：未重锚安全指纹，新 run 仍拒直至重启 + 宿主确认（arch/ops-privileged-mode.md §4.3.1）';
+      this.audit('config.rollback.attest_skipped', msg, {
+        hashBefore: expectedHash,
+        hashAfter: written.hash,
+        backupPath: written.backupPath,
+      });
+      warnings = [...(written.warnings ?? []), msg];
+    } else {
+      warnings = this.reattestAfterSecurityWrite(written, ['agents']);
+    }
+
     // 运行时全量重置（新 run 用回滚后构建；在跑 run 跑完自然结束）
     this.deps.gateway.resetRuntimeConfig(providerInstances, agentDefs, levels);
     for (const def of agentDefs) {
@@ -669,7 +790,7 @@ export class ConfigApplyService {
     }
     this.audit(
       'config.rollback',
-      `回滚到备份 ${backupPath}（变更段：${changedSections.join(', ') || '无'}${l3Changed ? '；含 L3 段需重启生效' : ''}）`,
+      `回滚到备份 ${backupPath}（变更段：${changedSections.join(', ') || '无'}${l3Changed ? '；含 L3/顶层安全段需重启生效' : ''}）`,
       {
         hashBefore: expectedHash,
         hashAfter: written.hash,
@@ -681,7 +802,7 @@ export class ConfigApplyService {
       applied: l3Changed ? 'restart-required' : 'next-run',
       affectedAgents: agentDefs.map((d) => d.id),
       backupPath: written.backupPath,
-      warnings: written.warnings,
+      warnings,
     };
   }
 
