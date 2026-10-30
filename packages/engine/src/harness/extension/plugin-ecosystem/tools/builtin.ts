@@ -35,15 +35,17 @@ import { createProcessListTool } from './process-tools.js';
 import { createPrivExecTool } from './privileged-tool.js';
 import { createDocumentProbeTool, createDocumentReadTool } from './document-tools.js';
 import {
-  isUnderSessionUndoRoot,
+  containmentOptions,
   defaultPathEnv,
   isPathUnderRoots,
   isUnderAttachmentRoot,
+  isUnderSessionUndoRoot,
   resolvePlatformShell,
   resolveReadableToolPath,
   resolveToolPath,
 } from './platform.js';
 import { readFileNoFollow } from '../../../shared/paths/index.js';
+import { matchesDenyPattern } from '../../../shared/paths/glob.js';
 
 
 /**
@@ -137,10 +139,7 @@ export function createShellTool(options?: {
       }
 
       const resolvedShell = resolvePlatformShell();
-      const resolvedCwd = resolveToolPath(cwd, context?.cwd, {
-        allowRoots: context?.pathRoots,
-        containment: context?.pathContainment,
-      });
+      const resolvedCwd = resolveToolPath(cwd, context?.cwd, containmentOptions(context));
 
       // D2-a: always ProcessSandbox (jail backend when probed, else supervised).
       const { createProcessSandbox } = await import('../../execution-environment/sandbox.js');
@@ -365,10 +364,7 @@ export function createFileReadTool(options?: {
 
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
-      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, {
-        allowRoots: context?.pathRoots,
-        containment: context?.pathContainment,
-      });
+      const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, containmentOptions(context));
       const offset = (args.offset as number) ?? 1;
       const limit = (args.limit as number) ?? 2000;
 
@@ -463,10 +459,7 @@ export function createFileWriteTool(): RegisteredTool {
 
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
-      const path = resolveToolPath(rawPath, cwd, {
-        allowRoots: context?.pathRoots,
-        containment: context?.pathContainment,
-      });
+      const path = resolveToolPath(rawPath, cwd, containmentOptions(context));
       if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot write to attachments root');
       }
@@ -552,10 +545,7 @@ export function createFileDeleteTool(): RegisteredTool {
 
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
-      const path = resolveToolPath(rawPath, cwd, {
-        allowRoots: context?.pathRoots,
-        containment: context?.pathContainment,
-      });
+      const path = resolveToolPath(rawPath, cwd, containmentOptions(context));
       if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot delete from attachments root');
       }
@@ -726,10 +716,7 @@ export function createFileListTool(options?: {
 
       const rawPath = (args.path as string | undefined) ?? '.';
       const cwd = context?.cwd ?? process.cwd();
-      const basePath = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, {
-        allowRoots: context?.pathRoots,
-        containment: context?.pathContainment,
-      });
+      const basePath = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, containmentOptions(context));
       // 找文件意图（带 pattern）默认递归；显式 recursive:false 仍只列本层
       const hasPattern = Boolean((args.pattern as string | undefined)?.trim());
       const recursive = args.recursive === undefined && hasPattern
@@ -740,6 +727,7 @@ export function createFileListTool(options?: {
       const maxDepth = Math.min(Math.max((args.maxDepth as number) ?? 4, 1), 8);
 
       const entries: Array<{ name: string; path: string; type: 'file' | 'directory'; size?: number }> = [];
+      const denylist = context?.pathDenylist ?? [];
       let totalCount = 0;
       let entryCapped = false;
       let depthCapped = false;
@@ -755,6 +743,8 @@ export function createFileListTool(options?: {
           if (entryCapped) return;
           const fullPath = join(dir, item.name);
           const relativePath = relative(basePath, fullPath);
+          // Denied names are not even enumerated: existence and size are data too.
+          if (denylist.length > 0 && matchesDenyPattern(relativePath.split('\\').join('/'), denylist)) continue;
 
           if (recursive && item.isDirectory() && SKIP_DIR_NAMES.has(item.name)) continue;
           // pattern 只过滤列出的条目；递归时目录始终下钻（否则 recursive+*.md 进不了子目录）

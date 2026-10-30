@@ -13,6 +13,7 @@
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
 import {
+  containmentOptions,
   isPathUnderRoots,
   isUnderAttachmentRoot,
   isUnderSessionUndoRoot,
@@ -60,10 +61,7 @@ export function createFileEditTool(): RegisteredTool {
 
       const rawPath = args.path as string;
       const cwd = context.cwd ?? process.cwd();
-      const path = resolveToolPath(rawPath, cwd, {
-        allowRoots: context.pathRoots,
-        containment: context.pathContainment,
-      });
+      const path = resolveToolPath(rawPath, cwd, containmentOptions(context));
       if (isUnderAttachmentRoot(path, context.attachmentRoots)) {
         throw new Error('session attachments are read-only; cannot edit attachments root');
       }

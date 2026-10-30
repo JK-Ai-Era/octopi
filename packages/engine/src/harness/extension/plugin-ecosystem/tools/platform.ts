@@ -6,13 +6,14 @@
  */
 
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
-import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
   isPathUnderRoots,
   lexicalUnderRoots,
   realpathAllowMissing,
 } from '../../../shared/paths/index.js';
+import { matchesDenyPattern } from '../../../shared/paths/glob.js';
 
 export { isPathUnderRoots };
 
@@ -31,20 +32,39 @@ export interface PlatformShell {
 }
 
 /**
- * 解析工具入参路径：绝对路径原样返回，相对路径相对 cwd
+ * Build containment options from a tool context.
  *
- * 使用 `path.isAbsolute`，同时覆盖 POSIX `/foo`、Windows 盘符
- * `C:\` / `C:/` 与 UNC `\\server\share`。
+ * Every tool used to spell these fields out by hand, which is how a newly added
+ * policy field gets silently dropped (the same failure that hid
+ * `refuseFinalSymlink` from the tool surface). One constructor, one place to add
+ * the next field.
  *
- * @param rawPath - 工具入参路径
- * @param cwd - 工作目录；缺省为 `process.cwd()`
- * @returns 规范化后的绝对路径
+ * @param context - tool execution context
+ * @returns options for {@link resolveToolPath}
  */
+export function containmentOptions(
+  context?: { pathRoots?: readonly string[]; pathContainment?: 'strict' | 'soft' | 'none'; pathDenylist?: readonly string[] } | null,
+): ResolveToolPathOptions {
+  return {
+    allowRoots: context?.pathRoots,
+    containment: context?.pathContainment,
+    denyPatterns: context?.pathDenylist,
+  };
+}
+
+/** L2 路径约束选项（由 {@link containmentOptions} 从工具上下文构造） */
 export interface ResolveToolPathOptions {
   /** L2 允许根；containment 非 none 时必须落在其下 */
-  allowRoots?: string[];
+  allowRoots?: readonly string[];
   /** L2 级别；省略 = 不限制 */
   containment?: 'strict' | 'soft' | 'none';
+  /**
+   * L2 拒绝清单（glob，匹配允许根内相对路径与文件名）。
+   *
+   * 独立于 containment：声明即拒绝，任何级别都生效。默认空 = 不拒绝任何路径，
+   * 因为「agent 读写自己 workspace 里的 `.env`」是合法且常见的用法。
+   */
+  denyPatterns?: readonly string[];
 }
 
 /**
@@ -63,15 +83,29 @@ export interface ResolveToolPathOptions {
  */
 function containPath(absPath: string, rawPath: string, options?: ResolveToolPathOptions): string {
   const containment = options?.containment ?? 'none';
-  // `none` must stay syscall-free: it is the "no policy" mode.
-  if (containment === 'none') return absPath;
-
+  const denyPatterns = options?.denyPatterns ?? [];
   const roots = options?.allowRoots ?? [];
+
+  // The denylist is an independent deny layer: if a deployment declares these
+  // patterns forbidden, they are forbidden at every containment level. The
+  // lexical spelling is checked first because it needs no syscalls.
+  if (denyPatterns.length > 0) {
+    denyPath(absPath, rawPath, options, denyPatterns);
+  }
+
+  // `none` stays syscall-free unless a denylist is declared: then the resolved
+  // target must be checked too, or an innocuously named link reads a denied file.
+  if (containment === 'none') {
+    if (denyPatterns.length > 0) denyResolvedTarget(absPath, rawPath, options, denyPatterns);
+    return absPath;
+  }
+
   if (roots.length === 0) {
     // strict 无 root = fail-closed（与 isPathAllowed 一致）；soft 仅审计
     if (containment === 'strict') {
       throw new Error(`path_forbidden: "${rawPath}" effect roots not configured`);
     }
+    if (denyPatterns.length > 0) denyResolvedTarget(absPath, rawPath, options, denyPatterns);
     return absPath;
   }
 
@@ -79,6 +113,13 @@ function containPath(absPath: string, rawPath: string, options?: ResolveToolPath
     .map((root) => realpathAllowMissing(resolve(root)))
     .filter((root): root is string => root !== null);
   const realTarget = realpathAllowMissing(absPath);
+
+  // Re-check the resolved path *before* the root verdict: the caller's spelling
+  // may be innocuous while the link target is denied, and that must also hold for
+  // paths that end up escaping the roots (soft mode passes those through).
+  if (denyPatterns.length > 0 && realTarget !== null && realTarget !== absPath) {
+    denyPath(realTarget, rawPath, options, denyPatterns);
+  }
 
   // An unresolvable target or a set of vanished roots is a denial, not a pass.
   // Both sides are already real here, so compare them lexically: re-resolving
@@ -90,7 +131,62 @@ function containPath(absPath: string, rawPath: string, options?: ResolveToolPath
     // soft：放行（审计由调用方/Observer 负责），保留词法答案以免改变既有语义
     return absPath;
   }
+
   return realTarget;
+}
+
+/**
+ * Apply the denylist to the symlink-resolved target of a path.
+ *
+ * Only the resolved spelling is tested: the lexical one was already checked by
+ * the caller, and this exists for the "harmless name → denied target" case.
+ *
+ * @param absPath - absolute, lexically normalized candidate
+ * @param rawPath - caller spelling, for the error message
+ * @param options - containment options (roots)
+ * @param denyPatterns - denylist globs
+ */
+function denyResolvedTarget(
+  absPath: string,
+  rawPath: string,
+  options: ResolveToolPathOptions | undefined,
+  denyPatterns: readonly string[],
+): void {
+  const realTarget = realpathAllowMissing(absPath);
+  if (realTarget !== null && realTarget !== absPath) denyPath(realTarget, rawPath, options, denyPatterns);
+}
+
+/**
+ * Throw when the path matches the denylist.
+ *
+ * Matching happens against the path relative to the containing root, so a
+ * pattern like `.git/**` means "inside a root", not "anywhere on the host".
+ * When no root contains it the absolute path is used, which still catches
+ * name-based patterns such as `*.pem`.
+ *
+ * @param absPath - absolute path to test
+ * @param rawPath - caller spelling, for the error message
+ * @param options - containment options (roots)
+ * @param denyPatterns - denylist globs
+ */
+function denyPath(
+  absPath: string,
+  rawPath: string,
+  options: ResolveToolPathOptions | undefined,
+  denyPatterns: readonly string[],
+): void {
+  const roots = options?.allowRoots ?? [];
+  const candidates: string[] = [];
+  for (const root of roots) {
+    const realRoot = realpathAllowMissing(resolve(root)) ?? resolve(root);
+    if (lexicalUnderRoots(absPath, [realRoot])) {
+      candidates.push(relative(realRoot, absPath).split(sep).join('/'));
+    }
+  }
+  candidates.push(absPath.split(sep).join('/'));
+  if (candidates.some((candidate) => matchesDenyPattern(candidate, denyPatterns))) {
+    throw new Error(`path_forbidden: "${rawPath}" matches pathDenylist`);
+  }
 }
 
 /**
@@ -146,6 +242,11 @@ export function resolveReadableToolPath(
       const realCandidate = realpathAllowMissing(candidate);
       if (realRoot === null || realCandidate === null) continue;
       if (!lexicalUnderRoots(realCandidate, [realRoot])) continue;
+      // Attachment roots are outside the effect roots, so they would otherwise
+      // skip the denylist entirely: "read-only" is not "allowed to read".
+      if (options?.denyPatterns && options.denyPatterns.length > 0) {
+        denyPath(realCandidate, rawPath, options, options.denyPatterns);
+      }
       return realCandidate;
     }
   }

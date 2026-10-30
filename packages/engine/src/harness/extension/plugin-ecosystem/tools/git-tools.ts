@@ -10,17 +10,20 @@
  */
 import type { RegisteredTool, ToolExecutionContext } from '@octopi-agent/core/types.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
-import { resolveToolPath, isUnderAttachmentRoot, isUnderSessionUndoRoot } from './platform.js';
+import {
+  containmentOptions,
+  isUnderAttachmentRoot,
+  isUnderSessionUndoRoot,
+  resolveToolPath,
+} from './platform.js';
 import { detectEol, toEol } from './eol.js';
 import { assertSafeRef, type AllowlistedRunResult } from './allowlisted-run.js';
+import { matchesDenyPattern } from '../../../shared/paths/glob.js';
 import { runGit } from './git-runner.js';
 
 function resolveCwd(context: ToolExecutionContext | undefined, raw?: string): string {
   const cwd = raw ?? context?.cwd ?? process.cwd();
-  const abs = resolveToolPath(cwd, context?.cwd, {
-    allowRoots: context?.pathRoots,
-    containment: context?.pathContainment,
-  });
+  const abs = resolveToolPath(cwd, context?.cwd, containmentOptions(context));
   if (isUnderAttachmentRoot(abs, context?.attachmentRoots)) {
     throw new Error('session attachments are read-only; cannot run git under attachments root');
   }
@@ -35,10 +38,7 @@ function assertPathSafe(
   context: ToolExecutionContext | undefined,
   label: string,
 ): string {
-  const abs = resolveToolPath(raw, context?.cwd, {
-    allowRoots: context?.pathRoots,
-    containment: context?.pathContainment,
-  });
+  const abs = resolveToolPath(raw, context?.cwd, containmentOptions(context));
   if (isUnderAttachmentRoot(abs, context?.attachmentRoots)) {
     throw new Error(`session attachments are read-only; cannot ${label} under attachments root`);
   }
@@ -65,6 +65,14 @@ function toGitPathspec(
   if (!isMagic) {
     return assertPathSafe(raw, context, label);
   }
+  const denylist = context?.pathDenylist ?? [];
+  // A glob pathspec is matched by git, not by us, so we cannot prove it excludes
+  // denied paths. Fail closed instead of shipping an unverifiable allow.
+  if (denylist.length > 0) {
+    throw new Error(
+      `pathspec_glob_forbidden: glob pathspec "${raw}" cannot be checked against pathDenylist; pass explicit paths`,
+    );
+  }
   if (
     raw.startsWith('/') ||
     raw.startsWith('\\\\') ||
@@ -85,9 +93,125 @@ function toGitPathspec(
   return raw;
 }
 
-function toText(result: AllowlistedRunResult): Record<string, unknown> {
+/**
+ * Decode a git-quoted path (`"a\tb"`) into its literal spelling.
+ *
+ * @param token - path token straight from git output
+ * @returns the path git meant, without the a/ or b/ side prefix
+ */
+function unquoteGitPath(token: string): string {
+  const body = token.startsWith('"') && token.endsWith('"')
+    ? token.slice(1, -1).replace(/\\(.)/g, '$1')
+    : token;
+  return body.replace(/^[ab]\//, '');
+}
+
+/**
+ * Split the arguments of a `diff --git a/<path> b/<path>` header.
+ *
+ * @param rest - header text after `diff --git `
+ * @returns path tokens, still quoted when git quoted them
+ */
+function splitDiffHeader(rest: string): string[] {
+  const tokens: string[] = [];
+  let index = 0;
+  while (index < rest.length) {
+    if (rest[index] === ' ') {
+      index += 1;
+      continue;
+    }
+    let token = '';
+    while (index < rest.length && rest[index] !== ' ') {
+      if (rest[index] === '"') {
+        token += '"';
+        index += 1;
+        while (index < rest.length) {
+          if (rest[index] === '\\' && index + 1 < rest.length) {
+            token += rest[index] + rest[index + 1];
+            index += 2;
+            continue;
+          }
+          token += rest[index];
+          if (rest[index] === '"') {
+            index += 1;
+            break;
+          }
+          index += 1;
+        }
+        continue;
+      }
+      token += rest[index];
+      index += 1;
+    }
+    tokens.push(token);
+  }
+  return tokens;
+}
+
+/**
+ * Drop git output that names or contains denied paths.
+ *
+ * `git_diff` / `git_show` emit file *contents* keyed by section headers, and
+ * `git_status` emits bare paths, so path arguments alone are not enough: a
+ * deployment that denies `.env*` must not get that content back through VCS.
+ * Truncated diffs cannot be verified section by section, so they are refused
+ * rather than returned unverified.
+ *
+ * @param text - raw git stdout
+ * @param truncated - whether the runner cut the output
+ * @param patterns - denylist globs
+ * @param kind - output shape
+ * @returns filtered stdout
+ */
+function filterGitOutput(
+  text: string,
+  truncated: boolean,
+  patterns: readonly string[],
+  kind: 'diff' | 'status',
+): string {
+  if (patterns.length === 0) return text;
+  const lines = text.split('\n');
+  if (kind === 'status') {
+    return lines
+      .filter((line) => {
+        if (line.startsWith('##') || line.length < 4) return true;
+        const raw = line.slice(3);
+        const target = raw.includes(' -> ') ? raw.slice(raw.lastIndexOf(' -> ') + 4) : raw;
+        return !matchesDenyPattern(unquoteGitPath(target.trim()), patterns);
+      })
+      .join('\n');
+  }
+  if (truncated) {
+    throw new Error(
+      'path_forbidden: git output was truncated, so pathDenylist could not be verified; narrow the request',
+    );
+  }
+  let dropping = false;
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith('diff --git ')) {
+      const paths = splitDiffHeader(line.slice('diff --git '.length)).map(unquoteGitPath);
+      dropping = paths.some((path) => matchesDenyPattern(path, patterns));
+    } else if (/^ .+?\s+\|\s+\d+/.test(line)) {
+      // `--stat` rows are single lines, not sections; test the named path.
+      const path = unquoteGitPath(line.trim().split(/\s+\|\s+/)[0]!.trim());
+      if (matchesDenyPattern(path, patterns)) continue;
+    }
+    if (!dropping) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+function toText(
+  result: AllowlistedRunResult,
+  context?: ToolExecutionContext,
+  contentKind?: 'diff' | 'status',
+): Record<string, unknown> {
+  const stdout = contentKind
+    ? filterGitOutput(result.stdout, result.truncated, context?.pathDenylist ?? [], contentKind)
+    : result.stdout;
   return {
-    stdout: result.stdout,
+    stdout,
     stderr: result.stderr,
     exitCode: result.exitCode,
     durationMs: result.durationMs,
@@ -126,7 +250,7 @@ export function createGitStatusTool(): RegisteredTool {
         '--untracked-files=all',
         ...pathArgs,
       ]);
-      return { ...toText(result), cwd };
+      return { ...toText(result, context, 'status'), cwd };
     },
   };
 }
@@ -178,7 +302,7 @@ export function createGitDiffTool(): RegisteredTool {
         gitArgs.push('--', ...paths.map((p) => toGitPathspec(p, context, 'diff')));
       }
       const result = await runGit(context, cwd, gitArgs, { timeoutMs: 120_000 });
-      return { ...toText(result), cwd, mode };
+      return { ...toText(result, context, 'diff'), cwd, mode };
     },
   };
 }
@@ -246,7 +370,7 @@ export function createGitShowTool(): RegisteredTool {
       if (args.stat === true) gitArgs.push('--stat');
       gitArgs.push(rev);
       const result = await runGit(context, cwd, gitArgs, { timeoutMs: 120_000 });
-      return { ...toText(result), cwd, revision: rev };
+      return { ...toText(result, context, 'diff'), cwd, revision: rev };
     },
   };
 }

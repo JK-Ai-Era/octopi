@@ -7,10 +7,11 @@
  */
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
 import {
+  containmentOptions,
   isPathUnderRoots,
   isUnderAttachmentRoot,
-  resolveToolPath,
   isUnderSessionUndoRoot,
+  resolveToolPath,
 } from './platform.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
 import { isFinalSymlink } from '../../../shared/paths/index.js';
@@ -22,10 +23,7 @@ function resolveSafePath(
   label: string,
 ): string {
   const cwd = context?.cwd ?? process.cwd();
-  const path = resolveToolPath(rawPath, cwd, {
-    allowRoots: context?.pathRoots,
-    containment: context?.pathContainment,
-  });
+  const path = resolveToolPath(rawPath, cwd, containmentOptions(context));
   if (isUnderAttachmentRoot(path, context?.attachmentRoots)) {
     throw new Error(`session attachments are read-only; cannot ${label} under attachments root`);
   }

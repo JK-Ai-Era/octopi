@@ -27,7 +27,11 @@ import {
   resolveSupportBinding,
   type ToolSummarySupport,
 } from '../../../context/capabilities/summary/index.js';
-import { resolveToolPath } from './platform.js';
+import {
+  containmentOptions,
+  resolveToolPath,
+} from './platform.js';
+import { globToPathRegex, matchesDenyPattern } from '../../../shared/paths/glob.js';
 
 /** 单条匹配结果 */
 interface SearchMatch {
@@ -216,10 +220,7 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
 
       const rawRoot = args.path as string | undefined;
       const rootPath = rawRoot
-        ? resolveToolPath(rawRoot, context.cwd ?? process.cwd(), {
-            allowRoots: context.pathRoots,
-            containment: context.pathContainment,
-          })
+        ? resolveToolPath(rawRoot, context.cwd ?? process.cwd(), containmentOptions(context))
         : (context.cwd ?? process.cwd());
 
       const terms = collectPatternTerms(args);
@@ -254,6 +255,11 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
 
       async function considerFile(fullPath: string, relPath: string): Promise<void> {
         if (truncated) return;
+        // Denylist applies per file, not just to the `path` argument: this tool
+        // walks a tree and returns file *contents*, so a denied name would
+        // otherwise be readable here while `file_read` refuses it.
+        const denylist = context.pathDenylist ?? [];
+        if (denylist.length > 0 && matchesDenyPattern(relPath, denylist)) return;
         filesSeen += 1;
 
         // glob 过滤：root 相对路径（无 `/` 的模式等价于任意深度 globstar）
@@ -697,136 +703,6 @@ async function searchFileLines(options: {
 }
 
 // ── glob 编译 ──
-
-/**
- * 将路径 glob 编译为正则（匹配 root 相对路径）
- *
- * 语义对齐 rg/git：
- * - `**` 跨目录；`*` / `?` 不跨 `/`
- * - 无 `/` 的模式（如 `*.md`）等价于任意深度的 globstar 匹配
- * - 支持 `{a,b}` 花括号（可多组）
- *
- * @param glob - glob 模式
- * @returns 整串匹配相对路径的正则（大小写不敏感）
- */
-function globToPathRegex(glob: string): RegExp {
-  const trimmed = glob.trim();
-  if (!trimmed) throw new Error('glob must be non-empty');
-  const normalized = trimmed.includes('/') ? trimmed : `**/${trimmed}`;
-  const source = globToSource(normalized);
-  return new RegExp(`^${source}$`, 'i');
-}
-
-/**
- * 将（已规范化）glob 片段编译为正则源
- *
- * @param glob - 含路径分隔符的 glob
- * @returns 正则源片段（无首尾锚点）
- */
-function globToSource(glob: string): string {
-  let out = '';
-  let i = 0;
-
-  while (i < glob.length) {
-    const ch = glob[i];
-
-    // `\*` `\?` 等 → 字面量
-    if (ch === '\\' && i + 1 < glob.length && '*?[]{}\\/!'.includes(glob[i + 1])) {
-      out += escapeRegex(glob[i + 1]);
-      i += 2;
-      continue;
-    }
-
-    if (ch === '*' && glob[i + 1] === '*') {
-      i += 2;
-      if (glob[i] === '/') {
-        i += 1;
-        // `**/` → 任意深度前缀（含零层）
-        out += '(?:.*/)?';
-      } else {
-        out += '.*';
-      }
-      continue;
-    }
-
-    if (ch === '*') {
-      i += 1;
-      out += '[^/]*';
-      continue;
-    }
-
-    if (ch === '?') {
-      i += 1;
-      out += '[^/]';
-      continue;
-    }
-
-    if (ch === '{') {
-      const end = findBraceEnd(glob, i);
-      if (end === -1) {
-        out += '\\{';
-        i += 1;
-        continue;
-      }
-      const alts = splitBraceAlts(glob.slice(i + 1, end));
-      out += `(?:${alts.map((alt) => globToSource(alt)).join('|')})`;
-      i = end + 1;
-      continue;
-    }
-
-    if ('.+^$()|[]'.includes(ch)) {
-      out += `\\${ch}`;
-    } else {
-      out += ch;
-    }
-    i += 1;
-  }
-
-  return out;
-}
-
-/**
- * 找到配对的 `}`（跳过嵌套 `{}`）
- *
- * @param glob - glob 字符串
- * @param openIndex - `{` 下标
- * @returns 配对 `}` 下标；无则 -1
- */
-function findBraceEnd(glob: string, openIndex: number): number {
-  let depth = 0;
-  for (let i = openIndex; i < glob.length; i++) {
-    if (glob[i] === '{') depth += 1;
-    else if (glob[i] === '}') {
-      depth -= 1;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-}
-
-/**
- * 拆分花括号内的顶层逗号备选
- *
- * @param body - `{}` 内部
- * @returns 备选列表
- */
-function splitBraceAlts(body: string): string[] {
-  const alts: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const ch of body) {
-    if (ch === '{') depth += 1;
-    if (ch === '}') depth -= 1;
-    if (ch === ',' && depth === 0) {
-      alts.push(current);
-      current = '';
-      continue;
-    }
-    current += ch;
-  }
-  alts.push(current);
-  return alts;
-}
 
 // ── L1 输出收缩（F1-B1：结构化硬顶，零 LLM） ──
 

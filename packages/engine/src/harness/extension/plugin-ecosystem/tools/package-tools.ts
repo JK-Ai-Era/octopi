@@ -13,10 +13,11 @@ import { join } from 'node:path';
 import type { RegisteredTool, ToolExecutionContext } from '@octopi-agent/core/types.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
 import {
+  containmentOptions,
+  findExecutable,
   isUnderAttachmentRoot,
   isUnderSessionUndoRoot,
   resolveToolPath,
-  findExecutable,
 } from './platform.js';
 import { runAllowlistedArgv, type AllowlistedRunResult } from './allowlisted-run.js';
 import { resolveNodeToolCommand } from './platform.js';
@@ -25,10 +26,7 @@ type Pm = 'npm' | 'pnpm' | 'yarn';
 
 function resolveCwd(context: ToolExecutionContext | undefined, raw?: string): string {
   const cwd = raw ?? context?.cwd ?? process.cwd();
-  const abs = resolveToolPath(cwd, context?.cwd, {
-    allowRoots: context?.pathRoots,
-    containment: context?.pathContainment,
-  });
+  const abs = resolveToolPath(cwd, context?.cwd, containmentOptions(context));
   if (isUnderAttachmentRoot(abs, context?.attachmentRoots)) {
     throw new Error('session attachments are read-only; cannot run package tools under attachments root');
   }
@@ -43,10 +41,7 @@ function assertPathSafe(
   context: ToolExecutionContext | undefined,
   label: string,
 ): string {
-  const abs = resolveToolPath(raw, context?.cwd, {
-    allowRoots: context?.pathRoots,
-    containment: context?.pathContainment,
-  });
+  const abs = resolveToolPath(raw, context?.cwd, containmentOptions(context));
   if (isUnderAttachmentRoot(abs, context?.attachmentRoots)) {
     throw new Error(`session attachments are read-only; cannot ${label} under attachments root`);
   }
@@ -267,10 +262,7 @@ export function createProjectRunTool(): RegisteredTool {
         throw new Error(`project_run: invalid script name "${script}"`);
       }
 
-      const pkgPath = resolveToolPath('package.json', cwd, {
-        allowRoots: context?.pathRoots,
-        containment: context?.pathContainment,
-      });
+      const pkgPath = resolveToolPath('package.json', cwd, containmentOptions(context));
       const { pkg } = await readPackageJson(pkgPath);
       const scripts = (pkg.scripts ?? {}) as Record<string, unknown>;
       if (typeof scripts[script] !== 'string') {

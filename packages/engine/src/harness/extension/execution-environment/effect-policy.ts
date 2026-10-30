@@ -8,6 +8,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { expandHomePath } from '../../../paths.js';
+import { globToPathRegex, normalizeDenyPattern, validateDenyPattern } from '../../shared/paths/glob.js';
 import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
 import type { ToolIsolationMode } from './isolation.js';
 import type { EscalationPolicy, EscalationRule } from './privileged-exec.js';
@@ -171,6 +172,13 @@ export interface EffectPolicyConfig {
    * 代价：`pathContainment: 'none'` 下根内合法链接的读写会被拒。
    */
   refuseFinalSymlink?: boolean;
+  /**
+   * 拒绝匹配这些 glob 的路径（相对允许根匹配，同时匹配文件名）。
+   *
+   * 默认空 = 不拒绝任何路径；「agent 读写自己 workspace 里的 `.env`」是合法
+   * 用法，本字段是部署策略而非引擎世界观。声明即拒绝，任何 containment 级别都生效。
+   */
+  pathDenylist?: string[];
   shellEscape?: ShellEscapePolicy;
   /**
    * Jail network posture (D4-c). Omitted = mode default:
@@ -243,6 +251,8 @@ export interface EffectiveEffectPolicy {
   pathContainment: PathContainment;
   /** 拒绝最终组件为符号链接的文件读写（`untrusted` 强制 true） */
   refuseFinalSymlink: boolean;
+  /** 拒绝清单（glob）；空数组 = 不拒绝 */
+  pathDenylist: readonly string[];
   shellEscape: ShellEscapePolicy;
   /** Resolved jail network posture */
   network: 'open' | 'deny' | 'allowlist';
@@ -305,6 +315,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     // containment 已把路径解析为真实路径，合法链接不受影响；需要闭合
     // 「检查后、落盘前被换成链接」窗口的部署再显式开启。
     refuseFinalSymlink: false,
+    pathDenylist: [],
     // 无 L4 时无法「只禁越界」：deny = 拒绝 shell 工具（fail-closed）
     shellEscape: 'deny',
     network: 'deny',
@@ -319,6 +330,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     toolIsolation: 'session-subdir',
     pathContainment: 'strict',
     refuseFinalSymlink: false,
+    pathDenylist: [],
     // 编码 agent 必须有 shell；文件侧靠 L2，shell FS 越界待 L4
     shellEscape: 'allow',
     network: 'open',
@@ -334,6 +346,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     pathContainment: 'none',
     // containment 关闭时不做 realpath，开启会拒掉根内合法链接，故保持关闭
     refuseFinalSymlink: false,
+    pathDenylist: [],
     shellEscape: 'allow',
     network: 'open',
     processLimits: true,
@@ -348,6 +361,7 @@ const MODE_DEFAULTS: Record<EffectRunMode, ModePreset> = {
     pathContainment: 'strict',
     // 不可信输入下强制开启：硬化为不可放松的产品承诺
     refuseFinalSymlink: true,
+    pathDenylist: [],
     shellEscape: 'deny',
     network: 'deny',
     processLimits: true,
@@ -637,6 +651,17 @@ export function resolveEffectiveEffectPolicy(
   // containment off, in-root links are a legitimate workflow.
   const refuseFinalSymlink =
     requestedMode === 'untrusted' ? true : (config.refuseFinalSymlink ?? d.refuseFinalSymlink);
+  // Union, not replace: a preset may only *add* denied patterns, so a deployment
+  // cannot loosen a built-in deny list by supplying its own.
+  const pathDenylist = [...new Set([...(d.pathDenylist ?? []), ...(config.pathDenylist ?? [])])]
+    .map(normalizeDenyPattern);
+  // Two gates, deliberately: the config schema rejects these shapes at load time
+  // (so a daemon never starts believing it is protected), and this loop covers
+  // callers that hand-build a config object instead of going through the schema.
+  for (const pattern of pathDenylist) {
+    validateDenyPattern(pattern);
+    globToPathRegex(pattern);
+  }
 
   // untrusted intent residue: keep discard-on-close even when effectiveMode renames
   const onClose =
@@ -653,6 +678,7 @@ export function resolveEffectiveEffectPolicy(
     toolIsolation: config.toolIsolation ?? d.toolIsolation,
     pathContainment,
     refuseFinalSymlink,
+    pathDenylist,
     // degraded untrusted must not leave shell allow as a hole
     shellEscape: toolSurface === 'reduced' ? 'deny' : (config.shellEscape ?? d.shellEscape),
     // untrusted product promise: egress deny is not a config knob (like pathContainment)

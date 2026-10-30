@@ -184,6 +184,11 @@ export interface ToolExecutionContext {
    */
   refuseFinalSymlink?: boolean;
   /**
+   * 拒绝匹配这些 glob 的路径（相对允许根匹配，同时匹配文件名）。
+   * 由 Runner 注入；缺省为空 = 不拒绝任何路径。
+   */
+  pathDenylist?: readonly string[];
+  /**
    * 文件效应写入口（L3 undo）。文件写工具必须经此落盘。
    * 由 Runner 注入 TurnFileUndoLog；缺失时文件写工具必须拒绝执行。
    */

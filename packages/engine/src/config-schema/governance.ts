@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { ConfigPathSchema, SessionRightsSchema } from './shared.js';
+import { validateDenyPattern } from '../harness/shared/paths/glob.js';
 
 export const SecurityConfigSchema = z.object({
   enforce: z.enum(['block', 'audit']).optional(),
@@ -68,6 +69,29 @@ export const EffectPolicyConfigSchema = z.object({
    * 缺省 false；`mode: 'untrusted'` 强制 true 且不可关闭。
    */
   refuseFinalSymlink: z.boolean().optional(),
+  /**
+   * 拒绝匹配这些 glob 的路径（相对允许根匹配，同时匹配文件名）。
+   * 默认空 = 不拒绝任何路径；声明即拒绝，任何 pathContainment 级别都生效。
+   *
+   * 只收「能真正匹配」的形状：以 `/` 开头/结尾、含 `.`/`..` 段、空串一律在配置
+   * 加载期报错——一条永不命中的安全配置比没有配置更危险。
+   */
+  pathDenylist: z
+    .array(z.string())
+    .optional()
+    .superRefine((patterns, ctx) => {
+      patterns?.forEach((pattern, index) => {
+        try {
+          validateDenyPattern(pattern);
+        } catch (error) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [index],
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }),
   shellEscape: z.enum(['deny', 'confirm', 'allow']).optional(),
   processLimits: z.boolean().optional(),
   commit: z.enum(['auto', 'manual']).optional(),

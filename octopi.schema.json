@@ -91,6 +91,12 @@
               "refuseFinalSymlink": {
                 "type": "boolean"
               },
+              "pathDenylist": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "shellEscape": {
                 "type": "string",
                 "enum": [
@@ -2860,6 +2866,12 @@
         },
         "refuseFinalSymlink": {
           "type": "boolean"
+        },
+        "pathDenylist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "shellEscape": {
           "type": "string",

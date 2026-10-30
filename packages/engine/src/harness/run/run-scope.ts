@@ -51,6 +51,8 @@ export interface RunToolRuntime {
   pathContainment?: "strict" | "soft" | "none";
   /** 拒绝最终组件为符号链接的文件读写（来自 effectPolicy.refuseFinalSymlink） */
   refuseFinalSymlink?: boolean;
+  /** 拒绝清单（glob）；空 = 不拒绝 */
+  pathDenylist?: readonly string[];
   confirmEffect?: import("@octopi-agent/core/types/tools.js").ToolExecutionContext["confirmEffect"];
   effectChannel?: "engine" | "host-gate";
   /** 提权策略（ops P3/P4，resolved）：priv_exec 匹配面（allowlist 全等 / full 全量） */

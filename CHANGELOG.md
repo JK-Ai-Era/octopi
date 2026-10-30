@@ -107,6 +107,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.24 (2026-10-30)
+
+### feat(tools): 部署声明式路径拒绝清单 `effectPolicy.pathDenylist`（P3）
+
+- 新增 `effectPolicy.pathDenylist`（默认空数组 = 不拒绝任何路径）。机制归引擎、策略归部署：agent 读写自己 workspace 的 `.env` 是合法用法，因此引擎不自带任何拒绝项。
+- 声明即拒绝，**任何 `pathContainment` 级别**（strict / soft / none）都生效；它与审计记账无关（审计问「是否在根内」，deny 问「是否允许触碰」）。
+- 匹配语义与 `file_search` 的 glob 参数共用同一编译器（`shared/paths/glob.ts`），支持 `**`、`{a,b}`、裸模式任意深度、文件名匹配。`\` 一律视为路径分隔符（Windows 写 `.git\**` 有效）。
+- 校验分两处：配置 schema 在**加载期**拒绝永不命中的形状（空串、前导 `/`、尾随分隔符、`.`/`..` 段），`resolveEffectiveEffectPolicy` 再兜一层供绕过 schema 的调用方；一条永不命中的安全配置比没有配置更危险。
+- **覆盖的是内容面，不只是路径参数**：`file_read`/`file_write` 等按名字寻址的工具之外，`file_search`（逐文件跳过）、`file_list`（不枚举被禁名字）、`git_status`/`git_diff`/`git_show`（按段/行过滤正文与名字）同样受约束。启用 denylist 时 `git` 的 glob pathspec 一律拒绝（`pathspec_glob_forbidden`），因为无法证明它排除了被禁路径。
+- 符号链接指向被禁目标同样被拒（`none` 与 soft 逃逸分支均已覆盖，见 `arch/path-containment-hardening.md` §10）。
+- 已知边界：硬链接 realpath 不可见；`shell` 内命令不受 denylist 约束（由 `shellEscape`/jail 策略负责）。
+- 验证：新增 `tests/harness/path-denylist.test.ts` 17 例 + `path-denylist-coverage.test.ts` 14 例 + 上下文贯通 3 例；全量 **3797 passed / 7 skipped**；typecheck、lint、`arch/check-sync.sh`、build 绿。
+
+---
+
 ## v0.97.23 (2026-10-30)
 
 ### feat(tools): 最终组件符号链接守卫 refuseFinalSymlink（P2）

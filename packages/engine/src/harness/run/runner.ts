@@ -502,6 +502,7 @@ export class SessionAwareRunner {
   /** 本 Runner 生效的 L2 级别（由 effectPolicy 展开） */
   private effectPathContainment: "strict" | "soft" | "none" = "none";
   private effectRefuseFinalSymlink = false;
+  private effectPathDenylist: readonly string[] = [];
   private effectChannel: "engine" | "host-gate" = "engine";
   private effectAllowRoots: string[] = [];
   /** Effective effectPolicy.mode (for Runtime injection / UI) */
@@ -1264,6 +1265,7 @@ export class SessionAwareRunner {
         const sessionExtraRoots = readSessionEffectOverrides(session.metadata).transactionRoots;
         this.effectPathContainment = eff.pathContainment;
         this.effectRefuseFinalSymlink = eff.refuseFinalSymlink;
+        this.effectPathDenylist = eff.pathDenylist;
         this.effectChannel = eff.effects;
         this.effectAllowRoots = mergeTransactionRoots(eff.allowRoots, sessionExtraRoots);
         this.effectMode = eff.mode;
@@ -1682,6 +1684,7 @@ export class SessionAwareRunner {
               : undefined,
           pathContainment: this.effectPathContainment,
           refuseFinalSymlink: this.effectRefuseFinalSymlink,
+          pathDenylist: this.effectPathDenylist,
           confirmEffect: this.config.confirmEffect,
           effectChannel: this.effectChannel,
           escalation: this.effectEscalation,
