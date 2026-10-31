@@ -118,6 +118,8 @@ export function createDefaultSystemPromptAssembler(options?: {
   /** Wisdom 注入条数硬顶 */
   wisdomCoreMaxItems?: number;
   wisdomScenarioMaxItems?: number;
+  /** trial 可见性（wisdom.injection.trialVisible；缺省 true——trial 的意义就是被试用） */
+  wisdomIncludeTrial?: boolean;
   cognitionStore?: ConceptGraphStore;
   memoryLimit?: number;
   knowledgeMaxEntries?: number;
@@ -223,6 +225,7 @@ export function createDefaultSystemPromptAssembler(options?: {
                 text: query,
                 coreMaxItems: options?.wisdomCoreMaxItems,
                 scenarioMaxItems: options?.wisdomScenarioMaxItems,
+                includeTrial: options?.wisdomIncludeTrial,
               });
               return picks.map((p) => ({ entry: p.entry, bucket: p.bucket }));
             },

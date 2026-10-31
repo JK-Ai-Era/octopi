@@ -16,6 +16,7 @@ import {
 } from '@octopi-agent/engine/harness/memory/wisdom-policy.js';
 import {
   formAndAdmit,
+  isCoreEligible,
   parseWisdomFormationJson,
   normalizeWisdomFormation,
   pickForInjection,
@@ -230,9 +231,7 @@ describe('pickForInjection', () => {
   it('场景匹配进 scenario 桶；factory/strengthened 进 core', () => {
     const core = entry({ id: 'c1', origin: 'factory', status: 'active', scenario: { problemTypes: ['通用'] } });
     const scen = entry({ id: 's1', status: 'active' });
-    const picks = pickForInjection([core, scen], '验证型宣称 需要证据', {
-      includeTrial: true,
-    });
+    const picks = pickForInjection([core, scen], '验证型宣称 需要证据');
     expect(picks.find((p) => p.entry.id === 'c1')?.bucket).toBe('core');
     const sp = picks.find((p) => p.entry.id === 's1');
     expect(sp?.bucket).toBe('scenario');
@@ -245,11 +244,61 @@ describe('pickForInjection', () => {
       scenario: { problemTypes: ['验证型宣称'], antiScenarios: ['假设成功'] },
     });
     const contested = entry({ id: 'x1', status: 'contested' });
-    const picks = pickForInjection([anti, contested], '请假设成功并继续验证型宣称', {
-      includeTrial: true,
-    });
+    const picks = pickForInjection([anti, contested], '请假设成功并继续验证型宣称');
     expect(picks.some((p) => p.entry.id === 'a1')).toBe(false);
     expect(picks.some((p) => p.entry.id === 'x1')).toBe(false);
+  });
+
+  it('trial 默认可注入但只进 scenario 桶；无场景匹配不注入（回归：trial 召回死锁）', () => {
+    // trial 即便 problemTypes >= 2 也不得进 core
+    const trial = entry({
+      id: 't1',
+      status: 'trial',
+      scenario: { problemTypes: ['验证型宣称', '范围裁剪'] },
+    });
+    const unmatched = pickForInjection([trial], '今天天气不错');
+    expect(unmatched.some((p) => p.entry.id === 't1')).toBe(false);
+
+    const matched = pickForInjection([trial], '这是验证型宣称的处理');
+    const tp = matched.find((p) => p.entry.id === 't1');
+    expect(tp?.bucket).toBe('scenario');
+    expect(tp!.score).toBeGreaterThan(0);
+  });
+
+  it('includeTrial:false 只注入已站稳条目', () => {
+    const trial = entry({ id: 't1', status: 'trial' });
+    const active = entry({ id: 'a1', status: 'active' });
+    const picks = pickForInjection([trial, active], '验证型宣称 需要证据', {
+      includeTrial: false,
+    });
+    expect(picks.some((p) => p.entry.id === 't1')).toBe(false);
+    expect(picks.some((p) => p.entry.id === 'a1')).toBe(true);
+  });
+
+  it('isCoreEligible 状态枚举：trial 永不 core，其余按宽覆盖资格', () => {
+    const twoTypes = { problemTypes: ['a', 'b'] };
+    const oneType = { problemTypes: ['a'] };
+    // trial 无论形状/出身都不进 core
+    expect(isCoreEligible(entry({ status: 'trial', origin: 'factory', scenario: twoTypes }))).toBe(false);
+    expect(isCoreEligible(entry({ status: 'trial', scenario: oneType }))).toBe(false);
+    // factory / strengthened / 多 problemTypes 宽覆盖
+    expect(isCoreEligible(entry({ status: 'active', origin: 'factory', scenario: oneType }))).toBe(true);
+    expect(isCoreEligible(entry({ status: 'strengthened', scenario: oneType }))).toBe(true);
+    expect(isCoreEligible(entry({ status: 'active', scenario: twoTypes }))).toBe(true);
+    // active 单场景不算宽覆盖
+    expect(isCoreEligible(entry({ status: 'active', scenario: oneType }))).toBe(false);
+  });
+
+  it('trial 场景入场须全字面命中；bigram 弱重叠不算', () => {
+    const trial = entry({ id: 't1', status: 'trial', scenario: { problemTypes: ['验证型宣称'] } });
+    // 只共享 bigram「宣称」，无全字面命中 → trial 不得注入
+    expect(pickForInjection([trial], '他提出了一个宣称')).toEqual([]);
+    // 全字面命中 → 进 scenario 桶
+    const matched = pickForInjection([trial], '这是验证型宣称的处理');
+    expect(matched.find((p) => p.entry.id === 't1')?.bucket).toBe('scenario');
+    // 已站稳条目维持宽松门槛（弱重叠即可入 scenario）
+    const active = entry({ id: 'a1', status: 'active', scenario: { problemTypes: ['验证型宣称'] } });
+    expect(pickForInjection([active], '他提出了一个宣称').some((p) => p.entry.id === 'a1')).toBe(true);
   });
 
   it('scenarioMatchScore 对无关文本为 0', () => {

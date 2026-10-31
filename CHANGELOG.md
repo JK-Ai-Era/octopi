@@ -107,6 +107,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.97.25 (2026-10-31)
+
+### fix(wisdom): 蒸馏 wisdom 永不被召回——`includeTrial` 缺省值与生命周期语义相悖
+
+- 症状：wisdom 蒸馏产出正常但一次都未被召回（实证 `agents/default/agent.db` 12 条全部 `trial|distilled`、`applied=0`）。
+- 根因：distilled 出生即 `trial`（设计即「trial 试用挣 confidence」），而 `pickForInjection` 的 `includeTrial` 缺省 `false`，生产两处注入调用点从不传该参 → trial 条目在 pick 层被整体滤除；晋升 trial→active 要求 `applied>=3 && assisted>contested`，而 `applied` 仅在注入时入账 → 「永不注入→永不晋升」死锁。既有测试全绿是因为测试显式传 `includeTrial: true`，调用形态与生产不一致。
+- **行为变化**：`includeTrial` 缺省 `false→true`；`trial` 条目**只进 scenario 桶且零 core 名额**，且场景入场须 problemTypes/signals **全字面命中**（bigram 弱重叠不算——未验证假设不给模糊入场券）；已站稳条目（active/strengthened）维持宽松门槛不变。
+- **配置接线**：`wisdom.injection` 从「schema 接受但无消费方」变为生效——`coreMaxItems`/`scenarioMaxItems`/`trialVisible` 经 `AgentBuilder.wisdomInjection` 接到装配（`trialVisible` 缺省 true，显式 false 只注入已站稳条目）；`coreMaxTokens` 仍无消费方（见 KNOWN-ISSUES）。
+- **记账修正**：`WisdomLayer` 只对实际留在注入文本里的条目记 `applied`/报 `sources`（被预算裁掉的不再入账——`applied` 是归因环地基）；顺带删除 `WisdomLayer` 从未使用的 `coreMaxItems/scenarioMaxItems` 死字段（cap 真实入口在 select 闭包）。
+- 测试：`pickForInjection` 用例改为覆盖缺省语义，新增 `isCoreEligible` 状态枚举、trial 全字面门槛回归（bigram 不入 / 全命中入 / 已站稳宽松不变）、`includeTrial:false` 用例；端到端新增蒸馏 trial 召回（形状够格但状态不许进 core 的 miss 场景 + manifest `included` 断言）、`wisdomIncludeTrial:false` 语义、截断不入账三例。
+- 遗留（后续期，另行拍板）：结局归因环仍断——无生产代码构造 `WisdomOutcomeEvent`，`wisdom.steward.evaluate.request` 无发射方，晋升的 `assisted` 判决缺位；`evaluation.windowHours` 仍无消费方。
+- 验证：wisdom 相关 3 测试文件 61 例、全量 `npm test` 绿；eslint + tests typecheck 绿；独立评审（含两次变异测试实证回归钉死死锁）。
+
+---
+
 ## v0.97.24 (2026-10-30)
 
 ### feat(tools): 部署声明式路径拒绝清单 `effectPolicy.pathDenylist`（P3）

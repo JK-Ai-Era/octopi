@@ -576,6 +576,12 @@ export class AgentBuilder {
   };
   /** 智慧（注入 system prompt WisdomLayer） */
   private _wisdomStore?: import('../memory/types.js').WisdomStore;
+  /** Wisdom 注入策略（wisdom.injection：core/scenario 上限 + trialVisible） */
+  private _wisdomInjection?: {
+    coreMaxItems?: number;
+    scenarioMaxItems?: number;
+    trialVisible?: boolean;
+  };
   /** 认知图谱（注入 system prompt CognitionLayer） */
   private _cognitionStore?: import('../memory/types.js').ConceptGraphStore;
   /** system prompt 装配器调参 */
@@ -889,6 +895,16 @@ export class AgentBuilder {
   /** 注入 WisdomStore（半静态思维范式，进 system prompt WisdomLayer） */
   wisdomStore(store: import('../memory/types.js').WisdomStore): this {
     this._wisdomStore = store;
+    return this;
+  }
+
+  /** 注入策略（wisdom.injection.*：coreMaxItems/scenarioMaxItems/trialVisible） */
+  wisdomInjection(cfg: {
+    coreMaxItems?: number;
+    scenarioMaxItems?: number;
+    trialVisible?: boolean;
+  }): this {
+    this._wisdomInjection = cfg;
     return this;
   }
 
@@ -1369,6 +1385,9 @@ export class AgentBuilder {
       knowledgeGroupByScope: this._knowledgeCatalogOpts?.groupByScope,
       knowledgeShowProgress: this._knowledgeCatalogOpts?.showProgress,
       wisdomStore,
+      wisdomCoreMaxItems: this._wisdomInjection?.coreMaxItems,
+      wisdomScenarioMaxItems: this._wisdomInjection?.scenarioMaxItems,
+      wisdomIncludeTrial: this._wisdomInjection?.trialVisible,
       cognitionStore,
       systemBudgetRatio: assemblerCfg?.systemBudgetRatio,
       systemBudgetTokens: assemblerCfg?.systemBudgetTokens,

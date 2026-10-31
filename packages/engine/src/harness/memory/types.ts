@@ -330,7 +330,7 @@ export interface WisdomInjectQuery {
   coreMaxItems?: number;
   /** 场景条数硬顶 */
   scenarioMaxItems?: number;
-  /** 是否包含 trial（默认 false） */
+  /** 是否包含 trial（默认 true——trial 的意义就是被试用；显式 false 只注入已站稳条目） */
   includeTrial?: boolean;
 }
 

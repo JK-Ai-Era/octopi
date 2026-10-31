@@ -497,6 +497,7 @@ async function wireContextStores(
     const wis = input.wisdomConfig;
     if (wis?.enabled !== false) {
       builder.wisdomStore(new SqliteWisdomStore(db, { hardCap: wis?.capacity?.hardCap }));
+      if (wis?.injection) builder.wisdomInjection(wis.injection);
     }
 
     const cog = input.cognitionConfig;

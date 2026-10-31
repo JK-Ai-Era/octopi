@@ -81,7 +81,7 @@ The top-level mapping guard checks section-level keys only; these **sub-keys** a
 - **`plugins.configs`** (per-plugin config): passed through the boundary, but `PluginLoader` does not read it yet.
 - **`models.mode`** (`merge` / `replace`): no consumer; provider/model merging behavior is fixed.
 - **`session` passthrough extras** (`reset` / `maintenance` and any typo keys): `SessionConfigSchema` is `.passthrough()`; only `dmScope` / `idleExpiryMs` are consumed.
-- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.injection` / `wisdom.govern` / `wisdom.capacity.softCap`** and **`cognition.capacity` / `cognition.retrieval` / `cognition.consolidation`**: steward tuning currently lives in each subsystem's `config.yaml` `metadata.config`; only `*.enabled`, `wisdom.capacity.hardCap` and `cognition.identity.*` / `cognition.relations.*` are consumed from `octopi.json`.
+- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens`** and **`cognition.capacity` / `cognition.retrieval` / `cognition.consolidation`**: steward tuning currently lives in each subsystem's `config.yaml` `metadata.config`; only `*.enabled`, `wisdom.capacity.hardCap`, `wisdom.injection.{coreMaxItems,scenarioMaxItems,trialVisible}` (since v0.97.25) and `cognition.identity.*` / `cognition.relations.*` are consumed from `octopi.json`.
 - **`gateway`** (top-level: `port` / `host` / `debugRest`): planned Gateway override section (`arch/npm-package-split.md`); the daemon currently reads `args.port` / `channels[]` / `web` instead, so configuring it has no effect (the mapping guard classifies it `ignored`).
 
 ## Compact summary paths — known boundaries (2026-10, F8 review follow-up)

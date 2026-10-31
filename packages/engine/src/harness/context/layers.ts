@@ -400,8 +400,6 @@ export class WisdomLayer extends BaseLayer {
     Array<{ entry: { id: string; statement: string; scenario: { problemTypes: string[]; antiScenarios?: string[] }; effect: { posture?: string; questions?: string[] } }; bucket: 'core' | 'scenario' }>
   >;
   private readonly onInjected?: (ids: string[]) => void | Promise<void>;
-  private readonly coreMaxItems?: number;
-  private readonly scenarioMaxItems?: number;
 
   constructor(options: {
     select: (query: string) => Promise<
@@ -409,15 +407,11 @@ export class WisdomLayer extends BaseLayer {
     >;
     /** S1 applied 入账（注入命中） */
     onInjected?: (ids: string[]) => void | Promise<void>;
-    coreMaxItems?: number;
-    scenarioMaxItems?: number;
     order?: number;
   }) {
     super('wisdom', { order: options.order, placement: 'snapshot' });
     this.select = options.select;
     this.onInjected = options.onInjected;
-    this.coreMaxItems = options.coreMaxItems;
-    this.scenarioMaxItems = options.scenarioMaxItems;
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
@@ -427,18 +421,21 @@ export class WisdomLayer extends BaseLayer {
     if (!body) return null;
     const text = `# 思维框架\n\n${body}`;
     const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
-    const sources = picks.map((p) => p.entry.id);
-    // S1：实际进入 system 的条目记 applied（轻量，不跑 confidence）
-    if (this.onInjected && sources.length) {
+    // S1：只对实际留在文本里的条目记 applied / 报 sources——
+    // truncate 粗滤会裁掉尾部条目，被裁掉的不入账（applied 是归因环地基，宁缺勿滥）
+    const keptIds = picks
+      .filter((p) => truncated.includes(p.entry.statement))
+      .map((p) => p.entry.id);
+    if (this.onInjected && keptIds.length) {
       try {
-        await this.onInjected(sources);
+        await this.onInjected(keptIds);
       } catch {
         // 入账失败不拖垮装配；结局环可由 evaluate 兜
       }
     }
     return this.content(truncated, {
       dropped,
-      sources,
+      sources: keptIds,
     });
   }
 }
@@ -458,6 +455,8 @@ export interface CreateDefaultLayersOptions {
   wisdomStore?: import('../memory/types.js').WisdomStore;
   wisdomCoreMaxItems?: number;
   wisdomScenarioMaxItems?: number;
+  /** trial 可见性（wisdom.injection.trialVisible；缺省 true——trial 的意义就是被试用） */
+  wisdomIncludeTrial?: boolean;
 }
 
 /**
@@ -478,12 +477,11 @@ export function createDefaultLayers(options: CreateDefaultLayersOptions): Contex
             text: query,
             coreMaxItems: options.wisdomCoreMaxItems,
             scenarioMaxItems: options.wisdomScenarioMaxItems,
+            includeTrial: options.wisdomIncludeTrial,
           });
           return picks.map((p) => ({ entry: p.entry, bucket: p.bucket }));
         },
         onInjected: (ids) => store.touchApplied(ids),
-        coreMaxItems: options.wisdomCoreMaxItems,
-        scenarioMaxItems: options.wisdomScenarioMaxItems,
       }),
     );
   }

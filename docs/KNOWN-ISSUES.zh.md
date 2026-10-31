@@ -81,7 +81,7 @@
 - **`plugins.configs`**（按插件配置）：已透传过边界，但 `PluginLoader` 尚不读取。
 - **`models.mode`**（`merge` / `replace`）：无消费方；provider/模型合并行为目前固定。
 - **`session` passthrough 附加键**（`reset` / `maintenance` 及任何拼写错误的键）：`SessionConfigSchema` 是 `.passthrough()`；实际只消费 `dmScope` / `idleExpiryMs`。
-- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.injection` / `wisdom.govern` / `wisdom.capacity.softCap`** 与 **`cognition.capacity` / `cognition.retrieval` / `cognition.consolidation`**：steward 调参目前写在各子系统 `config.yaml` 的 `metadata.config`；`octopi.json` 侧只消费 `*.enabled`、`wisdom.capacity.hardCap` 与 `cognition.identity.*` / `cognition.relations.*`。
+- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens`** 与 **`cognition.capacity` / `cognition.retrieval` / `cognition.consolidation`**：steward 调参目前写在各子系统 `config.yaml` 的 `metadata.config`；`octopi.json` 侧只消费 `*.enabled`、`wisdom.capacity.hardCap`、`wisdom.injection.{coreMaxItems,scenarioMaxItems,trialVisible}`（v0.97.25 起）与 `cognition.identity.*` / `cognition.relations.*`。
 - **`gateway`**（顶层：`port` / `host` / `debugRest`）：规划中的 Gateway 覆盖段（`arch/npm-package-split.md`）；daemon 目前读 `args.port` / `channels[]` / `web`，配置它无效果（映射守卫分类为 `ignored`）。
 
 

@@ -240,6 +240,40 @@ export async function formAndAdmit(
 // ── 场景匹配（P0 keyword；embedding/llm 留给后续，不假装已实现） ──
 
 /**
+ * 关键词/字面场景匹配分 + 全字面命中标记。
+ *
+ * @param entry - 条目
+ * @param text - 本轮查询/任务文本
+ * @returns score∈[0,1]（无命中为 0）；fullHit=problemTypes/signals 任一词全字面命中
+ */
+export function scenarioMatchDetail(
+  entry: WisdomEntry,
+  text: string,
+): { score: number; fullHit: boolean } {
+  const q = text.toLowerCase();
+  if (!q.trim()) return { score: 0, fullHit: false };
+  const anti = (entry.scenario.antiScenarios ?? []).map((s) => s.toLowerCase());
+  if (anti.some((a) => a && q.includes(a))) return { score: 0, fullHit: false };
+
+  const types = entry.scenario.problemTypes.map((s) => s.toLowerCase());
+  const signals = (entry.scenario.signals ?? []).map((s) => s.toLowerCase());
+  const words = types.concat(signals);
+  if (words.length === 0) return { score: 0, fullHit: false };
+
+  let hit = 0;
+  let fullHit = false;
+  for (const w of words) {
+    if (!w) continue;
+    if (q.includes(w)) {
+      hit += 2;
+      fullHit = true;
+    } else if (overlapChars(q, w)) hit += 1;
+  }
+  if (hit === 0) return { score: 0, fullHit: false };
+  return { score: Math.min(1, hit / (words.length * 2)), fullHit };
+}
+
+/**
  * 关键词/字面场景匹配分。
  *
  * @param entry - 条目
@@ -247,24 +281,7 @@ export async function formAndAdmit(
  * @returns [0,1]；无命中为 0
  */
 export function scenarioMatchScore(entry: WisdomEntry, text: string): number {
-  const q = text.toLowerCase();
-  if (!q.trim()) return 0;
-  const anti = (entry.scenario.antiScenarios ?? []).map((s) => s.toLowerCase());
-  if (anti.some((a) => a && q.includes(a))) return 0;
-
-  const types = entry.scenario.problemTypes.map((s) => s.toLowerCase());
-  const signals = (entry.scenario.signals ?? []).map((s) => s.toLowerCase());
-  const words = types.concat(signals);
-  if (words.length === 0) return 0;
-
-  let hit = 0;
-  for (const w of words) {
-    if (!w) continue;
-    if (q.includes(w)) hit += 2;
-    else if (overlapChars(q, w)) hit += 1;
-  }
-  if (hit === 0) return 0;
-  return Math.min(1, hit / (words.length * 2));
+  return scenarioMatchDetail(entry, text).score;
 }
 
 function overlapChars(q: string, w: string): boolean {
@@ -278,11 +295,29 @@ function overlapChars(q: string, w: string): boolean {
 }
 
 /**
+ * core 桶资格：宽覆盖（多 problemTypes 或 strengthened/factory）；
+ * trial 永不进 core——未验证的假设只走场景匹配命中，不常驻刷屏。
+ *
+ * @param entry - 条目（状态已过 usable 过滤或可独立断言）
+ * @returns 是否可进 core 桶
+ */
+export function isCoreEligible(
+  entry: Pick<WisdomEntry, 'status' | 'origin' | 'scenario'>,
+): boolean {
+  if (entry.status === 'trial') return false;
+  return (
+    entry.origin === 'factory' ||
+    entry.status === 'strengthened' ||
+    entry.scenario.problemTypes.length >= 2
+  );
+}
+
+/**
  * 选择注入集：小核心 + 场景匹配。
  *
  * @param entries - 可注入条目（store 已滤状态）
  * @param text - 本轮文本
- * @param options - 条数硬顶
+ * @param options - 条数硬顶；includeTrial 缺省 true（trial 的意义就是被试用）
  * @returns 排序后的注入选择
  */
 export function pickForInjection(
@@ -296,7 +331,7 @@ export function pickForInjection(
 ): WisdomInjectPick[] {
   const coreMax = options?.coreMaxItems ?? 8;
   const scenarioMax = options?.scenarioMaxItems ?? 8;
-  const includeTrial = options?.includeTrial ?? false;
+  const includeTrial = options?.includeTrial ?? true;
 
   const usable = entries.filter((e) => {
     if (e.status === 'retired' || e.status === 'superseded' || e.status === 'candidate') return false;
@@ -305,23 +340,32 @@ export function pickForInjection(
     return true;
   });
 
-  const scored = usable.map((e) => ({
-    entry: e,
-    match: scenarioMatchScore(e, text),
-    score: wisdomInjectScore(e, 1),
-    scenarioScore: wisdomInjectScore(e, scenarioMatchScore(e, text)),
-  }));
+  const scored = usable.map((e) => {
+    const m = scenarioMatchDetail(e, text);
+    return {
+      entry: e,
+      match: m.score,
+      fullHit: m.fullHit,
+      score: wisdomInjectScore(e, 1),
+      scenarioScore: wisdomInjectScore(e, m.score),
+    };
+  });
 
-  // core：宽覆盖（多 problemTypes 或 strengthened/factory）优先
   const coreCandidates = scored
-    .filter((s) => s.entry.origin === 'factory' || s.entry.status === 'strengthened' || s.entry.scenario.problemTypes.length >= 2)
+    .filter((s) => isCoreEligible(s.entry))
     .sort((a, b) => b.score - a.score)
     .slice(0, coreMax)
     .map((s) => ({ entry: s.entry, bucket: 'core' as const, score: 1 }));
 
   const coreIds = new Set(coreCandidates.map((c) => c.entry.id));
+  // scenario：trial 须全字面命中（bigram 弱重叠不算数——未验证假设不给模糊入场券）
   const scenario = scored
-    .filter((s) => s.match > 0 && !coreIds.has(s.entry.id))
+    .filter(
+      (s) =>
+        s.match > 0 &&
+        (s.entry.status !== 'trial' || s.fullHit) &&
+        !coreIds.has(s.entry.id),
+    )
     .sort((a, b) => b.scenarioScore - a.scenarioScore)
     .slice(0, scenarioMax)
     .map((s) => ({ entry: s.entry, bucket: 'scenario' as const, score: s.match }));
