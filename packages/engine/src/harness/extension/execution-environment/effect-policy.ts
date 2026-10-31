@@ -202,8 +202,9 @@ export interface EffectPolicyConfig {
   jail?: JailIntent;
   /** jail≠none 且笼不可用时：`refuse` 拒绝执行 | `degrade`（缺省）记 securityDegraded + 告警 */
   onJailUnavailable?: OnJailUnavailable;
-  /** `jail: "none"` 时必填的显式表态（缺省拒绝启动；§8.1 二级确认）。root/elevated
-   *  部署同样要求此声明（§5 P4 root 部署语义，启动期断言）。 */
+  /** `jail: "none"` / `escalation: "full"` 时按块必填的显式表态（缺省拒绝启动；§8.1 二级确认）。
+   *  root/elevated 部署声明是另一回事：只认**顶层** effectPolicy 的本字段（§5 P4，启动期断言）；
+   *  agent 块内的本字段只声明该块自己的 jail=none/full，不参与 elevated 启动声明。 */
   privilegedAck?: string;
   /** 提权策略（§4/§5 P3/P4）：`allowlist` 按 cmd+args 全等放行；`full` 全量档
    *  （需 `jail: "none"` + `privilegedAck` + `mode: "host"`）；缺省 `none` */

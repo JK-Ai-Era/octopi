@@ -386,7 +386,7 @@ const PRIVILEGED_DECLARATION_RE = /privileged_declaration_required \(([^)]+)\)/;
  *
  * @param logPath Gateway 日志路径
  * @param startMarker 本次 `serve start` 写下的 `--- octopi serve start ... ---` 行
- * @returns 命中时返回 scope（`<top>` 或 agent id），未命中/日志不可读返回 null
+ * @returns 命中时返回 scope（elevated 启动闸门恒为 `<top>`；解析器保持 scope 无关），未命中/日志不可读返回 null
  */
 export function detectPrivilegedDeclarationFailure(logPath: string, startMarker: string): string | null {
   try {
@@ -401,11 +401,31 @@ export function detectPrivilegedDeclarationFailure(logPath: string, startMarker:
 }
 
 /**
+ * elevated 启动声明的取值面：部署级知情声明（§8.1），只读顶层 `effectPolicy.privilegedAck`。
+ *
+ * agent 块内的 privilegedAck 是该块自己的 jail=none / escalation=full 范围级表态
+ * （schema refine 与 resolveEffectiveEffectPolicy 按块执法），**永不**参与 elevated
+ * 启动闸门——agent ack 满足不了部署声明。独立成纯函数供测试钉住这两个方向。
+ *
+ * @param config 顶层配置（只读 `effectPolicy.privilegedAck`）
+ * @returns 恒为 `<top>` scope 及其声明值（未声明时 `ack` 为 undefined）
+ */
+export function resolveElevatedDeclarationScope(config: {
+  effectPolicy?: { privilegedAck?: string };
+}): { name: '<top>'; ack?: string } {
+  return { name: '<top>', ack: config.effectPolicy?.privilegedAck };
+}
+
+/**
  * privileged 声明闸门拒绝的独立双语提示（不套「gateway 崩溃 + 日志尾巴」框架）。
+ *
+ * elevated 启动声明只认顶层（§8.1 部署级知情声明），修复指引恒指顶层 effectPolicy；
+ * agent 块内的 privilegedAck 只服务该块自己的 jail=none / escalation=full 范围级表态，
+ * 不参与 elevated 启动声明。scope 仅忠实回显断言来源供日志定位。
  *
  * 示例 JSON 刻意不含注释：octopi.json 是严格 JSON，用户原样粘贴必须合法。
  *
- * @param opts.scope 未声明的配置面（`<top>` 或 agent id）
+ * @param opts.scope 断言来源（elevated 启动闸门恒为 `<top>`）
  * @param opts.configPath 实际加载的配置文件路径（指给用户修改的位置）
  * @param opts.restartCommand 可复述给用户的重启动命令；缺省用中性的「重启 Octopi」
  *   （同一提示会被 `serve fg` 直跑路径复用，写死 `serve start` 会指错命令）
@@ -423,13 +443,6 @@ export function renderPrivilegedDeclarationNotice(opts: {
   const enRestart = opts.restartCommand
     ? `Save the file, then re-run '${opts.restartCommand}'.`
     : 'Save the file, then restart Octopi.';
-  const top = scope === '<top>';
-  const zhFix = top
-    ? '在其中的顶层 effectPolicy 中加入 privilegedAck 字段（任意非空字符串，是「我明确知道这是特权部署」的申明）。'
-    : `在其中 agents 数组中 id 为 "${scope}" 的 agent 的 effectPolicy 中加入 privilegedAck 字段（任意非空字符串，是「我明确知道这是特权部署」的申明；agent 的 effectPolicy 整体覆盖顶层，即使顶层已有声明，此处也必须自带）。`;
-  const enFix = top
-    ? 'Apply it at the top-level effectPolicy. Example (keep your other effectPolicy fields; the config file is strict JSON — no comments):'
-    : `Apply it at the effectPolicy of agent "${scope}" (an agent effectPolicy fully overrides the top level, so the declaration must be repeated there even when the top level has one). Example (keep your other effectPolicy fields; the config file is strict JSON — no comments):`;
   return [
     `⛔ privileged_declaration_required (${scope}) — 高权限启动已被拒绝 / elevated startup refused`,
     '',
@@ -439,7 +452,7 @@ export function renderPrivilegedDeclarationNotice(opts: {
     '',
     '如果你确定要以管理员身份启动，请在配置文件：',
     `    ${configPath}`,
-    zhFix,
+    '在其中的顶层 effectPolicy 中加入 privilegedAck 字段（任意非空字符串，是「我明确知道这是特权部署」的申明）。',
     '例如（已有的其他 effectPolicy 字段照旧保留；配置文件是严格 JSON，不要写注释）：',
     '',
     '    "effectPolicy": {',
@@ -455,7 +468,7 @@ export function renderPrivilegedDeclarationNotice(opts: {
     'If you intend to run as administrator, add a privilegedAck field (any non-empty string — an explicit',
     'acknowledgement that this is a privileged deployment) to your config file:',
     `    ${configPath}`,
-    enFix,
+    'Apply it at the top-level effectPolicy. Example (keep your other effectPolicy fields; the config file is strict JSON — no comments):',
     '',
     '    "effectPolicy": {',
     '      "privilegedAck": "windows-admin-by-design"',
@@ -908,46 +921,42 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     }
     // ops P4 §5 P4：root/elevated 部署语义——daemon 以高权限跑时没有 sudo，危险轴是
     // 「笼不笼 × uid=0」，必须显式 privileged 声明（同 privilegedAck），拒绝静默特权态。
-    // 口径与 config-bridge 相同：agent.effectPolicy 整体覆盖顶层，无则回落顶层。
+    // ack 是部署级知情声明（进程 elevated 事实，§8.1 二级确认）：只看顶层声明。
+    // agent 块内的 privilegedAck 服务于该块自己的 jail=none / escalation=full 范围级表态
+    // （schema refine 与 resolveEffectiveEffectPolicy 按块执法），与 elevated 启动声明无关。
     const { isProcessElevated, assertPrivilegedDeclaration } = await import(
       '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js'
     );
     const elevated = await isProcessElevated();
     if (elevated) {
-      const declared: Array<{ name: string; ack?: string }> = [
-        { name: '<top>', ack: config.effectPolicy?.privilegedAck },
-        ...((config as { agents?: Array<{ id?: string; effectPolicy?: { privilegedAck?: string } }> }).agents ?? []).map(
-          (agent) => ({
-            name: agent.id ?? '<agent>',
-            ack: (agent.effectPolicy ?? config.effectPolicy)?.privilegedAck,
-          }),
-        ),
-      ];
-      for (const scope of declared) {
-        try {
-          assertPrivilegedDeclaration({ elevated, privilegedAck: scope.ack, scope: scope.name });
-        } catch (err) {
-          // 仅闸门断言渲染独立提示（首行含机器可读标记，serve start 父进程据此换呈现）；
-          // 其他异常原样上浮，不伪装成 privilegedAck 缺失
-          if (!(err instanceof Error) || !err.message.startsWith('privileged_declaration_required')) {
-            throw err;
-          }
-          let noticeConfigPath = configPath ?? defaultConfigPath();
-          try {
-            noticeConfigPath = resolveConfigFilePath(configPath);
-          } catch {
-            // 极窄窗口内配置文件被移走/不可读：回退展示缺省路径；加载失败的真实错误已在 loadConfig 上浮
-          }
-          for (const line of renderPrivilegedDeclarationNotice({
-            scope: scope.name,
-            configPath: noticeConfigPath,
-            // 守护模式由 serve start 拉起，可复述该命令；直跑 fg 时用中性措辞避免指错命令
-            restartCommand: process.env.OCTOPI_DAEMON === '1' ? 'octopi serve start' : undefined,
-          })) {
-            console.error(line);
-          }
-          process.exit(1);
+      const declaration = resolveElevatedDeclarationScope(config);
+      try {
+        assertPrivilegedDeclaration({
+          elevated,
+          privilegedAck: declaration.ack,
+          scope: declaration.name,
+        });
+      } catch (err) {
+        // 仅闸门断言渲染独立提示（首行含机器可读标记，serve start 父进程据此换呈现）；
+        // 其他异常原样上浮，不伪装成 privilegedAck 缺失
+        if (!(err instanceof Error) || !err.message.startsWith('privileged_declaration_required')) {
+          throw err;
         }
+        let noticeConfigPath = configPath ?? defaultConfigPath();
+        try {
+          noticeConfigPath = resolveConfigFilePath(configPath);
+        } catch {
+          // 极窄窗口内配置文件被移走/不可读：回退展示缺省路径；加载失败的真实错误已在 loadConfig 上浮
+        }
+        for (const line of renderPrivilegedDeclarationNotice({
+          scope: '<top>',
+          configPath: noticeConfigPath,
+          // 守护模式由 serve start 拉起，可复述该命令；直跑 fg 时用中性措辞避免指错命令
+          restartCommand: process.env.OCTOPI_DAEMON === '1' ? 'octopi serve start' : undefined,
+        })) {
+          console.error(line);
+        }
+        process.exit(1);
       }
       console.log('⚠ PRIVILEGED: process is elevated (root/admin) — persistent PRIVILEGED marker is now in effect.');
     }

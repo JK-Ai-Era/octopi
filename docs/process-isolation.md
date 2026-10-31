@@ -237,7 +237,7 @@ Unknown or untagged tools are **rejected** on the reduced surface
     "untrustedAdmission": "refuse",   // refuse | degrade (untrusted only)
     "jail": "auto",                   // auto | require | none (none needs privilegedAck)
     "onJailUnavailable": "degrade",   // refuse | degrade (jail != none)
-    "privilegedAck": "…",             // explicit declaration (required for jail=none and for root/elevated runs)
+    "privilegedAck": "…",             // explicit declaration (jail=none/full per block; elevated declaration: top-level only)
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
     "processLimits": true,
@@ -338,8 +338,11 @@ command would pretend to be privileged without being). It is admitted only under
 config contradiction rejected at load time (`allowlist` stays contradiction-free
 and keeps its jail). Root deployments get the same treatment from the other
 side: an elevated process (root / Windows admin token, detected by behavior, not
-by a config bit) must carry an explicit `privilegedAck` or the daemon refuses to
-start. Either way the UI and CLI show a **persistent `PRIVILEGED` badge**
+by a config bit) must carry an explicit top-level `effectPolicy.privilegedAck` or
+the daemon refuses to start. The declaration is deployment-scoped: agent
+`effectPolicy` blocks do not carry it (their `privilegedAck` has a different job —
+declaring that agent's own `jail: "none"` / `escalation.policy: "full"`). Either way the UI
+and CLI show a **persistent `PRIVILEGED` badge**
 (header badge + run observatory; `octopi serve status`) — the standing
 counterpart of `privilegedAck`, not a one-time toast.
 

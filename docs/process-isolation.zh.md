@@ -207,7 +207,7 @@ reduced 面上 **未标注工具一律拒绝**（unknown-reject）；内置工�
     "untrustedAdmission": "refuse",   // refuse | degrade（仅 untrusted）
     "jail": "auto",                   // auto | require | none（none 需 privilegedAck）
     "onJailUnavailable": "degrade",   // refuse | degrade（jail != none）
-    "privilegedAck": "…",             // 显式表态（jail=none 必填；root/elevated 部署同样必填）
+    "privilegedAck": "…",             // 显式表态（jail=none/full 按块必填；elevated 声明只认顶层）
     "shellEscape": "deny",            // deny | confirm | allow
     "pathContainment": "strict",      // strict | soft | none
     "processLimits": true,
@@ -282,7 +282,9 @@ privileged 通道执行**任意** argv（`via: "sudo"` 下仍必须显式 `sudo 
 裸跑等于非特权通道假象）。前提严格：`mode: "host"` + `jail: "none"` + `privilegedAck`
 三者齐备，其余组合一律按配置矛盾在加载期拒绝（`allowlist` 档不矛盾、保持原牢笼）。
 root 部署从另一侧受同一约束：高权限进程（root / Windows 管理员令牌，**行为探测**而非
-配置位）必须带显式 `privilegedAck`，否则拒绝启动。无论哪条路径，WebUI 与 CLI 都**常驻**
+配置位）必须带显式的**顶层** `effectPolicy.privilegedAck`，否则拒绝启动。该声明是部署级的：
+agent 的 effectPolicy 块不承载它（agent 级 `privilegedAck` 另有职责：声明该 agent 自己的
+`jail: "none"` / `escalation.policy: "full"`）。无论哪条路径，WebUI 与 CLI 都**常驻**
 显示 `PRIVILEGED` 标记（app header + Run 观测；`octopi serve status`）——它是
 `privilegedAck` 的常驻可见另一半，不是一次性 toast。
 

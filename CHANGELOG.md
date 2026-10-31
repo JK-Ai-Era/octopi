@@ -108,6 +108,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.2 (2026-11-01)
+
+### fix(cli): elevated privilegedAck gate checks the top-level deployment declaration only
+
+- **问题**：elevated 启动闸门曾按「agent.effectPolicy 整体覆盖顶层」逐 agent 复查 `privilegedAck`——这是 config-bridge 组合模型的副产品，不是拍板语义。elevation 是**进程级**事实，per-agent 检查没有增量安全价值（检查失败是整个 daemon 拒启，不是按 agent 拦截），且制造耦合惊讶源：给 agent 写个与提权无关的 `mode: "project"` 就会静默撤销部署级声明，导致启动在 `(agentId)` scope 拒绝（Windows 实机踩中）。
+- **改动**：闸门只查顶层 `config.effectPolicy.privilegedAck`（§8.1 二级确认 = 部署级知情声明）；agent 级 `privilegedAck` 字段**保留**——它服务于另一个逐 agent 的真实关切：`jail: "none"` / `escalation.policy: "full"` 的范围级表态（governance schema refine 与 `resolveEffectiveEffectPolicy` 按块执法；移除该字段会让 agent 级 jail=none/full 变成永远无法满足的死校验，故否决了「schema 移除」方案）。双语独立提示的修复指引恒指顶层 effectPolicy，JSDoc 记录双重角色。
+- **文档**：`docs/process-isolation.md` + `.zh.md` 同步——elevated 声明明确为顶层专用，agent 级 `privilegedAck` 只声明该 agent 自己的 jail=none/full；配置参考注释同步。`arch/ops-privileged-mode.md` §5-P4 补 A′ 细化拍板记录。
+- **兼容性**：agent 块里已有的 `privilegedAck` 继续合法（jail=none/full 场景仍必需；对 elevated 启动声明冗余但无害），无迁移要求。**Breaking note**：无——纯收窄检查面；此前依赖 per-agent elevated 复查的配置行为不变（顶层声明本就必需且充分性提升）。
+- **Review 收口（子代理，无 blocker）**：抽出纯函数 `resolveElevatedDeclarationScope` 并双向钉测——顶层声明在 agent 块缺 ack 时即通过（曾经失败的确切场景）、agent 块 ack **永不**满足部署闸门（安全相关方向）；engine `EffectPolicyConfig.privilegedAck` 类型 docstring 修正（agent 块字段不承载 elevated 声明）；检测器 JSDoc、docs 措辞（"do not carry it"）、双语注释对称性同步。
+- **验证**：`tests/cli-serve-failure-diagnosis.test.ts` 28/28 绿（agent 分支测试改为「scope 只影响标记行、指引恒顶层」+ 新增闸门取值面 3 例）；eslint + tests typecheck 绿。engine 侧 `assertPrivilegedDeclaration` 与 governance schema 均未改动（仅一处类型注释）。
+
+---
+
 ## v0.98.1 (2026-11-01)
 
 ### fix(cli): bilingual standalone notice for the elevated privilegedAck gate refusal

@@ -17,7 +17,9 @@ import {
   waitForKnowledgeLines,
   detectPrivilegedDeclarationFailure,
   renderPrivilegedDeclarationNotice,
+  resolveElevatedDeclarationScope,
 } from '../src/cli/daemon.js';
+import { assertPrivilegedDeclaration } from '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js';
 
 let tempDir: string;
 let logPath: string;
@@ -222,7 +224,7 @@ describe('detectPrivilegedDeclarationFailure', () => {
     expect(detectPrivilegedDeclarationFailure(logPath, marker)).toBe('<top>');
   });
 
-  test('agent scope is returned verbatim for the notice to render', () => {
+  test('scope is parsed verbatim (parser stays scope-agnostic)', () => {
     mkdirSync(dirname(logPath), { recursive: true });
     writeFileSync(logPath, [marker, 'privileged_declaration_required (worker-1): …'].join('\n'), 'utf-8');
     expect(detectPrivilegedDeclarationFailure(logPath, marker)).toBe('worker-1');
@@ -284,10 +286,49 @@ describe('renderPrivilegedDeclarationNotice', () => {
     expect(topText).not.toContain('//');
   });
 
-  test('agent scope names the agent and explains the top-level override', () => {
+  test('scope only affects the marker line; fix instructions stay top-level (deployment-scoped ack)', () => {
     const agentText = renderPrivilegedDeclarationNotice({ scope: 'worker-1', configPath }).join('\n');
-    expect(agentText).toContain('"worker-1"');
-    expect(agentText).toContain('overrides the top level');
-    expect(agentText).toContain('整体覆盖顶层');
+    expect(agentText).toContain('privileged_declaration_required (worker-1)');
+    expect(agentText).toContain('顶层 effectPolicy');
+    expect(agentText).toContain('top-level effectPolicy');
+    expect(agentText).not.toContain('agents 数组');
+    expect(agentText).not.toContain('overrides the top level');
+  });
+});
+
+describe('resolveElevatedDeclarationScope', () => {
+  test('top-level ack satisfies the gate even when an agent block lacks it (the case that used to fail)', () => {
+    const cfg = {
+      effectPolicy: { privilegedAck: 'windows-admin-by-design' },
+      agents: [{ id: 'default', effectPolicy: { mode: 'project', transactionRoots: ['/tmp/x'] } }],
+    };
+    const declaration = resolveElevatedDeclarationScope(cfg);
+    expect(declaration.name).toBe('<top>');
+    expect(declaration.ack).toBe('windows-admin-by-design');
+    expect(() =>
+      assertPrivilegedDeclaration({ elevated: true, privilegedAck: declaration.ack, scope: declaration.name }),
+    ).not.toThrow();
+  });
+
+  test('an agent-block ack can never satisfy the deployment gate (no top-level ack → refuse)', () => {
+    const cfg = {
+      effectPolicy: undefined,
+      agents: [{ id: 'default', effectPolicy: { privilegedAck: 'agent-scoped' } }],
+    };
+    const declaration = resolveElevatedDeclarationScope(cfg);
+    expect(declaration.ack).toBeUndefined();
+    try {
+      assertPrivilegedDeclaration({ elevated: true, privilegedAck: declaration.ack, scope: declaration.name });
+      expect.unreachable('must refuse without the top-level declaration');
+    } catch (err) {
+      expect((err as Error).message).toContain('privileged_declaration_required (<top>)');
+    }
+  });
+
+  test('non-elevated runs are unaffected', () => {
+    const declaration = resolveElevatedDeclarationScope({});
+    expect(() =>
+      assertPrivilegedDeclaration({ elevated: false, privilegedAck: declaration.ack, scope: declaration.name }),
+    ).not.toThrow();
   });
 });
