@@ -7,6 +7,9 @@
 import type {
   AdmitWisdomInput,
   AdmitWisdomResult,
+  WisdomAttributionCitation,
+  WisdomAttributionWindow,
+  WisdomAttributionWindowInput,
   WisdomCounterevidence,
   WisdomEntry,
   WisdomInjectPick,
@@ -26,6 +29,7 @@ import { pickForInjection } from './wisdom-formation.js';
 export class InMemoryWisdomStore implements WisdomStore {
   readonly name = 'in-memory-wisdom';
   private entries = new Map<string, WisdomEntry>();
+  private windows = new Map<string, WisdomAttributionWindow>();
   private seq = 0;
 
   async admit(
@@ -123,7 +127,10 @@ export class InMemoryWisdomStore implements WisdomStore {
     });
   }
 
-  async recordOutcomes(events: WisdomOutcomeEvent[]): Promise<void> {
+  async recordOutcomes(
+    events: WisdomOutcomeEvent[],
+    config?: import('./wisdom-policy.js').WisdomEvaluationConfig,
+  ): Promise<void> {
     const byId = new Map<string, WisdomOutcomeEvent[]>();
     for (const e of events) {
       const list = byId.get(e.wisdomId) ?? [];
@@ -135,7 +142,7 @@ export class InMemoryWisdomStore implements WisdomStore {
       if (!cur) continue;
       const folded = foldOutcomeEvents(cur, evs);
       let next: WisdomEntry = { ...cur, ...folded, updatedAt: Date.now() };
-      const plan = planConfidenceUpdate(next);
+      const plan = planConfidenceUpdate(next, config);
       if (plan) {
         next = {
           ...next,
@@ -174,6 +181,45 @@ export class InMemoryWisdomStore implements WisdomStore {
         },
         updatedAt: now,
       });
+    }
+  }
+
+  async recordAttributionWindow(input: WisdomAttributionWindowInput): Promise<string> {
+    const id = `waw_${++this.seq}`;
+    this.windows.set(id, {
+      ...input,
+      injectedIds: [...input.injectedIds],
+      citations: input.citations.map((c) => ({ ...c })),
+      id,
+      createdAt: Date.now(),
+    });
+    return id;
+  }
+
+  async listPendingWindows(limit?: number): Promise<WisdomAttributionWindow[]> {
+    const pending = [...this.windows.values()]
+      .filter((w) => w.judgedAt === undefined)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    // 缺省上限 500（与 Sqlite 对齐，防 pending 无界增长拖垮判官）
+    return pending.slice(0, limit && limit > 0 ? limit : 500);
+  }
+
+  async markWindowsJudged(ids: string[], at?: number): Promise<string[]> {
+    const now = at ?? Date.now();
+    const newlyJudged: string[] = [];
+    for (const id of ids) {
+      const w = this.windows.get(id);
+      // 只有真正置上的才算本次标记（跨进程幂等：他方先标则不发事件）
+      if (!w || w.judgedAt !== undefined) continue;
+      w.judgedAt = now;
+      newlyJudged.push(id);
+    }
+    return newlyJudged;
+  }
+
+  async pruneWindows(before: number): Promise<void> {
+    for (const [id, w] of this.windows) {
+      if (w.judgedAt !== undefined && w.judgedAt < before) this.windows.delete(id);
     }
   }
 

@@ -40,7 +40,7 @@ lifecycle:
   maxDurationMs: 15000
 
 runtimeInject:
-  requires: ['wisdomStore']
+  requires: ['wisdomStore', 'eventBus']
 
 observability:
   eventPrefix: wisdom.steward.govern

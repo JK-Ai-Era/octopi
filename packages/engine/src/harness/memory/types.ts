@@ -5,6 +5,8 @@
  * 实现：InMemory* / Sqlite*（AgentDatabase）。非 Kernel。
  */
 
+import type { WisdomEvaluationConfig } from './wisdom-policy.js';
+
 // ── Memory ──
 
 /**
@@ -358,6 +360,33 @@ export interface WisdomOutcomeEvent {
   ref?: string;
 }
 
+/** 归因窗口中的一处引用摘录（判官强证据） */
+export interface WisdomAttributionCitation {
+  wisdomId: string;
+  excerpt: string;
+}
+
+/** 归因窗口输入（run 收尾记账） */
+export interface WisdomAttributionWindowInput {
+  sessionId: string;
+  agentId?: string;
+  /** 本轮任务/查询文本（判官 digest 证据） */
+  query: string;
+  /** run 收尾原因（completed/aborted/error…）——仅作判官上下文，不作判决 */
+  outcome: string;
+  /** 本轮注入的 wisdom id（装配 manifest sources） */
+  injectedIds: string[];
+  citations: WisdomAttributionCitation[];
+}
+
+/** 归因窗口：弱归因验证的记账单位（run 收尾 → 判官批量判决） */
+export interface WisdomAttributionWindow extends WisdomAttributionWindowInput {
+  id: string;
+  createdAt: number;
+  /** 缺省 = 未判决 */
+  judgedAt?: number;
+}
+
 export interface WisdomStats {
   total: number;
   byStatus: Record<WisdomStatus, number>;
@@ -385,10 +414,23 @@ export interface WisdomStore {
   listForGovern(filter?: { includeRetired?: boolean }): Promise<WisdomEntry[]>;
   update(id: string, patch: Partial<WisdomEntry>): Promise<void>;
   softRetire(id: string, meta: { by: string; reason: WisdomRetireReason | string }): Promise<void>;
-  /** 弱归因结局入账 */
-  recordOutcomes(events: WisdomOutcomeEvent[]): Promise<void>;
+  /** 弱归因结局入账（含 confidence/状态迁移）；config 缺省用默认评估参数 */
+  recordOutcomes(events: WisdomOutcomeEvent[], config?: WisdomEvaluationConfig): Promise<void>;
   /** 注入命中轻量入账（S1 applied）；不跑 confidence 规划 */
   touchApplied(ids: string[]): Promise<void>;
+  /** 归因窗口：run 收尾记账；返回窗口 id */
+  recordAttributionWindow(input: WisdomAttributionWindowInput): Promise<string>;
+  /** 未判决窗口（判官取件；createdAt 升序；缺省上限 500，两实现一致） */
+  listPendingWindows(limit?: number): Promise<WisdomAttributionWindow[]>;
+  /**
+   * 标记窗口已判决（`judged_at IS NULL` 原子标记；先标记后发判决事件：宁丢勿重）。
+   *
+   * @returns 本次真正被标记的 id（已被他方标记的不在内——调用方只对返回集发
+   *判决事件，构成跨进程幂等）
+   */
+  markWindowsJudged(ids: string[], at?: number): Promise<string[]>;
+  /** 清理 judgedAt 早于 before 的旧窗口（保留期外） */
+  pruneWindows(before: number): Promise<void>;
   stats(): Promise<WisdomStats>;
 }
 

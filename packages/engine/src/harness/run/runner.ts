@@ -39,6 +39,7 @@ import {
   joinSlotXml,
   parseTurnIdFromContent,
 } from '../context/turn-envelope.js';
+import { collectRunAssistantTexts } from '../memory/wisdom-attribution.js';
 import { splitRuntimeEnvironmentInjection, withRuntimeEnvironmentInjection } from '../context/runtime-datetime.js';
 import { loadRootInstructionsInjection } from '../context/root-instructions.js';
 import type { SessionTaskService } from '../session/tasks/service.js';
@@ -587,6 +588,10 @@ export class SessionAwareRunner {
   }>;
   /** Assembler 层缓存清理钩子（可选接线；与 contextDetachIndex 无关） */
   private systemPromptAssemblerClear?: (sessionId: string) => void;
+  /** Wisdom 归因窗口记账钩子（学习环；不是观测通道，失败不得影响 run 收口） */
+  private wisdomAttributionSink?: (
+    info: import('../memory/wisdom-attribution.js').WisdomRunWindowInfo,
+  ) => void | Promise<void>;
   /** turn 级 Knowledge grounding（可选；arch/knowledge-layer.md §4.4） */
   private groundingAssembler?: (input: {
     sessionId: string;
@@ -854,6 +859,17 @@ export class SessionAwareRunner {
   }
 
   /**
+   * 注入 Wisdom 归因窗口记账（run 收尾；学习环）
+   */
+  setWisdomAttributionSink(
+    sink: (
+      info: import('../memory/wisdom-attribution.js').WisdomRunWindowInfo,
+    ) => void | Promise<void>,
+  ): void {
+    this.wisdomAttributionSink = sink;
+  }
+
+  /**
    * 注入 turn 级 Knowledge grounding（可选）
    */
   setGroundingAssembler(
@@ -976,6 +992,10 @@ export class SessionAwareRunner {
     let observerRunId = '';
     let observerFinalMessages: Message[] | undefined;
     let observerEndReason: string | undefined;
+    /** Wisdom 归因窗口素材（装配时抓 sources/query，收尾时切本轮 assistant 文本） */
+    let wisdomInjectedIds: string[] = [];
+    let runQueryText = '';
+    let runMessagesBase = 0;
     /**
      * 桥接状态（assistant 文本 / 停止原因）。
      *
@@ -1480,6 +1500,12 @@ export class SessionAwareRunner {
             : null;
           if (assembled.manifest) {
             const assembledAt = Date.now();
+            const layerQuery = extractLayerQuery(session.messages, { topicHints });
+            // 归因窗口素材（学习环，非观测）：本轮 wisdom sources + query + 消息基线
+            wisdomInjectedIds =
+              assembled.manifest.layers.find((l) => l.id === 'wisdom')?.sources ?? [];
+            runQueryText = layerQuery;
+            runMessagesBase = session.messages.length;
             this.emitObserved({
               type: 'context.layers.assembled',
               timestamp: assembledAt,
@@ -1490,7 +1516,7 @@ export class SessionAwareRunner {
                 agentId: _agentId,
                 manifest: assembled.manifest,
                 enabledLayerIds: assembled.manifest.layers.map((l) => l.id),
-                query: extractLayerQuery(session.messages, { topicHints }),
+                query: layerQuery,
                 assembledAt,
               },
             });
@@ -2490,6 +2516,24 @@ export class SessionAwareRunner {
       inboxRun?.close();
       release();
       gateRelease?.();
+      // Wisdom 归因窗口记账（学习环）：锁释放后再写，DB 慢不得拖住 session 锁；
+      // 本轮注入 + 结局 + 引用摘录 → 判官批量判决。失败只告警（学习环可由下批窗口补），
+      // 不走 eventSink/Observer——学习记账不是观测通道。
+      if (this.wisdomAttributionSink && wisdomInjectedIds.length > 0 && observerFinalMessages) {
+        try {
+          await this.wisdomAttributionSink({
+            sessionId,
+            agentId: _agentId,
+            outcome: runEndReason,
+            query: runQueryText,
+            injectedIds: wisdomInjectedIds,
+            assistantTexts: collectRunAssistantTexts(observerFinalMessages, runMessagesBase),
+          });
+        } catch (err) {
+          // 学习环静默关闭是严重问题：至少告警一次，不得只吞不报
+          console.warn(`[Runner] wisdom attribution sink failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     }
   }
 

@@ -35,6 +35,9 @@ export type {
   WisdomInjectPick,
   WisdomOutcomeSignal,
   WisdomOutcomeEvent,
+  WisdomAttributionCitation,
+  WisdomAttributionWindowInput,
+  WisdomAttributionWindow,
   WisdomStats,
   WisdomStore,
   ConceptKind,
@@ -98,6 +101,8 @@ export {
   toAdmitWisdomInput,
   formAndAdmit,
   scenarioMatchScore,
+  scenarioMatchDetail,
+  isCoreEligible,
   pickForInjection,
   formatWisdomBody,
 } from './wisdom-formation.js';
@@ -106,6 +111,31 @@ export type {
   ParsedWisdomItem,
   ParsedWisdomFormation,
 } from './wisdom-formation.js';
+
+// ── Wisdom 归因窗口 / 判决事件 ──
+export {
+  extractCitations,
+  collectRunAssistantTexts,
+  recordWisdomRunWindow,
+  selectAttributionCandidates,
+  planAttributionBatch,
+  buildAttributionDigest,
+  parseAttributionVerdicts,
+  verdictsToOutcomeEvents,
+} from './wisdom-attribution.js';
+export type {
+  WisdomRunWindowInfo,
+  AttributionCandidate,
+  AttributionBatch,
+  AttributionVerdict,
+} from './wisdom-attribution.js';
+export {
+  emitWisdomEvaluateRequest,
+  emitWisdomGoverned,
+  WISDOM_EVALUATE_REQUEST_EVENT,
+  WISDOM_GOVERNED_EVENT,
+} from './wisdom-events.js';
+export type { WisdomEvaluateRequestPayload } from './wisdom-events.js';
 
 // ── Cognition 门控 / 可塑 / 概念化 ──
 export {

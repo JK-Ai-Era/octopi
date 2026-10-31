@@ -1404,6 +1404,17 @@ export class AgentBuilder {
       (input) => systemPromptAssembler.assemble(input),
       (sid) => systemPromptAssembler.clearSession(sid),
     );
+    // Wisdom 归因窗口记账（学习环）：run 收尾 → 窗口落库，待判官批量判决
+    if (wisdomStore) {
+      runner.setWisdomAttributionSink(async (info) => {
+        try {
+          const { recordWisdomRunWindow } = await import('../memory/wisdom-attribution.js');
+          await recordWisdomRunWindow(wisdomStore, info);
+        } catch {
+          // 归因记账失败不得拖垮 run 收口
+        }
+      });
+    }
 
     // turn 级 Knowledge grounding（消息插槽 knowledgeGrounding；不进 system）
     const groundingPort = this._knowledgeGroundingPort ?? this._knowledgeRetriever;

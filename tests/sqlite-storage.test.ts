@@ -253,6 +253,35 @@ describe('SqliteWisdomStore', () => {
     expect(picks[0].entry.derivedFrom.memoryIds).toEqual(['m1', 'm2']);
   });
 
+  it('归因窗口：记录 → 未判决列表 → 标记 → 清理', async () => {
+    const id = await store.recordAttributionWindow({
+      sessionId: 's1',
+      agentId: 'default',
+      query: '这是验证型宣称的处理',
+      outcome: 'completed',
+      injectedIds: ['wis_x'],
+      citations: [{ wisdomId: 'wis_x', excerpt: '摘录' }],
+    });
+    const pending = await store.listPendingWindows();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      id,
+      sessionId: 's1',
+      outcome: 'completed',
+      injectedIds: ['wis_x'],
+      citations: [{ wisdomId: 'wis_x', excerpt: '摘录' }],
+    });
+    expect(pending[0].judgedAt).toBeUndefined();
+
+    await store.markWindowsJudged([id]);
+    expect(await store.listPendingWindows()).toHaveLength(0);
+
+    // 原子标记：重复标记不再刷新 judgedAt，返回空（跨进程幂等键）
+    expect(await store.markWindowsJudged([id])).toEqual([]);
+
+    await store.pruneWindows(Date.now() + 1000);
+  });
+
   it('拒绝单源 distilled', async () => {
     const r = await store.admit({
       statement: '单源不够',

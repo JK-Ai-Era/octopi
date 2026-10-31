@@ -10,13 +10,16 @@ import type {
   InjectedDependencies,
 } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
 import type { WisdomStore } from '@octopi-agent/engine/harness/memory/types.js';
+import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import {
   planWisdomGovern,
   wisdomUtility,
   type WisdomGovernConfig,
 } from '../../../harness/memory/wisdom-policy.js';
+import { emitWisdomGoverned } from '../../../harness/memory/wisdom-events.js';
 
 const DEP_WISDOM = 'wisdomStore';
+const DEP_EVENT_BUS = 'eventBus';
 const DEP_CONFIG = '__subsystem_config__';
 
 async function handler(_input: SubsystemInput, deps?: InjectedDependencies): Promise<SubsystemOutput> {
@@ -46,6 +49,8 @@ async function handler(_input: SubsystemInput, deps?: InjectedDependencies): Pro
   }
 
   const stats = await store.stats();
+  // 治理脉搏：判官（wisdom.steward.attribute）等维护动作挂此脉搏；发射失败不影响 govern
+  emitWisdomGoverned(deps?.[DEP_EVENT_BUS] as EventBus | undefined);
   return {
     act: {
       mode: 'inject',

@@ -328,6 +328,21 @@ export class AgentDatabase {
       CREATE INDEX IF NOT EXISTS idx_wisdom_status ON wisdom(status);
       CREATE INDEX IF NOT EXISTS idx_wisdom_priority ON wisdom(priority);
 
+      -- ── Wisdom 归因窗口（弱归因验证：run 收尾记账，判官批量判决）──
+      CREATE TABLE IF NOT EXISTS wisdom_attribution_windows (
+        id           TEXT PRIMARY KEY,
+        session_id   TEXT NOT NULL,
+        agent_id     TEXT,
+        query        TEXT NOT NULL DEFAULT '',
+        outcome      TEXT NOT NULL DEFAULT '',
+        injected_ids TEXT NOT NULL DEFAULT '[]',
+        citations    TEXT NOT NULL DEFAULT '[]',
+        created_at   INTEGER NOT NULL,
+        judged_at    INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_wisdom_windows_judged ON wisdom_attribution_windows(judged_at);
+      CREATE INDEX IF NOT EXISTS idx_wisdom_windows_created ON wisdom_attribution_windows(created_at);
+
       -- ── Knowledge Sources 注册表 ──
       CREATE TABLE IF NOT EXISTS knowledge_sources (
         id          TEXT PRIMARY KEY,

@@ -9,6 +9,9 @@
 import type {
   AdmitWisdomInput,
   AdmitWisdomResult,
+  WisdomAttributionCitation,
+  WisdomAttributionWindow,
+  WisdomAttributionWindowInput,
   WisdomCounterevidence,
   WisdomDerivation,
   WisdomEffect,
@@ -221,7 +224,10 @@ export class SqliteWisdomStore implements WisdomStore {
     });
   }
 
-  async recordOutcomes(events: WisdomOutcomeEvent[]): Promise<void> {
+  async recordOutcomes(
+    events: WisdomOutcomeEvent[],
+    config?: import('../wisdom-policy.js').WisdomEvaluationConfig,
+  ): Promise<void> {
     if (events.length === 0) return;
     const byId = new Map<string, WisdomOutcomeEvent[]>();
     for (const e of events) {
@@ -234,7 +240,7 @@ export class SqliteWisdomStore implements WisdomStore {
       if (!current) continue;
       const folded = foldOutcomeEvents(current, evs);
       let next: WisdomEntry = { ...current, ...folded, updatedAt: Date.now() };
-      const plan = planConfidenceUpdate(next);
+      const plan = planConfidenceUpdate(next, config);
       if (plan) {
         next = {
           ...next,
@@ -279,6 +285,75 @@ export class SqliteWisdomStore implements WisdomStore {
         .prepare(`UPDATE wisdom SET outcomes_json = ?, updated_at = ? WHERE id = ?`)
         .run(JSON.stringify(outcomes), now, id);
     }
+  }
+
+  async recordAttributionWindow(input: WisdomAttributionWindowInput): Promise<string> {
+    const id = AgentDatabase.generateId('waw');
+    this.db.raw
+      .prepare(
+        `INSERT INTO wisdom_attribution_windows
+           (id, session_id, agent_id, query, outcome, injected_ids, citations, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.sessionId,
+        input.agentId ?? null,
+        input.query,
+        input.outcome,
+        JSON.stringify(input.injectedIds),
+        JSON.stringify(input.citations),
+        Date.now(),
+      );
+    return id;
+  }
+
+  async listPendingWindows(limit?: number): Promise<WisdomAttributionWindow[]> {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM wisdom_attribution_windows WHERE judged_at IS NULL
+         ORDER BY created_at ASC LIMIT ?`,
+      )
+      .all(limit && limit > 0 ? limit : 500) as unknown as Array<Record<string, unknown>>;
+    return rows.map((r) => this.rowToWindow(r));
+  }
+
+  async markWindowsJudged(ids: string[], at?: number): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const now = at ?? Date.now();
+    const stmt = this.db.raw.prepare(
+      `UPDATE wisdom_attribution_windows SET judged_at = ? WHERE id = ? AND judged_at IS NULL`,
+    );
+    const newlyJudged: string[] = [];
+    for (const id of ids) {
+      // 只有真正置上的才算本次标记（跨进程幂等：他方先标则不发事件）
+      const res = stmt.run(now, id) as { changes?: number | bigint };
+      if (Number(res.changes ?? 0) > 0) newlyJudged.push(id);
+    }
+    return newlyJudged;
+  }
+
+  async pruneWindows(before: number): Promise<void> {
+    this.db.raw
+      .prepare(
+        `DELETE FROM wisdom_attribution_windows WHERE judged_at IS NOT NULL AND judged_at < ?`,
+      )
+      .run(before);
+  }
+
+  private rowToWindow(r: Record<string, unknown>): WisdomAttributionWindow {
+    return {
+      id: String(r.id),
+      sessionId: String(r.session_id),
+      agentId: r.agent_id == null ? undefined : String(r.agent_id),
+      query: String(r.query ?? ''),
+      outcome: String(r.outcome ?? ''),
+      // 坏行不得毒化整批（手工损坏/半写 JSON 跳过字段而非抛错）
+      injectedIds: safeParse<string[]>(String(r.injected_ids ?? ''), []),
+      citations: safeParse<WisdomAttributionCitation[]>(String(r.citations ?? ''), []),
+      createdAt: Number(r.created_at),
+      judgedAt: r.judged_at == null ? undefined : Number(r.judged_at),
+    };
   }
 
   async stats(): Promise<WisdomStats> {

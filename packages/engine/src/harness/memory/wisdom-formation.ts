@@ -391,6 +391,9 @@ export function formatWisdomBody(picks: WisdomInjectPick[]): string {
     byType.set(key, list);
   }
   const blocks: string[] = [];
+  blocks.push(
+    '> 归因：若某条范式实质影响了你的决策，可在回复中引用其 id（如 [wis_xxx]）以便事后验证。',
+  );
   for (const [type, list] of byType) {
     const lines = list.map((e) => formatWisdomBullet(e));
     blocks.push(`## 面对「${type}」\n\n${lines.join('\n\n')}`);
@@ -399,7 +402,7 @@ export function formatWisdomBody(picks: WisdomInjectPick[]): string {
 }
 
 function formatWisdomBullet(e: WisdomEntry): string {
-  const parts = [`- ${e.statement}`];
+  const parts = [`- [${e.id}] ${e.statement}`];
   const effectBits: string[] = [];
   if (e.effect.posture) effectBits.push(`推理姿态：${e.effect.posture}`);
   if (e.effect.questions?.length) effectBits.push(`先问：${e.effect.questions.join('；')}`);

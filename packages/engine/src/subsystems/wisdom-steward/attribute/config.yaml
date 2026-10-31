@@ -1,0 +1,60 @@
+id: wisdom.steward.attribute
+name: Wisdom Steward Attribute
+description: 弱归因判决：归因窗口 digest 批量 LLM 判决（assisted/contested/unclear），判决事件交 evaluate 入账
+
+sense:
+  source: schedule
+  # 每日一次兜底脉搏；挂 govern 脉搏（governed 事件）+ 显式 attribute.request 增量触发
+  interval: 86400000
+  runOnStart: false
+  cooldownMs: 86400000
+  filter:
+    condition: "true"
+    events: ['wisdom.steward.governed', 'wisdom.steward.attribute.request']
+    emits: ['wisdom.steward.attributed', 'wisdom.steward.attribute.failed', 'wisdom.steward.evaluate.request']
+  isolation: isolated
+
+think:
+  # code = 调 handler.ts 确定性实现（digest 构建 + LLM 判决解析；判决语义归 LLM）
+  implementation: code
+  strategy: deterministic
+  model: mini
+  maxIterations: 1
+
+act:
+  mode: inject
+
+signal:
+  severity: info
+  channel: [event]
+
+boundary:
+  visibility: isolated
+  authority: act
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: agent
+
+lifecycle:
+  maxConcurrent: 1
+  maxDurationMs: 120000
+
+runtimeInject:
+  requires: ['wisdomStore', 'eventBus']
+
+observability:
+  eventPrefix: wisdom.steward.attribute
+
+metadata:
+  config:
+    dryRun: false
+    maxPairs: 40
+    sampleMax: 2
+    maxWindows: 500
+    maxTokens: 4096
+    windowRetentionMs: 2592000000

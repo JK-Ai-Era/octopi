@@ -219,12 +219,12 @@ describe('WisdomLayer applied 记账', () => {
         applied.push(ids);
       },
     });
-    // maxChars = max(80, 50*2) = 100：第一条完整保留，第二条被裁掉
+    // maxChars = max(80, 75*2) = 150：脚注(居顶)+分组头+第一条(约 125 字符)完整保留，第二条被裁掉
     const out = await layer.assemble({
       sessionId: 's',
       messages: [],
       query: 'x',
-      tokenBudget: 50,
+      tokenBudget: 75,
       systemBudget: 50,
     } satisfies LayerAssembleContext);
     expect(out).not.toBeNull();

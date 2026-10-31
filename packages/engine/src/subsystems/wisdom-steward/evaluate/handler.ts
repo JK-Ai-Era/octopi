@@ -47,7 +47,9 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
   const events = rawEvents.filter(isOutcomeEvent);
 
   if (events.length > 0 && !dryRun) {
-    await store.recordOutcomes(events);
+    // config 必须透传：recordOutcomes 内部推进 confidence/状态迁移，
+    // 否则 evaluation.* 配置在事件路径上被默认值绕过（评审 F4）
+    await store.recordOutcomes(events, config);
   }
 
   const entries = await store.listForGovern({ includeRetired: false });
