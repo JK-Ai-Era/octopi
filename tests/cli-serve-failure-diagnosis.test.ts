@@ -15,6 +15,8 @@ import {
   getGatewayLogPath,
   readKnowledgeLinesSince,
   waitForKnowledgeLines,
+  detectPrivilegedDeclarationFailure,
+  renderPrivilegedDeclarationNotice,
 } from '../src/cli/daemon.js';
 
 let tempDir: string;
@@ -202,5 +204,90 @@ describe('diagnoseStartupFailure', () => {
       expect(out.join('\n')).toContain(`Full log: ${base.logPath}`);
       expect(out.join('\n')).toContain('octopi serve fg');
     }
+  });
+});
+
+describe('detectPrivilegedDeclarationFailure', () => {
+  const marker = '--- octopi serve start 2026-10-31T16:23:15.219Z port=18180 ---';
+  const refusalLine =
+    '⛔ privileged_declaration_required (<top>) — 高权限启动已被拒绝 / elevated startup refused';
+
+  test('returns scope for a refusal after the current start marker', () => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(
+      logPath,
+      [marker, '[config] Loading config from /home/u/.octopi/octopi.json', refusalLine].join('\n'),
+      'utf-8',
+    );
+    expect(detectPrivilegedDeclarationFailure(logPath, marker)).toBe('<top>');
+  });
+
+  test('agent scope is returned verbatim for the notice to render', () => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(logPath, [marker, 'privileged_declaration_required (worker-1): …'].join('\n'), 'utf-8');
+    expect(detectPrivilegedDeclarationFailure(logPath, marker)).toBe('worker-1');
+  });
+
+  test('missing start marker (rotated/replaced log) returns null instead of misattributing', () => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(logPath, [refusalLine, '[config] Loading config from /home/u/.octopi/octopi.json'].join('\n'), 'utf-8');
+    expect(detectPrivilegedDeclarationFailure(logPath, marker)).toBeNull();
+  });
+
+  test('ignores a refusal from a previous run (appended log)', () => {
+    mkdirSync(dirname(logPath), { recursive: true });
+    writeFileSync(
+      logPath,
+      [refusalLine, marker, '[config] Loading config from /home/u/.octopi/octopi.json'].join('\n'),
+      'utf-8',
+    );
+    expect(detectPrivilegedDeclarationFailure(logPath, marker)).toBeNull();
+  });
+
+  test('missing log file returns null', () => {
+    expect(detectPrivilegedDeclarationFailure(join(tempDir, 'nope.log'), marker)).toBeNull();
+  });
+});
+
+describe('renderPrivilegedDeclarationNotice', () => {
+  const configPath = 'C:\\Users\\James\\.octopi\\octopi.json';
+  const topLines = renderPrivilegedDeclarationNotice({ scope: '<top>', configPath });
+  const topText = topLines.join('\n');
+
+  test('first line carries the machine-readable marker and scope', () => {
+    expect(topLines[0]).toContain('privileged_declaration_required (<top>)');
+  });
+
+  test('explains the consequence and names the config file with a privilegedAck example', () => {
+    expect(topText).toContain('系统管理员');
+    expect(topText).toContain('elevated (root/admin) privileges');
+    expect(topText).toContain(configPath);
+    expect(topText).toContain('privilegedAck');
+    expect(topText).toContain('windows-admin-by-design');
+  });
+
+  test('restart hint: neutral by default, names the command only when told to', () => {
+    expect(topText).toContain('重新启动 Octopi');
+    expect(topText).toContain('restart Octopi');
+    expect(topText).not.toContain('octopi serve');
+
+    const withCmd = renderPrivilegedDeclarationNotice({
+      scope: '<top>',
+      configPath,
+      restartCommand: 'octopi serve start',
+    }).join('\n');
+    expect(withCmd).toContain("重新运行 'octopi serve start'");
+    expect(withCmd).toContain("re-run 'octopi serve start'");
+  });
+
+  test('example is paste-safe: no // comments (octopi.json is strict JSON)', () => {
+    expect(topText).not.toContain('//');
+  });
+
+  test('agent scope names the agent and explains the top-level override', () => {
+    const agentText = renderPrivilegedDeclarationNotice({ scope: 'worker-1', configPath }).join('\n');
+    expect(agentText).toContain('"worker-1"');
+    expect(agentText).toContain('overrides the top level');
+    expect(agentText).toContain('整体覆盖顶层');
   });
 });

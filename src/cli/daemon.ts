@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
-import { loadConfig, toGatewayConfig } from '../config.js';
+import { loadConfig, toGatewayConfig, resolveConfigFilePath } from '../config.js';
 import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
 import { createProviderFromConfig, createWireDumpSinkFromConfig } from '@octopi-agent/engine/config.js';
 import type {
@@ -47,6 +47,11 @@ interface DaemonPidFile {
 
 export function getPidPath(): string {
   return join(getOctopiHome(), 'gateway.pid');
+}
+
+/** 缺省配置路径（模块级封装：`startGatewayBlocking` 内有同名 `await import` 遮蔽，函数内直接引用会 TDZ） */
+function defaultConfigPath(): string {
+  return join(getOctopiHome(), 'octopi.json');
 }
 
 export function readPidFile(): DaemonPidFile | null {
@@ -369,6 +374,97 @@ export function diagnoseStartupFailure(opts: {
   return lines;
 }
 
+/** privileged 声明闸门拒绝的机器可读标记（子进程写日志，serve start 父进程据此换独立提示呈现） */
+const PRIVILEGED_DECLARATION_RE = /privileged_declaration_required \(([^)]+)\)/;
+
+/**
+ * 识别本次启动中 privileged 声明闸门的拒绝。
+ *
+ * gateway.log 是追加写入：只认 startMarker 之后切片里的标记，
+ * 否则上一次运行的同类拒绝会误触发本次启动的独立提示；
+ * 本次标记缺失（日志被轮转/替换）时无法界定归属，返回 null 走通用诊断。
+ *
+ * @param logPath Gateway 日志路径
+ * @param startMarker 本次 `serve start` 写下的 `--- octopi serve start ... ---` 行
+ * @returns 命中时返回 scope（`<top>` 或 agent id），未命中/日志不可读返回 null
+ */
+export function detectPrivilegedDeclarationFailure(logPath: string, startMarker: string): string | null {
+  try {
+    const text = readFileSync(logPath, 'utf-8');
+    const idx = text.lastIndexOf(startMarker);
+    if (idx < 0) return null;
+    return PRIVILEGED_DECLARATION_RE.exec(text.slice(idx + startMarker.length))?.[1] ?? null;
+  } catch {
+    // 日志缺失/不可读：无法识别，调用方走通用「崩溃 + 日志尾巴」呈现（呈现降级，不是安全绕过）
+    return null;
+  }
+}
+
+/**
+ * privileged 声明闸门拒绝的独立双语提示（不套「gateway 崩溃 + 日志尾巴」框架）。
+ *
+ * 示例 JSON 刻意不含注释：octopi.json 是严格 JSON，用户原样粘贴必须合法。
+ *
+ * @param opts.scope 未声明的配置面（`<top>` 或 agent id）
+ * @param opts.configPath 实际加载的配置文件路径（指给用户修改的位置）
+ * @param opts.restartCommand 可复述给用户的重启动命令；缺省用中性的「重启 Octopi」
+ *   （同一提示会被 `serve fg` 直跑路径复用，写死 `serve start` 会指错命令）
+ * @returns 逐行提示文本；首行含机器可读标记 `privileged_declaration_required (<scope>)`
+ */
+export function renderPrivilegedDeclarationNotice(opts: {
+  scope: string;
+  configPath: string;
+  restartCommand?: string;
+}): string[] {
+  const { scope, configPath } = opts;
+  const zhRestart = opts.restartCommand
+    ? `保存后重新运行 '${opts.restartCommand}'。`
+    : '保存后重新启动 Octopi。';
+  const enRestart = opts.restartCommand
+    ? `Save the file, then re-run '${opts.restartCommand}'.`
+    : 'Save the file, then restart Octopi.';
+  const top = scope === '<top>';
+  const zhFix = top
+    ? '在其中的顶层 effectPolicy 中加入 privilegedAck 字段（任意非空字符串，是「我明确知道这是特权部署」的申明）。'
+    : `在其中 agents 数组中 id 为 "${scope}" 的 agent 的 effectPolicy 中加入 privilegedAck 字段（任意非空字符串，是「我明确知道这是特权部署」的申明；agent 的 effectPolicy 整体覆盖顶层，即使顶层已有声明，此处也必须自带）。`;
+  const enFix = top
+    ? 'Apply it at the top-level effectPolicy. Example (keep your other effectPolicy fields; the config file is strict JSON — no comments):'
+    : `Apply it at the effectPolicy of agent "${scope}" (an agent effectPolicy fully overrides the top level, so the declaration must be repeated there even when the top level has one). Example (keep your other effectPolicy fields; the config file is strict JSON — no comments):`;
+  return [
+    `⛔ privileged_declaration_required (${scope}) — 高权限启动已被拒绝 / elevated startup refused`,
+    '',
+    '【中文】',
+    '你正在以系统管理员（root/admin）权限启动 Octopi，这将使 Octopi 具备系统级权限。',
+    'Octopi 拒绝在没有显式声明的情况下以高权限运行（不允许静默的特权部署）。',
+    '',
+    '如果你确定要以管理员身份启动，请在配置文件：',
+    `    ${configPath}`,
+    zhFix,
+    '例如（已有的其他 effectPolicy 字段照旧保留；配置文件是严格 JSON，不要写注释）：',
+    '',
+    '    "effectPolicy": {',
+    '      "privilegedAck": "windows-admin-by-design"',
+    '    }',
+    '',
+    `${zhRestart}如果不想以管理员权限运行，请改用普通用户权限的终端启动。`,
+    '',
+    '[EN]',
+    'You are starting Octopi with elevated (root/admin) privileges, which grants it system-level access.',
+    'Octopi refuses to run elevated without an explicit declaration — no silent privileged deployments.',
+    '',
+    'If you intend to run as administrator, add a privilegedAck field (any non-empty string — an explicit',
+    'acknowledgement that this is a privileged deployment) to your config file:',
+    `    ${configPath}`,
+    enFix,
+    '',
+    '    "effectPolicy": {',
+    '      "privilegedAck": "windows-admin-by-design"',
+    '    }',
+    '',
+    `${enRestart} To run unprivileged, use a normal (non-admin) terminal.`,
+  ];
+}
+
 /**
  * 按 `observability.llmRequestDump` 构造 wire dump sink（未启用时 undefined）
  *
@@ -534,6 +630,31 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   ]);
 
   if (outcome.kind !== 'ready' || !outcome.pid) {
+    // privileged 声明闸门拒绝 = 独立安全提示；不套「gateway 崩溃 + 日志尾巴」框架
+    const privilegedScope =
+      outcome.kind === 'exited' && !spawnError
+        ? detectPrivilegedDeclarationFailure(logPath, startMarker)
+        : null;
+    if (privilegedScope) {
+      let noticeConfigPath = configPath ?? defaultConfigPath();
+      try {
+        noticeConfigPath = resolveConfigFilePath(configPath);
+      } catch {
+        // 极窄窗口内配置文件被移走/不可读：提示本体照常呈现，回退展示缺省路径；
+        // 真实的「配置找不到」错误在子进程 loadConfig 已上浮进日志，不会被这里吞掉
+      }
+      for (const line of renderPrivilegedDeclarationNotice({
+        scope: privilegedScope,
+        configPath: noticeConfigPath,
+        restartCommand: 'octopi serve start',
+      })) {
+        console.error(line);
+      }
+      console.error('');
+      console.error(`Full log: ${logPath}`);
+      console.error(`Foreground debug: octopi serve fg${configPath ? ` -c ${configPath}` : ''}`);
+      process.exit(1);
+    }
     if (outcome.kind === 'exited') {
       if (spawnError) {
         console.error(`❌ Failed to launch Gateway child process: ${spawnError}`);
@@ -806,7 +927,25 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         try {
           assertPrivilegedDeclaration({ elevated, privilegedAck: scope.ack, scope: scope.name });
         } catch (err) {
-          console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+          // 仅闸门断言渲染独立提示（首行含机器可读标记，serve start 父进程据此换呈现）；
+          // 其他异常原样上浮，不伪装成 privilegedAck 缺失
+          if (!(err instanceof Error) || !err.message.startsWith('privileged_declaration_required')) {
+            throw err;
+          }
+          let noticeConfigPath = configPath ?? defaultConfigPath();
+          try {
+            noticeConfigPath = resolveConfigFilePath(configPath);
+          } catch {
+            // 极窄窗口内配置文件被移走/不可读：回退展示缺省路径；加载失败的真实错误已在 loadConfig 上浮
+          }
+          for (const line of renderPrivilegedDeclarationNotice({
+            scope: scope.name,
+            configPath: noticeConfigPath,
+            // 守护模式由 serve start 拉起，可复述该命令；直跑 fg 时用中性措辞避免指错命令
+            restartCommand: process.env.OCTOPI_DAEMON === '1' ? 'octopi serve start' : undefined,
+          })) {
+            console.error(line);
+          }
           process.exit(1);
         }
       }

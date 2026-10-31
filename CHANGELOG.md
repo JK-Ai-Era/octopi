@@ -108,6 +108,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.1 (2026-11-01)
+
+### fix(cli): bilingual standalone notice for the elevated privilegedAck gate refusal
+
+- **问题**：elevated（root/admin）进程缺 `effectPolicy.privilegedAck` 时，闸门只往 gateway.log 写一行 `✗ privileged_declaration_required …` 就退出，`octopi serve start` 把它套进「❌ Gateway exited during startup + 日志尾巴」的通用崩溃框架——用户面对的是一段混着 timing 行的英文报错，既不知道这是安全申明缺失，也不知道去哪个配置文件改。
+- **改动**：拒绝呈现重做为**独立中英双语提示**（`renderPrivilegedDeclarationNotice`，`src/cli/daemon.ts`）：说明「管理员权限启动 = Octopi 具备系统级权限」、指明实际加载的配置文件路径、给出顶层 `effectPolicy.privilegedAck` 示例（**示例不含注释**——octopi.json 是严格 JSON，粘贴必须合法）；agent 级 scope 指到对应 agent 的 effectPolicy 并说明「agent effectPolicy 整体覆盖顶层」。
+- **呈现链路**：子进程（`serve fg`）闸门拒绝时渲染提示写入日志（首行含机器可读标记 `privileged_declaration_required (<scope>)`）；`serve start` 父进程经 `detectPrivilegedDeclarationFailure` 在**本次启动标记之后**识别该标记，只输出独立提示 + `Full log`/`Foreground debug` 出路，不再走崩溃框架。标记归属判定 fail-safe：本次启动标记缺失（日志轮转）或日志不可读时返回 null 走通用诊断，绝不拿上一次运行的拒绝误报本次。
+- **Review 收口（子代理 4 minor）**：①子进程 catch 收窄——仅闸门断言走独立提示，其他异常原样上浮不伪装成 privilegedAck 缺失；②配置文件在竞态窗口被移走时 `resolveConfigFilePath` 有兜底路径，提示照常呈现（加载失败的真实错误已在 loadConfig 上浮）；③重启命令参数化——守护模式复述 `octopi serve start`，`serve fg` 直跑用中性「重启 Octopi」措辞不指错命令；④模块级 `defaultConfigPath()` 规避 `startGatewayBlocking` 内同名 `await import` 遮蔽导致的 TDZ（typecheck 抓出）。
+- **验证**：`tests/cli-serve-failure-diagnosis.test.ts` 新增 9 例（检测器：命中/agent scope/上一次运行隔离/标记缺失/日志缺失；渲染：双语内容+配置路径+示例、示例无注释粘贴安全、重启措辞两种模式、agent 覆盖说明），25/25 绿；eslint + tests typecheck 绿。engine 侧 `assertPrivilegedDeclaration` 契约不变，无公开 API 变化。
+
 ## v0.98.0 (2026-10-31)
 
 ### feat(wisdom): 弱归因判决环落地——LLM 批量判官接通 trial→active 晋升
