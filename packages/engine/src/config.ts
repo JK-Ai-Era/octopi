@@ -1037,6 +1037,8 @@ export interface HarnessConfig {
       coreMaxItems?: number;
       coreMaxTokens?: number;
       scenarioMaxItems?: number;
+      /** trial 轮转试用名额（缺省 2；0 = 关闭轮转） */
+      trialMaxItems?: number;
       trialVisible?: boolean;
     };
     govern?: {

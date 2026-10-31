@@ -353,6 +353,8 @@ export const WisdomConfigSchema = z.object({
       coreMaxItems: z.number().int().positive().max(32).optional(),
       coreMaxTokens: z.number().int().positive().optional(),
       scenarioMaxItems: z.number().int().positive().max(32).optional(),
+      // 0 = 关闭 trial 轮转试用名额（缺省 2）
+      trialMaxItems: z.number().int().min(0).max(32).optional(),
       trialVisible: z.boolean().optional(),
     })
     .optional(),

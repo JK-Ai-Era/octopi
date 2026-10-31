@@ -40,6 +40,8 @@ interface FormationConfig {
   minMemorySupport?: number;
   minClusterSize?: number;
   maxEvidenceChars?: number;
+  /** 库内范式清单条数上限（独立预算；缺省 30） */
+  maxDigestItems?: number;
   dryRun?: boolean;
   /** T4：晋升候选堆叠阈值（连续/数量） */
   minPromotionStack?: number;
@@ -76,20 +78,37 @@ function failOutput(message: string, reason: string): SubsystemOutput {
 }
 
 /**
- * 聚合炼制原料：promotion 候选 + 同型 method/norm 簇。
+ * 聚合炼制原料：promotion 候选 + 同型 method/norm 簇 + 库内已有范式清单。
  *
  * @param memoryStore - MemoryStore
+ * @param wisdomStore - WisdomStore（库内范式清单 + 已覆盖语料过滤）
  * @param minCluster - 触发阈值
- * @param maxChars - 证据包字符上限
+ * @param maxChars - 证据段字符上限
+ * @param maxDigestItems - 库内范式清单条数上限（独立预算）
  * @returns 证据包文本与 memoryIds
  */
 async function buildEvidencePack(
   memoryStore: MemoryStore,
+  wisdomStore: WisdomStore,
   minCluster: number,
   maxChars: number,
+  maxDigestItems: number,
 ): Promise<{ text: string; memoryIds: string[]; clusterHits: number; promotionCount: number }> {
   const all = await memoryStore.listForGovern({ includeDeleted: false });
-  const alive = all.filter((e) => !e.deleted && (e.status ?? 'active') !== 'shadow');
+  const livingWisdom = (await wisdomStore.listForGovern()).filter(
+    (w) => w.status !== 'retired' && w.status !== 'superseded',
+  );
+  // 语料去覆盖：只统计 trial/active/strengthened 范式的 derivedFrom——
+  // candidate/contested 不锁语料（contested 可能被修反，同批证据要能炼出修正版）。
+  // 同源材料反复炼制是重复条目的燃料，已消化材料由下方「库内已有范式」清单代表
+  const covered = new Set<string>();
+  for (const w of livingWisdom) {
+    if (w.status !== 'trial' && w.status !== 'active' && w.status !== 'strengthened') continue;
+    for (const id of w.derivedFrom?.memoryIds ?? []) covered.add(id);
+  }
+  const alive = all.filter(
+    (e) => !e.deleted && (e.status ?? 'active') !== 'shadow' && !covered.has(e.id),
+  );
   const promotions = planPromotionCandidates(alive, 20);
 
   // 按 type+首 tag 聚簇（代码侧选择；语义归 LLM）
@@ -125,6 +144,17 @@ async function buildEvidencePack(
   }
   let text = parts.join('\n');
   if (text.length > maxChars) text = text.slice(0, maxChars);
+
+  // 库内已有范式清单：LLM 级语义去重的输入（同主题勿重复炼制；实质改进走 supersedesId 取代）。
+  // 受 maxDigestItems 单独约束（maxChars 只管证据段，两者共同构成有界提示）；截断如实上报
+  if (livingWisdom.length) {
+    const shown = livingWisdom.slice(0, maxDigestItems);
+    const hidden = livingWisdom.length - shown.length;
+    const digestLines = shown.map((w) => `- (${w.id}) ${w.statement.slice(0, 80)}`).join('\n');
+    text += `\n## 库内已有范式（同主题勿重复炼制；确有实质改进则输出 supersedesId 取代，不要新增${
+      hidden ? `；另有 ${hidden} 条未列出` : ''
+    }）\n${digestLines}`;
+  }
   return {
     text,
     memoryIds: [...ids],
@@ -145,11 +175,12 @@ async function handler(
   const config = (deps?.[DEP_CONFIG] as FormationConfig | undefined) ?? {};
   const minCluster = config.minClusterSize ?? 5;
   const maxChars = config.maxEvidenceChars ?? 6000;
+  const maxDigestItems = config.maxDigestItems ?? 30;
   const maxItems = config.maxItemsPerRun ?? 2;
   const dryRun = config.dryRun ?? false;
   const minPromotionStack = config.minPromotionStack ?? 3;
 
-  const pack = await buildEvidencePack(memoryStore, minCluster, maxChars);
+  const pack = await buildEvidencePack(memoryStore, wisdomStore, minCluster, maxChars, maxDigestItems);
   // 触发器（防「见者有份」）：真实簇 或 晋升候选堆叠；仅有零散材料不打 LLM
   const hasCluster = pack.clusterHits > 0;
   const hasStackedPromotions = pack.promotionCount >= minPromotionStack;

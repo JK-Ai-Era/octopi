@@ -289,7 +289,8 @@ export type WisdomGateReason =
   | 'invalid_kind'
   | 'missing_derived_from'
   | 'unknown_derived_id'
-  | 'supersedes_target_missing';
+  | 'supersedes_target_missing'
+  | 'supersedes_target_invalid';
 
 export interface WisdomGateOutcome {
   ok: boolean;
@@ -332,15 +333,17 @@ export interface WisdomInjectQuery {
   coreMaxItems?: number;
   /** 场景条数硬顶 */
   scenarioMaxItems?: number;
+  /** trial 轮转试用名额硬顶（默认 2——保证 trial 有机会积累 applied 以晋升；0 关闭轮转） */
+  trialMaxItems?: number;
   /** 是否包含 trial（默认 true——trial 的意义就是被试用；显式 false 只注入已站稳条目） */
   includeTrial?: boolean;
 }
 
 export interface WisdomInjectPick {
   entry: WisdomEntry;
-  /** core = 常备小核心；scenario = 本轮匹配 */
-  bucket: 'core' | 'scenario';
-  /** 场景匹配分（core 为 1） */
+  /** core = 常备小核心；scenario = 本轮匹配；trial = 轮转试用名额 */
+  bucket: 'core' | 'scenario' | 'trial';
+  /** 场景匹配分（core 为 1；trial 轮转为场景分，可为 0） */
   score: number;
 }
 

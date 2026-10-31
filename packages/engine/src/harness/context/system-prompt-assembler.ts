@@ -118,6 +118,8 @@ export function createDefaultSystemPromptAssembler(options?: {
   /** Wisdom 注入条数硬顶 */
   wisdomCoreMaxItems?: number;
   wisdomScenarioMaxItems?: number;
+  /** trial 轮转试用名额（wisdom.injection.trialMaxItems；缺省 2——保底曝光打破晋升死锁；0 关闭） */
+  wisdomTrialMaxItems?: number;
   /** trial 可见性（wisdom.injection.trialVisible；缺省 true——trial 的意义就是被试用） */
   wisdomIncludeTrial?: boolean;
   cognitionStore?: ConceptGraphStore;
@@ -225,9 +227,10 @@ export function createDefaultSystemPromptAssembler(options?: {
                 text: query,
                 coreMaxItems: options?.wisdomCoreMaxItems,
                 scenarioMaxItems: options?.wisdomScenarioMaxItems,
+                trialMaxItems: options?.wisdomTrialMaxItems,
                 includeTrial: options?.wisdomIncludeTrial,
               });
-              return picks.map((p) => ({ entry: p.entry, bucket: p.bucket }));
+              return picks;
             },
             onInjected: (ids) => wisdomStore.touchApplied(ids),
           }),

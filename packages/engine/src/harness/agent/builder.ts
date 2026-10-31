@@ -577,10 +577,11 @@ export class AgentBuilder {
   };
   /** 智慧（注入 system prompt WisdomLayer） */
   private _wisdomStore?: import('../memory/types.js').WisdomStore;
-  /** Wisdom 注入策略（wisdom.injection：core/scenario 上限 + trialVisible） */
+  /** Wisdom 注入策略（wisdom.injection：core/scenario/trial 上限 + trialVisible） */
   private _wisdomInjection?: {
     coreMaxItems?: number;
     scenarioMaxItems?: number;
+    trialMaxItems?: number;
     trialVisible?: boolean;
   };
   /** 认知图谱（注入 system prompt CognitionLayer） */
@@ -903,6 +904,7 @@ export class AgentBuilder {
   wisdomInjection(cfg: {
     coreMaxItems?: number;
     scenarioMaxItems?: number;
+    trialMaxItems?: number;
     trialVisible?: boolean;
   }): this {
     this._wisdomInjection = cfg;
@@ -1391,6 +1393,7 @@ export class AgentBuilder {
       wisdomStore,
       wisdomCoreMaxItems: this._wisdomInjection?.coreMaxItems,
       wisdomScenarioMaxItems: this._wisdomInjection?.scenarioMaxItems,
+      wisdomTrialMaxItems: this._wisdomInjection?.trialMaxItems,
       wisdomIncludeTrial: this._wisdomInjection?.trialVisible,
       cognitionStore,
       systemBudgetRatio: assemblerCfg?.systemBudgetRatio,

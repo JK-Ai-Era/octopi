@@ -58,4 +58,5 @@ metadata:
     minMemorySupport: 2
     minClusterSize: 5
     maxEvidenceChars: 6000
+    maxDigestItems: 30
     maxTokens: 8192

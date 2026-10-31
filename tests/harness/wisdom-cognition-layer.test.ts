@@ -7,6 +7,7 @@ import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness
 import { DefaultContextAssembler } from '@octopi-agent/engine/harness/context/assembler.js';
 import { WisdomLayer } from '@octopi-agent/engine/harness/context/layers.js';
 import type { LayerAssembleContext } from '@octopi-agent/engine/harness/context/layer-types.js';
+import type { WisdomInjectPick } from '@octopi-agent/engine/harness/memory/types.js';
 import { InMemoryConceptGraph } from '@octopi-agent/engine/harness/memory/cognition.js';
 import { InMemoryWisdomStore } from '@octopi-agent/engine/harness/memory/wisdom.js';
 import type { Message } from '@octopi-agent/core/types.js';
@@ -104,7 +105,7 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
     expect(ids).not.toContain('cognition');
   });
 
-  it('蒸馏出生的 trial 条目场景匹配时被注入且计入 applied（回归：trial 召回死锁）', async () => {
+  it('蒸馏出生的 trial 场景命中注入并记 applied；无命中走 trial 轮转保底曝光', async () => {
     const wisdomStore = new InMemoryWisdomStore();
     const admitted = await wisdomStore.admit({
       statement: '蒸馏出的范式必须能被试用，否则永远无法挣得信任',
@@ -130,15 +131,18 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
     expect(hit.runtimeSnapshot ?? '').toContain('蒸馏出的范式必须能被试用');
     expect((await wisdomStore.get(admitted.id!))?.outcomes.applied).toBe(1);
 
-    // 无场景匹配：trial 形状够格（2 个 problemTypes）但状态不许进 core → 不注入、不记 applied
+    // 无场景命中：trial 进不了 core，但由 trial 轮转桶保底曝光（打破晋升死锁）——
+    // 轮转注入带 [试用] 标记，且不计 applied（applied 语义=场景命中被使用；
+    // 曝光入账会稀释 contestRate、废掉 zero-apply 淘汰）
     const miss = await asm.assemble({
       sessionId: 's',
       messages: [userMsg('今天天气不错')],
       persona: 'You are test.',
       contextWindow: 32000,
     });
-    expect(miss.runtimeSnapshot ?? '').not.toContain('蒸馏出的范式必须能被试用');
-    expect(miss.manifest?.layers.find((l) => l.id === 'wisdom')?.included ?? false).toBe(false);
+    expect(miss.runtimeSnapshot ?? '').toContain('[试用]');
+    expect(miss.runtimeSnapshot ?? '').toContain('蒸馏出的范式必须能被试用');
+    expect(miss.manifest?.layers.find((l) => l.id === 'wisdom')?.included ?? false).toBe(true);
     expect((await wisdomStore.get(admitted.id!))?.outcomes.applied).toBe(1);
   });
 
@@ -214,7 +218,8 @@ describe('WisdomLayer applied 记账', () => {
     });
     const applied: string[][] = [];
     const layer = new WisdomLayer({
-      select: async () => [mk('w1', '一'), mk('w2', '二')],
+      // 截断记账测试的最小假对象：非完整 WisdomEntry，断言与字段无关
+      select: async () => [mk('w1', '一'), mk('w2', '二')] as unknown as WisdomInjectPick[],
       onInjected: (ids) => {
         applied.push(ids);
       },

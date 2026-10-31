@@ -143,23 +143,39 @@ export function evaluateWisdomGate(
   if (options?.existing?.length) {
     const norm = normalizeStatement(statement);
     for (const ex of options.existing) {
-      // 只与已站稳的范式冲突检测；candidate/trial 不挡新条
-      if (ex.status !== 'active' && ex.status !== 'strengthened') continue;
+      // 已被取代/退役的条目不参与查重（继任者已接管其主题）
+      if (ex.status === 'superseded' || ex.status === 'retired') continue;
       const exNorm = normalizeStatement(ex.statement);
-      if (exNorm === norm && !input.supersedesId) {
-        return {
-          ok: false,
-          reason: 'duplicate_statement',
-          message: `dup_of=${ex.id}`,
-        };
-      }
-      // 字面-语义对立启发：同一宾语 + 互斥谓词（不做全文 NLI）
-      if (!input.supersedesId && looksOpposed(statement, ex.statement)) {
-        return {
-          ok: false,
-          reason: 'semantic_conflict',
-          message: `conflict_with=${ex.id}`,
-        };
+      if (!input.supersedesId) {
+        // 查重覆盖全部存活条目（含 trial——distilled 出生即 trial，同主题重复的主战场）
+        if (exNorm === norm) {
+          return {
+            ok: false,
+            reason: 'duplicate_statement',
+            message: `dup_of=${ex.id}`,
+          };
+        }
+        // 对立检测先于近重：同词面但义务互斥是矛盾而非重复（reason 要区分两种处置）。
+        // 维持只对已站稳的范式检测；trial 不因疑似对立挡新条（两条都未验证时留给试用裁决）。
+        if (
+          (ex.status === 'active' || ex.status === 'strengthened') &&
+          looksOpposed(statement, ex.statement)
+        ) {
+          return {
+            ok: false,
+            reason: 'semantic_conflict',
+            message: `conflict_with=${ex.id}`,
+          };
+        }
+        // 近重复兜底（bigram 相似度，阈值 0.30 经真实重复对标定：同主题最高 0.38、跨主题最高 0.06）。
+        // 语义去重主责在 formation LLM（证据包附库内范式清单），此处只拦重度换词复述。
+        if (looksNearDuplicate(statement, ex.statement)) {
+          return {
+            ok: false,
+            reason: 'duplicate_statement',
+            message: `near_dup_of=${ex.id}`,
+          };
+        }
       }
     }
   }
@@ -197,10 +213,42 @@ export function normalizeStatement(s: string): string {
 }
 
 const OPPOSITE_PAIRS: Array<[RegExp, RegExp]> = [
-  [/(必须|应该|应当)/, /(禁止|不得|不要|不应)/],
-  [/(禁止|不得|不要|不应)/, /(必须|应该|应当)/],
-  [/(优先|先)/, /(禁止|不得)/],
+  [/(必须|应该|应当)/, /(禁止|不得|不要|不应|不必|无需)/],
+  [/(禁止|不得|不要|不应|不必|无需)/, /(必须|应该|应当)/],
+  [/(优先|先)/, /(禁止|不得|不必)/],
 ];
+
+/** 近重复 bigram 相似度阈值（真实重复对标定：同主题对最高 0.38/中位 0.16，跨主题对最高 0.06） */
+export const NEAR_DUPLICATE_RATIO = 0.3;
+
+/**
+ * 近重复 bigram 长度下限（归一化后的大约字符数）。
+ * 短陈述共享公式化开头（「先验证」「面对 X 时先问」）时相似度虚高（可达 1.0），
+ * 会误杀同模板不同判断的合法范式——短陈述只走字面全等查重。
+ */
+const NEAR_DUPLICATE_MIN_CHARS = 12;
+
+/**
+ * 近重复兜底：陈述文本 bigram 相似度 ≥ 阈值视为重度换词复述。
+ *
+ * 双方陈述都必须 ≥ NEAR_DUPLICATE_MIN_CHARS（短陈述公式化重叠不可判语义）；
+ * 阈值取保守高位（0.30）——语义去重主责在 formation LLM，此启发宁可漏拦不可误杀。
+ *
+ * @param a - 新陈述
+ * @param b - 既有陈述
+ * @param threshold - 相似度阈值（缺省 NEAR_DUPLICATE_RATIO）
+ * @returns 是否疑似近重复
+ */
+export function looksNearDuplicate(
+  a: string,
+  b: string,
+  threshold: number = NEAR_DUPLICATE_RATIO,
+): boolean {
+  const na = normalizeStatement(a);
+  const nb = normalizeStatement(b);
+  if (na.length < NEAR_DUPLICATE_MIN_CHARS || nb.length < NEAR_DUPLICATE_MIN_CHARS) return false;
+  return sharedBigramRatio(a, b) >= threshold;
+}
 
 /**
  * 保守对立启发：同主题词重叠 + 互斥义务词。宁可漏拦，不可误杀。

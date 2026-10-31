@@ -396,15 +396,13 @@ export class CognitionLayer extends BaseLayer {
  * 不做全量 dump。匹配失败只注入 core（宁缺毋滥）。
  */
 export class WisdomLayer extends BaseLayer {
-  private readonly select: (query: string) => Promise<
-    Array<{ entry: { id: string; statement: string; scenario: { problemTypes: string[]; antiScenarios?: string[] }; effect: { posture?: string; questions?: string[] } }; bucket: 'core' | 'scenario' }>
-  >;
+  private readonly select: (
+    query: string,
+  ) => Promise<import('../memory/types.js').WisdomInjectPick[]>;
   private readonly onInjected?: (ids: string[]) => void | Promise<void>;
 
   constructor(options: {
-    select: (query: string) => Promise<
-      Array<{ entry: { id: string; statement: string; scenario: { problemTypes: string[]; antiScenarios?: string[] }; effect: { posture?: string; questions?: string[] } }; bucket: 'core' | 'scenario' }>
-    >;
+    select: (query: string) => Promise<import('../memory/types.js').WisdomInjectPick[]>;
     /** S1 applied 入账（注入命中） */
     onInjected?: (ids: string[]) => void | Promise<void>;
     order?: number;
@@ -417,25 +415,26 @@ export class WisdomLayer extends BaseLayer {
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
     const picks = await this.select(ctx.query ?? '');
     if (picks.length === 0) return null;
-    const body = formatWisdomBody(picks as never);
+    const body = formatWisdomBody(picks);
     if (!body) return null;
     const text = `# 思维框架\n\n${body}`;
     const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
-    // S1：只对实际留在文本里的条目记 applied / 报 sources——
-    // truncate 粗滤会裁掉尾部条目，被裁掉的不入账（applied 是归因环地基，宁缺勿滥）
-    const keptIds = picks
-      .filter((p) => truncated.includes(p.entry.statement))
-      .map((p) => p.entry.id);
-    if (this.onInjected && keptIds.length) {
+    // S1：只对实际留在文本里的条目报 sources——truncate 粗滤会裁掉尾部条目，被裁掉的不入账。
+    // applied 只记 core/scenario 命中：trial 轮转是保底曝光（bucket='trial'），入账 applied 会
+    // 稀释 contestRate、废掉 zero-apply 淘汰、抬高 utility——曝光与「被使用」是两件事。
+    // sources 仍含 trial（归因窗口需要真实注入清单，判官才能裁 assisted）。
+    const kept = picks.filter((p) => truncated.includes(p.entry.statement));
+    const appliedIds = kept.filter((p) => p.bucket !== 'trial').map((p) => p.entry.id);
+    if (this.onInjected && appliedIds.length) {
       try {
-        await this.onInjected(keptIds);
+        await this.onInjected(appliedIds);
       } catch {
         // 入账失败不拖垮装配；结局环可由 evaluate 兜
       }
     }
     return this.content(truncated, {
       dropped,
-      sources: keptIds,
+      sources: kept.map((p) => p.entry.id),
     });
   }
 }
@@ -455,6 +454,8 @@ export interface CreateDefaultLayersOptions {
   wisdomStore?: import('../memory/types.js').WisdomStore;
   wisdomCoreMaxItems?: number;
   wisdomScenarioMaxItems?: number;
+  /** trial 轮转试用名额（wisdom.injection.trialMaxItems；缺省 2——保底曝光打破晋升死锁；0 关闭） */
+  wisdomTrialMaxItems?: number;
   /** trial 可见性（wisdom.injection.trialVisible；缺省 true——trial 的意义就是被试用） */
   wisdomIncludeTrial?: boolean;
 }
@@ -477,9 +478,10 @@ export function createDefaultLayers(options: CreateDefaultLayersOptions): Contex
             text: query,
             coreMaxItems: options.wisdomCoreMaxItems,
             scenarioMaxItems: options.wisdomScenarioMaxItems,
+            trialMaxItems: options.wisdomTrialMaxItems,
             includeTrial: options.wisdomIncludeTrial,
           });
-          return picks.map((p) => ({ entry: p.entry, bucket: p.bucket }));
+          return picks;
         },
         onInjected: (ids) => store.touchApplied(ids),
       }),

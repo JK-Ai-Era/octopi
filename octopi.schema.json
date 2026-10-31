@@ -2684,6 +2684,11 @@
               "exclusiveMinimum": 0,
               "maximum": 32
             },
+            "trialMaxItems": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            },
             "trialVisible": {
               "type": "boolean"
             }

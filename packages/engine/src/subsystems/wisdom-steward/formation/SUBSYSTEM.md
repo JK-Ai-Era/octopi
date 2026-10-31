@@ -23,7 +23,8 @@
       "memoryIds": ["m1", "m2"],
       "conceptIds": [],
       "exceptions": [],
-      "kind": "corrective"
+      "kind": "corrective",
+      "supersedesId": null
     }
   ],
   "droppedNotes": ["不足以形成范式的主题说明"]
@@ -38,5 +39,11 @@
 4. **有适用域**：problemTypes 非空；写清 antiScenarios。
 5. 不输出 secrets、统计句、人格/宪法句。
 6. 无合格范式时输出 `{"items":[],"droppedNotes":["…"]}`，不要硬凑。
+7. **对照「库内已有范式」去重**：同主题已有范式时不输出新条目；确有实质改进时输出 `supersedesId`（值为被取代条目 id）取代之，不要新增同主题条目。
+
+## 标签粒度（影响召回匹配，必须遵守）
+
+- `problemTypes`：2–6 字短语标签（如「缓存优化」「验证型宣称」），不用整句。
+- `signals`：2–6 个短词标签，每个 ≤12 字（如「缓存 miss」「任务快照过期」），不用整句长描述。
 
 kind ∈ `generalize | corrective | selection | boundary`。

@@ -108,6 +108,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.5 (2026-11-01)
+
+### fix(wisdom): 召回死锁与重复入库双修复——trial 轮转保底曝光 + 提取去重闭环
+
+- **背景**（实测定诊）：库内 20 条 wisdom 全部卡在 trial（applied 全 0、归因窗口 0 条），两个症状同根——①**召回死锁**：trial 进不了 core、scenario 只认整句全字面命中（真实任务命中数 0），而 applied 只在注入后记账，trial→active 需 applied≥3 → 永不晋升的死循环；②**重复入库**：同一语料簇反复炼制 + 查重只对 active/strengthened（trial 互相零查重）+ 字面全等查重拦不住换词复述 + LLM 提示无去重指令 → 三大主题各重复 5–7 条。
+- **止血①（召回）**：`pickForInjection` 新增 **trial 轮转试用名额**（`wisdom.injection.trialMaxItems`，缺省 2，0=关）——最少被试用者优先、同分旧者先出、跨桶去重、anti 命中不轮转；bucket 联合扩为 `core|scenario|trial`。**行为变更（breaking-ish）**：无场景命中的 trial 也会被注入，渲染带 `[试用]` 标记供模型降权采信（保底曝光是挣得晋升的唯一路径；`trialVisible:false` 或 `trialMaxItems:0` 可关）。**轮转注入不计 applied**——applied 语义保持「场景命中被使用」，防曝光污染 contestRate / zero-apply 淘汰 / utility。
+- **止血②（召回）**：`scenarioMatchDetail` 分词化——长描述句信号按空白/标点/符号切段（≥2 字）逐段匹配，**≥3 字分段**全字面命中即 fullHit（2 字通用词不发 trial 入场券）；antiScenarios 触发条件为整串或 ≥3 字分段命中（2 字碎片歧义大不触发）。实测同一「重构 context assembler」任务命中 0 → 5 条 scenario。
+- **治本③（查重）**：admit 门控查重覆盖**全部存活条目**（含 trial）；新增 `looksNearDuplicate` bigram 近重复兜底（阈值 0.30，经真实重复对标定：同主题最高 0.38 / 跨主题最高 0.06，宁可漏拦）；检测顺序 全等→对立→近重（同词面义务互斥是矛盾不是重复，reason 分离）；superseded/retired 旧条目不参与查重。
+- **治本④（去重闭环）**：formation 证据包尾部附「库内已有范式」清单（id+statement），SUBSYSTEM.md 新增硬规则 7（同主题勿重复炼制，实质改进走 `supersedesId` 取代）+ 标签粒度约束（problemTypes 2–6 字、signals 短词标签 ≤12 字，服务于分段命中）；`supersedesId` 从 LLM 输出贯通到 admit。
+- **治本⑤（语料去覆盖）**：已被 trial/active/strengthened 范式 `derivedFrom` 覆盖的记忆不再进证据包（同源反复炼制的燃料切断；candidate/contested 不锁语料）；全部覆盖时 `no_trigger` 节流不打 LLM。
+- **独立评审修复**（对抗式评审后逐条核实）：近重复查重加 ≥12 字长度下限（短陈述公式化重叠相似度虚高会误杀合法范式，只走字面全等）；「必须/不必」类相反义务改判 `semantic_conflict`（补否定词表）；supersede 继承被取代者溯源并并入白名单（同源精炼主路径不被去覆盖堵死，memoryIds 留空即继承）；dryRun 查重与真实 admit 口径一致；supersede 目标校验存活 + factory 出厂保护（`supersedes_target_invalid`）+ sqlite 改写/写入事务化；库内范式清单受 `maxDigestItems`（缺省 30）预算约束并上报截断。未采纳并记录：near-dup 阈值入配置（与既有 looksOpposed 启发一致保持硬编码）、预算紧时 trial 尾部截断饥饿（尾部内容固有属性）。
+- **验证**：`tests/memory/wisdom-formation.test.ts` 更新+新增（轮转排序/跨桶去重/名额硬顶/分段命中/anti 门槛/轮转避 anti/fullHit 门槛/查重扩展/near-dup 反例/相反义务分类/supersede 溯源继承/取代目标校验/dryRun 对齐），新增 `tests/memory/wisdom-formation-steward.test.ts`（证据包去覆盖/范式清单/no_trigger 节流/contested 解锁语料/supersede 真实覆盖语料端到端）；wisdom 相关 73 例 + 全量测试 + lint 全绿。真实数据实测：原 0 命中任务现召回 5 scenario + 2 trial 轮转（带 [试用] 标记），无关任务 2 条 trial 保底且不计 applied。
+- **遗留**：库内 20 条存量 trial 为三大主题重复簇（旧机制产物），需一次人工合并（每主题保留 1 条、其余 retire）——另行确认清单后执行。
+
+---
+
 ## v0.98.4 (2026-11-01)
 
 ### fix(security): shell 解析引擎替换为 tree-sitter，根治管道/拼接命令假 critical 误拦

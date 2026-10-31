@@ -90,6 +90,36 @@ export class SqliteWisdomStore implements WisdomStore {
     const status = resolveInitialWisdomStatus(input);
     const id = AgentDatabase.generateId('wis');
 
+    const insertRow = (): void => {
+      this.db.raw
+        .prepare(
+          `INSERT INTO wisdom (
+            id, statement, rationale, scenario_json, effect_json, status, confidence, priority,
+            derived_from_json, exceptions_json, counterevidence_json, outcomes_json,
+            origin, kind, superseded_by, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          input.statement.trim(),
+          input.rationale?.trim() || null,
+          JSON.stringify(input.scenario),
+          JSON.stringify(input.effect),
+          status,
+          clamp01(input.confidence ?? defaultConfidence(status, input.origin ?? 'distilled')),
+          input.priority ?? defaultPriority(status, input.origin ?? 'distilled'),
+          JSON.stringify(input.derivedFrom),
+          JSON.stringify(input.exceptions ?? []),
+          JSON.stringify([]),
+          JSON.stringify(emptyOutcomes()),
+          input.origin ?? 'distilled',
+          input.kind,
+          null,
+          now,
+          now,
+        );
+    };
+
     if (input.supersedesId) {
       const prev = this.getSync(input.supersedesId);
       if (!prev) {
@@ -99,38 +129,32 @@ export class SqliteWisdomStore implements WisdomStore {
           message: `supersedesId=${input.supersedesId}`,
         };
       }
-      this.db.raw
-        .prepare(`UPDATE wisdom SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ?`)
-        .run(id, now, prev.id);
+      // 取代目标必须存活（retired/superseded 已退出主题）；factory 是人格级预设，
+      // 只经人工通道更换，不许炼制回路静默取代（否则 govern 的出厂保护被绕过）
+      if (prev.status === 'retired' || prev.status === 'superseded' || prev.origin === 'factory') {
+        return {
+          action: 'rejected',
+          reason: 'supersedes_target_invalid',
+          message: `supersedes_target=${prev.status}/${prev.origin}`,
+        };
+      }
+      // 旧条目改写与新条目写入同事务：避免 INSERT 失败留下「已 superseded 但无继任者」悬挂链
+      this.db.raw.exec('BEGIN IMMEDIATE');
+      try {
+        this.db.raw
+          .prepare(
+            `UPDATE wisdom SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ?`,
+          )
+          .run(id, now, prev.id);
+        insertRow();
+        this.db.raw.exec('COMMIT');
+      } catch (err) {
+        this.db.raw.exec('ROLLBACK');
+        throw err;
+      }
+    } else {
+      insertRow();
     }
-
-    this.db.raw
-      .prepare(
-        `INSERT INTO wisdom (
-          id, statement, rationale, scenario_json, effect_json, status, confidence, priority,
-          derived_from_json, exceptions_json, counterevidence_json, outcomes_json,
-          origin, kind, superseded_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        input.statement.trim(),
-        input.rationale?.trim() || null,
-        JSON.stringify(input.scenario),
-        JSON.stringify(input.effect),
-        status,
-        clamp01(input.confidence ?? defaultConfidence(status, input.origin ?? 'distilled')),
-        input.priority ?? defaultPriority(status, input.origin ?? 'distilled'),
-        JSON.stringify(input.derivedFrom),
-        JSON.stringify(input.exceptions ?? []),
-        JSON.stringify([]),
-        JSON.stringify(emptyOutcomes()),
-        input.origin ?? 'distilled',
-        input.kind,
-        null,
-        now,
-        now,
-      );
 
     return {
       action: input.supersedesId ? 'superseded' : 'created',
@@ -155,6 +179,7 @@ export class SqliteWisdomStore implements WisdomStore {
     return pickForInjection(entries, query.text ?? '', {
       coreMaxItems: query.coreMaxItems,
       scenarioMaxItems: query.scenarioMaxItems,
+      trialMaxItems: query.trialMaxItems,
       includeTrial: query.includeTrial,
     });
   }

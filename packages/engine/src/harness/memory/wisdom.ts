@@ -58,6 +58,14 @@ export class InMemoryWisdomStore implements WisdomStore {
           message: `supersedesId=${input.supersedesId}`,
         };
       }
+      // 与 SqliteWisdomStore 同规：目标必须存活；factory 出厂预设不许炼制回路静默取代
+      if (prev.status === 'retired' || prev.status === 'superseded' || prev.origin === 'factory') {
+        return {
+          action: 'rejected',
+          reason: 'supersedes_target_invalid',
+          message: `supersedes_target=${prev.status}/${prev.origin}`,
+        };
+      }
       this.entries.set(prev.id, {
         ...prev,
         status: 'superseded',
@@ -95,6 +103,7 @@ export class InMemoryWisdomStore implements WisdomStore {
     return pickForInjection(entries, query.text ?? '', {
       coreMaxItems: query.coreMaxItems,
       scenarioMaxItems: query.scenarioMaxItems,
+      trialMaxItems: query.trialMaxItems,
       includeTrial: query.includeTrial,
     });
   }
