@@ -108,6 +108,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.4 (2026-11-01)
+
+### fix(security): shell 解析引擎替换为 tree-sitter，根治管道/拼接命令假 critical 误拦
+
+- **根因**：字符串解析引擎（现 `shell-parser-fallback`）的「token 中间重定向」启发式会击中**引号内**的 `>`——`"… 2>/dev/null …"` 被 tokenizer 压成单 token 后，从第一个 `>` 截出的垃圾串被当成重定向目标，以 `/dev/null…` 开头即命中 `/dev/` 保护路径前缀 → 误判 critical 拦截。表现为 `du | sort | tail`、`for … $(wc -l < $f)`、`bash script.sh "… 2>/dev/null …"` 等无害管道/拼接命令大量被 blocked。
+- **方案**（选型 A）：主解析引擎换 `web-tree-sitter@0.27.1` + vendored `tree-sitter-bash.wasm`（语法 v0.25.1；来源 @2h2d/tree-sitter-wasms@0.2.1，sha256/工具链/更新流程见 `vendor/README.md`）。AST 映射回原 `ParsedCommand/ParsedSegment` 契约，risk-evaluator / degradation / 硬边界探测器零改动受益；原字符串解析器改名 `shell-parser-fallback`，长期保留为降级防线（初始化失败或语法树含 ERROR 时回退；定位与退役条件见 security/README）。
+- **映射语义**：引号内 `2>/dev/null` 不再产生重定向；`VAR=val`、`export/declare` 是声明不产生命令段；`for/do/done`、`[[ ]]` 是结构不产生「未知命令」噪音；命令替换/子 shell/进程替换里的命令展开为独立命令段（`echo $(rm -rf /)` 现在可拦，堵住真实执行盲区）；heredoc 定界符未加引号时正文里的 `$(...)` 照常展开（引号定界符则保持字面量）；`$'…'`（ANSI-C 引号）正确剥壳进路径分类；整句重定向（`done > /etc/x`）与孤立重定向（`> /etc/x`）目标仍参与路径评估。
+- **不确定输入不静默**：tree-sitter 解析报错 → 回退 fallback 引擎并标 `uncertain`，风险分档附加「结构不确定」unknown 因子（走放行+事件通道），不把不确定当安全。**强不确定与等级正交**（F6）：`RiskDecision`/Core `ToolCallRiskPolicy` 契约新增可选 `uncertain` 字段，守卫对强不确定决策无论等级高低始终发 `tool_call.risk_unknown` 交安全智能体过目（拦截行为不变）；弱不确定（未知命令名）不发事件防刷屏。fallback 引擎同根因加固：tokenizer 输出逐字符引号来源，重定向识别只认未引号区域（引号内 `<`/`>` 是字面量）——从源头消灭「引号内 `2>/dev/null` 捏造保护路径目标」的假 critical，且不误伤 `>/etc/$FILE` 类真实目标。
+- **初始化**：`initShellParser()` 挂在 `AgentBuilder.build()` 与 `wireAgentBuilder()`（解析同步、初始化异步一次、失败降级不阻断）；wasm 随 `copy-engine-assets` 进 dist。
+- **验证**：155/155 安全测试绿——71 条既有契约 + 49 条 Windows 契约全部在新引擎下通过（`echo hello>/tmp/out.txt`、`2>&1`、内联代码分档、P2 空格路径合并等原语义保持），35 条新回归（4 条误拦样本转绿、真实执行盲区补齐、映射语义、不确定通道、fallback 引号掩码、硬边界直测、F6 正交语义）；经独立评审（无 blocker）逐条核实后修复 heredoc 未引号命令替换、`$'…'` 剥壳、管道末级包装识别、fallback 引号误判/目标误伤等项；全量测试套件、`npm run lint`、`arch/check-sync.sh`、engine build（tsc）全绿。
+- **breaking note**：无契约破坏（`parseShellCommand` 签名不变）。行为差异：命令替换内的命令计入风险（更严）；声明/赋值/关键字不再产生「未知命令」因子（噪音减少）。
+
+---
+
 ## v0.98.3 (2026-11-01)
 
 ### chore(repo): normalize line endings in the index and add `.gitattributes`

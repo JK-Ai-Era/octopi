@@ -67,6 +67,7 @@ export class DefaultToolCallRiskPolicy implements ToolCallRiskPolicy {
     factors: Array<{ source: string; description: string; level: string }>;
     alternative?: { description: string; command?: string; steps?: string[] };
     reason: string;
+    uncertain?: boolean;
   } {
     const cwd = context?.cwd ?? this.cwd;
 
@@ -95,6 +96,7 @@ export class DefaultToolCallRiskPolicy implements ToolCallRiskPolicy {
       })),
       alternative,
       reason: decision.reason,
+      uncertain: decision.uncertain,
     };
   }
 }

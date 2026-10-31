@@ -273,7 +273,10 @@ harness/governance/security/
 ├── default-security-guard.ts   # 硬边界 + 始终接线 RiskPolicy + Input/Output
 ├── default-risk-policy.ts      # DefaultToolCallRiskPolicy — 规则引擎
 ├── risk-evaluator.ts           # 操作+目标组合风险评估 + 硬边界探测
-├── shell-parser.ts             # Shell 命令解析器（4 层）
+├── shell-parser.ts             # Shell 命令解析入口（引擎分发 + 回退）
+├── shell-parser-treesitter.ts  # 主引擎：web-tree-sitter + vendored tree-sitter-bash.wasm
+├── shell-parser-fallback.ts    # 回退引擎：纯字符串解析（4 层）
+├── shell-parser-shared.ts      # 共享常量 + wrapper 拆壳
 ├── degradation.ts              # 6 种降级策略
 ├── capability-enforcer.ts      # 信任分级
 └── index.ts

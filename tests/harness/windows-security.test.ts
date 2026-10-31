@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 
-import { parseShellCommand } from '@octopi-agent/engine/harness/governance/security/shell-parser.js';
+import {
+  parseShellCommand,
+  initShellParser,
+  isShellParserReady,
+} from '@octopi-agent/engine/harness/governance/security/shell-parser.js';
 import {
   evaluateShellCommand,
   evaluateNonShellTool,
@@ -8,6 +12,12 @@ import {
   detectCatastrophicRecursiveDelete,
 } from '@octopi-agent/engine/harness/governance/security/risk-evaluator.js';
 import type { ToolCall } from '@octopi-agent/core/types.js';
+
+// Windows 契约在 tree-sitter 主引擎下断言（引擎缺失=交付缺陷，不允许静默降级跑绿）
+beforeAll(async () => {
+  await initShellParser();
+  expect(isShellParserReady()).toBe(true);
+});
 
 function tc(name: string, args: Record<string, unknown>): ToolCall {
   return { id: '1', name, arguments: args } as ToolCall;

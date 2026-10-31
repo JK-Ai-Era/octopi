@@ -271,7 +271,10 @@ harness/governance/security/
 ├── default-security-guard.ts   # hard boundaries + always-wired RiskPolicy + Input/Output
 ├── default-risk-policy.ts      # DefaultToolCallRiskPolicy — rule engine
 ├── risk-evaluator.ts           # operation+target combo risk assessment + hard-boundary probes
-├── shell-parser.ts             # shell command parser (4 layers)
+├── shell-parser.ts             # shell command parse entry (engine dispatch + fallback)
+├── shell-parser-treesitter.ts  # primary engine: web-tree-sitter + vendored tree-sitter-bash.wasm
+├── shell-parser-fallback.ts    # fallback string parser (4 layers)
+├── shell-parser-shared.ts      # shared constants + wrapper unwrapping
 ├── degradation.ts              # 6 degradation strategies
 ├── capability-enforcer.ts      # trust tiering
 └── index.ts

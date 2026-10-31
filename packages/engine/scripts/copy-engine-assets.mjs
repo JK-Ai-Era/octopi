@@ -46,3 +46,22 @@ if (existsSync(subSrc)) {
   }
   console.log(`[copy-engine-assets] subsystems: ${copied} asset(s) → ${subDist}`);
 }
+
+// security vendored wasm（tree-sitter-bash 语法，主解析引擎依赖）
+const vendorSrc = join(root, 'src', 'harness', 'governance', 'security', 'vendor');
+const vendorDist = join(root, 'dist', 'harness', 'governance', 'security', 'vendor');
+const vendorWasm = join(vendorSrc, 'tree-sitter-bash.wasm');
+if (existsSync(vendorWasm)) {
+  await mkdir(vendorDist, { recursive: true });
+  let copied = 0;
+  for (const file of await walk(vendorSrc)) {
+    const dest = join(vendorDist, relative(vendorSrc, file));
+    await mkdir(dirname(dest), { recursive: true });
+    await cp(file, dest);
+    copied += 1;
+  }
+  console.log(`[copy-engine-assets] security vendor: ${copied} file(s) → ${vendorDist}`);
+} else {
+  console.error('[copy-engine-assets] FAILED: missing', vendorWasm);
+  process.exitCode = 1;
+}

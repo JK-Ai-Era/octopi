@@ -10,7 +10,7 @@
 
 - DefaultSecurityGuard — 硬边界 + 始终接线的 RiskPolicy + Input/Output 检查
 - DefaultToolCallRiskPolicy — 规则引擎（操作+目标组合风险评估）
-- ShellParser — Shell 命令解析器（4 层：拆分→识别→重定向→Wrapper）
+- ShellParser — Shell 命令解析（双引擎：tree-sitter 主引擎 + fallback 字符串回退）
 - Degradation — 6 种降级策略
 - SafetyAgentSpec — 安全智能体规格
 - CapabilityEnforcer — 信任分级
@@ -39,8 +39,23 @@
 - default-security-guard.ts — 硬边界 + RiskPolicy 接线 + Input/Output
 - default-risk-policy.ts — 风险规则引擎
 - risk-evaluator.ts — 操作+目标组合评估 + 硬边界探测（灾难删/下载执行/清盘）
-- shell-parser.ts — Shell 命令解析
+- shell-parser.ts — Shell 解析入口（引擎分发 + 回退；`parseShellCommand` 签名稳定）
+- shell-parser-treesitter.ts — 主引擎：web-tree-sitter + vendored tree-sitter-bash.wasm（`vendor/`）
+- shell-parser-fallback.ts — 回退引擎：纯字符串解析（初始化失败或语法树含 ERROR 时启用，标记 `uncertain`）
+- shell-parser-shared.ts — 两个引擎共用的常量与拆壳/合并/转义
 - degradation.ts — 降级策略
 - safety-agent-spec.ts — 安全智能体规格
 - capability-enforcer.ts — 信任分级
 - index.ts — 统一导出
+
+**装配要求**：tree-sitter 主引擎需在首次评估前 `await initShellParser()`
+（`AgentBuilder.build()` / `wireAgentBuilder()` 已内置）。绕过 builder 自装配
+SecurityGuard 的嵌入方必须自行调用，否则静默使用 fallback 回退引擎
+（`getShellParserEngine()` 可查当前引擎）。
+
+**回退引擎定位**：`shell-parser-fallback.ts` 是**长期保留的降级防线**（不是待退役
+代码）——主引擎缺席或解析报错时，硬边界探测（灾难删/下载执行/清盘）仍需输入。
+冻结维护：只修缺陷，不扩特性。退役条件（满足其一再议，删除时解析失败语义降为
+`uncertain` → unknown 通道）：① 解析入口支持注入 wasm 字节（覆盖 edge/打包器
+场景）且初始化失败改为 fail-loud；② 运行时契约收窄为「仅 Node 宿主」且初始化
+失败可观测信号上线后零失败观察期通过。

@@ -311,6 +311,7 @@ export function evaluateShellCommand(
       level: 'unknown',
       factors: [{ source: 'method', description: '命令解析失败', level: 'unknown' }],
       reason: '命令结构过于复杂，无法确定性解析',
+      uncertain: true,
     };
   }
 
@@ -369,6 +370,17 @@ export function evaluateShellCommand(
     }
   }
 
+  // 4.5 解析不确定（tree-sitter 报错回退 fallback 引擎）：
+  // 结构可能被低估，显式计入 unknown 因子——有确定性高风险仍照常抬升，
+  // 全低风险时整体落 unknown 通道（放行 + 事件），不把不确定静默当安全。
+  if (parsed.uncertain) {
+    factors.push({
+      source: 'method',
+      description: '命令结构不确定（存在解析器无法确定性解析的片段）',
+      level: 'unknown',
+    });
+  }
+
   // 5. 计算整体风险等级
   const level = computeOverallRisk(factors);
 
@@ -376,6 +388,8 @@ export function evaluateShellCommand(
     level,
     factors,
     reason: buildReason(level, factors),
+    // 强不确定与等级正交：无论等级高低都标记，供守卫上报安全智能体
+    ...(parsed.uncertain ? { uncertain: true } : {}),
   };
 }
 

@@ -41,6 +41,7 @@ import type { ContextEngine } from '../context/types.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
 import type { AgentBuilder } from './builder.js';
+import { initShellParser } from '../governance/security/shell-parser.js';
 
 // ── 配置解析（唯一实现；供 wire 与公开导出共用） ──
 
@@ -221,6 +222,9 @@ export async function wireAgentBuilder(
   builder: AgentBuilder,
   spec: AgentWireSpec,
 ): Promise<{ memoryStore?: unknown; skillManager?: unknown }> {
+  // ── Shell 解析引擎（安全风险评估依赖；失败自动降级 legacy，不阻断组装） ──
+  await initShellParser();
+
   // ── Model ──
   builder.model(spec.model);
 

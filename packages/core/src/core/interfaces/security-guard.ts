@@ -74,6 +74,8 @@ export interface ToolCallRiskPolicy {
     factors: Array<{ source: string; description: string; level: string }>;
     alternative?: { description: string; command?: string; steps?: string[] };
     reason: string;
+    /** 强不确定（解析结构性不确定等）：需安全智能体过目，与等级正交（不改变拦截行为） */
+    uncertain?: boolean;
   };
 }
 

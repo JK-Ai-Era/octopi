@@ -5,10 +5,22 @@
  * 每个测试用例都是一个"这个命令应该被判断为什么风险等级"的断言。
  */
 
-import { describe, it, expect } from 'vitest';
-import { parseShellCommand, getCommandNames, hasCommand } from '@octopi-agent/engine/harness/governance/security/shell-parser.js';
+import { describe, it, expect, beforeAll } from 'vitest';
+import {
+  parseShellCommand,
+  getCommandNames,
+  hasCommand,
+  initShellParser,
+  isShellParserReady,
+} from '@octopi-agent/engine/harness/governance/security/shell-parser.js';
 import { evaluateRisk, evaluateShellCommand, evaluateNonShellTool } from '@octopi-agent/engine/harness/governance/security/risk-evaluator.js';
 import { suggestDegradation } from '@octopi-agent/engine/harness/governance/security/degradation.js';
+
+// 全部契约在 tree-sitter 主引擎下断言（引擎缺失=交付缺陷，不允许静默降级跑绿）
+beforeAll(async () => {
+  await initShellParser();
+  expect(isShellParserReady()).toBe(true);
+});
 
 // ═══════════════════════════════════════════════════
 // Shell Parser 测试

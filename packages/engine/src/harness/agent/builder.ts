@@ -78,6 +78,7 @@ import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import {
   DefaultSecurityGuard,
 } from '../governance/security/default-security-guard.js';
+import { initShellParser } from '../governance/security/shell-parser.js';
 import type { SecurityGuard, SecurityGuardConfig } from '@octopi-agent/core/security-guard.js';
 import {
   BudgetPolicyEngine,
@@ -1185,6 +1186,9 @@ export class AgentBuilder {
     const mode = options?.mode ?? 'full';
     const events = this._events ?? new DefaultEventBus();
     this._events = events;
+
+    // Shell 解析引擎（安全风险评估依赖；失败自动降级 legacy，不阻断构建）
+    await initShellParser();
 
     // 并发控制：ProviderPool
     if (this._concurrencyConfig?.providerPool && this._namedProviders.size > 0) {

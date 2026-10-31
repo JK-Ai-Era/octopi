@@ -485,6 +485,16 @@ export class DefaultSecurityGuard {
       return { isClean: hardViolations.length === 0, violations: hardViolations, riskUnknown: true };
     }
 
+    // 强不确定（解析结构性不确定）：正交通知安全智能体过目，
+    // 等级判定与拦截行为照常（不因不确定放行，也不因不确定加拦）
+    if (decision.uncertain) {
+      this.emitRunEvent({
+        type: 'tool_call.risk_unknown',
+        timestamp: Date.now(),
+        data: { toolCall: call, decision },
+      });
+    }
+
     const riskViolations: SecurityViolation[] = [];
     if (decision.level !== 'low') {
       const severityMap: Record<string, SecurityViolation['severity']> = {

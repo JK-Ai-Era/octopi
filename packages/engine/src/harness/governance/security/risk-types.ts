@@ -48,6 +48,13 @@ export interface ParsedCommand {
   hasSubshell: boolean;
   /** 是否包含后台执行（&） */
   hasBackground: boolean;
+  /**
+   * 解析不确定：tree-sitter 无法确定性解析（语法树含 ERROR）后回退 fallback 引擎。
+   * 风险分档应附加「结构不确定」因子，不允许静默当正常结果。
+   */
+  uncertain?: boolean;
+  /** 未挂载到命令段的重定向（如 `> file` 单独成句）：目标仍参与路径风险评估 */
+  orphanRedirects?: Redirect[];
 }
 
 // ── 风险等级 ──
@@ -87,6 +94,11 @@ export interface RiskDecision {
   alternative?: SafeAlternative;
   /** 决策理由（人类可读） */
   reason: string;
+  /**
+   * 强不确定（解析结构性不确定等）：需安全智能体过目。
+   * 与等级正交——始终触发 risk_unknown 事件上报，但不改变等级判定与拦截行为。
+   */
+  uncertain?: boolean;
 }
 
 // ── 路径风险分类 ──
