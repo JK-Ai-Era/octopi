@@ -1,0 +1,22 @@
+# Line-ending normalization — keep blobs in LF, always.
+#
+# Why this file exists (do not delete without reading):
+#   This repository is edited on Windows (developer shell runs with
+#   core.autocrlf=true) *and* by the octopi agent, whose git tools run with
+#   GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM pointed at NUL (gitIsolationEnv(), a
+#   deliberate RCE-isolation measure). That isolation also drops core.autocrlf,
+#   so files the agent wrote and committed landed in the index with CRLF blobs.
+#   Before this file, 15 files (delegation/*.ts, AGENTS.md, KNOWN-ISSUES*.md,
+#   delegation tests) carried i/crlf or i/mixed endings while the other ~1193
+#   were i/lf. Mixed blob endings make cross-platform merges conflict on whole
+#   files and hide the real diff.
+#
+# Why `text=auto` (and not `eol=lf`):
+#   `text` is a repository attribute, so it applies no matter which global config
+#   the caller has — including the agent's stripped environment. It forces
+#   normalization on add (CRLF -> LF in the blob) while leaving *working-tree*
+#   checkout to each clone's core.autocrlf. Windows developers keep CRLF locally,
+#   the agent and macOS get LF, and the index stays LF either way, so merges no
+#   longer blow up file-wide. Use `eol=lf` only if you deliberately want LF in
+#   every working tree.
+* text=auto

@@ -108,6 +108,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.3 (2026-11-01)
+
+### chore(repo): normalize line endings in the index and add `.gitattributes`
+
+- **问题**：仓库里 1209 个文件的 blob 混着两种行尾约定——1193 个是 `i/lf`，但 15 个（`AGENTS.md`、`docs/KNOWN-ISSUES.md` + `.zh.md`、`collaboration/delegation/*.ts`、插件侧 `tools/delegation.ts`、两个 delegation 测试）是 `i/crlf` 或 `i/mixed`。跨平台协作时整篇冲突、真实 diff 被行尾噪声淹没（`arch` 子仓库正在为此付代价）。
+- **根因**：Windows 开发环境 `core.autocrlf=true`，而 agent 的 git 工具在 `gitIsolationEnv()` 里把 `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` 指向 NUL（防仓库配置 RCE 的安全隔离），顺带丢了 `autocrlf`——于是 agent 工作区里的 CRLF 被原样提交进 blob。**这是工具隔离的副作用，不是人为编辑失误**；同一个 `autocrlf` 缺失也让 `git_status`/`git_diff` 把 CRLF 工作区误报成整篇改写（假改动）。
+- **改动**：新增 `.gitattributes`（`* text=auto`）。`text` 是**仓库级属性**，不受调用方全局配置影响，因此无论 shell 还是 agent 提交都会归一化进 LF；checkout 仍按各 clone 的 `core.autocrlf`（Windows 本地照样 CRLF），开发者习惯不变。随后 `git add --renormalize .` 把 15 个 CRLF/mixed blob 转为 LF。
+- **验证**：`git diff --cached --ignore-cr-at-eol` 输出为空——5130 增 / 5130 删完全对称，零内容改动；`git ls-files --eol` 复核 index 现为 1209 个 `i/lf`，`i/crlf`/`i/mixed` 归零。顺带消除了 `octopi.schema.json`（生成物，LF）长期存在的「M 但无 diff」stat 噪声。
+- **兼容性**：无 API/行为变化。**Breaking note**：无——纯行尾归一；已 clone 的机器下次 checkout 行为不变，`git pull` 会看到这 15 个文件为行尾变更。
+
+---
+
 ## v0.98.2 (2026-11-01)
 
 ### fix(cli): elevated privilegedAck gate checks the top-level deployment declaration only
