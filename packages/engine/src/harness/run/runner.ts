@@ -1673,6 +1673,8 @@ export class SessionAwareRunner {
         runId,
         systemPrompt: runContext.systemPrompt,
         agentRevision: effectiveRunConfig.agentRevision,
+        // 交接式摘要素材（F8R-05）：每次装配现取活任务快照（attachSession 同对象）
+        taskSnapshot: () => renderSessionTasksInjection(session.tasks ?? [], { includeGuidance: false }),
         toolRuntime: {
           sessionId,
           agentId: _agentId,

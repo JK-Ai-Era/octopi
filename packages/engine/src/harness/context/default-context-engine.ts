@@ -233,6 +233,7 @@ export class DefaultContextEngine implements ContextEngine {
       signal,
       tokenEstimator,
       summarize,
+      taskSnapshot,
       emit,
       loadCompactState,
     } = params;
@@ -286,6 +287,7 @@ export class DefaultContextEngine implements ContextEngine {
               messagesBudget: 0,
               agingPlan,
               summarize,
+              taskSnapshot,
               estimator,
               emit,
               systemPrompt,
@@ -331,6 +333,7 @@ export class DefaultContextEngine implements ContextEngine {
       messagesBudget: budget.messagesBudget,
       agingPlan,
       summarize,
+      taskSnapshot,
       estimator,
       emit,
       systemPrompt,
@@ -433,6 +436,8 @@ export class DefaultContextEngine implements ContextEngine {
             targetTokens: overflowTargetTokens,
             previousSummary,
             summarize,
+            // 摘要素材只随摘要请求走：无 summarize 的机械降级不携带（评审 L1）
+            taskSnapshot: summarize ? taskSnapshot : undefined,
             tokenEstimator: estimator,
             llmPrefix: overflowLlmPrefix,
             // F8 统一契约：预算/折叠区间/窗口/事件与 manual、proactive 同源
@@ -583,6 +588,8 @@ export class DefaultContextEngine implements ContextEngine {
     messagesBudget: number;
     agingPlan: ToolResultAgingPlan;
     summarize?: SummarizeFunction;
+    /** 交接式摘要素材（F8R-05）：自动路径随摘要请求透传，不再依赖历史里的旧快照副本 */
+    taskSnapshot?: string;
     estimator: TokenEstimator;
     emit?: ContextEmitFn;
     /** 缓存前缀原料：与会话请求同形（system+tools+完整历史） */
@@ -859,6 +866,7 @@ export class DefaultContextEngine implements ContextEngine {
         targetTokens: targetMiddleTokens,
         previousSummary: state?.previousSummary,
         summarize,
+        taskSnapshot: params.taskSnapshot,
         tokenEstimator: estimator,
         requireSummary: true,
         llmPrefix,

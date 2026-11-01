@@ -360,6 +360,7 @@ export class Agent {
       grounding: options?.runScope?.grounding,
       toolRuntime: options?.runScope?.toolRuntime,
       agentRevision: options?.runScope?.agentRevision,
+      taskSnapshot: options?.runScope?.taskSnapshot,
     };
 
     let gen = runAgentWithReliability(context, config, harness, signal, {

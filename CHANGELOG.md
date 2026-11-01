@@ -108,6 +108,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.9 (2026-11-01)
+
+### fix(context): auto compaction paths carry a fresh taskSnapshot (F8R-05)
+
+- 交接式摘要素材 `taskSnapshot` 打通自动路径（默认 `summarizeFn` 装配；`summaryPort` 分支仍在 F8 契约外，见 KNOWN-ISSUES）：`AssembleParams.taskSnapshot` → `applyProactiveCompact` / overflow → `CompressParams.taskSnapshot`，与手动 `compactStructural` 同源同规。此前自动摘要只能依赖注入到会话历史里的任务快照副本（可能过期），交接书的任务段会失真。
+- 新鲜度：RunScope 携带惰性 provider（`taskSnapshot: () => renderSessionTasksInjection(...)`，宪法 I1——只活在 Run），装配/摘要时现取；`SessionTaskService.attachSession` 与 runner 是同一内存对象，run 内任务变更即刻可见。生产链：runner → RunScope → `Agent.run` 透传 → builder 装配时读取（空串归一为 undefined，引擎「无素材」口径唯一）。
+- 摘要请求的任务快照块声明权威性（supersedes any task list shown earlier in the conversation）：历史注入的任务副本随 llmPrefix 一并可见，显式声明防模型把已关闭任务复述成未完成。
+- **验证**：`tests/context-task-snapshot.test.ts` 六态钉死（proactive 无窗口/预算分支、overflow、机械截断反向钉、真实 HybridCompressor 链路尾部 user 含活快照、无素材）＋ `context-wiring-p0.test.ts` 接线哨兵（RunScope→AssembleParams 双向）；全量测试绿。KNOWN-ISSUES（EN/ZH）移除该条目（已收口）。
+
+---
+
 ## v0.98.8 (2026-11-01)
 
 ### feat(config): wire gateway.port/host as listen override; warn on unwired config keys

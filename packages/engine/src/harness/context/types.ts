@@ -112,6 +112,12 @@ export interface AssembleParams {
   tokenEstimator?: TokenEstimator;
   /** LLM 摘要调用函数（可选，用于压缩阶段） */
   summarize?: SummarizeFunction;
+  /**
+   * 交接式摘要素材：当前会话 task 快照（B0：易变块走 content 尾部指令）。
+   * 手动/自动（proactive/overflow）压缩路径统一透传给摘要请求（F8R-05），
+   * 使自动路径不再依赖注入历史里的旧快照副本。
+   */
+  taskSnapshot?: string;
   /** 压缩进度回调（可选；UI / 可观测） */
   emit?: ContextEmitFn;
   /**

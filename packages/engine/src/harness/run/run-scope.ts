@@ -127,6 +127,12 @@ export interface RunScope {
   toolRuntime?: RunToolRuntime;
   /** Agent 模板 revision（Reserved：AgentRevision 绑 Run） */
   agentRevision?: string;
+  /**
+   * 交接式摘要素材的活来源（F8R-05）：惰性渲染当前会话 task 快照。
+   * 装配/摘要时现取——session.tasks 与 SessionTaskService attachSession 是同一
+   * 内存对象，run 内任务变更即刻可见；避免自动压缩用注入历史里的旧副本。
+   */
+  taskSnapshot?: () => string;
 }
 
 let runIdSeq = 0;

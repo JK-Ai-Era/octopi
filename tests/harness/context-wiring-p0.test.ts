@@ -8,6 +8,9 @@ import type { ModelProvider, LLMRequest } from '@octopi-agent/core/interfaces/mo
 import type { Message } from '@octopi-agent/core/types.js';
 import { createProviderSummarize, pickSummarizeProvider } from '@octopi-agent/engine/harness/context/summarize.js';
 import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import type { ContextEngine } from '@octopi-agent/engine/harness/context/types.js';
+import { withRunScope, type RunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
 
 function mockProvider(onChat?: (req: LLMRequest) => void): ModelProvider & { chatCalls: LLMRequest[] } {
   const chatCalls: LLMRequest[] = [];
@@ -194,5 +197,41 @@ describe('Builder 默认接线', () => {
     const spy = vi.fn(async () => ({ systemPrompt: 'custom' }));
     built.runner.setSystemPromptAssembler(spy);
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('RunScope.taskSnapshot 经 convertToLlm 透传到 AssembleParams（F8R-05 接线哨兵）', async () => {
+    const provider = mockProvider();
+    const inner = new DefaultContextEngine();
+    const seen: Array<string | undefined> = [];
+    const capturing: ContextEngine = {
+      get info() {
+        return inner.info;
+      },
+      assemble: (p) => {
+        seen.push(p.taskSnapshot);
+        return inner.assemble(p);
+      },
+    };
+    const builder = new AgentBuilder().model(provider).contextEngine(capturing);
+    const { agent } = await builder.buildAgent();
+    agent.setSystemPrompt('You are test.');
+    const shortMsgs: Message[] = [msg('hello')];
+    const scope: RunScope = {
+      sessionId: 'wiring-snap',
+      agentId: 'main',
+      runId: 'run_wiring_snap_1',
+      taskSnapshot: () => 'LIVE TASKS',
+    };
+    async function* drive(): AsyncGenerator<void> {
+      await agent.config.convertToLlm!(shortMsgs);
+    }
+    for await (const step of withRunScope(scope, drive())) {
+      void step;
+    }
+    expect(seen).toContain('LIVE TASKS');
+
+    // 反向：ALS 之外（无 RunScope）不得伪造素材
+    await agent.config.convertToLlm!(shortMsgs);
+    expect(seen[seen.length - 1]).toBeUndefined();
   });
 });

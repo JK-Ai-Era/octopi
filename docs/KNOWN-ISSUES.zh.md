@@ -90,4 +90,3 @@
 
 - **`summaryPort` 不在 F8 交接契约内。** `CompactEngine` 的 `summaryPort` 分支仅共用四段式任务文本（`HANDOVER_SUMMARY_TASK`）；其预算语义（`policy.budget` 硬顶）、previous-摘要合并提示、fold/task 快照注入由 `SummaryExtractor` / `capabilities/summary/executor` 契约自行决定，与 `summarizeFn` 路径不完全一致。默认装配不传 `summaryPort`（manual / proactive / overflow 均走 `summarizeFn`）；启用该 Port 的部署需自行核对契约差异。
 - **`context.compact.summarize_fallback` 暂无 WebUI 消费端。** 事件已进 run timeline（observer `TIMELINE_TYPES`），但 `web/runtime/store.ts` / `web/conversation/adapter.ts` 无对应 case，会话 inspector 不渲染 cache-miss 旁路。
-- **自动压缩路径拿不到新鲜 taskSnapshot**（F8R-05，manual 路有）。自动摘要只能用注入到会话历史里的 task 快照副本（可能过期）；收口需把 `taskSnapshot` 顺着 `AssembleParams → applyProactiveCompact / overflow → compress` 透传，延后处理。

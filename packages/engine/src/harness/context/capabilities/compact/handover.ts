@@ -106,7 +106,7 @@ export function buildHandoverPrompt(options: HandoverPromptOptions): HandoverPro
     ? `\n\nPrevious summary:\n${options.previousSummary}`
     : '';
   const taskBlock = options.taskSnapshot?.trim()
-    ? `\n\nCurrent session task list snapshot (live task store):\n${options.taskSnapshot.trim()}`
+    ? `\n\nCurrent session task list snapshot (live task store; supersedes any task list shown earlier in the conversation):\n${options.taskSnapshot.trim()}`
     : '';
   return {
     instruction: `${instruction}${foldBlock}`,
@@ -154,7 +154,7 @@ export function buildHandoverUserContent(
   content: string,
 ): string {
   const taskBlock = options.taskSnapshot?.trim()
-    ? `\n\nCurrent session task list snapshot (live task store):\n${options.taskSnapshot.trim()}`
+    ? `\n\nCurrent session task list snapshot (live task store; supersedes any task list shown earlier in the conversation):\n${options.taskSnapshot.trim()}`
     : '';
   if (!options.previousSummary) {
     return `${content}${taskBlock}`;

@@ -1824,6 +1824,9 @@ export class AgentBuilder {
         maxOutputTokens: snapshot?.maxOutputTokens,
         compactTargetTokens: this._contextAssemblerConfig?.compactTargetTokens,
         summarize: summarizeFn,
+        // 交接式摘要素材（F8R-05）：自动压缩路径也随摘要请求带上活任务快照；
+        // 空串归一为 undefined——引擎口径「无素材」只有一种形状（评审 L3）
+        taskSnapshot: scope?.taskSnapshot?.() || undefined,
         loadCompactState: () => agent.getSessionCompactState(sessionId, agentId),
         // 惰性读 bus：覆盖 buildAgent 之后才 setEvents 的场景
         // Observer：ContextEngine 侧事件（context.compact.* 等）不经过 Runner emitObserved，
