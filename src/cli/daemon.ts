@@ -17,6 +17,7 @@ import {
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { loadConfig, toGatewayConfig, resolveConfigFilePath } from '../config.js';
+import { resolveListenConfig } from './listen-config.js';
 import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
 import { createProviderFromConfig, createWireDumpSinkFromConfig } from '@octopi-agent/engine/config.js';
 import type {
@@ -77,7 +78,7 @@ export function removePidFile(): void {
   }
 }
 
-/** 从配置解析 Gateway 监听端口 */
+/** 从配置解析 Gateway 监听端口（与 listen-config.ts 同一优先级：CLI > gateway > channels > 18180） */
 export function resolveListenPort(
   args: Pick<CliArgs, 'port' | 'config'>,
   configPath?: string,
@@ -87,7 +88,8 @@ export function resolveListenPort(
   try {
     const config = loadConfig(path);
     const httpChannel = config.channels?.find((c: { type: string }) => c.type === 'http');
-    if (httpChannel?.port) return httpChannel.port;
+    const gatewayOverride = (config as { gateway?: { port?: number } }).gateway;
+    return resolveListenConfig({ gateway: gatewayOverride, http: httpChannel }).port;
   } catch { /* fall through */ }
   return 18180;
 }
@@ -574,7 +576,7 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
     console.error("   1. Stop the occupying process, then run 'octopi serve start' again");
     console.error(`   2. Start on another port:       octopi serve start --port ${port + 1}`);
     console.error(
-      `   3. Change the port permanently: set channels[type=http].port in ${configPath ?? 'your config'}`,
+      `   3. Change the port permanently: set gateway.port or channels[type=http].port in ${configPath ?? 'your config'}`,
     );
     process.exit(1);
   }
@@ -1211,10 +1213,18 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   });
 
   const httpConfig = config.channels?.find((c: any) => c.type === 'http');
-  const listenPort = args.port ?? httpConfig?.port ?? 18180;
+  // gateway 进程面覆盖段接线（listen-config.ts）：CLI --port > gateway.* > channels[type=http] > 缺省
+  const gatewayOverride = (config as { gateway?: { port?: number; host?: string } }).gateway;
+  const listenCfg = resolveListenConfig({
+    cliPort: args.port,
+    gateway: gatewayOverride,
+    http: httpConfig,
+    webHost: config.web?.host,
+  });
+  const listenPort = listenCfg.port;
   // web.host 可作 Gateway HTTP 的缺省（局域网访问两者都要放开）；channels[].host 优先
-  const listenHostConfig = httpConfig?.host ?? config.web?.host;
-  if (httpConfig || args.port) {
+  const listenHostConfig = listenCfg.host;
+  if (listenCfg.enabled) {
     const { HttpChannelAdapter } = await import('@octopi-agent/gateway/protocols/http.js');
     const { WebApiRouter } = await import('@octopi-agent/gateway/web/api/router.js');
     const { resolveListenHost } = await import('@octopi-agent/engine/config.js');
@@ -1263,6 +1273,13 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       approverIdentity: httpConfig?.apiKey ? 'owner' : undefined,
     });
     const listenHost = resolveListenHost(listenHostConfig);
+    // SEC-7 边界显式化：无 apiKey 时 console/config API 不设防（checkAuth 放行），
+    // 与 `--port` 单独启动同语义；gateway.port 覆盖段使该组合更易撞上，必须出声。
+    if (!httpConfig?.apiKey) {
+      console.warn(
+        '⚠️  Gateway HTTP listener has NO apiKey (channels[type=http].apiKey): console/config API is unauthenticated — local use only, configure an apiKey otherwise.',
+      );
+    }
     gateway.registerChannel(new HttpChannelAdapter({
       port: listenPort,
       host: listenHost,
@@ -1295,7 +1312,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   writePidFile({
     pid: process.pid,
     config: configPath ?? join(getOctopiHome(), 'octopi.json'),
-    port: httpConfig || args.port ? listenPort : undefined,
+    port: listenCfg.enabled ? listenPort : undefined,
     startedAt: new Date().toISOString(),
   });
 

@@ -108,6 +108,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.8 (2026-11-01)
+
+### feat(config): wire gateway.port/host as listen override; warn on unwired config keys
+
+- **`gateway.port` / `gateway.host` 已接线**（进程面覆盖段，`arch/npm-package-split.md` §5.2）：监听优先级 CLI `--port` > `gateway.*` > `channels[type=http]` > 默认 18180，host 同序（`web.host` 仅作缺省）。daemon / WebUI / TUI 全部端口消费方收敛到 `src/cli/listen-config.ts` 单一解析——此前 `serve start` 把 channels 端口当 `--port` 注入子进程、chat/WebUI 各自读 channels，`gateway.port` 会 split-brain。语义：端口来源即监听开关；`apiKey` / `path` / `corsOrigins` 仍取 `channels[type=http]`；`gateway.host` 只改绑定地址，自身不启动监听。
+- **未接线配置键启动告警**（`src/config-schema/unwired-keys.ts`）：schema 接受但无消费方的键在 `loadConfig` 显式告警（配置了暂不生效，`session.*` 附加键提示可能为拼写错误），消除静默失效。表按代码消费面核实到 `wire-agent-builder.ts` 粒度：`cognition.capacity.{stopNodes,stopEdges}`、`cognition.identity.{mergeThreshold,candidateBandHi}`、`cognition.relations.causesMinIndependentMemories` 实际已接线（原 KNOWN-ISSUES 表述过粗）；补漏报 `knowledge.attachments.inject.{recallTopK,inventory}`、`knowledge.attachments.tools.attachmentsRootReadOnly`、`cognition.{conceptualize,plasticity}` 等。
+- **监听无 `apiKey` 启动告警**：console/config API 无鉴权时显式出声（SEC-7 边界显式化；最锐利的 security 写路径此前已有 `refuseUnauthenticatedSecurityWrite` 闸）。
+- init 默认配置删除未接线的 `models.mode`（否则新装部署每次启动告警）；`octopi.example.json` 清除未接线键样例并把 `gateway.port` 改为与 channels 一致（18180），canonical 模板不再自相矛盾。
+- KNOWN-ISSUES（EN/ZH 同步）：`gateway` 条目收窄为 `gateway.debugRest`（含端口即开关/鉴权来源语义）；wisdom/cognition 子键消费清单按代码证据精确化；日期戳更新。
+- **验证**：全量测试绿；新增钉：`resolveListenPort` 真实配置文件优先级回归、init/example 无未接线键守卫、unwired 表双向断言；lint + typecheck 绿；arch/check-sync 绿；独立子代理对抗性评审的 C1–C4/M1 均核实成立并修复。遗留：`serve start`→子进程 argv 级结构测试暂缺（以 resolveListenPort 钉覆盖解析层）；`NormalizedHarnessConfig` 不含 `gateway` 段，daemon/webui 仍按形状 cast（类型面收敛待 config 类型重构）。
+
+---
+
 ## v0.98.7 (2026-11-01)
 
 ### feat(webui): 上下文层详情改为卡片下就地展开

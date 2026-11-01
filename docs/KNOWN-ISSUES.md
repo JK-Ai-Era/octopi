@@ -1,7 +1,7 @@
 # Known Issues
 
 > **Language note**: This English edition is the **working authority**. The Chinese translation is [`KNOWN-ISSUES.zh.md`](./KNOWN-ISSUES.zh.md). Keep both in sync.
-> Last updated: 2026-10-16 (cleaned resolved entries — this file keeps only **open items** and **existing boundaries**; resolved/closed issues live in `CHANGELOG` and the corresponding architecture docs)
+> Last updated: 2026-11-01 (cleaned resolved entries — this file keeps only **open items** and **existing boundaries**; resolved/closed issues live in `CHANGELOG` and the corresponding architecture docs)
 
 ## Session / ACL capability layer
 
@@ -67,7 +67,7 @@ Approval attribution: with `channels.http.apiKey` set, the web surface is creden
 
 ## Config keys declared but not yet wired (2026-10)
 
-**Status:** the schema accepts these keys but no consumer exists yet — configuring them has **no effect**. Tracked here so they are not mistaken for wired behavior. The top-level mapping guard (`tests/config-gateway-top-level-mapping.test.ts`) classifies them as `ignored`; re-classify them as `mapped` when implementing.
+**Status:** the schema accepts these keys but no consumer exists yet — configuring them has **no effect**. Tracked here so they are not mistaken for wired behavior. The top-level mapping guard (`tests/config-gateway-top-level-mapping.test.ts`) classifies **top-level** keys (its `CLASSIFICATION` table); sub-key gaps are tracked in the list below and enforced by `src/config-schema/unwired-keys.ts`. Since v0.98.8 `loadConfig` **warns at startup** when these keys are present — no effect, but no longer silent.
 
 - **`compact`** (compact capability defaults: `defaultProtectHead` / `defaultProtectTail` / `defaultTargetTokens` / `defaultMode`): session compaction reads the `contextEngine` keys (`protectFirstN` / `protectLastN` / `targetTokens`) instead; the capability-level defaults currently have no consumer.
 - **`session.reset` / `session.maintenance`** (daily/idle reset and store-pruning knobs): `session` is a passthrough schema block, but neither the engine nor the gateway consumes these fields (they were removed from the `GatewayConfig` type as dead surface in v0.86.37).
@@ -79,10 +79,11 @@ Not defects — host-consumed keys that intentionally bypass `GatewayConfig`: `c
 The top-level mapping guard checks section-level keys only; these **sub-keys** are accepted by the schema but have no consumer yet (configuring them has no effect):
 
 - **`plugins.configs`** (per-plugin config): passed through the boundary, but `PluginLoader` does not read it yet.
+- **`knowledge.attachments.inject.recallTopK` / `knowledge.attachments.inject.inventory` / `knowledge.attachments.tools.attachmentsRootReadOnly`**: accepted by the schema but never read (`inventory` in the injection result is an output field, not this toggle); the gateway forwards only `fullTextMaxChars` / `intent` / `intentTimeoutMs` / `emptyMessagePrompt`.
 - **`models.mode`** (`merge` / `replace`): no consumer; provider/model merging behavior is fixed.
 - **`session` passthrough extras** (`reset` / `maintenance` and any typo keys): `SessionConfigSchema` is `.passthrough()`; only `dmScope` / `idleExpiryMs` are consumed.
-- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens`** and **`cognition.capacity` / `cognition.retrieval` / `cognition.consolidation`**: steward tuning currently lives in each subsystem's `config.yaml` `metadata.config`; only `*.enabled`, `wisdom.capacity.hardCap`, `wisdom.injection.{coreMaxItems,scenarioMaxItems,trialMaxItems,trialVisible}` (core/scenario/trialVisible since v0.97.25; trialMaxItems since v0.98.5) and `cognition.identity.*` / `cognition.relations.*` are consumed from `octopi.json`.
-- **`gateway`** (top-level: `port` / `host` / `debugRest`): planned Gateway override section (`arch/npm-package-split.md`); the daemon currently reads `args.port` / `channels[]` / `web` instead, so configuring it has no effect (the mapping guard classifies it `ignored`).
+- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens`** and **`cognition.conceptualize` / `cognition.plasticity` / `cognition.consolidation` / `cognition.retrieval` / `cognition.capacity.{warnNodes,warnEdges}` / `cognition.identity.candidateBandLo` / `cognition.relations.{requireCue,allowCooccurEscalation}`**: steward tuning currently lives in each subsystem's `config.yaml` `metadata.config`. Consumed from `octopi.json`: `*.enabled`, `wisdom.capacity.hardCap`, `wisdom.injection.{coreMaxItems,scenarioMaxItems,trialMaxItems,trialVisible}` (core/scenario/trialVisible since v0.97.25; trialMaxItems since v0.98.5), `cognition.identity.{mergeThreshold,candidateBandHi}`, `cognition.relations.causesMinIndependentMemories`, `cognition.capacity.{stopNodes,stopEdges}` (granular consumption verified against `wire-agent-builder.ts`, 2026-11-01).
+- **`gateway.debugRest`**: `gateway.port` / `gateway.host` are consumed since v0.98.8 (`src/cli/listen-config.ts`, shared by daemon / WebUI / TUI — precedence CLI `--port` > `gateway.*` > `channels[type=http]` > defaults). Semantics: any configured port source (`--port` / `gateway.port` / `channels[]`) enables the listener; `apiKey` / `path` / `corsOrigins` still come from `channels[type=http]` only; `gateway.host` only rebinds the address (it does not enable the listener by itself); a listener started without `apiKey` prints an unauthenticated-API warning. `debugRest` still has no consumer.
 
 ## Compact summary paths — known boundaries (2026-10, F8 review follow-up)
 

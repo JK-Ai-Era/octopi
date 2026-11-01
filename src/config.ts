@@ -16,6 +16,7 @@ import { flattenModels, resolveModelConfig } from '@octopi-agent/engine/config.j
 import { validateConfigOrThrow } from './config-schema.js';
 import { applyLegacyBudget, detectConfigMigrations } from './config-migrations.js';
 import { detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
+import { detectUnwiredConfigKeys } from './config-schema/unwired-keys.js';
 import { expandEnvPlaceholders as expandEnvPlaceholdersShared } from '@octopi-agent/engine/config-admin/env.js';
 import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
@@ -99,6 +100,13 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   if (unknownKeys.length > 0) {
     console.warn(
       `[config] 未知配置键（将被忽略）：${unknownKeys.join(', ')} —— 建议修正；WebUI 保存路径会拒绝这类 typo`,
+    );
+  }
+  // 已声明但未接线键告警：合法但配置了不生效——不告警等于默许静默失效（见 docs/KNOWN-ISSUES.md）
+  const unwiredKeys = detectUnwiredConfigKeys(raw);
+  if (unwiredKeys.length > 0) {
+    console.warn(
+      `[config] 以下配置键暂不生效（已声明但无消费方；session.* 附加键可能是拼写错误）：${unwiredKeys.join(', ')} —— 详见 docs/KNOWN-ISSUES.md`,
     );
   }
 

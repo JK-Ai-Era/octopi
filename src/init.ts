@@ -154,12 +154,11 @@ const LEGACY_PERSONA_MOVES: Array<{ from: string; to: string }> = [
 
 // ── 默认配置模板 ──
 
-function generateDefaultConfig(homeDir: string, agentId: string = 'default'): object {
+export function generateDefaultConfig(homeDir: string, agentId: string = 'default'): object {
   const agentHome = join(homeDir, 'agents', agentId);
   return {
     $schema: './node_modules/octopi-agent/octopi.schema.json',
     models: {
-      mode: 'merge',
       providers: {
         openai: {
           baseUrl: 'https://api.openai.com/v1',

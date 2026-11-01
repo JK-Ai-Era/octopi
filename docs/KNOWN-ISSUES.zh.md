@@ -1,7 +1,7 @@
 # 已知问题
 
 > **语言说明**：英文版见 [KNOWN-ISSUES.md](./KNOWN-ISSUES.md)。本文为中文对译，变更须双语同步。
-> 最后更新：2026-10-16（清理已解决条目——本文件仅保留**开放项**与**现存边界**；已解决/已关闭问题见 `CHANGELOG` 与对应架构文档）
+> 最后更新：2026-11-01（清理已解决条目——本文件仅保留**开放项**与**现存边界**；已解决/已关闭问题见 `CHANGELOG` 与对应架构文档）
 
 ## Session / ACL 能力层
 
@@ -67,7 +67,7 @@
 
 ## 配置键已声明但尚未接线（2026-10）
 
-**状态**：schema 接受这些键，但目前**没有任何消费方**——配置了也不生效。记录在此以免被误当作已接线的行为。顶层映射守卫（`tests/config-gateway-top-level-mapping.test.ts`）将其分类为 `ignored`；实现时请改判为 `mapped`。
+**状态**：schema 接受这些键，但目前**没有任何消费方**——配置了也不生效。记录在此以免被误当作已接线的行为。顶层映射守卫（`tests/config-gateway-top-level-mapping.test.ts`）分类的是**顶层**键（其 `CLASSIFICATION` 表）；子键缺口以下方清单为准，并由 `src/config-schema/unwired-keys.ts` 检测。自 v0.98.8 起 `loadConfig` 在启动时对这些键**显式告警**——仍不生效，但不再静默。
 
 - **`compact`**（compact 能力缺省：`defaultProtectHead` / `defaultProtectTail` / `defaultTargetTokens` / `defaultMode`）：会话压缩实际读取 `contextEngine` 键（`protectFirstN` / `protectLastN` / `targetTokens`）；能力级缺省目前无消费方。
 - **`session.reset` / `session.maintenance`**（每日/空闲重置与存储清理旋钮）：`session` 是 passthrough schema 块，但 engine 与 gateway 均不消费这些字段（v0.86.37 已将其从 `GatewayConfig` 类型中作为死面移除）。
@@ -79,10 +79,11 @@
 顶层映射守卫只查段级键；以下**子键** schema 接受但暂无消费方（配置了不生效）：
 
 - **`plugins.configs`**（按插件配置）：已透传过边界，但 `PluginLoader` 尚不读取。
+- **`knowledge.attachments.inject.recallTopK` / `knowledge.attachments.inject.inventory` / `knowledge.attachments.tools.attachmentsRootReadOnly`**：schema 接受但从未被读取（注入结果里的 `inventory` 是输出字段，并非此开关）；gateway 只转发 `fullTextMaxChars` / `intent` / `intentTimeoutMs` / `emptyMessagePrompt`。
 - **`models.mode`**（`merge` / `replace`）：无消费方；provider/模型合并行为目前固定。
 - **`session` passthrough 附加键**（`reset` / `maintenance` 及任何拼写错误的键）：`SessionConfigSchema` 是 `.passthrough()`；实际只消费 `dmScope` / `idleExpiryMs`。
-- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens`** 与 **`cognition.capacity` / `cognition.retrieval` / `cognition.consolidation`**：steward 调参目前写在各子系统 `config.yaml` 的 `metadata.config`；`octopi.json` 侧只消费 `*.enabled`、`wisdom.capacity.hardCap`、`wisdom.injection.{coreMaxItems,scenarioMaxItems,trialMaxItems,trialVisible}`（core/scenario/trialVisible 自 v0.97.25；trialMaxItems 自 v0.98.5）与 `cognition.identity.*` / `cognition.relations.*`。
-- **`gateway`**（顶层：`port` / `host` / `debugRest`）：规划中的 Gateway 覆盖段（`arch/npm-package-split.md`）；daemon 目前读 `args.port` / `channels[]` / `web`，配置它无效果（映射守卫分类为 `ignored`）。
+- **`wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens`** 与 **`cognition.conceptualize` / `cognition.plasticity` / `cognition.consolidation` / `cognition.retrieval` / `cognition.capacity.{warnNodes,warnEdges}` / `cognition.identity.candidateBandLo` / `cognition.relations.{requireCue,allowCooccurEscalation}`**：steward 调参目前写在各子系统 `config.yaml` 的 `metadata.config`。`octopi.json` 侧消费的是：`*.enabled`、`wisdom.capacity.hardCap`、`wisdom.injection.{coreMaxItems,scenarioMaxItems,trialMaxItems,trialVisible}`（core/scenario/trialVisible 自 v0.97.25；trialMaxItems 自 v0.98.5）、`cognition.identity.{mergeThreshold,candidateBandHi}`、`cognition.relations.causesMinIndependentMemories`、`cognition.capacity.{stopNodes,stopEdges}`（消费粒度已按 `wire-agent-builder.ts` 核实，2026-11-01）。
+- **`gateway.debugRest`**：`gateway.port` / `gateway.host` 自 v0.98.8 起已接线（`src/cli/listen-config.ts`，daemon / WebUI / TUI 共用——优先级 CLI `--port` > `gateway.*` > `channels[type=http]` > 缺省）。语义：任一端口来源（`--port` / `gateway.port` / `channels[]`）存在即启动监听；`apiKey` / `path` / `corsOrigins` 仍只取 `channels[type=http]`；`gateway.host` 只改变绑定地址（自身不启动监听）；监听启动时未配置 `apiKey` 会打印无鉴权告警。`debugRest` 仍无消费方。
 
 
 ## 压缩摘要路径 — 已知边界（2026-10，F8 review 跟进）

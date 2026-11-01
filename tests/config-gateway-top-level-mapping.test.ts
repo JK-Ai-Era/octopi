@@ -43,7 +43,8 @@ const CLASSIFICATION: Record<string, Classification> = {
   summary: { kind: 'host-consumed', where: 'daemon SummaryPort wiring (src/cli/daemon.ts)' },
   compact: {
     kind: 'ignored',
-    reason: 'compact 能力缺省键声明了但无消费方；见 docs/KNOWN-ISSUES.md',
+    reason:
+      'compact 能力缺省键声明了但无消费方（unwired-keys 启动告警）；见 docs/KNOWN-ISSUES.md',
   },
   documents: { kind: 'mapped', target: 'documents' },
   knowledge: { kind: 'mapped', target: 'knowledge' },
@@ -67,8 +68,9 @@ const CLASSIFICATION: Record<string, Classification> = {
   webSearch: { kind: 'host-consumed', where: 'daemon web_search factory (src/cli/daemon.ts)' },
   delegation: { kind: 'mapped', target: 'delegation' },
   gateway: {
-    kind: 'ignored',
-    reason: '规划中的 Gateway 覆盖段（port/host/debugRest），产品无消费方（daemon 读 args.port/channels）；见 docs/KNOWN-ISSUES.md',
+    kind: 'host-consumed',
+    where:
+      'daemon listen override port/host (src/cli/listen-config.ts) + toGatewayConfig hitlWebhook；debugRest 仍未接线（unwired-keys 启动告警 + KNOWN-ISSUES 跟踪）',
   },
   web: { kind: 'host-consumed', where: 'daemon listenHost + octopi webui start (src/cli/daemon.ts, src/cli/webui.ts)' },
 };

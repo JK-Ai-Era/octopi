@@ -8,6 +8,7 @@ import type { CliArgs } from './args.js';
 import { loadConfig } from '../config.js';
 import { initOctopi, getOctopiHome, isInitialized, formatInitReport } from '../init.js';
 import { readPidFile, writePidFile, removePidFile, isProcessAlive } from './daemon.js';
+import { resolveListenConfig } from './listen-config.js';
 import { createProviderFromConfig } from '@octopi-agent/engine/config.js';
 import { resolveGatewayUrl, resolveGatewayApiKey, selectChatAgent } from './helpers.js';
 
@@ -136,7 +137,11 @@ export async function chatCommand(args: CliArgs): Promise<void> {
     }
     const channels = config.channels ?? [];
     const httpChannel = channels.find((c) => c.type === "http");
-    const port = httpChannel?.port ?? 18180;
+    // 与 daemon 监听同序（listen-config.ts）：fork 的 serve fg 子进程按配置自解析，此处必须同值
+    const port = resolveListenConfig({
+      gateway: (config as { gateway?: { port?: number } }).gateway,
+      http: httpChannel,
+    }).port;
     writePidFile({
       pid: child.pid,
       config: configPath ?? join(getOctopiHome(), 'octopi.json'),

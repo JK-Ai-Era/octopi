@@ -61,6 +61,7 @@ function readConfigWebSettings(configPath?: string): {
     const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as {
       web?: { dir?: unknown; host?: unknown; port?: unknown; gitStatusPollSeconds?: unknown };
       channels?: unknown;
+      gateway?: unknown;
     };
     const dir = typeof raw.web?.dir === 'string' && raw.web.dir.trim() ? raw.web.dir.trim() : undefined;
     const host = typeof raw.web?.host === 'string' && raw.web.host.trim()
@@ -81,7 +82,13 @@ function readConfigWebSettings(configPath?: string): {
             !!c && typeof c === 'object' && (c as { type?: unknown }).type === 'http',
         ) ?? null)
       : null;
-    const gatewayPort = typeof httpChannel?.port === 'number' ? httpChannel.port : undefined;
+    // 与 daemon 监听同序：gateway.port（进程面覆盖）> channels[type=http].port（listen-config.ts）
+    const gatewayOverridePort =
+      raw.gateway && typeof raw.gateway === 'object' && typeof (raw.gateway as { port?: unknown }).port === 'number'
+        ? (raw.gateway as { port: number }).port
+        : undefined;
+    const gatewayPort =
+      gatewayOverridePort ?? (typeof httpChannel?.port === 'number' ? httpChannel.port : undefined);
     return {
       dir,
       host,

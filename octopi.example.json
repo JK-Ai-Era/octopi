@@ -2,7 +2,6 @@
   "$schema": "./octopi.schema.json",
 
   "models": {
-    "mode": "merge",
     "level": {
       "mini": { "primary": "openai/gpt-5-mini" },
       "standard": { "primary": "openai/gpt-5.5" },
@@ -160,9 +159,6 @@
 
   "cognition": {
     "enabled": true,
-    "conceptualize": {
-      "onMemoryWrite": true
-    },
     "relations": {
       "causesMinIndependentMemories": 2
     },
@@ -171,13 +167,8 @@
       "candidateBandHi": 0.35
     },
     "capacity": {
-      "warnNodes": 5000,
-      "warnEdges": 20000,
       "stopNodes": 10000,
       "stopEdges": 40000
-    },
-    "consolidation": {
-      "ttlHours": 24
     }
   },
 
@@ -332,8 +323,7 @@
   },
 
   "gateway": {
-    "port": 8787,
-    "host": "local",
-    "debugRest": false
+    "port": 18180,
+    "host": "local"
   }
 }
