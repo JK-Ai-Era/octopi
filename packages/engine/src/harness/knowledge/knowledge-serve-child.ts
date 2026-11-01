@@ -12,6 +12,7 @@ import { startKnowledgeService } from './serve.js';
 import { acquireKnowledgeWriterLock } from './writer-lock.js';
 import type { KnowledgeServiceToken } from './http-app.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
+import type { KnowledgeBootEmbed, KnowledgeBootIngest, KnowledgeBootRetriever } from './boot-config.js';
 
 interface BootFile {
   dbPath: string;
@@ -19,13 +20,13 @@ interface BootFile {
   port?: number;
   tokens: KnowledgeServiceToken[];
   documentConfig?: DocumentCapabilityConfig | null;
-  embed?: {
-    enabled?: boolean;
-    embedBatch?: number;
-    embedMinIntervalMs?: number;
-    embedConcurrency?: number;
-    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-  };
+  embed?: KnowledgeBootEmbed;
+  /** Ingest 调参（knowledge.load / index.queue / index.files） */
+  ingest?: KnowledgeBootIngest;
+  /** 检索调参（knowledge.keywordWeight / autoInject / hint / index.hybridKeyword） */
+  retriever?: KnowledgeBootRetriever;
+  /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
+  autoDescribe?: boolean;
   sqliteVecExtensionPath?: string;
   embeddingModels?: {
     providers?: Record<string, unknown>;
@@ -71,6 +72,9 @@ async function main(): Promise<void> {
     documentConfig: boot.documentConfig ?? null,
     embeddingModels: boot.embeddingModels ?? null,
     embed: boot.embed ?? null,
+    ingest: boot.ingest ?? null,
+    retriever: boot.retriever ?? null,
+    autoDescribe: boot.autoDescribe,
     ...(boot.sqliteVecExtensionPath
       ? { sqliteVecExtensionPath: boot.sqliteVecExtensionPath }
       : {}),

@@ -15,6 +15,11 @@ import type { DocumentPort, DocumentPortConfig } from './types.js';
 export interface DocumentCapabilityConfig {
   extract?: {
     enabled?: boolean;
+    /**
+     * 档位路由部署缺省（per-call extractOptions.tier 覆盖）：
+     * `auto`（缺省）= t0→t1→t2 逐档降级；`t0-only` = 钉死本地抽取，不外发增强/云
+     */
+    backend?: 'auto' | 't0-only';
     timeoutMs?: number;
     maxFileBytes?: number;
     allowedRoots?: string[];
@@ -41,6 +46,7 @@ export function createDocumentPortFromConfig(
   const extract = cfg?.extract;
   const config: DocumentPortConfig = {
     enabled: extract?.enabled !== false,
+    ...(extract?.backend ? { backend: extract.backend } : {}),
     ...(extract?.timeoutMs != null ? { timeoutMs: extract.timeoutMs } : {}),
     ...(extract?.maxFileBytes != null ? { maxFileBytes: extract.maxFileBytes } : {}),
     ...(extract?.allowedRoots?.length ? { allowedRoots: extract.allowedRoots } : {}),

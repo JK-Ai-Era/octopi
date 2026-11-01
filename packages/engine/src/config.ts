@@ -133,13 +133,18 @@ export interface KnowledgeRuntimeConfig {
     includePriorUserTurns?: number;
     skipIfUserTokensBelow?: number;
   };
-  index?: {
-    embedding?: boolean;
-    hybridKeyword?: boolean;
+  /** Phase B 向量化（v0.98.11 起取代 index.phaseB / index.embedding / index.embedSecretPolicy） */
+  embed?: {
+    /** false = 纯关键词索引（不外发 embed）；缺省 true */
+    enabled?: boolean;
+    embedBatch?: number;
+    embedMinIntervalMs?: number;
+    embedConcurrency?: number;
     /** embedding 外发前敏感形态策略（默认 redact） */
     embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-    phaseA?: { concurrency?: number; debounceMs?: number };
-    phaseB?: { embedBatch?: number; concurrency?: number; ratePerMin?: number };
+  };
+  index?: {
+    hybridKeyword?: boolean;
     queue?: { maxDepth?: number };
     /**
      * 索引文件限额（按格式分级；缺省见 DEFAULT_KNOWLEDGE_FILE_LIMITS）
@@ -171,6 +176,8 @@ export interface KnowledgeRuntimeConfig {
   };
   load?: {
     parseConcurrency?: number;
+    /** fs watch debounce ms（默认 800；原 index.phaseA.debounceMs） */
+    debounceMs?: number;
     diskWatermarkAlert?: boolean;
   };
   promotion?: {
@@ -183,11 +190,6 @@ export interface KnowledgeRuntimeConfig {
     maxFileBytes?: number;
     maxTotalBytes?: number;
     allowedExtensions?: string[];
-    parse?: {
-      extract?: boolean;
-      keywordIndex?: boolean;
-      embedding?: 'off' | 'lazy' | 'on-upload';
-    };
     inject?: {
       fullTextMaxChars?: number;
       recallTopK?: number;
@@ -621,19 +623,6 @@ export interface DocumentsCapabilityConfig {
     timeoutMs?: number;
     maxInputBytes?: number;
   };
-  markitdown?: {
-    enabled?: boolean;
-    command?: string;
-  };
-  enhanced?: {
-    enabled?: boolean;
-    provider?: 'mineru' | 'azure-di' | 'azure-cu' | string;
-    endpoint?: string | null;
-    command?: string | null;
-    authRef?: string | null;
-    timeoutMs?: number;
-    preferOn?: string[];
-  };
 }
 
 /**
@@ -922,15 +911,11 @@ export interface HarnessConfig {
   compact?: CompactCapabilityConfig;
   /** 公用能力 documents（DocumentPort 读抽取） */
   documents?: DocumentsCapabilityConfig;
-  /** system prompt 七层装配器配置 */
-  contextAssembler?: ContextAssemblerConfig;
-  /** context 域扩展：全局宪法等 */
+  /** system prompt 七层装配器 / 全局宪法（唯一声明面：context 域；v0.98.11 起顶层简写已删除） */
   context?: {
     constitution?: ConstitutionConfig;
     contextAssembler?: ContextAssemblerConfig;
   };
-  /** 全局宪法（顶层简写，等价 context.constitution） */
-  constitution?: ConstitutionConfig;
   /** Memory 写入/置信度策略 */
   memory?: {
     profile?: 'personal_assistant' | 'embedded_interactive' | 'embedded_headless';
@@ -975,16 +960,10 @@ export interface HarnessConfig {
       maxLength?: Partial<Record<'fact' | 'method' | 'norm', number>>;
     };
   };
-  /** Cognition 概念图谱（arch/cognition-graph-formation.md） */
+  /** Cognition 概念图谱（arch/cognition-graph-formation.md）；steward 调参面在子系统 config.yaml metadata.config */
   cognition?: {
     enabled?: boolean;
-    conceptualize?: {
-      onMemoryWrite?: boolean;
-      maxNodesPerProposition?: number;
-      maxEdgesPerProposition?: number;
-    };
     relations?: {
-      requireCue?: boolean;
       causesMinIndependentMemories?: number;
     };
     identity?: {
@@ -992,60 +971,22 @@ export interface HarnessConfig {
       candidateBandHi?: number;
     };
     capacity?: {
-      warnNodes?: number;
-      warnEdges?: number;
       stopNodes?: number;
       stopEdges?: number;
     };
-    retrieval?: {
-      depth?: number;
-      delta?: number;
-      tau?: number;
-      limit?: number;
-    };
-    consolidation?: {
-      debounceMinutes?: number;
-      ttlHours?: number;
-    };
   };
-  /** Wisdom 判断范式（arch/wisdom-layer-formation.md） */
+  /** Wisdom 判断范式（arch/wisdom-layer-formation.md）；steward 调参面在子系统 config.yaml metadata.config */
   wisdom?: {
     enabled?: boolean;
     capacity?: {
-      softCap?: number;
       hardCap?: number;
-    };
-    formation?: {
-      enabled?: boolean;
-      dryRun?: boolean;
-      ttlHours?: number;
-      minMemorySupport?: number;
-      minClusterSize?: number;
-      minPromotionStack?: number;
-      maxItemsPerRun?: number;
-      maxEvidenceChars?: number;
-    };
-    evaluation?: {
-      dryRun?: boolean;
-      windowHours?: number;
-      minAppliesForActive?: number;
-      contestRate?: number;
-      counterevidenceWeight?: number;
-      strengthenMinApplies?: number;
     };
     injection?: {
       coreMaxItems?: number;
-      coreMaxTokens?: number;
       scenarioMaxItems?: number;
       /** trial 轮转试用名额（缺省 2；0 = 关闭轮转） */
       trialMaxItems?: number;
       trialVisible?: boolean;
-    };
-    govern?: {
-      dryRun?: boolean;
-      zeroApplyIdleMs?: number;
-      priorityDecayStep?: number;
-      priorityFloor?: number;
     };
   };
   /** Knowledge 检索/召回（全局缺省；agents[].knowledge.recall 可覆盖） */

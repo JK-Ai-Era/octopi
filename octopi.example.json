@@ -96,32 +96,25 @@
   "documents": {
     "extract": {
       "enabled": true,
+      "backend": "auto",
       "timeoutMs": 30000,
       "maxFileBytes": 52428800
     },
     "legacy": {
       "converter": "none"
-    },
-    "markitdown": {
-      "enabled": false
-    },
-    "enhanced": {
-      "enabled": false,
-      "provider": "mineru"
     }
-  },
-
-  "contextAssembler": {
-    "systemBudgetRatio": 0.22,
-    "includeLayerPreview": true,
-    "layerPreviewChars": 400,
-    "includeLayerContent": true
   },
 
   "context": {
     "constitution": {
       "mode": "product",
       "path": null
+    },
+    "contextAssembler": {
+      "systemBudgetRatio": 0.22,
+      "includeLayerPreview": true,
+      "layerPreviewChars": 400,
+      "includeLayerContent": true
     }
   },
 
@@ -174,7 +167,6 @@
 
   "knowledge": {
     "recall": "hybrid",
-    "required": false,
     "service": {
       "manageLocal": true,
       "port": 18280
@@ -195,8 +187,11 @@
       "includePriorUserTurns": 1,
       "skipIfUserTokensBelow": 8
     },
+    "embed": {
+      "enabled": true,
+      "embedSecretPolicy": "redact"
+    },
     "index": {
-      "embedSecretPolicy": "redact",
       "files": {
         "oversize": "partial",
         "maxFileBytes": 50000000,

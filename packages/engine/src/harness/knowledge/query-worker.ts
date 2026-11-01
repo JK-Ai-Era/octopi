@@ -9,6 +9,7 @@ import { KnowledgeDatabase } from './db.js';
 import { KnowledgeSourceStore } from './source-store.js';
 import { KnowledgeIndexStore } from './index-store.js';
 import { KnowledgeRetriever } from './retriever.js';
+import type { KnowledgeBootEmbed, KnowledgeBootRetriever } from './boot-config.js';
 import {
   LocalKnowledgeQueryService,
   type SearchQuery,
@@ -27,6 +28,10 @@ interface QueryBoot {
     providers?: Record<string, unknown>;
     embedding?: unknown;
   } | null;
+  /** 检索调参（knowledge.keywordWeight / autoInject / hint / index.hybridKeyword） */
+  retriever?: KnowledgeBootRetriever | null;
+  /** 向量化开关（embed.enabled=false 时不建 embedding provider，不外发 query embed） */
+  embed?: KnowledgeBootEmbed | null;
 }
 
 /** meta：列表/控制面（UI 轮询必须稳）；search：检索/catalog（可慢） */
@@ -114,7 +119,7 @@ type QueryCall =
   | { id: number; method: 'isSourceOwner'; sourceId: string; gatewayId: string }
   | { id: number; method: 'ready' }
   | { id: number; method: 'listJobs'; query: ListJobsQuery }
-  | { id: number; method: 'promotionCandidates' }
+  | { id: number; method: 'promotionCandidates'; opts?: { minSessions?: number; minHits?: number } }
   | { id: number; method: 'shutdown' };
 
 async function main(): Promise<void> {
@@ -140,7 +145,8 @@ async function main(): Promise<void> {
   });
 
   let embeddingProvider: unknown = null;
-  if (boot.embeddingModels) {
+  // embed.enabled=false：纯关键词索引——检索侧不建 provider，query 不外发 embed（与写侧 resolveEmbedding 同判）
+  if (boot.embeddingModels && boot.embed?.enabled !== false) {
     const { resolveEmbeddingRuntime } = await import(
       '../memory/sqlite/embedding-from-models.js'
     );
@@ -156,6 +162,7 @@ async function main(): Promise<void> {
     sourceStore: sources,
     indexStore: index,
     embeddingProvider: embeddingProvider as never,
+    ...(boot.retriever ?? {}),
   });
   const svc = new LocalKnowledgeQueryService({
     db,
@@ -246,7 +253,7 @@ async function main(): Promise<void> {
             data = await svc.listJobs(msg.query);
             break;
           case 'promotionCandidates':
-            data = await svc.promotionCandidates();
+            data = await svc.promotionCandidates(msg.opts);
             break;
           default:
             throw new Error(`unknown_query_method`);

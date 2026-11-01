@@ -144,6 +144,8 @@ export function createDefaultDocumentPort(options: CreateDocumentPortOptions = {
   const backends = options.backends ?? createDefaultBackends();
   const legacy = options.legacyConverter ?? null;
   const capsTtl = options.capabilitiesTtlMs ?? 5 * 60_000;
+  /** 部署缺省档位（documents.extract.backend）：t0-only 钉死本地档；probe / hasBackendFor / extract 同判 */
+  const defaultTier: ExtractTier | undefined = config.backend === 't0-only' ? 't0' : undefined;
 
   let capsCache: { at: number; value: DocumentCapabilities; available: Set<string> } | null = null;
 
@@ -279,7 +281,7 @@ export function createDefaultDocumentPort(options: CreateDocumentPortOptions = {
       if (LEGACY_FORMATS.has(format) && format !== 'xls') {
         return { format, level: caps.formats[format]?.level ?? 'none' };
       }
-      const candidates = pickBackends(format, available, ['t0', 't1', 't2']);
+      const candidates = pickBackends(format, available, tierOrder(defaultTier));
       const first = candidates[0];
       return {
         format,
@@ -364,7 +366,7 @@ export function createDefaultDocumentPort(options: CreateDocumentPortOptions = {
 
       async function hasBackendFor(fmt: DocumentFormatHint): Promise<boolean> {
         const { available } = await loadCapabilities();
-        return pickBackends(fmt, available, ['t0', 't1', 't2']).length > 0;
+        return pickBackends(fmt, available, tierOrder(defaultTier)).length > 0;
       }
 
       async function runExtract(args: {
@@ -378,7 +380,8 @@ export function createDefaultDocumentPort(options: CreateDocumentPortOptions = {
         legacyConversion?: ExtractResult['meta']['legacyConversion'];
       }): Promise<ExtractResult> {
         const { available } = await loadCapabilities();
-        const tiers = tierOrder(args.extractOptions.tier);
+        // 档位路由：per-call tier > documents.extract.backend 部署缺省（t0-only 钉死不外发）> auto 全档
+        const tiers = tierOrder(args.extractOptions.tier ?? defaultTier);
         const candidates = pickBackends(args.formatHint, available, tiers);
 
         if (candidates.length === 0 && args.formatHint === 'unknown') {

@@ -56,7 +56,6 @@ export const engineConfigSchema = z.object({
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   schedules: SchedulesJsonConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
-  contextAssembler: ContextAssemblerConfigSchema.optional(),
   /** 公用能力 summary（capabilities） */
   summary: SummaryConfigSchema.optional(),
   /** 公用能力 compact 缺省 */
@@ -71,7 +70,6 @@ export const engineConfigSchema = z.object({
       contextAssembler: ContextAssemblerConfigSchema.optional(),
     })
     .optional(),
-  constitution: ConstitutionConfigSchema.optional(),
   memory: MemoryConfigSchema.optional(),
   cognition: CognitionConfigSchema.optional(),
   /** Wisdom 判断范式（maxim） */

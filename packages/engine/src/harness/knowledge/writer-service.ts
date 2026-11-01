@@ -14,6 +14,10 @@ import { generateKnowledgeDescription } from './describe.js';
 import type { KnowledgeSource, KnowledgeSourceInput } from './types.js';
 import type { KnowledgeJobControlState } from './job-control-state.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
+import type {
+  KnowledgeBootEmbed,
+  KnowledgeBootIngest,
+} from './boot-config.js';
 import type { EmbeddingProvider } from '../memory/sqlite/embedding.js';
 
 export interface WriteIdentity {
@@ -136,13 +140,11 @@ export interface LocalWriteDeps {
   embeddingProvider?: EmbeddingProvider | null;
   /** source.authRef 解析（SEC-3c consumer 绑定强制） */
   credentials?: import('../governance/credentials/store.js').CredentialStore | null;
-  embed?: {
-    enabled?: boolean;
-    embedBatch?: number;
-    embedMinIntervalMs?: number;
-    embedConcurrency?: number;
-    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-  } | null;
+  embed?: KnowledgeBootEmbed | null;
+  /** Ingest 调参（knowledge.load / index.queue / index.files） */
+  ingest?: KnowledgeBootIngest | null;
+  /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
+  autoDescribe?: boolean;
 }
 
 /** 进程内唯一写者（测试 / :memory:）。 */
@@ -164,6 +166,7 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
       documentConfig: deps.documentConfig ?? null,
       embeddingProvider: embed?.enabled === false ? null : (deps.embeddingProvider ?? null),
       credentials: deps.credentials ?? null,
+      ...(deps.ingest ?? {}),
       ...(embed?.embedBatch != null ? { embedBatch: embed.embedBatch } : {}),
       ...(embed?.embedMinIntervalMs != null ? { embedMinIntervalMs: embed.embedMinIntervalMs } : {}),
       ...(embed?.embedConcurrency != null ? { embedConcurrency: embed.embedConcurrency } : {}),
@@ -560,6 +563,8 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
   async startIngestRuntime(): Promise<void> {
     const { sources, ingest } = this;
     ingest.onSourceSettled = (sourceId) => {
+      // catalog.autoDescribe=false：索引稳定后不自动生成 generatedDescription（v0.51.5 语义）
+      if (this.deps.autoDescribe === false) return;
       void (async () => {
         try {
           const src = sources.get(sourceId);

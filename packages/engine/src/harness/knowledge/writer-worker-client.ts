@@ -18,6 +18,7 @@ import type { KnowledgeSource } from './types.js';
 import type { KnowledgeJobControlState } from './job-control-state.js';
 import type { IngestProgressEvent } from './ingest.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
+import type { KnowledgeBootEmbed, KnowledgeBootIngest } from './boot-config.js';
 
 interface WriterReply {
   id?: number;
@@ -38,13 +39,11 @@ export interface WorkerWriteStartOptions {
     providers?: Record<string, unknown>;
     embedding?: unknown;
   } | null;
-  embed?: {
-    enabled?: boolean;
-    embedBatch?: number;
-    embedMinIntervalMs?: number;
-    embedConcurrency?: number;
-    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-  } | null;
+  embed?: KnowledgeBootEmbed | null;
+  /** Ingest 调参（knowledge.load / index.queue / index.files） */
+  ingest?: KnowledgeBootIngest | null;
+  /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
+  autoDescribe?: boolean;
   testEmbeddingStub?: boolean;
   timeoutMs?: number;
 }
@@ -134,6 +133,8 @@ export class WorkerWriteService implements KnowledgeWriteService {
         sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
         embeddingModels: opts.embeddingModels ?? null,
         embed: opts.embed ?? null,
+        ingest: opts.ingest ?? null,
+        autoDescribe: opts.autoDescribe,
         testEmbeddingStub: opts.testEmbeddingStub ?? false,
       },
       env: process.env,

@@ -210,6 +210,11 @@ export interface ResolvedExtractSource {
 
 export interface DocumentPortConfig {
   enabled?: boolean;
+  /**
+   * 档位路由部署缺省（per-call ExtractOptions.tier 覆盖）：
+   * `auto`（缺省）= t0→t1→t2 逐档降级；`t0-only` = 钉死本地抽取（内容不外发）
+   */
+  backend?: 'auto' | 't0-only';
   timeoutMs?: number;
   maxFileBytes?: number;
   /** 路径允许根；未设置则不限制（由调用方约束） */

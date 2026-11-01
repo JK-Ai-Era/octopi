@@ -184,8 +184,8 @@ export interface AgentWireSpec {
   };
 
   contextEngineConfig?: ContextEngineConfig;
-  contextAssemblerConfig?: HarnessConfig['contextAssembler'];
-  constitutionConfig?: HarnessConfig['constitution'];
+  contextAssemblerConfig?: NonNullable<HarnessConfig['context']>['contextAssembler'];
+  constitutionConfig?: NonNullable<HarnessConfig['context']>['constitution'];
   memoryConfig?: HarnessConfig['memory'];
   cognitionConfig?: HarnessConfig['cognition'];
   wisdomConfig?: HarnessConfig['wisdom'];

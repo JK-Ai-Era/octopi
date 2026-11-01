@@ -747,7 +747,7 @@ Session save：全量 messages + contextCompact 快照
 | LLM 调用 | ✓ | ✓ |
 | 自动/proactive 压缩 | ✓ | **跳过** |
 | assemble 按 token 截消息 | ✓ | **跳过** |
-| 七层 system 窗口比例预算 | ✓ | 不按窗口硬裁；可选 `contextAssembler.systemBudgetTokens` |
+| 七层 system 窗口比例预算 | ✓ | 不按窗口硬裁；可选 `context.contextAssembler.systemBudgetTokens` |
 | 手动/force **结构压缩** | ✓ | ✓（头尾+摘要；`POST /sessions/:id/compact`） |
 | `compactTargetTokens` | 可选 | 显式目标，非猜测 |
 

@@ -20,6 +20,10 @@ import type {
   QueryWorkerRole,
 } from './query-service.js';
 import type { PromotionCandidate } from './hit-log.js';
+import type {
+  KnowledgeBootEmbed,
+  KnowledgeBootRetriever,
+} from './boot-config.js';
 import type { HybridSearchResult, AutoGroundDecision } from './retriever.js';
 import type { KnowledgeSource, KnowledgeSourceId } from './types.js';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
@@ -101,6 +105,10 @@ export class WorkerQueryService implements KnowledgeQueryService {
       providers?: Record<string, unknown>;
       embedding?: unknown;
     } | null;
+    /** 向量化开关（embed.enabled=false 时不建 embedding provider） */
+    embed?: KnowledgeBootEmbed | null;
+    /** 检索调参（透传进 Worker 的 KnowledgeRetriever） */
+    retriever?: KnowledgeBootRetriever | null;
   }): Promise<WorkerQueryService> {
     const worker = new Worker(resolveWorkerUrl('./query-worker.js', import.meta.url), {
       workerData: {
@@ -108,6 +116,8 @@ export class WorkerQueryService implements KnowledgeQueryService {
         sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
         embeddingModels: opts.embeddingModels ?? null,
         role: opts.role ?? 'all',
+        embed: opts.embed ?? null,
+        retriever: opts.retriever ?? null,
       },
     });
     const client = new WorkerQueryService(worker, opts.queryTimeoutMs ?? 15_000);
@@ -314,8 +324,8 @@ export class WorkerQueryService implements KnowledgeQueryService {
     return (await this.call({ method: 'listJobs', query })) as Array<Record<string, unknown>>;
   }
 
-  async promotionCandidates(): Promise<PromotionCandidate[]> {
-    return (await this.call({ method: 'promotionCandidates' })) as PromotionCandidate[];
+  async promotionCandidates(opts?: { minSessions?: number; minHits?: number }): Promise<PromotionCandidate[]> {
+    return (await this.call({ method: 'promotionCandidates', opts })) as PromotionCandidate[];
   }
 
   async dispose(): Promise<void> {

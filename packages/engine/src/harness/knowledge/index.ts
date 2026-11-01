@@ -71,6 +71,13 @@ export type {
   KnowledgeFileLimitsInput,
   OversizePolicy,
 } from './file-limits.js';
+export { knowledgeTuningFromConfig } from './boot-config.js';
+export type {
+  KnowledgeBootTuning,
+  KnowledgeBootEmbed,
+  KnowledgeBootIngest,
+  KnowledgeBootRetriever,
+} from './boot-config.js';
 export {
   LocalFsFetcher,
   UrlFetcher,

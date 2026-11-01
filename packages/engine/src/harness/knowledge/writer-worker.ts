@@ -11,6 +11,7 @@ import {
   type WriteIdentity,
 } from './writer-service.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
+import type { KnowledgeBootEmbed, KnowledgeBootIngest } from './boot-config.js';
 import type { IngestProgressEvent } from './ingest.js';
 
 interface WriterBoot {
@@ -22,13 +23,11 @@ interface WriterBoot {
     providers?: Record<string, unknown>;
     embedding?: unknown;
   } | null;
-  embed?: {
-    enabled?: boolean;
-    embedBatch?: number;
-    embedMinIntervalMs?: number;
-    embedConcurrency?: number;
-    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-  } | null;
+  embed?: KnowledgeBootEmbed | null;
+  /** Ingest 调参（knowledge.load / index.queue / index.files） */
+  ingest?: KnowledgeBootIngest | null;
+  /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
+  autoDescribe?: boolean;
   testEmbeddingStub?: boolean;
 }
 
@@ -83,6 +82,8 @@ async function main(): Promise<void> {
     documentConfig: boot.documentConfig ?? null,
     embeddingProvider: embeddingProvider as never,
     embed: boot.embed ?? null,
+    ingest: boot.ingest ?? null,
+    autoDescribe: boot.autoDescribe,
   });
 
   write.onProgress((evt: IngestProgressEvent) => {

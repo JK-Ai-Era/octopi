@@ -6,6 +6,11 @@
  */
 
 import type { KnowledgeClient } from '@octopi-agent/engine/harness/knowledge/client.js';
+import type {
+  KnowledgeBootEmbed,
+  KnowledgeBootIngest,
+  KnowledgeBootRetriever,
+} from '@octopi-agent/engine/harness/knowledge/boot-config.js';
 import type { KnowledgeServiceProcessHandle } from '@octopi-agent/engine/harness/knowledge/start-service-process.js';
 
 export interface KnowledgeServiceConfig {
@@ -43,7 +48,11 @@ export class GatewayKnowledgeRuntime {
    * @param opts.dataDir - manageLocal 时的 OCTOPI_HOME/knowledge
    * @param opts.documentConfig - documents.*（与 Gateway 抽取同源）
    * @param opts.embeddingModels - models.*（子进程内重建 EmbeddingProvider）
-   * @param opts.embed - embed 批/限速/密钥策略
+   * @param opts.embed - embed 批/限速/密钥策略（仅 manageLocal；远程 Service 由其自身部署配置）
+   * @param opts.ingest - Ingest 调参（knowledge.load / index.queue / index.files；仅 manageLocal）
+   * @param opts.retriever - 检索调参（knowledge.keywordWeight / autoInject / hint；仅 manageLocal）
+   * @param opts.autoDescribe - false = 索引稳定后不自动生成描述（knowledge.catalog.autoDescribe；仅 manageLocal）
+   * @param opts.connectTimeoutMs 经 cfg 传入：manageLocal 启动握手等待（fork→ready）
    */
   async start(
     cfg: KnowledgeServiceConfig | undefined,
@@ -57,13 +66,13 @@ export class GatewayKnowledgeRuntime {
         providers?: Record<string, unknown>;
         embedding?: unknown;
       } | null;
-      embed?: {
-        enabled?: boolean;
-        embedBatch?: number;
-        embedMinIntervalMs?: number;
-        embedConcurrency?: number;
-        embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-      };
+      embed?: KnowledgeBootEmbed;
+      /** Ingest 调参（knowledge.load / index.queue / index.files） */
+      ingest?: KnowledgeBootIngest;
+      /** 检索调参（knowledge.keywordWeight / autoInject / hint / index.hybridKeyword） */
+      retriever?: KnowledgeBootRetriever;
+      /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe；仅 manageLocal） */
+      autoDescribe?: boolean;
       sqliteVecExtensionPath?: string;
     },
   ): Promise<void> {
@@ -99,7 +108,12 @@ export class GatewayKnowledgeRuntime {
           tokens: [{ token, tenantId: this.tenantId, gatewayId: this.gatewayId }],
           documentConfig: opts.documentConfig ?? null,
           embed: opts.embed ?? undefined,
+          ingest: opts.ingest ?? undefined,
+          retriever: opts.retriever ?? undefined,
+          autoDescribe: opts.autoDescribe,
           embeddingModels: opts.embeddingModels ?? null,
+          // connectTimeoutMs = 连接建立等待（fork→ready 握手）；远程模式无独立连接阶段，请求由 timeoutMs 约束
+          ...(cfg?.connectTimeoutMs != null ? { startTimeoutMs: cfg.connectTimeoutMs } : {}),
           ...(opts.sqliteVecExtensionPath
             ? { sqliteVecExtensionPath: opts.sqliteVecExtensionPath }
             : {}),

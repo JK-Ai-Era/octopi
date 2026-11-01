@@ -18,6 +18,11 @@ import { LocalKnowledgeQueryService } from './query-service.js';
 import { KnowledgeSourceStore } from './source-store.js';
 import { KnowledgeIndexStore } from './index-store.js';
 import { KnowledgeRetriever } from './retriever.js';
+import type {
+  KnowledgeBootEmbed,
+  KnowledgeBootIngest,
+  KnowledgeBootRetriever,
+} from './boot-config.js';
 
 interface EngineBoot {
   dbPath: string;
@@ -31,13 +36,13 @@ interface EngineBoot {
     providers?: Record<string, unknown>;
     embedding?: unknown;
   } | null;
-  embed?: {
-    enabled?: boolean;
-    embedBatch?: number;
-    embedMinIntervalMs?: number;
-    embedConcurrency?: number;
-    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-  } | null;
+  embed?: KnowledgeBootEmbed | null;
+  /** Ingest 调参（knowledge.load / index.queue / index.files） */
+  ingest?: KnowledgeBootIngest | null;
+  /** 检索调参（knowledge.keywordWeight / autoInject / hint / index.hybridKeyword） */
+  retriever?: KnowledgeBootRetriever | null;
+  /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
+  autoDescribe?: boolean;
   testEmbeddingStub?: boolean;
 }
 
@@ -194,6 +199,8 @@ async function main(): Promise<void> {
       documentConfig: boot.documentConfig ?? null,
       embeddingProvider: embeddingProvider as never,
       embed: boot.embed ?? null,
+      ingest: boot.ingest ?? null,
+      autoDescribe: boot.autoDescribe,
     });
     const sources = new KnowledgeSourceStore(writeDb);
     const index = new KnowledgeIndexStore(writeDb);
@@ -201,6 +208,7 @@ async function main(): Promise<void> {
       sourceStore: sources,
       indexStore: index,
       embeddingProvider: embeddingProvider as never,
+      ...(boot.retriever ?? {}),
     });
     query = new LocalKnowledgeQueryService({
       db: writeDb,
@@ -218,6 +226,8 @@ async function main(): Promise<void> {
       sqliteVecExtensionPath: boot.sqliteVecExtensionPath,
       embeddingModels: boot.testEmbeddingStub ? null : (boot.embeddingModels ?? null),
       embed: boot.embed ?? null,
+      ingest: boot.ingest ?? null,
+      autoDescribe: boot.autoDescribe,
       testEmbeddingStub: boot.testEmbeddingStub ?? false,
     });
     // 残留写路由上的短读：独立只读连接（WAL）
@@ -235,6 +245,7 @@ async function main(): Promise<void> {
       sourceStore: sources,
       indexStore: index,
       embeddingProvider: embeddingProvider as never,
+      ...(boot.retriever ?? {}),
     });
     query = new LocalKnowledgeQueryService({
       db: readDb,

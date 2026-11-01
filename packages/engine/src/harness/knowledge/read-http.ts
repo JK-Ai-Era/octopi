@@ -13,6 +13,7 @@ import type {
 } from './query-service.js';
 import type { KnowledgeServiceToken } from './http-app.js';
 import { matchKnowledgeToken } from './http-bridge.js';
+import { promotionThresholdsFromParams } from './http-params.js';
 
 export interface ReadHttpDeps {
   /** meta：projects / sources / detail / jobs / ready */
@@ -391,7 +392,10 @@ export async function handleKnowledgeReadHttp(
     }
 
     if (path === '/v1/promotion-candidates') {
-      json(res, 200, { ok: true, data: await meta.promotionCandidates() });
+      json(res, 200, {
+        ok: true,
+        data: await meta.promotionCandidates(promotionThresholdsFromParams(url.searchParams)),
+      });
       return true;
     }
 

@@ -160,23 +160,6 @@ export const DocumentsConfigSchema = z.object({
       maxInputBytes: z.number().int().positive().optional(),
     })
     .optional(),
-  markitdown: z
-    .object({
-      enabled: z.boolean().optional(),
-      command: z.string().optional(),
-    })
-    .optional(),
-  enhanced: z
-    .object({
-      enabled: z.boolean().optional(),
-      provider: z.string().optional(),
-      endpoint: z.string().nullable().optional(),
-      command: z.string().nullable().optional(),
-      authRef: z.string().nullable().optional(),
-      timeoutMs: z.number().int().positive().optional(),
-      preferOn: z.array(z.string()).optional(),
-    })
-    .optional(),
 });
 
 /** 全局运行宪法（产品资产 / 集成商替换 / 关闭） */

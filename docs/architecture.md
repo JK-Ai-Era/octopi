@@ -745,7 +745,7 @@ Session save: full messages + contextCompact snapshot
 | LLM call | ✓ | ✓ |
 | Automatic/proactive compaction | ✓ | **skipped** |
 | assemble truncates messages by token | ✓ | **skipped** |
-| Seven-layer system window-ratio budget | ✓ | no hard cut by window; optional `contextAssembler.systemBudgetTokens` |
+| Seven-layer system window-ratio budget | ✓ | no hard cut by window; optional `context.contextAssembler.systemBudgetTokens` |
 | Manual/force **structural compaction** | ✓ | ✓ (head/tail + summary; `POST /sessions/:id/compact`) |
 | `compactTargetTokens` | optional | explicit target, not a guess |
 

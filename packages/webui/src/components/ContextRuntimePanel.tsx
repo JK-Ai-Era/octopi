@@ -270,7 +270,7 @@ export function ContextRuntimePanel({
           <div className="small muted" style={{ marginTop: 6 }}>
             {layer.status === 'empty' || layer.status === 'unregistered' || layer.status === 'idle'
               ? '本层本轮无正文。'
-              : '无层内容。请确认 contextAssembler.includeLayerContent=true 并重新装配一轮。'}
+              : '无层内容。请确认 context.contextAssembler.includeLayerContent=true 并重新装配一轮。'}
           </div>
         )}
       </div>

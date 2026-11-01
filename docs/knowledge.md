@@ -75,7 +75,7 @@ The Knowledge data plane is a **standalone HTTP Service** (sole writer), not an 
 - **Contract** (internal spec, not public): token → `(tenantId, gatewayId)`; business keys must not be forged from the body
 - **Wiring**: `knowledge.service.manageLocal` (default `true`) → **fork a child process** on this machine to bring up the Service, default port **18280**; `manageLocal: false` + `baseUrl` → connect to remote only; neither → knowledge plane `disabled`
 - **Single writer**: `knowledge.db.writer.lock` (held by the **Service process**, not the Gateway)
-- **State**: `ready` / `degraded` / `disabled` (visible when the Service fails to start; `knowledge.required` can fail closed)
+- **State**: `ready` / `degraded` / `disabled` (visible when the Service fails to start; `knowledge.required` fail-closed is planned but **not yet effective** — see KNOWN-ISSUES)
 
 #### 2.1.1 In-process thread boundaries (do not push heavy work back onto the main thread)
 
@@ -256,7 +256,6 @@ Retrieval results are **returned itemized with sources**; no silent merging.
 {
   "knowledge": {
     "recall": "hybrid",
-    "required": false,
     "service": {
       "manageLocal": true,
       "port": 18280
@@ -272,8 +271,11 @@ Retrieval results are **returned itemized with sources**; no silent merging.
       "maxEntries": 10,
       "autoDescribe": true
     },
+    "embed": {
+      "enabled": true,
+      "embedSecretPolicy": "redact"
+    },
     "index": {
-      "embedding": true,
       "hybridKeyword": true
     }
   },
@@ -289,15 +291,22 @@ Retrieval results are **returned itemized with sources**; no silent merging.
 | `service.baseUrl` / `token` | Remote Knowledge Service (`baseUrl` required when `manageLocal: false`) |
 | `service.manageLocal` | Default `true`: start the Service locally; `false` connects to `baseUrl` only |
 | `service.port` | manageLocal listen port (default **18280**; tests may use `0`) |
-| `required` | When `true`, fail closed if the Knowledge Service is unavailable |
+| `service.timeoutMs` | Service request timeout (write path; reads use `12s`) |
+| `service.connectTimeoutMs` | manageLocal startup handshake wait (fork→ready, default **30s**); remote mode has no separate connect phase |
+| `required` | **Not yet effective** (no consumer; tracked in KNOWN-ISSUES) — planned: fail closed if the Knowledge Service is unavailable |
 | `recall` | Content recall mode (see §5) |
-| `autoInject.*` | Injection thresholds, count, budget |
-| `catalog.*` | system catalog entry count, auto-describe switch |
-| `index.*` | Whether to embed / keyword leg / sync and concurrency |
+| `autoInject.*` | Injection thresholds (`minScore`/`minCoverage` are retriever-side), count, budget |
+| `keywordWeight` | Hybrid fusion weight for the keyword leg (retriever) |
+| `hint.minScore` | Minimum score for hintable hits (retriever) |
+| `catalog.*` | system catalog entry count, auto-describe switch (`false` = no description generated after index settles) |
+| `embed.*` | Embedding phase on/off, batch/rate/concurrency, egress secret policy (was `index.embedding` / `index.phaseB.*` / `index.embedSecretPolicy` before v0.98.11) |
+| `index.*` | Keyword leg switch, ingest queue depth, per-format file limits |
+| `load.*` | Parse concurrency, watch debounce, disk watermark alert |
 | `promotion.metrics` | Usage-metering thresholds (for later promotion signals; **does not** write Memory directly) |
+| `promotion.stewardOnConverge` | `false` = no promotion candidates are produced |
 | `attachments.*` | Session attachment limits and injection (`inject.intent` / `fullTextMaxChars`); see the OP-15 spec |
 
-Document extraction is configured under **`documents.*`** (same source as Knowledge worker / Gateway via `createDocumentPortFromConfig`): `extract.timeoutMs/maxFileBytes`, `legacy.converter=soffice` + `sofficePath/cacheDir/cacheMaxBytes/maxInputBytes`.
+Document extraction is configured under **`documents.*`** (same source as Knowledge worker / Gateway via `createDocumentPortFromConfig`): `extract.backend` (`auto`|`t0-only` tier pin), `extract.timeoutMs/maxFileBytes`, `legacy.converter=soffice` + `sofficePath/cacheDir/cacheMaxBytes/maxInputBytes`.
 
 Full key set: see `octopi.schema.json` and `octopi.example.json`.
 

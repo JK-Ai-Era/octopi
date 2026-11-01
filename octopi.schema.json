@@ -1239,68 +1239,6 @@
         }
       }
     },
-    "contextAssembler": {
-      "type": "object",
-      "properties": {
-        "systemBudgetRatio": {
-          "type": "number",
-          "minimum": 0.05,
-          "maximum": 0.5
-        },
-        "systemBudgetTokens": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        "snapshotBudgetTokens": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        "compactTargetTokens": {
-          "type": "number",
-          "exclusiveMinimum": 0
-        },
-        "layerShares": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string",
-            "enum": [
-              "wisdom",
-              "persona",
-              "skill",
-              "knowledge",
-              "cognition",
-              "memory",
-              "runtime"
-            ]
-          },
-          "additionalProperties": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "required": [
-            "wisdom",
-            "persona",
-            "skill",
-            "knowledge",
-            "cognition",
-            "memory",
-            "runtime"
-          ]
-        },
-        "includeLayerPreview": {
-          "type": "boolean"
-        },
-        "layerPreviewChars": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 4000
-        },
-        "includeLayerContent": {
-          "type": "boolean"
-        }
-      }
-    },
     "summary": {
       "type": "object",
       "properties": {
@@ -1572,69 +1510,6 @@
               "maximum": 9007199254740991
             }
           }
-        },
-        "markitdown": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "command": {
-              "type": "string"
-            }
-          }
-        },
-        "enhanced": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "provider": {
-              "type": "string"
-            },
-            "endpoint": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "command": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "authRef": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "timeoutMs": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "preferOn": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          }
         }
       }
     },
@@ -1771,14 +1646,26 @@
             }
           }
         },
-        "index": {
+        "embed": {
           "type": "object",
           "properties": {
-            "embedding": {
+            "enabled": {
               "type": "boolean"
             },
-            "hybridKeyword": {
-              "type": "boolean"
+            "embedBatch": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "embedMinIntervalMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "embedConcurrency": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             },
             "embedSecretPolicy": {
               "type": "string",
@@ -1787,40 +1674,14 @@
                 "redact",
                 "skip"
               ]
-            },
-            "phaseA": {
-              "type": "object",
-              "properties": {
-                "concurrency": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "debounceMs": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 9007199254740991
-                }
-              }
-            },
-            "phaseB": {
-              "type": "object",
-              "properties": {
-                "embedBatch": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "concurrency": {
-                  "type": "integer",
-                  "exclusiveMinimum": 0,
-                  "maximum": 9007199254740991
-                },
-                "ratePerMin": {
-                  "type": "number",
-                  "exclusiveMinimum": 0
-                }
-              }
+            }
+          }
+        },
+        "index": {
+          "type": "object",
+          "properties": {
+            "hybridKeyword": {
+              "type": "boolean"
             },
             "queue": {
               "type": "object",
@@ -1929,6 +1790,11 @@
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
             },
+            "debounceMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
             "diskWatermarkAlert": {
               "type": "boolean"
             }
@@ -1979,25 +1845,6 @@
               "type": "array",
               "items": {
                 "type": "string"
-              }
-            },
-            "parse": {
-              "type": "object",
-              "properties": {
-                "extract": {
-                  "type": "boolean"
-                },
-                "keywordIndex": {
-                  "type": "boolean"
-                },
-                "embedding": {
-                  "type": "string",
-                  "enum": [
-                    "off",
-                    "lazy",
-                    "on-upload"
-                  ]
-                }
               }
             },
             "inject": {
@@ -2137,32 +1984,6 @@
           }
         }
       }
-    },
-    "constitution": {
-      "type": "object",
-      "properties": {
-        "mode": {
-          "type": "string",
-          "enum": [
-            "product",
-            "custom",
-            "off"
-          ]
-        },
-        "path": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "mode"
-      ]
     },
     "memory": {
       "type": "object",
@@ -2397,41 +2218,13 @@
         "enabled": {
           "type": "boolean"
         },
-        "conceptualize": {
-          "type": "object",
-          "properties": {
-            "onMemoryWrite": {
-              "type": "boolean"
-            },
-            "onSessionEnd": {
-              "type": "boolean"
-            },
-            "maxNodesPerProposition": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 20
-            },
-            "maxEdgesPerProposition": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 40
-            }
-          }
-        },
         "relations": {
           "type": "object",
           "properties": {
-            "requireCue": {
-              "type": "boolean"
-            },
             "causesMinIndependentMemories": {
               "type": "integer",
               "minimum": 1,
               "maximum": 10
-            },
-            "allowCooccurEscalation": {
-              "type": "boolean",
-              "const": false
             }
           }
         },
@@ -2443,11 +2236,6 @@
               "minimum": 0,
               "maximum": 1
             },
-            "candidateBandLo": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
             "candidateBandHi": {
               "type": "number",
               "minimum": 0,
@@ -2455,84 +2243,9 @@
             }
           }
         },
-        "plasticity": {
-          "type": "object",
-          "properties": {
-            "eta": {
-              "type": "number",
-              "exclusiveMinimum": 0,
-              "exclusiveMaximum": 1
-            },
-            "deltaRetrieval": {
-              "type": "number",
-              "exclusiveMinimum": 0,
-              "exclusiveMaximum": 1
-            },
-            "decayPerDay": {
-              "type": "object",
-              "properties": {
-                "related": {
-                  "type": "number",
-                  "minimum": 0,
-                  "exclusiveMaximum": 1
-                },
-                "causes": {
-                  "type": "number",
-                  "minimum": 0,
-                  "exclusiveMaximum": 1
-                },
-                "part_of": {
-                  "type": "number",
-                  "minimum": 0,
-                  "exclusiveMaximum": 1
-                },
-                "opposes": {
-                  "type": "number",
-                  "minimum": 0,
-                  "exclusiveMaximum": 1
-                },
-                "similar_to": {
-                  "type": "number",
-                  "minimum": 0,
-                  "exclusiveMaximum": 1
-                },
-                "evolves_to": {
-                  "type": "number",
-                  "minimum": 0,
-                  "exclusiveMaximum": 1
-                }
-              }
-            }
-          }
-        },
-        "consolidation": {
-          "type": "object",
-          "properties": {
-            "debounceMinutes": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "ttlHours": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            }
-          }
-        },
         "capacity": {
           "type": "object",
           "properties": {
-            "warnNodes": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "warnEdges": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
             "stopNodes": {
               "type": "integer",
               "exclusiveMinimum": 0,
@@ -2542,31 +2255,6 @@
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
-            }
-          }
-        },
-        "retrieval": {
-          "type": "object",
-          "properties": {
-            "depth": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 5
-            },
-            "delta": {
-              "type": "number",
-              "exclusiveMinimum": 0,
-              "exclusiveMaximum": 1
-            },
-            "tau": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "limit": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 100
             }
           }
         }
@@ -2581,85 +2269,7 @@
         "capacity": {
           "type": "object",
           "properties": {
-            "softCap": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
             "hardCap": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            }
-          }
-        },
-        "formation": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "dryRun": {
-              "type": "boolean"
-            },
-            "ttlHours": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "minMemorySupport": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10
-            },
-            "minClusterSize": {
-              "type": "integer",
-              "minimum": 2,
-              "maximum": 50
-            },
-            "minPromotionStack": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 20
-            },
-            "maxItemsPerRun": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 10
-            },
-            "maxEvidenceChars": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            }
-          }
-        },
-        "evaluation": {
-          "type": "object",
-          "properties": {
-            "dryRun": {
-              "type": "boolean"
-            },
-            "windowHours": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "minAppliesForActive": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "contestRate": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "counterevidenceWeight": {
-              "type": "number",
-              "exclusiveMinimum": 0
-            },
-            "strengthenMinApplies": {
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
@@ -2674,11 +2284,6 @@
               "exclusiveMinimum": 0,
               "maximum": 32
             },
-            "coreMaxTokens": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
             "scenarioMaxItems": {
               "type": "integer",
               "exclusiveMinimum": 0,
@@ -2691,29 +2296,6 @@
             },
             "trialVisible": {
               "type": "boolean"
-            }
-          }
-        },
-        "govern": {
-          "type": "object",
-          "properties": {
-            "dryRun": {
-              "type": "boolean"
-            },
-            "zeroApplyIdleMs": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "priorityDecayStep": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "priorityFloor": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
             }
           }
         }

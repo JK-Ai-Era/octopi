@@ -53,7 +53,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 Notes:
 
 - **order ≠ priority**: order decides left-to-right position in the system prompt; priority decides who is retained first when the total budget is insufficient.
-- **defaultShare**: historical reference values; they **no longer** drive Assembler quotas. For a per-layer limit, configure `contextAssembler.layerShares` (hard cap).
+- **defaultShare**: historical reference values; they **no longer** drive Assembler quotas. For a per-layer limit, configure `context.contextAssembler.layerShares` (hard cap).
 - **runtime** is product layer 7 (system side, owned by Run); it absorbs the Runner's existing `injectedContext` (session tasks / subsystem guidance), sits near the conversation side; it is **not** Information.
 - **placement (E8)**: layers declare `placement: 'system' | 'snapshot'` (default `'system'`). Query-dependent picks (Memory / Cognition / Wisdom) and per-run dynamic injection (Runtime: datetime / tasks / guidance) are `'snapshot'`; stable fragments (Persona / Skill / Knowledge catalog / Runtime anchors: workspace / root instructions) stay `'system'`. `'snapshot'` layers assemble into the per-turn `<turn_context>` **inside that turn’s user message** (`<turn_start id>`), never into the system prompt (constitution E8: cache-stable prefix + full-replay history).
 
@@ -242,7 +242,7 @@ process-wide sink serves every session that shares a provider.
 - Builder can inject `wisdomStore` / `cognitionStore`; **`wireAgentBuilder` (shared by config-bridge / Gateway / createAgent)** mounts Memory/Wisdom/Cognition on the agent-home `AgentDatabase` and discovers `skills/` (sole discover entry); Gateway layers Knowledge catalog / tools on top
 - Gateway sets `builder.agentHome(home)` + `builder.agentId(id)` for the agent; Memory SQLite (agent.db) hangs on the agent home; **no** extract-to-disk directory
 - Default `createDefaultSystemPromptAssembler` registers Wisdom / Cognition layers when their dependencies exist
-- `octopi.json` → `contextAssembler.includeLayerPreview` can write layer previews into the manifest (Web context panel)
+- `octopi.json` → `context.contextAssembler.includeLayerPreview` can write layer previews into the manifest (Web context panel)
 - `GET /api/v1/agents/:id/context/health` exposes store counts (data-plane health)
 - Knowledge no longer uses an in-process proposition store; catalog / indexes / grounding see `docs/knowledge.md`
 

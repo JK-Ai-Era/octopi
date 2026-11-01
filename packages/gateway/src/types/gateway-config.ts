@@ -81,8 +81,7 @@ export interface GatewayConfig {
   };
   /** 产品 Observer 通道（Run 观测；生产可 summary/off） */
   observer?: import('@octopi-agent/engine/harness/observability/observer/types.js').ObserverConfig;
-  /** system prompt 七层装配器调参（preview / content / budget ratio） */
-  contextAssembler?: import('@octopi-agent/engine/config.js').ContextAssemblerConfig;
+  /** context 域（constitution / contextAssembler；唯一声明面，与 config-bridge 同源） */
   context?: import('@octopi-agent/engine/config.js').HarnessConfig['context'];
   /** contextEngine 段（主动压缩 / 老化 / 工作目标）；与 config-bridge 同源 */
   contextEngine?: import('@octopi-agent/engine/config.js').ContextEngineConfig;
@@ -90,7 +89,6 @@ export interface GatewayConfig {
   runGuard?: import('@octopi-agent/engine/config.js').RunGuardJsonConfig;
   /** security 段；与 config-bridge 同源 */
   security?: import('@octopi-agent/engine/config.js').HarnessConfig['security'];
-  constitution?: import('@octopi-agent/engine/config.js').ConstitutionConfig;
   memory?: import('@octopi-agent/engine/config.js').HarnessConfig['memory'];
   /** 子系统框架配置（审计目录 / allow / deny）；与 config-bridge 同源 */
   subsystems?: import('@octopi-agent/engine/config.js').HarnessConfig['subsystems'];

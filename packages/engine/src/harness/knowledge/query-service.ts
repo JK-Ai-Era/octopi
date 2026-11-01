@@ -23,6 +23,10 @@ import {
   type KnowledgeJobControlState,
 } from './job-control-state.js';
 import { KnowledgeHitLog, type PromotionCandidate } from './hit-log.js';
+import type {
+  KnowledgeBootRetriever,
+  KnowledgeBootEmbed,
+} from './boot-config.js';
 
 export interface QueryIdentity {
   tenantId?: string;
@@ -194,7 +198,7 @@ export interface KnowledgeQueryService {
   isSourceOwner(sourceId: string, gatewayId: string): Promise<boolean>;
   ready(): Promise<ReadySnapshot>;
   listJobs(query: ListJobsQuery): Promise<Array<Record<string, unknown>>>;
-  promotionCandidates(): Promise<PromotionCandidate[]>;
+  promotionCandidates(opts?: { minSessions?: number; minHits?: number }): Promise<PromotionCandidate[]>;
   dispose(): Promise<void> | void;
 }
 
@@ -553,8 +557,8 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
       .all(...(args as never[]), limit) as Array<Record<string, unknown>>;
   }
 
-  async promotionCandidates(): Promise<PromotionCandidate[]> {
-    return new KnowledgeHitLog(this.deps.db).promotionCandidates();
+  async promotionCandidates(opts?: { minSessions?: number; minHits?: number }): Promise<PromotionCandidate[]> {
+    return new KnowledgeHitLog(this.deps.db).promotionCandidates(opts);
   }
 
   dispose(): void {
@@ -595,6 +599,10 @@ export async function createKnowledgeQueryService(opts: {
   /** Worker 角色：meta=列表/控制面，search=检索/catalog，all=单 Worker 全量 */
   role?: QueryWorkerRole;
   queryTimeoutMs?: number;
+  /** 向量化开关（embed.enabled=false 时检索侧不建 embedding provider，不外发 query embed） */
+  embed?: KnowledgeBootEmbed | null;
+  /** 检索调参（透传进 Worker 的 KnowledgeRetriever） */
+  retriever?: KnowledgeBootRetriever | null;
 }): Promise<KnowledgeQueryService> {
   if (opts.mode === 'local' || opts.dbPath === ':memory:') {
     if (!opts.local) throw new Error('local query service requires local deps');
@@ -607,5 +615,7 @@ export async function createKnowledgeQueryService(opts: {
     sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
     role: opts.role ?? 'all',
     queryTimeoutMs: opts.queryTimeoutMs,
+    embed: opts.embed ?? null,
+    retriever: opts.retriever ?? null,
   });
 }

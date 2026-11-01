@@ -54,7 +54,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 说明：
 
 - **order ≠ priority**：order 决定在 system prompt 中的先后；priority 决定总预算不够时谁先留下。
-- **defaultShare**：历史参考值，**不再**驱动 Assembler 配额；需要单层限制时配置 `contextAssembler.layerShares`（硬顶）。
+- **defaultShare**：历史参考值，**不再**驱动 Assembler 配额；需要单层限制时配置 `context.contextAssembler.layerShares`（硬顶）。
 - **runtime** 是产品八层第 7 层（system 侧，归属 Run），收编现有 Runner 的 `injectedContext`（会话任务 / 子系统 guidance），靠近对话侧；**不是** Information。
 - **placement（E8）**：层声明 `placement: 'system' | 'snapshot'`（缺省 `'system'`）。query 相关择取（Memory / Cognition / Wisdom）与每 run 动态注入（Runtime：datetime / tasks / guidance）为 `'snapshot'`；稳定片段（Persona / Skill / Knowledge catalog / Runtime 锚点：workspace / root instructions）留 `'system'`。`'snapshot'` 层装配进本轮用户消息（`<turn_start id>`）内的 **`<turn_context>`**——**绝不**进 system prompt（宪法 E8：缓存稳定前缀 + 历史全回放）。
 
@@ -238,7 +238,7 @@ dump **默认关闭**（写盘量 ≈ 请求字节 × 每轮调用次数）；`m
 - Builder 可注入 `wisdomStore` / `cognitionStore`；**`wireAgentBuilder`（config-bridge / Gateway / createAgent 共用）**在 agent home 的 `AgentDatabase` 上挂 Memory/Wisdom/Cognition，并 discover `skills/`（唯一 discover 出口）；Gateway 叠加 Knowledge catalog / tools
 - Gateway 为 agent 设置 `builder.agentHome(home)` + `builder.agentId(id)`，Memory SQLite（agent.db）挂在 agent home；**无** extract 落盘目录
 - 默认 `createDefaultSystemPromptAssembler` 在依赖存在时注册 Wisdom / Cognition 层
-- `octopi.json` → `contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）
+- `octopi.json` → `context.contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）
 - `GET /api/v1/agents/:id/context/health` 暴露 store 计数（数据面健康）
 - Knowledge 不再使用进程内命题 Store；catalog / 索引 / grounding 见 `docs/knowledge.md`
 

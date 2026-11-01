@@ -76,7 +76,7 @@ Knowledge 数据面是 **独立 HTTP Service**（唯一写者），不是 Gatewa
 - **契约**（内部规格，不对外）：token → `(tenantId, gatewayId)`；业务键不从 body 伪造
 - **装配**：`knowledge.service.manageLocal`（默认 `true`）→ 本机 **fork 子进程**拉起 Service，缺省端口 **18280**；`manageLocal: false` + `baseUrl` → 只连远程；二者皆无 → 知识面 `disabled`
 - **单写者**：`knowledge.db.writer.lock`（由 **Service 进程**持有，不是 Gateway）
-- **状态**：`ready` / `degraded` / `disabled`（Service 起不来时可感知；`knowledge.required` 可 fail-closed）
+- **状态**：`ready` / `degraded` / `disabled`（Service 起不来时可感知；`knowledge.required` fail-closed 规划中**暂未生效**——见 KNOWN-ISSUES）
 
 #### 2.1.1 进程内线程边界（勿把重活塞回主线程）
 
@@ -257,7 +257,6 @@ Tier 3  Full        「原文」                knowledge_read
 {
   "knowledge": {
     "recall": "hybrid",
-    "required": false,
     "service": {
       "manageLocal": true,
       "port": 18280
@@ -273,8 +272,11 @@ Tier 3  Full        「原文」                knowledge_read
       "maxEntries": 10,
       "autoDescribe": true
     },
+    "embed": {
+      "enabled": true,
+      "embedSecretPolicy": "redact"
+    },
     "index": {
-      "embedding": true,
       "hybridKeyword": true
     }
   },
@@ -290,15 +292,22 @@ Tier 3  Full        「原文」                knowledge_read
 | `service.baseUrl` / `token` | 远程 Knowledge Service（`manageLocal: false` 时必填 baseUrl） |
 | `service.manageLocal` | 默认 `true`：本机拉起 Service；`false` 只连 `baseUrl` |
 | `service.port` | manageLocal 监听端口（缺省 **18280**；测试可用 `0`） |
-| `required` | `true` 时 Knowledge Service 不可用则 fail-closed |
+| `service.timeoutMs` | Service 请求超时（写路径；读路径 `12s`） |
+| `service.connectTimeoutMs` | manageLocal 启动握手等待（fork→ready，缺省 **30s**）；远程模式无独立连接阶段 |
+| `required` | **暂未生效**（无消费方，KNOWN-ISSUES 跟踪）——规划语义：Knowledge Service 不可用则 fail-closed |
 | `recall` | 内容召回模式（见 §5） |
-| `autoInject.*` | 注入门槛、条数、预算 |
-| `catalog.*` | system 目录条数、自动描述开关 |
-| `index.*` | 是否 embedding / 关键词腿 / 同步与并发 |
+| `autoInject.*` | 注入门槛（`minScore`/`minCoverage` 走检索侧）、条数、预算 |
+| `keywordWeight` | 关键词腿混合融合权重（检索侧） |
+| `hint.minScore` | hintable 命中最低分（检索侧） |
+| `catalog.*` | system 目录条数、自动描述开关（`false` = 索引稳定后不生成描述） |
+| `embed.*` | 向量化开关、批/限速/并发、外发密钥策略（v0.98.11 前为 `index.embedding` / `index.phaseB.*` / `index.embedSecretPolicy`） |
+| `index.*` | 关键词腿开关、ingest 队列深度、按格式文件限额 |
+| `load.*` | 解析并发、watch 防抖、磁盘水位告警 |
 | `promotion.metrics` | 使用计量阈值（供后续提升信号，**不**直接写 Memory） |
+| `promotion.stewardOnConverge` | `false` = 不产出晋升候选 |
 | `attachments.*` | 会话附件限额与注入（`inject.intent` / `fullTextMaxChars`）；见 OP-15 规格 |
 
-文档抽取配置在 **`documents.*`**（与 Knowledge worker / Gateway **同源** `createDocumentPortFromConfig`）：`extract.timeoutMs/maxFileBytes`、`legacy.converter=soffice` + `sofficePath/cacheDir/cacheMaxBytes/maxInputBytes`。
+文档抽取配置在 **`documents.*`**（与 Knowledge worker / Gateway **同源** `createDocumentPortFromConfig`）：`extract.backend`（`auto`|`t0-only` 档位钉死）、`extract.timeoutMs/maxFileBytes`、`legacy.converter=soffice` + `sofficePath/cacheDir/cacheMaxBytes/maxInputBytes`。
 
 完整键位见 `octopi.schema.json` 与 `octopi.example.json`。
 

@@ -3331,25 +3331,9 @@ export class Gateway {
       this.knowledgeRuntimePromise = (async () => {
         const { GatewayKnowledgeRuntime } = await import('./knowledge-runtime.js');
         const rt = new GatewayKnowledgeRuntime();
-        const kn = this.config.knowledge as
-          | {
-              service?: {
-                baseUrl?: string;
-                token?: string;
-                manageLocal?: boolean;
-                timeoutMs?: number;
-              };
-              embed?: {
-                enabled?: boolean;
-                embedBatch?: number;
-                embedMinIntervalMs?: number;
-                embedConcurrency?: number;
-                embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-              };
-            }
-          | undefined;
+        const kn = this.config.knowledge;
         const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
-        const { resolveKnowledgePaths } = await import(
+        const { resolveKnowledgePaths, knowledgeTuningFromConfig } = await import(
           '@octopi-agent/engine/harness/knowledge/index.js'
         );
         const paths = resolveKnowledgePaths(getOctopiHome());
@@ -3358,12 +3342,15 @@ export class Gateway {
           embedding: this.config.embedding,
         };
         const embForVec = this.config.embedding as { sqliteVecExtensionPath?: string } | undefined;
+        const tuning = knowledgeTuningFromConfig(this.config.knowledge);
         await rt.start(kn?.service, {
           dataDir: paths.root ?? paths.dbPath.replace(/[/\\][^/\\]+$/, ''),
           gatewayId: process.env.OCTOPI_GATEWAY_ID ?? 'gw-local',
           documentConfig: this.config.documents ?? null,
           embeddingModels,
-          embed: kn?.embed,
+          embed: tuning.embed,
+          ingest: tuning.ingest,
+          retriever: tuning.retriever,
           ...(embForVec?.sqliteVecExtensionPath
             ? { sqliteVecExtensionPath: embForVec.sqliteVecExtensionPath }
             : {}),
@@ -3881,13 +3868,19 @@ export class Gateway {
   }
 
   /**
-   * 提升候选（阈值当前为 hit-log 代码内默认；knowledge.promotion.metrics 配置面未接线）
+   * 提升候选（阈值来自 knowledge.promotion.metrics；stewardOnConverge=false 不产出）
    */
   async getKnowledgePromotionCandidates(): Promise<
     import('@octopi-agent/engine/harness/knowledge/hit-log.js').PromotionCandidate[]
   > {
+    const promotion = this.config.knowledge?.promotion;
+    // stewardOnConverge=false 不产出候选（v0.51 collectOnConverge 语义：避免假配置）
+    if (promotion?.stewardOnConverge === false) return [];
     const client = await this.getKnowledgeClient();
-    return (await client.promotionCandidates()) as import('@octopi-agent/engine/harness/knowledge/hit-log.js').PromotionCandidate[];
+    return (await client.promotionCandidates({
+      minSessions: promotion?.metrics?.minSessions,
+      minHits: promotion?.metrics?.minHits,
+    })) as import('@octopi-agent/engine/harness/knowledge/hit-log.js').PromotionCandidate[];
   }
 
   /**
@@ -3955,52 +3948,10 @@ export class Gateway {
     };
   }
 
-  /** 索引稳定后写 generatedDescription；长任务不靠 idle 超时 */
-  private async describeAfterIndexIdle(sourceId: string): Promise<void> {
-    try {
-      // 兜底：若本源已无队列（增量小文件）可立即描述；否则等 onSourceSettled
-      await this.maybeAutoDescribe(sourceId);
-    } catch {
-      /* describe 失败不影响索引 */
-    }
-  }
-
-  /** 索引稳定后生成 generatedDescription（Service 启发式 / LLM 由 Service 配置） */
-  private async maybeAutoDescribe(sourceId: string): Promise<void> {
-    await this.autoDescribeKnowledgeSource(sourceId);
-  }
-
+  /** 手动触发 describe（REST → Service 生成 generatedDescription；自动描述由 Service 索引稳定钩子驱动） */
   async autoDescribeKnowledgeSource(sourceId: string): Promise<void> {
     const client = await this.getKnowledgeClient();
     await client.describeSource(sourceId);
-  }
-
-  /** 有可用 LLM 时构造 describe 端口；无则走启发式 */
-  private buildKnowledgeDescribePort():
-    | import('@octopi-agent/engine/harness/knowledge/describe.js').KnowledgeDescribePort
-    | undefined {
-    const provider = [...this.providers.values()][0];
-    if (!provider) return undefined;
-    return async ({ displayName, kind, location, sample }) => {
-      const res = await provider.chat({
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Write one short purpose line for a knowledge corpus catalog. ' +
-              'Say WHAT it covers and WHEN to search it (typical questions). ' +
-              'Plain text only, no list markers, max 120 words.',
-          },
-          {
-            role: 'user',
-            content: `name: ${displayName}\ntype: ${kind}\nlocation: ${location}\n\nsample:\n${sample}`,
-          },
-        ],
-        temperature: 0.2,
-        maxTokens: 200,
-      });
-      return res.content ?? '';
-    };
   }
 
   /**
@@ -5179,9 +5130,9 @@ export class Gateway {
       },
       contextEngineConfig: this.config.contextEngine,
       contextAssemblerConfig:
-        this.config.context?.contextAssembler ?? this.config.contextAssembler,
+        this.config.context?.contextAssembler,
       constitutionConfig:
-        this.config.context?.constitution ?? this.config.constitution,
+        this.config.context?.constitution,
       memoryConfig: this.config.memory,
       cognitionConfig: this.config.cognition,
       wisdomConfig: this.config.wisdom,

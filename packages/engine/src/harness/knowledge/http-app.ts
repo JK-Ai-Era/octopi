@@ -8,6 +8,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { matchKnowledgeToken } from './http-bridge.js';
+import { promotionThresholdsFromParams } from './http-params.js';
 import type { KnowledgeQueryService, QueryIdentity } from './query-service.js';
 import type { KnowledgeWriteService, WriteIdentity } from './writer-service.js';
 
@@ -737,8 +738,12 @@ export class KnowledgeHttpApp {
       json(res, 200, { ok: true, data: detail.jobControl });
     });
 
-    this.route('GET', '/v1/promotion-candidates', async (_req, res) => {
-      json(res, 200, { ok: true, data: await this.query().promotionCandidates() });
+    this.route('GET', '/v1/promotion-candidates', async (req, res) => {
+      const url = new URL(req.url ?? '/', 'http://local');
+      json(res, 200, {
+        ok: true,
+        data: await this.query().promotionCandidates(promotionThresholdsFromParams(url.searchParams)),
+      });
     });
   }
 

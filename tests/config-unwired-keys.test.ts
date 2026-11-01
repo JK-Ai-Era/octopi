@@ -16,29 +16,16 @@ describe('detectUnwiredConfigKeys', () => {
       models: { mode: 'replace' },
       plugins: { loadPaths: ['./p'], configs: { myplug: { a: 1 } } },
       knowledge: {
+        required: true,
         attachments: {
           inject: { recallTopK: 5, inventory: true },
           tools: { attachmentsRootReadOnly: true },
         },
       },
       gateway: { debugRest: true },
+      contextEngine: { enableLLMSummary: true },
+      summary: { cache: { backend: 'file', dir: '/tmp/s' } },
       session: { reset: { daily: true }, maintenance: { prune: true }, typo: 1 },
-      wisdom: {
-        formation: { ttlHours: 24 },
-        evaluation: { windowHours: 12 },
-        govern: { dryRun: true },
-        capacity: { softCap: 50 },
-        injection: { coreMaxTokens: 400 },
-      },
-      cognition: {
-        conceptualize: { onMemoryWrite: true },
-        plasticity: { eta: 0.1 },
-        consolidation: { ttlHours: 1 },
-        retrieval: { depth: 2 },
-        capacity: { warnNodes: 100, warnEdges: 200 },
-        identity: { candidateBandLo: 0.2 },
-        relations: { requireCue: true, allowCooccurEscalation: false },
-      },
     };
     const detected = detectUnwiredConfigKeys(raw);
     for (const expected of [
@@ -47,25 +34,15 @@ describe('detectUnwiredConfigKeys', () => {
       'knowledge.attachments.inject.recallTopK',
       'knowledge.attachments.inject.inventory',
       'knowledge.attachments.tools.attachmentsRootReadOnly',
+      'knowledge.required',
+      'contextEngine.enableLLMSummary',
+      'summary.cache.backend',
+      'summary.cache.dir',
       'plugins.configs',
       'gateway.debugRest',
       'session.reset',
       'session.maintenance',
       'session.typo',
-      'wisdom.formation',
-      'wisdom.evaluation',
-      'wisdom.govern',
-      'wisdom.capacity.softCap',
-      'wisdom.injection.coreMaxTokens',
-      'cognition.conceptualize',
-      'cognition.plasticity',
-      'cognition.consolidation',
-      'cognition.retrieval',
-      'cognition.capacity.warnNodes',
-      'cognition.capacity.warnEdges',
-      'cognition.identity.candidateBandLo',
-      'cognition.relations.requireCue',
-      'cognition.relations.allowCooccurEscalation',
     ]) {
       expect(detected, `missing unwired report: ${expected}`).toContain(expected);
     }
@@ -95,9 +72,9 @@ describe('detectUnwiredConfigKeys', () => {
 
   it('reports block rules once even with many nested keys', () => {
     const raw = {
-      wisdom: { formation: { ttlHours: 1, minClusterSize: 2, maxItemsPerRun: 3 } },
+      compact: { defaultProtectHead: 1, defaultProtectTail: 2, defaultTargetTokens: 3 },
     };
-    expect(detectUnwiredConfigKeys(raw)).toEqual(['wisdom.formation']);
+    expect(detectUnwiredConfigKeys(raw)).toEqual(['compact']);
   });
 
   it('empty / non-object config reports nothing', () => {

@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { resolveWorkerUrl } from '../../worker-path.js';
 import type { KnowledgeServiceToken } from './http-app.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
+import type { KnowledgeBootEmbed, KnowledgeBootIngest, KnowledgeBootRetriever } from './boot-config.js';
 
 export interface KnowledgeServiceProcessOptions {
   dbPath: string;
@@ -26,13 +27,13 @@ export interface KnowledgeServiceProcessOptions {
   host?: string;
   tokens: KnowledgeServiceToken[];
   documentConfig?: DocumentCapabilityConfig | null;
-  embed?: {
-    enabled?: boolean;
-    embedBatch?: number;
-    embedMinIntervalMs?: number;
-    embedConcurrency?: number;
-    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-  };
+  embed?: KnowledgeBootEmbed;
+  /** Ingest 调参（knowledge.load / index.queue / index.files） */
+  ingest?: KnowledgeBootIngest;
+  /** 检索调参（knowledge.keywordWeight / autoInject / hint / index.hybridKeyword） */
+  retriever?: KnowledgeBootRetriever;
+  /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
+  autoDescribe?: boolean;
   sqliteVecExtensionPath?: string;
   embeddingModels?: {
     providers?: Record<string, unknown>;
@@ -68,6 +69,30 @@ function childNodeEnv(): NodeJS.ProcessEnv {
 }
 
 /**
+ * 组装 boot 文件内容 — Gateway 调参面 → Service 子进程的唯一交接面（纯函数，可单测锁 hop）。
+ *
+ * @param opts - 进程启动选项（与 startKnowledgeService 同构 + embeddingModels）
+ * @returns boot JSON 对象（与 knowledge-serve-child 的 BootFile 同构）
+ */
+export function buildKnowledgeServiceBootFile(
+  opts: KnowledgeServiceProcessOptions,
+): Record<string, unknown> {
+  return {
+    dbPath: opts.dbPath,
+    host: opts.host,
+    port: opts.port ?? 18280,
+    tokens: opts.tokens,
+    documentConfig: opts.documentConfig ?? null,
+    embed: opts.embed,
+    ingest: opts.ingest,
+    retriever: opts.retriever,
+    autoDescribe: opts.autoDescribe,
+    sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+    embeddingModels: opts.embeddingModels ?? null,
+  };
+}
+
+/**
  * 在独立子进程启动 Knowledge HTTP Service。
  *
  * @param opts - 与 startKnowledgeService 同构 + embeddingModels（子进程内重建 provider）
@@ -79,20 +104,7 @@ export async function startKnowledgeServiceProcess(
   const entry = fileURLToPath(resolveWorkerUrl('./knowledge-serve-child.js', import.meta.url));
   const bootDir = await mkdtemp(join(tmpdir(), 'octopi-kn-boot-'));
   const bootPath = join(bootDir, 'boot.json');
-  await writeFile(
-    bootPath,
-    JSON.stringify({
-      dbPath: opts.dbPath,
-      host: opts.host,
-      port: opts.port ?? 18280,
-      tokens: opts.tokens,
-      documentConfig: opts.documentConfig ?? null,
-      embed: opts.embed,
-      sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
-      embeddingModels: opts.embeddingModels ?? null,
-    }),
-    'utf8',
-  );
+  await writeFile(bootPath, JSON.stringify(buildKnowledgeServiceBootFile(opts)), 'utf8');
 
   // @types/node 的 ForkOptions 未声明 windowsHide 等字段，运行时有效
   // execPath 必须保持 process.execPath：Electron 下换捆绑 node 会切断 IPC

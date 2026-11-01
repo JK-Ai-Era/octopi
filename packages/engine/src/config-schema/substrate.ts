@@ -17,6 +17,7 @@ export const KnowledgeConfigSchema = z.object({
       /** manageLocal 本地监听端口（缺省 18280） */
       port: z.number().int().positive().max(65535).optional(),
       timeoutMs: z.number().int().positive().optional(),
+      /** Service 连接建立超时（manageLocal 启动握手等待，缺省 30s）；远程模式无独立连接阶段，请求由 timeoutMs 约束 */
       connectTimeoutMs: z.number().int().positive().optional(),
     })
     .optional(),
@@ -54,28 +55,27 @@ export const KnowledgeConfigSchema = z.object({
       skipIfUserTokensBelow: z.number().int().min(0).optional(),
     })
     .optional(),
-  index: z
+  /** Phase B 向量化（v0.98.11 起取代 index.phaseB / index.embedding / index.embedSecretPolicy） */
+  embed: z
     .object({
-      embedding: z.boolean().optional(),
-      hybridKeyword: z.boolean().optional(),
+      /** false = 纯关键词索引（不外发 embed）；缺省 true（仍受 models.embedding 是否配置约束） */
+      enabled: z.boolean().optional(),
+      /** embed 批大小（默认 32） */
+      embedBatch: z.number().int().positive().optional(),
+      /** embed 限速：相邻批次最小间隔 ms（默认 0 不限速） */
+      embedMinIntervalMs: z.number().int().nonnegative().optional(),
+      /** embed 并发（默认 4；与 parse 分槽） */
+      embedConcurrency: z.number().int().positive().optional(),
       /**
        * embedding 外发前敏感形态策略（默认 redact）
        * allow=原文；redact=脱敏后 embed；skip=命中不写向量
        */
       embedSecretPolicy: z.enum(['allow', 'redact', 'skip']).optional(),
-      phaseA: z
-        .object({
-          concurrency: z.number().int().positive().optional(),
-          debounceMs: z.number().int().nonnegative().optional(),
-        })
-        .optional(),
-      phaseB: z
-        .object({
-          embedBatch: z.number().int().positive().optional(),
-          concurrency: z.number().int().positive().optional(),
-          ratePerMin: z.number().positive().optional(),
-        })
-        .optional(),
+    })
+    .optional(),
+  index: z
+    .object({
+      hybridKeyword: z.boolean().optional(),
       queue: z.object({ maxDepth: z.number().int().positive().optional() }).optional(),
       /** 索引文件限额（按格式分级；缺省见 DEFAULT_KNOWLEDGE_FILE_LIMITS） */
       files: z
@@ -109,6 +109,8 @@ export const KnowledgeConfigSchema = z.object({
   load: z
     .object({
       parseConcurrency: z.number().int().positive().optional(),
+      /** fs watch debounce ms（默认 800；原 index.phaseA.debounceMs） */
+      debounceMs: z.number().int().nonnegative().optional(),
       diskWatermarkAlert: z.boolean().optional(),
     })
     .optional(),
@@ -130,13 +132,6 @@ export const KnowledgeConfigSchema = z.object({
       maxFileBytes: z.number().int().positive().optional(),
       maxTotalBytes: z.number().int().positive().optional(),
       allowedExtensions: z.array(z.string()).optional(),
-      parse: z
-        .object({
-          extract: z.boolean().optional(),
-          keywordIndex: z.boolean().optional(),
-          embedding: z.enum(['off', 'lazy', 'on-upload']).optional(),
-        })
-        .optional(),
       inject: z
         .object({
           fullTextMaxChars: z.number().int().positive().optional(),
@@ -250,120 +245,44 @@ export const MemoryConfigSchema = z.object({
     .optional(),
 });
 
-/** Cognition 概念图谱（arch/cognition-graph-formation.md） */
+/** Cognition 概念图谱（arch/cognition-graph-formation.md）；steward 调参面在子系统 config.yaml metadata.config */
 export const CognitionConfigSchema = z.object({
   enabled: z.boolean().optional(),
-  conceptualize: z
-    .object({
-      onMemoryWrite: z.boolean().optional(),
-      onSessionEnd: z.boolean().optional(),
-      maxNodesPerProposition: z.number().int().positive().max(20).optional(),
-      maxEdgesPerProposition: z.number().int().positive().max(40).optional(),
-    })
-    .optional(),
   relations: z
     .object({
-      requireCue: z.boolean().optional(),
       causesMinIndependentMemories: z.number().int().positive().min(1).max(10).optional(),
-      allowCooccurEscalation: z.literal(false).optional(),
     })
     .optional(),
   identity: z
     .object({
       mergeThreshold: z.number().min(0).max(1).optional(),
-      candidateBandLo: z.number().min(0).max(1).optional(),
       candidateBandHi: z.number().min(0).max(1).optional(),
-    })
-    .optional(),
-  plasticity: z
-    .object({
-      eta: z.number().gt(0).lt(1).optional(),
-      deltaRetrieval: z.number().gt(0).lt(1).optional(),
-      decayPerDay: z
-        .object({
-          related: z.number().min(0).lt(1).optional(),
-          causes: z.number().min(0).lt(1).optional(),
-          part_of: z.number().min(0).lt(1).optional(),
-          opposes: z.number().min(0).lt(1).optional(),
-          similar_to: z.number().min(0).lt(1).optional(),
-          evolves_to: z.number().min(0).lt(1).optional(),
-        })
-        .optional(),
-    })
-    .optional(),
-  consolidation: z
-    .object({
-      debounceMinutes: z.number().int().nonnegative().optional(),
-      ttlHours: z.number().int().positive().optional(),
     })
     .optional(),
   capacity: z
     .object({
-      warnNodes: z.number().int().positive().optional(),
-      warnEdges: z.number().int().positive().optional(),
       stopNodes: z.number().int().positive().optional(),
       stopEdges: z.number().int().positive().optional(),
     })
     .optional(),
-  retrieval: z
-    .object({
-      depth: z.number().int().positive().max(5).optional(),
-      delta: z.number().gt(0).lt(1).optional(),
-      tau: z.number().min(0).max(1).optional(),
-      limit: z.number().int().positive().max(100).optional(),
-    })
-    .optional(),
 });
 
-/** Wisdom 判断范式（arch/wisdom-layer-formation.md） */
+/** Wisdom 判断范式（arch/wisdom-layer-formation.md）；steward 调参面在子系统 config.yaml metadata.config */
 export const WisdomConfigSchema = z.object({
   enabled: z.boolean().optional(),
   capacity: z
     .object({
-      /** 存活面软顶（govern 淘汰）；默认 50 */
-      softCap: z.number().int().positive().optional(),
       /** admit 硬顶；默认 80 */
       hardCap: z.number().int().positive().optional(),
-    })
-    .optional(),
-  formation: z
-    .object({
-      enabled: z.boolean().optional(),
-      dryRun: z.boolean().optional(),
-      ttlHours: z.number().int().positive().optional(),
-      minMemorySupport: z.number().int().positive().min(1).max(10).optional(),
-      minClusterSize: z.number().int().positive().min(2).max(50).optional(),
-      minPromotionStack: z.number().int().positive().min(1).max(20).optional(),
-      maxItemsPerRun: z.number().int().positive().max(10).optional(),
-      maxEvidenceChars: z.number().int().positive().optional(),
-    })
-    .optional(),
-  evaluation: z
-    .object({
-      dryRun: z.boolean().optional(),
-      windowHours: z.number().int().positive().optional(),
-      minAppliesForActive: z.number().int().positive().optional(),
-      contestRate: z.number().min(0).max(1).optional(),
-      counterevidenceWeight: z.number().positive().optional(),
-      strengthenMinApplies: z.number().int().positive().optional(),
     })
     .optional(),
   injection: z
     .object({
       coreMaxItems: z.number().int().positive().max(32).optional(),
-      coreMaxTokens: z.number().int().positive().optional(),
       scenarioMaxItems: z.number().int().positive().max(32).optional(),
       // 0 = 关闭 trial 轮转试用名额（缺省 2）
       trialMaxItems: z.number().int().min(0).max(32).optional(),
       trialVisible: z.boolean().optional(),
-    })
-    .optional(),
-  govern: z
-    .object({
-      dryRun: z.boolean().optional(),
-      zeroApplyIdleMs: z.number().int().positive().optional(),
-      priorityDecayStep: z.number().int().positive().optional(),
-      priorityFloor: z.number().int().nonnegative().optional(),
     })
     .optional(),
 });

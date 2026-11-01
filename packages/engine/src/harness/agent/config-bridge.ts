@@ -147,8 +147,8 @@ export async function buildFromConfig(
   const budgetConfig = config.budgetPolicy;
   const runGuardConfig = config.runGuard;
   const contextEngineConfig = config.contextEngine;
-  const contextAssemblerConfig = config.context?.contextAssembler ?? config.contextAssembler;
-  const constitutionConfig = config.context?.constitution ?? config.constitution;
+  const contextAssemblerConfig = config.context?.contextAssembler;
+  const constitutionConfig = config.context?.constitution;
 
   // 2. 加载子系统（三级搜索路径）
   const subsystemSpecs = await resolveSubsystemSpecs();
@@ -177,6 +177,7 @@ export async function buildFromConfig(
         subsystemAllowlist: config.subsystems?.allowlist,
         subsystemDenylist: config.subsystems?.denylist,
         toolIsolation: config.toolIsolation,
+        effectPolicy: config.effectPolicy,
         sessionIdleExpiryMs: config.session?.idleExpiryMs,
         modelCallConfig: config.modelCall,
         concurrencyConfig: config.concurrency,

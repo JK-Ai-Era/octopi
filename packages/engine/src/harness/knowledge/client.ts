@@ -300,8 +300,18 @@ export class KnowledgeClient {
     );
   }
 
-  promotionCandidates(): Promise<unknown[]> {
-    return this.request('GET', '/v1/promotion-candidates', undefined, undefined, { read: true });
+  promotionCandidates(opts?: { minSessions?: number; minHits?: number }): Promise<unknown[]> {
+    const qs = new URLSearchParams();
+    if (opts?.minSessions != null) qs.set('minSessions', String(opts.minSessions));
+    if (opts?.minHits != null) qs.set('minHits', String(opts.minHits));
+    const search = qs.toString();
+    return this.request(
+      'GET',
+      `/v1/promotion-candidates${search ? `?${search}` : ''}`,
+      undefined,
+      undefined,
+      { read: true },
+    );
   }
 
   describeSource(sourceId: string): Promise<{ generatedDescription: string; source: string }> {

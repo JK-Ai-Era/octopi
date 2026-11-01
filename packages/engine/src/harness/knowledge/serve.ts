@@ -15,6 +15,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { Worker } from 'node:worker_threads';
 import { resolveWorkerUrl } from '../../worker-path.js';
 import type { KnowledgeServiceToken } from './http-app.js';
+import type {
+  KnowledgeBootEmbed,
+  KnowledgeBootIngest,
+  KnowledgeBootRetriever,
+} from './boot-config.js';
 import {
   matchKnowledgeToken,
   type HttpBridgeOutbound,
@@ -37,13 +42,13 @@ export interface KnowledgeServeOptions {
   documentConfig?: import('../capabilities/document/factory.js').DocumentCapabilityConfig | null;
   /** 测试 stub（闭包无法进 Worker）；生产用 embeddingModels */
   testEmbeddingStub?: boolean;
-  embed?: {
-    enabled?: boolean;
-    embedBatch?: number;
-    embedMinIntervalMs?: number;
-    embedConcurrency?: number;
-    embedSecretPolicy?: 'allow' | 'redact' | 'skip';
-  } | null;
+  embed?: KnowledgeBootEmbed | null;
+  /** Ingest 调参（knowledge.load / index.queue / index.files） */
+  ingest?: KnowledgeBootIngest | null;
+  /** 检索调参（knowledge.keywordWeight / autoInject / hint / index.hybridKeyword） */
+  retriever?: KnowledgeBootRetriever | null;
+  /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
+  autoDescribe?: boolean;
   sqliteVecExtensionPath?: string;
   embeddingModels?: {
     providers?: Record<string, unknown>;
@@ -76,6 +81,9 @@ async function startQueryWorker(opts: {
   role: QueryWorkerRole;
   sqliteVecExtensionPath?: string;
   embeddingModels?: KnowledgeServeOptions['embeddingModels'];
+  /** 向量化开关（embed.enabled=false 时检索侧不建 embedding provider，不外发 query embed） */
+  embed?: KnowledgeBootEmbed | null;
+  retriever?: KnowledgeBootRetriever | null;
 }): Promise<KnowledgeQueryService> {
   const { createKnowledgeQueryService } = await import('./query-service.js');
   return createKnowledgeQueryService({
@@ -83,6 +91,8 @@ async function startQueryWorker(opts: {
     mode: 'worker',
     role: opts.role,
     embeddingModels: opts.embeddingModels ?? null,
+    embed: opts.embed ?? null,
+    retriever: opts.retriever ?? null,
     ...(opts.sqliteVecExtensionPath
       ? { sqliteVecExtensionPath: opts.sqliteVecExtensionPath }
       : {}),
@@ -111,6 +121,9 @@ export async function startKnowledgeService(
       sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
       embeddingModels: opts.embeddingModels ?? null,
       embed: opts.embed ?? null,
+      ingest: opts.ingest ?? null,
+      retriever: opts.retriever ?? null,
+      autoDescribe: opts.autoDescribe,
       testEmbeddingStub: opts.testEmbeddingStub ?? false,
       // 文件库：纯读在主线程 Meta/Search；Engine 只做写编排 + 残留短读
       skipQueryWorker: useSplitQuery,
@@ -153,12 +166,16 @@ export async function startKnowledgeService(
           role: 'meta',
           sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
           embeddingModels: opts.embeddingModels,
+          embed: opts.embed,
+          retriever: opts.retriever,
         }),
         startQueryWorker({
           dbPath: opts.dbPath,
           role: 'search',
           sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
           embeddingModels: opts.embeddingModels,
+          embed: opts.embed,
+          retriever: opts.retriever,
         }),
       ]);
     } catch (e) {

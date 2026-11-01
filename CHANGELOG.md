@@ -108,6 +108,39 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.11 (2026-11-02)
+
+### feat(knowledge): 调参面接线 + embed 形状统一到消费侧（配置键审计 2.1/1a 收口）
+
+- **`knowledge.embed.*` 新增为向量化调参唯一声明面**（以 Service 消费形状为准）：`enabled` / `embedBatch` / `embedMinIntervalMs` / `embedConcurrency` / `embedSecretPolicy`。**BREAKING 迁移**：`index.embedding` → `embed.enabled`、`index.embedSecretPolicy` → `embed.embedSecretPolicy`、`index.phaseB.{embedBatch,concurrency,ratePerMin}` → `embed.{embedBatch,embedConcurrency,embedMinIntervalMs}`（`ratePerMin` 为每分钟批次数，等价 `embedMinIntervalMs=ceil(60000/ratePerMin)`）。这些键自 v0.60 拆独立 Knowledge Service 后从未生效（配了不生效），改名无行为损失；旧键现触发 unknown-keys 启动告警。schema 内部重叠一并收敛为单一真相源：`index.phaseA.concurrency` 与 `load.parseConcurrency` 同旋钮双名 → 只留 `load.parseConcurrency`；`index.phaseA.debounceMs` → `load.debounceMs`。
+- **Knowledge 调参面全线接线**（根因：v0.60 Service 拆分时 Gateway→Service 传递线整体丢失；v0.51.4/5 曾全量接线，映射以当时接线代码为准校准）：`load.{parseConcurrency,debounceMs,diskWatermarkAlert}`、`index.queue.maxDepth`、`index.files.*`（→ Ingest 调参块）；`keywordWeight` / `index.hybridKeyword` / `autoInject.{minScore,minCoverage}` / `hint.minScore`（→ Service 侧 KnowledgeRetriever）；`promotion.metrics.{minSessions,minHits}`（→ REST 查询参数 → hit-log 阈值）；`promotion.stewardOnConverge=false` 恢复 v0.51 `collectOnConverge` 语义（不产出晋升候选）；`catalog.autoDescribe=false` 时索引稳定后不再外发 describe。配置→boot 转换点唯一化为 `harness/knowledge/boot-config.ts`（`knowledgeTuningFromConfig`），6 处 inline embed 类型收敛为 `KnowledgeBootEmbed/Ingest/Retriever`。
+- **BREAKING**：`knowledge.attachments.parse.{extract,keywordIndex,embedding}` 删除（声明以来无任何消费方）。
+- `catalog.autoDescribe=false` 闸门加在 **Service 索引稳定钩子**（自动描述的真路径）；gateway 侧 `describeAfterIndexIdle` / `maybeAutoDescribe` / `buildKnowledgeDescribePort` 死链删除（Service 拆分后不可达）。generatedDescription 现为启发式生成（LLM describe 端口待 Service 侧接回，KNOWN-ISSUES 跟踪）。
+- `embed.enabled=false` 同样约束**检索侧**：query worker 不建 embedding provider、query 不外发 embed（split 查询路径此前漏判，由独立评审发现）。
+- **验证**：新增回归测试 `tests/harness/knowledge-boot-config.test.ts`（调参映射 + boot 交接面 hop-lock + promotion 阈值解析 5 用例）；全量测试绿。
+
+### feat(documents): extract.backend 档位路由接线；markitdown/enhanced 预留删除（1b 收口）
+
+- `documents.extract.backend`（`auto`|`t0-only`）接线至 DocumentPort 档位路由：per-call `extractOptions.tier` > 部署缺省 > auto（t0→t1→t2 逐档降级）；`t0-only` = 钉死本地抽取、内容不外发增强/云档（`arch/document-port.md` §7 设计原意；键自 27a0993 起仅声明未接线）。
+- **BREAKING**：`documents.markitdown.*` / `documents.enhanced.*` 删除——两段自 v0.63 起为 schema-only 预留、全史从未有实现；未来 T1/T2 后端落地时按届时需求重新设计配置面（设计稿 §7 与状态行同步）。
+- `documents.legacy.converter: 'remote'` 明确为**值级前瞻预留**（工厂返回 null 回退 `none`），KNOWN-ISSUES EN/ZH 跟踪；`converter` 键本身已接线（`none`/`soffice`）。
+- **验证**：新增 `tests/harness/document-tier-routing.test.ts`（档位优先级 4 用例）；全量测试绿。
+
+### fix(config): connectTimeoutMs 接线；config-bridge 补传顶层 effectPolicy（2.2/3 收口）
+
+- `knowledge.service.connectTimeoutMs` 接线至 manageLocal 启动握手等待（fork→ready，缺省 30s）；远程模式无独立连接阶段，请求由 `timeoutMs` 约束（schema 注释写明语义）。
+- 修复 `buildFromConfig`（config-bridge）静默丢失顶层 `effectPolicy`（宿主默认）：tool-effect-policy.md 拍板「粒度 per-agent 为主、宿主可给默认」，gateway 路径早已接线而库嵌入路径漏传。两路径契约测试 `tests/harness/config-bridge-effect-policy.test.ts` 锁定（宿主默认生效 + per-agent 覆盖优先）。
+
+### refactor(config)!: 顶层 contextAssembler / constitution 简写删除（4 收口）
+
+- **BREAKING**：顶层 `contextAssembler.*` / `constitution.*` 删除，唯一声明面为 `context.contextAssembler.*` / `context.constitution.*`。裁决依据：消费回退一直是 `context.* ?? 顶层`，保留胜出方保证 both-set 配置行为不变；只写顶层的配置现触发 unknown-keys 启动告警，请迁移至 `context.*`。7 处回退链简化（config-bridge / gateway / toGatewayConfig），GatewayConfig 平铺别名字段移除；`octopi.example.json` 与 `docs/architecture{,.zh}.md` 路径同步。
+
+### refactor(config)!: steward 调参键从 octopi.json 摘除（5 收口）
+
+- **BREAKING**：`wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens` 与 `cognition.conceptualize` / `cognition.plasticity` / `cognition.consolidation` / `cognition.retrieval` / `cognition.capacity.{warnNodes,warnEdges}` / `cognition.identity.candidateBandLo` / `cognition.relations.{requireCue,allowCooccurEscalation}` 不再被 octopi.json 接受（此前在该处也从不生效）。steward 调参面在各子系统 `config.yaml` `metadata.config`（前置核实：子系统配置不经该 Zod 校验，摘除安全）。`unwired-keys.ts` 规则表收窄至 7 条；octopi.json 侧消费键不动（`*.enabled`、`wisdom.capacity.hardCap`、`wisdom.injection.{coreMaxItems,scenarioMaxItems,trialMaxItems,trialVisible}`、`cognition.identity.{mergeThreshold,candidateBandHi}`、`cognition.relations.causesMinIndependentMemories`、`cognition.capacity.{stopNodes,stopEdges}`）。
+
+---
+
 ## v0.98.10 (2026-11-01)
 
 ### refactor(compact): remove the CompactEngine summaryPort path (P3 收口)
