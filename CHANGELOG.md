@@ -108,6 +108,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.10 (2026-11-01)
+
+### refactor(compact): remove the CompactEngine summaryPort path (P3 收口)
+
+- 删除 `CompactEngine` 的 `summaryPort` 替代摘要分支（`CompactOptions.summaryPort` / `CreateCompactEngineOptions.summaryPort`、对应代码与两条特性测试）：默认装配从未接线，契约与 `summarizeFn` 交接式路径不对齐（预算硬顶/合并提示/fold 快照语义分裂）——按 2026-11-01 拍板清理删除，中段摘要单一走 `summarizeFn`（落实 arch/summary-compact.md「稳定后废弃双入口」）。**工具侧 `SummaryPort`（`capabilities/summary`，L1/L2 软净化）不受影响**，`summary` 配置段接线照旧。
+- **BREAKING**（公开契约 `@octopi-agent/engine/harness` 导出面）：`CompactOptions.summaryPort` 与 `CreateCompactEngineOptions.summaryPort` 字段移除。**迁移**：只传 `summaryPort` 的宿主必须改为注入 `summarizeFn`（否则中段摘要失效、降级为截断）；同时传两者的宿主注意优先级已变（原先 port 优先于 summarizeFn）。为防静默行为切换，`createCompactEngine` / `compactMessages` / `compactText` 对残留 `summaryPort` 传参 **fail-loud 抛错**（`not_implemented: summaryPort was removed…`），不静默忽略。
+- KNOWN-ISSUES（EN/ZH）同步：移除 summaryPort 边界条目（已收口；v0.98.9 条目指向它的指针至此关闭）；container 后端标注**暂无计划**（2026-11-01 拍板；`docs/process-isolation.md` 的 opt-in 槽位表述同步对齐为"结构保留、未排期"）；sqlite-vec 改写为部署注意行（启动后核验 `stats.sqliteVec=1`）。
+- **验证**：新增 summaryPort 残留传参 fail-loud 测试；compact/summary 能力测试全绿；全量测试绿；lint+typecheck+build 绿；独立评审确认删除边界干净（工具侧 SummaryPort 未受损、summarizeMiddle 签名收窄无损、归因断言覆盖未减）。
+
+---
+
 ## v0.98.9 (2026-11-01)
 
 ### fix(context): auto compaction paths carry a fresh taskSnapshot (F8R-05)

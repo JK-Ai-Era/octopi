@@ -17,7 +17,7 @@
 
 **Session ACL per-tool rights (SEC-2, v0.78.0):** `SessionRights.toolRights` (`allow` / `deny` / `denyCapabilities`) intersects `agents[].tools` and `toolSurface` (narrow-only; deny wins). Enforced at tool listing and `beforeToolCall`. `agents[].maxSessionRights.toolRights` is an L1 ceiling; grant rejects expansions. Factory roles ship unrestricted tool surface; use custom roles for guest/readonly.
 
-**L4 process jail (v0.75.0–0.76.0):** capability contract, supervised spawn, bwrap/Seatbelt, and **shell wired through ProcessSandbox** (`docs/process-isolation.md`). Still open: bundled Windows Job Object / restricted-token helper; container backend. `untrusted` without L4 refuses or degrades via `untrustedAdmission`. Subsystems declaring `boundary.security: sandboxed` are refused at load without L4 (SEC-6 fail-closed, v0.90.9) — on hosts without a jail backend (e.g. Windows today), declare `trusted`/`privileged` explicitly; first-party built-ins do exactly that.
+**L4 process jail (v0.75.0–0.76.0):** capability contract, supervised spawn, bwrap/Seatbelt, and **shell wired through ProcessSandbox** (`docs/process-isolation.md`). Still open: bundled Windows Job Object / restricted-token helper. **Not planned**: container backend (decision 2026-11-01) — the opt-in slot is structurally kept but unscheduled (see `docs/process-isolation.md`). `untrusted` without L4 refuses or degrades via `untrustedAdmission`. Subsystems declaring `boundary.security: sandboxed` are refused at load without L4 (SEC-6 fail-closed, v0.90.9) — on hosts without a jail backend (e.g. Windows today), declare `trusted`/`privileged` explicitly; first-party built-ins do exactly that.
 
 **EffectPolicy default (v0.75.0):** omitting `mode` now means `workspace` (secure-by-default). Scaffolds set `"mode": "host"` explicitly. Deployments that relied on implicit host must add `"effectPolicy": { "mode": "host" }`.
 
@@ -56,7 +56,7 @@ Approval attribution: with `channels.http.apiKey` set, the web surface is creden
 **Still open:**
 
 - **Oversized Office tables**: worker + cancelable timeout; may still `parse_timeout` skip without infinite retry.
-- **sqlite-vec is production-required**: when not loaded, large stores (>50k vectors) **must not JS full-scan**; use neighbor buckets + forced keyword; million-scale requires `stats.sqliteVec=1`. HNSW optional backend is not scheduled yet.
+- **sqlite-vec is production-required — deployment note**: verify `stats.sqliteVec=1` right after startup; when not loaded, large stores (>50k vectors) **must not JS full-scan** — use neighbor buckets + forced keyword; million-scale deployments depend on sqlite-vec being loaded. HNSW optional backend is not scheduled yet.
 - **File size after DROP**: SQLite does not shrink automatically; needs `VACUUM`.
 - **watch may miss events**: reconcile parse-gap scan (~60s) as backstop, non-zero delay.
 - **`running` slot**: UI “tasks” = job count; embed parallelism is lanes within a job.
@@ -87,5 +87,4 @@ The top-level mapping guard checks section-level keys only; these **sub-keys** a
 
 ## Compact summary paths — known boundaries (2026-10, F8 review follow-up)
 
-- **`summaryPort` is outside the F8 handoff contract.** The `CompactEngine` `summaryPort` branch shares only the four-section task text (`HANDOVER_SUMMARY_TASK`); its budget semantics (`policy.budget` hard cap), previous-summary merge hint, and fold/task snapshot injection are governed by the `SummaryExtractor` / `capabilities/summary/executor` contract and are not fully aligned with the `summarizeFn` path. Default wiring does not pass `summaryPort` (manual / proactive / overflow all go through `summarizeFn`); deployments enabling this Port must verify the contract differences themselves.
 - **`context.compact.summarize_fallback` has no web-UI consumer yet.** The event lands in the run timeline (observer `TIMELINE_TYPES`), but `web/runtime/store.ts` / `web/conversation/adapter.ts` have no case for it, so the conversation inspector does not render cache-miss fallbacks.

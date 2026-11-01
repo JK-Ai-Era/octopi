@@ -9,33 +9,9 @@ import { createCompactEngine } from '@octopi-agent/engine/harness/context/capabi
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 import { HeuristicTokenEstimator } from '@octopi-agent/engine/harness/context/token-estimator.js';
 import { createMemorySummaryCache } from '@octopi-agent/engine/harness/context/capabilities/summary/memory-cache.js';
-import { createSummaryPort } from '@octopi-agent/engine/harness/context/capabilities/summary/index.js';
-import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
-}
-
-function mockProvider(content = '{"ok":true}'): ModelProvider {
-  return {
-    name: 'mock',
-    defaultModel: 'm',
-    async chat() {
-      return { content, model: 'm', finishReason: 'stop' as const };
-    },
-    async *stream() {
-      yield { type: 'done' as const };
-    },
-    async isAvailable() {
-      return true;
-    },
-    getModelInfo() {
-      return { name: 'm', contextWindow: 32000 };
-    },
-    getModelInfos() {
-      return [{ name: 'm', contextWindow: 32000 }];
-    },
-  };
 }
 
 describe('createCompactEngine', () => {
@@ -142,20 +118,12 @@ describe('createCompactEngine', () => {
     expect(out.summary ?? '').toContain('dropped');
   });
 
-  it('summaryPort 路径：conversation extract', async () => {
-    const provider = mockProvider('port-summary-text');
-    const port = createSummaryPort({
-      providers: new Map([['mock', provider]]),
-      fallbackProvider: provider,
-    });
-    const engine = createCompactEngine({ summaryPort: port });
-    const messages = Array.from({ length: 8 }, (_, i) => userMsg(`c${i}-` + 'y'.repeat(50)));
-    const out = await engine.compactMessages(messages, {
-      protectHead: 1,
-      protectTail: 1,
-      mode: 'structure_only',
-    });
-    expect(out.summary).toContain('port-summary-text');
+  it('summaryPort 传参 fail-loud（v0.98.10 移除，不静默切换路径）', async () => {
+    const engine = createCompactEngine();
+    expect(() => createCompactEngine({ summaryPort: {} } as never)).toThrow(/summaryPort was removed/);
+    await expect(
+      engine.compactMessages([userMsg('a'), userMsg('b')], { summaryPort: {} } as never),
+    ).rejects.toThrow(/summaryPort was removed/);
   });
 
   it('compactText structure_only 返回 string view', async () => {

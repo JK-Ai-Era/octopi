@@ -139,34 +139,6 @@ describe('手动压缩摘要请求形态（400 回归）', () => {
     expect(out.summary).not.toContain('OLD-SUMMARY');
   });
 
-  it('summaryPort 路径不受影响：文本化中段带归因', async () => {
-    const engine = createCompactEngine({ defaultProtectHead: 1, defaultProtectTail: 1 });
-    const extract = vi.fn(async (unit: { text: string }) => ({
-      text: 'port-summary',
-      coverage: 'full' as const,
-      tokensIn: 1,
-      tokensOut: 1,
-      policyId: 'conversation_default',
-      kind: 'conversation' as const,
-    }));
-    const messages: Message[] = [
-      userMsg('open'),
-      toolCallOnlyAssistant('c1', 'file_read', 'agent-b'),
-      toolResultMsg('c1', 'file_read', 'agent-b'),
-      userMsg('continue'),
-      userMsg('close'),
-    ];
-    const out = await engine.compactMessages(messages, {
-      protectHead: 1,
-      protectTail: 1,
-      mode: 'structure_only',
-      summaryPort: { extract } as never,
-    });
-    expect(out.summary).toContain('port-summary');
-    const unit = extract.mock.calls[0]![0] as { text: string };
-    expect(unit.text).toContain('(agent-b)');
-  });
-
   it('中段文本化为空（全无正文）→ summarizeFn 不被调用、旧摘要保留（不发空 user/占位内容）', async () => {
     const summarize = vi.fn(async (_messages: unknown[], _options?: unknown) => 'never');
     const engine = createCompactEngine({ defaultProtectHead: 1, defaultProtectTail: 1 });

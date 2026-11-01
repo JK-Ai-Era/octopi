@@ -13,7 +13,7 @@ import { buildSystemPrompt } from '../summary/executor.js';
 import { buildPolicyRegistry } from '../summary/resolver.js';
 import type { SummaryPolicy } from '../summary/types.js';
 
-/** 交接书四段式任务（summaryPort / summarizeFn / LLMSummaryCompressor 共用，保持指令对齐）。
+/** 交接书四段式任务（summarizeFn / LLMSummaryCompressor 共用，保持指令对齐）。
  * 反回声纪律（评审 F15）：指令里不出现任何工具调用/角色标记字面量——负面示例本身会教坏模型
  * 且引发闸门自命中；证据允许单行短引用（F4：引用≠污染）。 */
 export const HANDOVER_SUMMARY_TASK = [

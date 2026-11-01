@@ -6,7 +6,7 @@
 
 import type { Message } from '@octopi-agent/core/types.js';
 import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { SummaryCoverage, SummaryPolicy, SummaryPort } from '../summary/types.js';
+import type { SummaryCoverage, SummaryPolicy } from '../summary/types.js';
 
 export type CompactMode =
   | 'structure_only'
@@ -38,13 +38,10 @@ export interface CompactOptions {
   protectTail?: number;
   targetTokens?: number;
   mode?: CompactMode;
-  /** conversation 策略或显式 policy / id；SummaryPort 与 summarizeFn 两路均生效
-   *（summarizeFn 路径经 buildSystemPrompt 产指令，要求 output:'text' 策略） */
+  /** conversation 策略或显式 policy / id；经 buildSystemPrompt 产指令，要求 output:'text' 策略 */
   summarizePolicy?: SummaryPolicy | string;
   /** 兼容 ContextEngine 注入的 SummarizeFunction */
   summarizeFn?: CompactSummarizeFn;
-  /** 优先走 SummaryPort（conversation policy）；缺省时用 summarizeFn */
-  summaryPort?: SummaryPort;
   onSummarizeFail?: 'truncate' | 'keep_partial';
   estimator?: CompactTokenEstimator;
   previousSummary?: string;
@@ -120,6 +117,5 @@ export interface CreateCompactEngineOptions {
   defaultProtectTail?: number;
   defaultTargetTokens?: number;
   defaultMode?: CompactMode;
-  summaryPort?: SummaryPort;
   estimator?: CompactTokenEstimator;
 }

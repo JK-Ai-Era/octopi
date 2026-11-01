@@ -17,7 +17,7 @@
 
 **Session ACL per-tool（SEC-2，v0.78.0）：** `SessionRights.toolRights`（`allow` / `deny` / `denyCapabilities`）与 `agents[].tools`、`toolSurface` **求交**（只收窄；deny 优先）。工具列表与 `beforeToolCall` 双闸强制。`agents[].maxSessionRights.toolRights` 为 L1 天花板，grant 拒绝非法拓宽。出厂角色工具面不限；guest/只读等用自定义角色表达。
 
-**L4 process 牢笼（v0.75.0–0.76.0）：** 能力契约 + supervised spawn + bwrap/Seatbelt，且 **shell 已统一走 ProcessSandbox**（`docs/process-isolation.zh.md`）。仍开放：自带 Windows Job Object / 受限令牌 helper；container 后端。无 L4 时 `untrusted` 经 `untrustedAdmission` 拒绝或降级。声明 `boundary.security: sandboxed` 的子系统无 L4 时在加载期拒载（SEC-6 fail-closed，v0.90.9）——无牢笼后端的宿主（如今日 Windows）需显式声明 `trusted`/`privileged`；第一方内置子系统即如此声明。
+**L4 process 牢笼（v0.75.0–0.76.0）：** 能力契约 + supervised spawn + bwrap/Seatbelt，且 **shell 已统一走 ProcessSandbox**（`docs/process-isolation.zh.md`）。仍开放：自带 Windows Job Object / 受限令牌 helper。**暂无计划**：container 后端（2026-11-01 拍板）——opt-in 槽位结构上保留但未排期（见 `docs/process-isolation.zh.md`）。无 L4 时 `untrusted` 经 `untrustedAdmission` 拒绝或降级。声明 `boundary.security: sandboxed` 的子系统无 L4 时在加载期拒载（SEC-6 fail-closed，v0.90.9）——无牢笼后端的宿主（如今日 Windows）需显式声明 `trusted`/`privileged`；第一方内置子系统即如此声明。
 
 **EffectPolicy 缺省（v0.75.0）：** 省略 `mode` 即 `workspace`（secure-by-default）。脚手架显式 `"mode": "host"`。原先依赖「未写 mode=host」的部署需补 `"effectPolicy": { "mode": "host" }`。
 
@@ -56,7 +56,7 @@
 **仍开放：**
 
 - **Office 超大表**：worker+可取消超时；仍可能 `parse_timeout` skip，不无限重试。
-- **sqlite-vec 生产必选**：未加载时大库（>5 万向量）**禁止 JS 全扫**，走邻桶 + 强制关键词；百万级必须 `stats.sqliteVec=1`。HNSW 可选后端待立项。
+- **sqlite-vec 生产必选——部署注意**：启动后即核验 `stats.sqliteVec=1`；未加载时大库（>5 万向量）**禁止 JS 全扫**，走邻桶 + 强制关键词；百万级部署依赖 sqlite-vec 已加载。HNSW 可选后端待立项。
 - **DROP 后文件体积**：SQLite 不自动缩容，需 `VACUUM`。
 - **watch 可能漏事件**：reconcile parse 缺口扫描（约 60s）兜底，非零延迟。
 - **`running` 槽**：UI「任务」= job 数；embed 并行是 job 内 lanes。
@@ -88,5 +88,4 @@
 
 ## 压缩摘要路径 — 已知边界（2026-10，F8 review 跟进）
 
-- **`summaryPort` 不在 F8 交接契约内。** `CompactEngine` 的 `summaryPort` 分支仅共用四段式任务文本（`HANDOVER_SUMMARY_TASK`）；其预算语义（`policy.budget` 硬顶）、previous-摘要合并提示、fold/task 快照注入由 `SummaryExtractor` / `capabilities/summary/executor` 契约自行决定，与 `summarizeFn` 路径不完全一致。默认装配不传 `summaryPort`（manual / proactive / overflow 均走 `summarizeFn`）；启用该 Port 的部署需自行核对契约差异。
 - **`context.compact.summarize_fallback` 暂无 WebUI 消费端。** 事件已进 run timeline（observer `TIMELINE_TYPES`），但 `web/runtime/store.ts` / `web/conversation/adapter.ts` 无对应 case，会话 inspector 不渲染 cache-miss 旁路。

@@ -12,9 +12,8 @@ import { isCannedRefusalText } from '@octopi-agent/core/loop/canned-refusal.js';
 import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
 import { HeuristicTokenEstimator } from '../../token-estimator.js';
 import { buildPolicyRegistry } from '../summary/resolver.js';
-import type { ContentUnit, SummaryPolicy } from '../summary/types.js';
+import type { SummaryPolicy } from '../summary/types.js';
 import {
-  HANDOVER_SUMMARY_TASK,
   buildHandoverPrompt,
   buildHandoverUserContent,
   clampSummaryProviderCap,
@@ -180,10 +179,26 @@ function asSummaryMessage(summary: string): Message {
 /**
  * 创建 CompactEngine
  *
- * @param options - 缺省 protect / port / estimator
+ * @param options - 缺省 protect / estimator
  * @returns CompactEngine
  */
+/**
+ * v0.98.10 移除 summaryPort：残留传参必须 fail-loud——与 P0「配置了不生效须出声」同一原则，
+ * 禁止静默忽略后走 summarizeFn/截断降级（行为切换必须显式可见）。
+ *
+ * @param o - 待检配置对象（CompactOptions / CreateCompactEngineOptions）
+ * @param where - 报错定位（入口名）
+ */
+function rejectRemovedSummaryPort(o: unknown, where: string): void {
+  if (o !== null && typeof o === 'object' && 'summaryPort' in o) {
+    throw new Error(
+      `not_implemented: summaryPort was removed in v0.98.10 (${where}) — inject summarizeFn instead (see CHANGELOG breaking note)`,
+    );
+  }
+}
+
 export function createCompactEngine(options?: CreateCompactEngineOptions): CompactEngine {
+  rejectRemovedSummaryPort(options, 'createCompactEngine');
   const defaults = {
     // 能力层缺省与 DefaultContextEngine protectFirstN 同源（5，2026-10-28 拍板交接快照头 5）
     protectHead: options?.defaultProtectHead ?? 5,
@@ -194,11 +209,9 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
 
   async function summarizeMiddle(
     middleText: string,
-    middleMessages: Message[],
     opts: CompactOptions,
     maxTokens: number,
   ): Promise<{ summary?: string; coverage?: CompactOutcome['coverage']; error?: string }> {
-    const port = opts.summaryPort ?? options?.summaryPort;
     const summarizeFn = opts.summarizeFn;
     const registry = buildPolicyRegistry();
     let policy: SummaryPolicy = registry['conversation_default']!;
@@ -212,40 +225,6 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     // 过不了严格网关，且会让模型凭空产出；按摘要失败降级（onSummarizeFail 接管）
     if (!middleText.trim()) {
       return { error: 'empty_middle' };
-    }
-
-    if (port) {
-      const unit: ContentUnit = {
-        text: middleText,
-        structured: middleMessages,
-        channel: 'pipeline',
-        source: {},
-        kind: 'conversation',
-        policy: opts.summarizePolicy,
-        task: HANDOVER_SUMMARY_TASK,
-      };
-      try {
-        // 输出闸门与 summarizeFn 路径对齐：污染给一次加严重试，仍污染按失败降级（不静默存坏摘要）
-        let r = await port.extract(unit, {
-          signal: opts.signal,
-          previousSummary: opts.previousSummary,
-        });
-        if (detectSummaryContamination(r.text, middleText)) {
-          r = await port.extract(
-            { ...unit, task: `${HANDOVER_SUMMARY_TASK}${STRICT_RETRY_SUFFIX}` },
-            { signal: opts.signal, previousSummary: opts.previousSummary },
-          );
-          const again = detectSummaryContamination(r.text, middleText);
-          if (again) {
-            return { error: `contaminated_output:${again}` };
-          }
-        }
-        return { summary: r.text, coverage: r.coverage };
-      } catch (err) {
-        // 只吞 port.extract 的抛错（摘要器契约外失败：provider 报错/超时）——转 error
-        // 通道交给 onSummarizeFail 降级；try 内无其他可抛代码，无其他路径可至此
-        return { error: err instanceof Error ? err.message : String(err) };
-      }
     }
 
     if (summarizeFn) {
@@ -412,7 +391,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
 
     if (mode === 'summary_only') {
       const maxTokens = opts.maxSummaryTokens ?? summarySoftTargetTokens(tokensBefore, opts.summaryBudget);
-      const summarized = await summarizeMiddle(text, messages, opts, maxTokens);
+      const summarized = await summarizeMiddle(text, opts, maxTokens);
       if (!summarized.summary) {
         if (onFail === 'keep_partial' && opts.previousSummary && isMessages) {
           // slice(-0) === slice(0) 返回全量：protectTail=0 时 tail 必须显式为空
@@ -479,7 +458,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     // structure_only（默认）
     if (!isMessages) {
       const maxTokens = opts.maxSummaryTokens ?? summarySoftTargetTokens(tokensBefore, opts.summaryBudget);
-      const summarized = await summarizeMiddle(text, [], opts, maxTokens);
+      const summarized = await summarizeMiddle(text, opts, maxTokens);
       if (!summarized.summary) {
         const head = text.slice(0, Math.max(200, Math.floor(text.length * 0.15)));
         const tail = text.slice(-Math.max(200, Math.floor(text.length * 0.15)));
@@ -526,7 +505,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       opts.maxSummaryTokens ?? summarySoftTargetTokens(tokensBefore, opts.summaryBudget);
 
     const middleText = formatMessagesAsText(middle);
-    const summarized = await summarizeMiddle(middleText, middle, opts, maxSummaryTokens);
+    const summarized = await summarizeMiddle(middleText, opts, maxSummaryTokens);
 
     // 摘要即完整更新（previousSummary 已随 prompt 交给 summarizeFn 合并）；
     // 摘要失败时仍保留旧摘要兜底
@@ -575,7 +554,13 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
   }
 
   return {
-    compactMessages: (messages, opts) => compactCore(messages, opts ?? {}),
-    compactText: (text, opts) => compactCore(text, opts ?? {}),
+    compactMessages: async (messages, opts) => {
+      rejectRemovedSummaryPort(opts, 'compactMessages');
+      return compactCore(messages, opts ?? {});
+    },
+    compactText: async (text, opts) => {
+      rejectRemovedSummaryPort(opts, 'compactText');
+      return compactCore(text, opts ?? {});
+    },
   };
 }

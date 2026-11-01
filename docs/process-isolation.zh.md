@@ -368,7 +368,7 @@ DELETE /api/v1/sessions/:id/effect-roots?path=...
 
 ## 7. 我们不宣称什么
 
-- **不是**容器运行时；容器隔离仍是 opt-in 槽位。
+- **不是**容器运行时；容器隔离槽位结构上保留，但**未排期 / 暂无计划**（2026-11-01 拍板）。
 - **不以** syscall 过滤（seccomp）作为产品门槛。
 - **不以**网络隔离作为 L4 process 门槛（`network: open` 常见）。
 - **不把** supervised spawn 说成进程牢笼——它不是。

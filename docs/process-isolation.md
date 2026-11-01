@@ -446,7 +446,7 @@ DELETE /api/v1/sessions/:id/effect-roots?path=...
 
 ## 7. What we do not claim
 
-- **Not** a container runtime; container isolation remains an opt-in slot.
+- **Not** a container runtime; the container-isolation slot is structurally kept but **not scheduled / no plan** (decision 2026-11-01).
 - **Not** syscall filtering (seccomp) as a product floor.
 - **Not** network isolation as part of L4 process minimum (`network: open` is common).
 - **Not** that supervised spawn equals a process jail — it does not.
