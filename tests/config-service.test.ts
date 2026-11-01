@@ -154,6 +154,29 @@ describe('unknown config keys（防 Zod strip 吞 typo）', () => {
     expect(unknown).toHaveLength(2);
   });
 
+  it('v0.98.12 删除键变未知键（BREAKING 迁移的告警面）', () => {
+    const raw = {
+      models: {
+        providers: {
+          p: {
+            baseUrl: 'https://x/v1',
+            apiKey: '${K}',
+            api: 'openai-completions',
+            models: [{ id: 'm' }],
+          },
+        },
+      },
+      contextEngine: { enableLLMSummary: true },
+      summary: { cache: { backend: 'file', dir: '/tmp/s' } },
+      agents: [{ id: 'a', model: { provider: 'p', model: 'm', temperature: 0.7 } }],
+    };
+    const unknown = detectUnknownConfigKeys(raw);
+    expect(unknown).toContain('contextEngine.enableLLMSummary');
+    expect(unknown).toContain('summary.cache.backend');
+    expect(unknown).toContain('summary.cache.dir');
+    expect(unknown).toContain('agents[0].model.temperature');
+  });
+
   it('assertNoUnknownConfigKeys：typo 拒绝（写路径 fail-loud）', () => {
     expect(() => assertNoUnknownConfigKeys(minimalConfig())).not.toThrow();
     expect(() =>

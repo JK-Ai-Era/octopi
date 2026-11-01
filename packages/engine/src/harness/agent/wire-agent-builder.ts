@@ -167,6 +167,8 @@ export interface AgentWireSpec {
   /** 文件式 persona 目录，或内联 systemPrompt */
   persona?: string | { systemPrompt?: string };
   skillDirectory?: string;
+  /** Skill 启用清单（agents[].skills，按 skill id）；缺省 = 目录内全部启用 */
+  skills?: string[];
   /** SEC-2 / E6 工具策略与会话权利天花板 */
   tools?: import('@octopi-agent/core/types.js').ToolPolicy;
   maxSessionRights?: SessionAwareRunnerConfig['agentMaxSessionRights'];
@@ -306,7 +308,7 @@ export async function wireAgentBuilder(
       const { DefaultSkillManager } = await import(
         '../extension/plugin-ecosystem/skills/manager.js'
       );
-      skillManager = new DefaultSkillManager();
+      skillManager = new DefaultSkillManager(undefined, spec.skills ? { only: spec.skills } : undefined);
       await (skillManager as { discover: (d: string) => Promise<void> }).discover(skillDir);
       builder.skills(
         skillManager as import('../extension/plugin-ecosystem/skills/types.js').SkillManager,
@@ -317,7 +319,8 @@ export async function wireAgentBuilder(
       );
       skillManager = undefined;
     }
-    // 无 manager 时 builder 仍可用目录兜底
+    // 无 manager 时 builder 仍可用目录兜底（allowlist 同样生效）
+    builder.skillAllowlist(spec.skills);
     builder.skillDirectory(skillDir);
   }
 

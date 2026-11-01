@@ -108,6 +108,28 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.12 (2026-11-02)
+
+### refactor(config)!: 配置键审计 §1c 收口 — 死键删除（温度链 / enableLLMSummary / summary.cache 后端）
+
+- **BREAKING**：`contextEngine.enableLLMSummary`、`summary.cache.{backend,dir}`、`agents[].model.temperature`（含 `fallbackModels[].temperature`）删除——三者自声明以来零消费方（压缩摘要走 capabilities/summary 且失败自动回退 `fallbackTruncate`；summary 缓存只有 memory 后端；请求温度单一来源是 `models.providers[].models[].temperature`）。旧键现触发 unknown-keys 启动告警；模型级采样请配 provider 侧 `temperature`。
+- 温度死链一并清除：`RunConfig.temperature`（从未进请求）与装配用 `ModelConfig.temperature` 删除；**Core `ModelInfo.temperature` 是活字段保留**（provider modelInfo → 请求映射在用）。
+- 迁移：agent 级温度需求改配 `models.providers[].models[].temperature`（或按模型分档）；LLM 摘要关闭需求不存在（回退由失败自动触发）；summary 缓存持久化无计划（需要时重设计 file 后端）。
+
+### feat(skills): agents[].skills 接线为 Skill 启用清单（allowlist）
+
+- `agents[].skills`（按 skill id = SKILL.md 目录名）生效：`DefaultSkillManager` 只发现列出的 Skill（未列入者不进 prompt 索引、`load` 恒 null）；缺省 = 目录内全部启用。config-bridge / gateway 双装配路径与 skill 斜杠命令注册同规。
+
+### feat(models): models.providers[].models[].{reasoning,input} 能力投影到模型目录
+
+- 两键经 `ModelInfo` → `resolveCatalogEntry` → `ModelCatalogItem`（gateway + web/sdk）真实下发（此前仅 WebUI 表单透传、服务端从不下发，类型面在说谎）。能力声明与窗口判定解耦：无 contextWindow 也如实投影；未声明不猜测（undefined）。**provider 层同步**（评审 P0）：openai/anthropic 构造时原按四字段白名单重建 ModelInfo 且只认窗口/温度入表——`reasoning`/`input` 曾会整链丢失，现一并入表；真 provider + `createProviderFromConfig` 端到端用例锁定。
+
+### feat(knowledge): knowledge.required 接线为 run 准入闸门
+
+- `knowledge.required: true` 且知识运行时未达 `ready` → **拒绝新 run**（run 起点复核，与安全配置漂移守卫同位；错误经 run 通道回给用户，稳定前缀 `knowledge_required:`）。缺省 `false` = fail-open 不变。docs/knowledge{,.zh}.md 解除「暂未生效」标注。
+
+---
+
 ## v0.98.11 (2026-11-02)
 
 ### feat(knowledge): 调参面接线 + embed 形状统一到消费侧（配置键审计 2.1/1a 收口）

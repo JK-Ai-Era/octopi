@@ -6,8 +6,8 @@
  * - 本模块：schema **接受**但**无消费方**的键——配置合法却毫无效果，是最隐蔽的一类静默，
  *   启动路径必须显式告警（写路径消费方接入后本表同步收窄）。
  *
- * 表的准确性以代码消费面为准（e.g. `summary.cache.maxEntries/ttlMs` 已接线，
- * 只有 `summary.cache.backend/dir` 未接线）。收窄本表 = 实现消费方；新增未接线键 = 补行 + KNOWN-ISSUES 同步。
+ * 表的准确性以代码消费面为准（e.g. `knowledge.attachments.inject.fullTextMaxChars/intent*` 已接线，
+ * 同段的 `recallTopK/inventory` 未接线）。收窄本表 = 实现消费方；新增未接线键 = 补行 + KNOWN-ISSUES 同步。
  *
  * 覆盖边界：对象路径（含嵌套叶子）；数组段（agents[] / channels[] 等）内部不做下标粒度扫描，
  * 数组段自身的未接线子键需另行跟踪。
@@ -30,13 +30,6 @@ const UNWIRED_PREFIXES: readonly string[] = [
   'knowledge.attachments.inject.recallTopK',
   'knowledge.attachments.inject.inventory',
   'knowledge.attachments.tools.attachmentsRootReadOnly',
-  // 知识不可用语义（required fail-closed）无实现——接线/删除待业务讨论（审计 §1c 遗留）
-  'knowledge.required',
-  // LLM 摘要开关孤悬无消费方（压缩摘要走 capabilities/summary）——接/删待议
-  'contextEngine.enableLLMSummary',
-  // summary 缓存后端：daemon 只建 memory 缓存（maxEntries/ttlMs 已接线），file backend 未实现
-  'summary.cache.backend',
-  'summary.cache.dir',
 ];
 
 /** `session` 为 passthrough 块（防 typo 静默吞）：除消费键外的直接子键均未接线 */

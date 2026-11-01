@@ -31,6 +31,7 @@ export const AgentConfigSchema = z.object({
   tools: ToolPolicySchema.optional(),
   /** Skill 目录（缺省 `home/skills`）：与 `workspace`/`home` 同规（绝对或 `~` 形态，拒相对） */
   skillDirectory: ConfigPathSchema.optional(),
+  /** Skill 启用清单（按 skill id = SKILL.md 目录名）：只启用列出的 Skill；缺省 = 目录内全部；`[]` = 全部关闭（未命中的 id 在 discover 时告警） */
   skills: z.array(z.string()).optional(),
   channelBindings: z.record(z.string(), z.string()).optional(),
   /** Session ACL 天花板（E6 L1）；与角色 max / 绑定取交集 */

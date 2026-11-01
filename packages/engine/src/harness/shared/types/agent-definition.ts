@@ -21,7 +21,6 @@ export interface AgentPersona {
 export interface ModelConfig {
   provider: string;
   model: string;
-  temperature?: number;
   maxTokens?: number;
   contextWindow?: number;
   /** 回退模型列表（按优先级排序，由 resolveModelConfig 解析后的完整配置） */

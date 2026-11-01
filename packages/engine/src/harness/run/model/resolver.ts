@@ -16,6 +16,7 @@ import type {
   ModelCapabilitySource,
   ResolvedModel,
 } from './types.js';
+import type { ModelInputType } from '@octopi-agent/core/types/agent-definition.js';
 
 export interface ParsedModelRef {
   provider?: string;
@@ -80,10 +81,17 @@ export function lookupModelCapability(input: {
 }): {
   contextWindow?: number;
   maxOutputTokens?: number;
+  reasoning?: boolean;
+  input?: ModelInputType[];
   source: ModelCapabilitySource;
   known: boolean;
 } {
   const { provider, modelName, explicit } = input;
+
+  // 能力声明（reasoning/input）与窗口判定解耦：无窗口也可能有声明
+  const info = provider && modelName ? provider.getModelInfo(modelName) : undefined;
+  const reasoning = info?.reasoning;
+  const inputModalities = info?.input;
 
   // explicit（调用方带来的配置声明）优先
   const explicitWindow = positive(explicit?.contextWindow);
@@ -91,6 +99,8 @@ export function lookupModelCapability(input: {
     return {
       contextWindow: explicitWindow,
       maxOutputTokens: positive(explicit?.maxOutputTokens),
+      reasoning,
+      input: inputModalities,
       source: 'config',
       known: true,
     };
@@ -98,12 +108,13 @@ export function lookupModelCapability(input: {
 
   // provider ModelInfo（仅当构造 provider 时来自用户 models[] 配置）
   if (provider && modelName) {
-    const info = provider.getModelInfo(modelName);
     const w = positive(info?.contextWindow);
     if (w) {
       return {
         contextWindow: w,
         maxOutputTokens: positive(info?.maxOutputTokens) ?? positive(explicit?.maxOutputTokens),
+        reasoning,
+        input: inputModalities,
         source: 'config',
         known: true,
       };
@@ -112,6 +123,8 @@ export function lookupModelCapability(input: {
 
   return {
     maxOutputTokens: positive(explicit?.maxOutputTokens),
+    reasoning,
+    input: inputModalities,
     source: 'unknown',
     known: false,
   };
@@ -166,6 +179,8 @@ export function resolveModel(input: ResolveModelInput): ResolvedModel | null {
     provider,
     contextWindow: cap.contextWindow,
     maxOutputTokens: cap.maxOutputTokens,
+    reasoning: cap.reasoning,
+    input: cap.input,
     source: cap.known ? 'config' : 'unknown',
     known: cap.known,
     isOverride,
@@ -218,6 +233,8 @@ export function resolveCatalogEntry(input: {
       model: resolved.modelName,
       contextWindow: resolved.contextWindow ?? null,
       maxOutputTokens: resolved.maxOutputTokens,
+      reasoning: resolved.reasoning,
+      input: resolved.input,
       known: resolved.known,
       source: resolved.source,
     };
@@ -232,6 +249,8 @@ export function resolveCatalogEntry(input: {
     model: input.modelName,
     contextWindow: cap.contextWindow ?? null,
     maxOutputTokens: cap.maxOutputTokens,
+    reasoning: cap.reasoning,
+    input: cap.input,
     known: cap.known,
     source: cap.known ? 'config' : 'unknown',
   };

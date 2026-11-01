@@ -184,16 +184,20 @@ export class FileSystemSkillSource implements SkillSource {
 export class DefaultSkillManager implements SkillManager {
   private skills = new Map<string, SkillDefinition>();
   private source: SkillSource;
+  /** Skill id allowlist（`agents[].skills`）；undefined = 全部启用 */
+  private readonly only?: ReadonlySet<string>;
 
   /**
    * @param sourceOrDirectory - SkillSource 实例或目录路径（向后兼容）
+   * @param options.only - 启用的 Skill id allowlist（缺省全部）；discover 未列入的 Skill 不进索引、load 恒 null
    */
-  constructor(sourceOrDirectory?: SkillSource | string) {
+  constructor(sourceOrDirectory?: SkillSource | string, options?: { only?: string[] }) {
     if (typeof sourceOrDirectory === 'string') {
       this.source = new FileSystemSkillSource(sourceOrDirectory);
     } else {
       this.source = sourceOrDirectory ?? new FileSystemSkillSource('./skills');
     }
+    this.only = options?.only ? new Set(options.only) : undefined;
   }
 
   /**
@@ -212,7 +216,10 @@ export class DefaultSkillManager implements SkillManager {
     }
 
     const discovered = await this.source.discover();
+    const discoveredIds = new Set(discovered.map((d) => d.id));
     for (const item of discovered) {
+      // agents[].skills allowlist：未列入的 Skill 不进索引（load 经 skills map 天然拒绝）
+      if (this.only && !this.only.has(item.id)) continue;
       const skill: SkillDefinition = {
         id: item.id,
         name: item.meta.name,
@@ -224,6 +231,16 @@ export class DefaultSkillManager implements SkillManager {
         command: item.meta.command,
       };
       this.skills.set(skill.id, skill);
+    }
+    // allowlist 中未命中的 id（拼写错 / Skill 目录未落地）——fail-loud，防「静默全关」
+    if (this.only) {
+      for (const id of this.only) {
+        if (!discoveredIds.has(id)) {
+          console.warn(
+            `[Skills] agents[].skills id "${id}" not found in skill directory (typo, or not landed yet)`,
+          );
+        }
+      }
     }
   }
 

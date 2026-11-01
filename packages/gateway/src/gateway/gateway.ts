@@ -245,6 +245,27 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
   };
 }
 
+/**
+ * knowledge.required 准入判定（纯函数）：`required: true` 且知识运行时未达 `ready`
+ * 时返回拒绝原因（run 起点复核用）；`required` 非 true 时恒放行（fail-open 缺省）。
+ *
+ * `degraded` / `disabled` / 启动中（ref 未落定）均判不可用；远程（baseUrl）Service
+ * 无独立连接探测，状态以运行时已知值为准。
+ *
+ * @param required - `knowledge.required` 配置值
+ * @param state - Knowledge 运行时状态（`getKnowledgeState()` 同源：boot 失败 = `degraded`）
+ * @returns 拒绝原因（含稳定前缀 `knowledge_required:`）；放行时 undefined
+ */
+export function knowledgeRequiredAdmissionError(
+  required: boolean | undefined,
+  state: import('./knowledge-runtime.js').KnowledgeRuntimeState | 'starting',
+): string | undefined {
+  if (required !== true) return undefined;
+  return state === 'ready'
+    ? undefined
+    : `knowledge_required: Knowledge Service is not ready (state=${state}); run refused by knowledge.required`;
+}
+
 /** WebUI 模型目录条目（与 harness/run/model ModelCatalogEntry 对齐） */
 export interface ModelCatalogItem {
   id: string;
@@ -253,8 +274,36 @@ export interface ModelCatalogItem {
   /** 未配置时为 null（未知，不猜测） */
   contextWindow: number | null;
   maxOutputTokens?: number;
+  /** 能力声明（models.providers[].models[] 透传；未声明不下发） */
+  reasoning?: boolean;
+  input?: Array<'text' | 'image' | 'audio' | 'video'>;
   known: boolean;
   source: string;
+}
+
+/** `resolveCatalogEntry` 结果 → WebUI 目录条目（唯一转换点，防两处字面量漂移） */
+function toCatalogItem(e: {
+  id: string;
+  provider: string;
+  model: string;
+  contextWindow: number | null;
+  maxOutputTokens?: number;
+  reasoning?: boolean;
+  input?: Array<'text' | 'image' | 'audio' | 'video'>;
+  known: boolean;
+  source: string;
+}): ModelCatalogItem {
+  return {
+    id: e.id,
+    provider: e.provider,
+    model: e.model,
+    contextWindow: e.contextWindow,
+    maxOutputTokens: e.maxOutputTokens,
+    reasoning: e.reasoning,
+    input: e.input,
+    known: e.known,
+    source: e.source,
+  };
 }
 
 /** Agent 默认模型摘要 */
@@ -915,6 +964,13 @@ export class Gateway {
     await this.runtime.start();
     // Ready 前必须拿到 Knowledge 终态，保证启动日志与 /health 一致
     await knowledgeBoot;
+    // knowledge.required 与知识终态核对：未达 ready 显式告警（fail-closed——此后拒一切新 run）
+    if (this.config.knowledge?.required === true && this.getKnowledgeState() !== 'ready') {
+      console.warn(
+        `[Gateway] knowledge.required=true but Knowledge state=${this.getKnowledgeState()} — ` +
+          'all new runs will be refused until it recovers (restart the gateway to retry boot)',
+      );
+    }
     this.started = true;
     console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
   }
@@ -1873,7 +1929,10 @@ export class Gateway {
           const { DefaultSkillManager } = await import(
             '@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/manager.js'
           );
-          const skillManager = new DefaultSkillManager();
+          const skillManager = new DefaultSkillManager(
+            undefined,
+            agent.skills ? { only: agent.skills } : undefined,
+          );
           await skillManager.discover(skillDir);
           this.registerSkillCommands(skillManager);
         }
@@ -2142,15 +2201,7 @@ export class Gateway {
         providers: this.providers,
         explicit,
       });
-      return {
-        id: e.id,
-        provider: e.provider,
-        model: e.model,
-        contextWindow: e.contextWindow,
-        maxOutputTokens: e.maxOutputTokens,
-        known: e.known,
-        source: e.source,
-      };
+      return toCatalogItem(e);
     };
 
     for (const [providerName, provider] of this.providers) {
@@ -2244,15 +2295,7 @@ export class Gateway {
           }
         : undefined,
     });
-    return {
-      id: e.id,
-      provider: e.provider,
-      model: e.model,
-      contextWindow: e.contextWindow,
-      maxOutputTokens: e.maxOutputTokens,
-      known: e.known,
-      source: e.source,
-    };
+    return toCatalogItem(e);
   }
 
   /**
@@ -4908,6 +4951,19 @@ export class Gateway {
     return {
       inbox: inner.inbox,
       execute(req: Parameters<SessionRunnerDispatcher['execute']>[0], signal?: AbortSignal) {
+        // knowledge.required 准入闸门（run 起点复核，与安全配置漂移守卫同位）：
+        // 知识面未达 ready 时拒绝新 run，错误经 run 通道回给用户。
+        // 状态取 getKnowledgeState()（/health 同源，boot 失败=degraded 而非 disabled）；
+        // 被拒 run 不计入 in-flight（retireRunner 判据不受影响）。
+        const gateError = knowledgeRequiredAdmissionError(
+          tracker.config.knowledge?.required,
+          tracker.getKnowledgeState(),
+        );
+        if (gateError) {
+          return (async function* () {
+            throw new Error(gateError);
+          })();
+        }
         tracker.runnerInflight.set(runner, (tracker.runnerInflight.get(runner) ?? 0) + 1);
         const iter = inner.execute(req, signal);
         return (async function* () {
@@ -5107,6 +5163,7 @@ export class Gateway {
             ? agent.persona
             : undefined,
       skillDirectory: agent.skillDirectory,
+      skills: agent.skills,
       tools: agent.tools,
       maxSessionRights: agent.maxSessionRights,
       effectPolicy:

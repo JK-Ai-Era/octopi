@@ -16,15 +16,12 @@ describe('detectUnwiredConfigKeys', () => {
       models: { mode: 'replace' },
       plugins: { loadPaths: ['./p'], configs: { myplug: { a: 1 } } },
       knowledge: {
-        required: true,
         attachments: {
           inject: { recallTopK: 5, inventory: true },
           tools: { attachmentsRootReadOnly: true },
         },
       },
       gateway: { debugRest: true },
-      contextEngine: { enableLLMSummary: true },
-      summary: { cache: { backend: 'file', dir: '/tmp/s' } },
       session: { reset: { daily: true }, maintenance: { prune: true }, typo: 1 },
     };
     const detected = detectUnwiredConfigKeys(raw);
@@ -34,10 +31,6 @@ describe('detectUnwiredConfigKeys', () => {
       'knowledge.attachments.inject.recallTopK',
       'knowledge.attachments.inject.inventory',
       'knowledge.attachments.tools.attachmentsRootReadOnly',
-      'knowledge.required',
-      'contextEngine.enableLLMSummary',
-      'summary.cache.backend',
-      'summary.cache.dir',
       'plugins.configs',
       'gateway.debugRest',
       'session.reset',

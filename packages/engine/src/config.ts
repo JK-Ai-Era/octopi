@@ -556,8 +556,6 @@ export interface ContextEngineConfig {
   minOutputReserve?: number;
   /** 输出预留最大值（默认 8000） */
   maxOutputReserve?: number;
-  /** 是否启用 LLM 摘要（默认 true） */
-  enableLLMSummary?: boolean;
   /** 摘要模型（可选，使用主模型） */
   summaryModel?: string;
 }
@@ -587,10 +585,8 @@ export interface SummaryCapabilityConfig {
   } & Record<string, unknown>;
   cache?: {
     enabled?: boolean;
-    backend?: 'memory' | 'file';
     ttlMs?: number;
     maxEntries?: number;
-    dir?: string;
   };
 }
 
@@ -689,8 +685,6 @@ export interface ModelDefinition {
   provider: string;
   /** 模型名称 */
   model: string;
-  /** 温度 */
-  temperature?: number;
   /** 最大 token 数 */
   maxTokens?: number;
   /** 上下文窗口大小 */
@@ -1274,7 +1268,6 @@ function resolveFallbackModels(
     return {
       provider: m.provider,
       model: m.model,
-      temperature: m.temperature,
       maxTokens: m.maxTokens,
       contextWindow: m.contextWindow ?? defaults?.contextWindow,
       fallbackModels: resolveFallbackModels(m.fallbackModels, models, defaults, depth + 1),
@@ -1352,7 +1345,14 @@ export async function createProviderFromConfig(
   options?: { wireDump?: import('./integration/providers/wire-dump.js').WireDumpSink },
 ): Promise<ModelProvider> {
   const apiType = pc.api === 'anthropic-messages' ? 'anthropic' : 'openai';
-  const models = pc.models.map(m => ({ name: m.name ?? m.id, contextWindow: m.contextWindow, maxOutputTokens: m.maxTokens, temperature: m.temperature }));
+  const models = pc.models.map(m => ({
+    name: m.name ?? m.id,
+    contextWindow: m.contextWindow,
+    maxOutputTokens: m.maxTokens,
+    temperature: m.temperature,
+    reasoning: m.reasoning,
+    input: m.input,
+  }));
   const defaultModel = pc.models[0]?.name ?? pc.models[0]?.id;
 
   let decorate: (inner: ModelProvider) => ModelProvider = (inner) => inner;

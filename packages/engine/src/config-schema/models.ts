@@ -90,7 +90,6 @@ export const ModelDefinitionSchema = z.object({
   id: z.string().optional(),
   provider: z.string().min(1),
   model: z.string().min(1),
-  temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().positive().optional(),
   contextWindow: z.number().positive().optional(),
   fallbackModels: z.array(z.union([z.string().min(1), InlineModelConfigSchema])).optional(),

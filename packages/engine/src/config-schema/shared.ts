@@ -59,7 +59,6 @@ export const ToolPolicySchema = z.object({
 export const InlineModelConfigSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
-  temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().positive().optional(),
   contextWindow: z.number().positive().optional(),
 });
@@ -67,7 +66,6 @@ export const InlineModelConfigSchema = z.object({
 export const ModelConfigSchema = z.object({
   provider: z.string({ error: 'Agent must specify a model provider' }).min(1),
   model: z.string({ error: 'Agent must specify a model' }).min(1),
-  temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().positive().optional(),
   contextWindow: z.number().positive('contextWindow must be a positive number').optional(),
   fallbackModels: z.array(z.union([z.string().min(1), InlineModelConfigSchema])).optional(),

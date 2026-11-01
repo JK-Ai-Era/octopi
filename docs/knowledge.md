@@ -293,7 +293,7 @@ Retrieval results are **returned itemized with sources**; no silent merging.
 | `service.port` | manageLocal listen port (default **18280**; tests may use `0`) |
 | `service.timeoutMs` | Service request timeout (write path; reads use `12s`) |
 | `service.connectTimeoutMs` | manageLocal startup handshake wait (fork→ready, default **30s**); remote mode has no separate connect phase |
-| `required` | **Not yet effective** (no consumer; tracked in KNOWN-ISSUES) — planned: fail closed if the Knowledge Service is unavailable |
+| `required` | When `true`, new runs are refused unless the Knowledge Service is `ready` (run-admission gate; default `false` = fail-open). A `degraded`/`disabled` state refuses **all** new runs until recovery — the gateway logs a startup warning and a restart retries boot |
 | `recall` | Content recall mode (see §5) |
 | `autoInject.*` | Injection thresholds (`minScore`/`minCoverage` are retriever-side), count, budget |
 | `keywordWeight` | Hybrid fusion weight for the keyword leg (retriever) |

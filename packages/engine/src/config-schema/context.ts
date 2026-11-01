@@ -50,7 +50,6 @@ export const ContextEngineConfigSchema = z.object({
   outputRatio: z.number().min(0).max(1).optional(),
   minOutputReserve: z.number().positive().optional(),
   maxOutputReserve: z.number().positive().optional(),
-  enableLLMSummary: z.boolean().optional(),
   summaryModel: z.string().optional(),
 }).refine(
   (data) => {
@@ -123,10 +122,8 @@ export const SummaryConfigSchema = z.object({
   cache: z
     .object({
       enabled: z.boolean().optional(),
-      backend: z.enum(['memory', 'file']).optional(),
       ttlMs: z.number().int().positive().optional(),
       maxEntries: z.number().int().positive().optional(),
-      dir: z.string().optional(),
     })
     .optional(),
 });

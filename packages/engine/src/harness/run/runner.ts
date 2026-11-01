@@ -229,7 +229,6 @@ export interface RunConfig {
   model?: string;
   /** model 为裸名时的 provider 缺省 */
   modelProvider?: string;
-  temperature?: number;
   cwd?: string;
   /** 本次 Run 的工具隔离覆盖（缺省用 Runner 配置 / DEFAULT_TOOL_ISOLATION） */
   toolIsolation?: ToolIsolationMode;

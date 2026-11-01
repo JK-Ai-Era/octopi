@@ -150,7 +150,7 @@ Runner.handle
 - Without an explicit `.summarize()`, the Builder auto-mounts `createProviderSummarize` with the primary model
 - `config-bridge` / capabilities resolution chain: **`models.level.mini`** (overridable via `summary.modelLevel`) → `contextEngine.summaryModel` → mini → standard → primary model
 - Auto-summarize can be disabled with `.disableAutoSummarize()`
-- **Skill**: `skillDirectory` or `home/skills` is discovered at build time; every turn injects `<available_skills>`
+- **Skill**: `skillDirectory` or `home/skills` is discovered at build time (restricted by the `agents[].skills` allowlist when set); every turn injects `<available_skills>`
 - **Memory recall**: `builder.memoryStore`; config-bridge and Gateway build a `SqliteMemoryStore` from `home/agent.db`. **Knowledge**: system only injects the catalog (`builder.knowledgeCatalog`); the catalog is **tagged** `id/name/type/status/scale/location` + `purpose`/`topics`; sources/indexes/exogenous ingest see `docs/knowledge.md`
 - **MemoryStore single instance**: `AgentBuilder.build()` registers `memory_store`/`memory_search` from `builder.memoryStore` before `buildCore`; MemoryLayer recall and `memory.steward.*` writes share the same instance. Gateway **no longer** mounts global memory tools on a process-level `InMemoryMemoryStore`
 - **Compact state persistence (E4)**: authoritative bucket `SessionData.contextCompacts[agentId]`; `contextCompact` is the primary/single-agent compatibility view. Jsonl `*.state.json` persistence. `Agent` in-memory bridge key = `(sessionId, agentId)`. **Different agents do not borrow each other's compact**. Manual compact: `SessionAwareRunner.compactSession` (**same session lock** as handle, queued; do not rely only on `status==='processing'`)

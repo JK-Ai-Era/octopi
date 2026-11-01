@@ -8,6 +8,7 @@
  */
 
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { ModelInputType } from '@octopi-agent/core/types/agent-definition.js';
 
 /** contextWindow / maxTokens 的声明来源 */
 export type ModelCapabilitySource =
@@ -33,6 +34,9 @@ export interface ResolvedModel {
   /** 显式配置的上下文窗口；未配置 = 未知 */
   contextWindow?: number;
   maxOutputTokens?: number;
+  /** 能力声明（models.providers[].models[] 透传；未声明不猜测） */
+  reasoning?: boolean;
+  input?: ModelInputType[];
   source: ModelCapabilitySource;
   /** contextWindow 是否来自显式配置 */
   known: boolean;
@@ -48,6 +52,9 @@ export interface ModelCatalogEntry {
   /** 未配置时为 null */
   contextWindow: number | null;
   maxOutputTokens?: number;
+  /** 能力声明（models.providers[].models[] 透传；未声明不猜测） */
+  reasoning?: boolean;
+  input?: ModelInputType[];
   known: boolean;
   source: ModelCapabilitySource;
 }

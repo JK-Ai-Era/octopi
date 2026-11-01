@@ -105,6 +105,9 @@ export interface ModelCatalogItem {
   /** 未配置时为 null */
   contextWindow: number | null;
   maxOutputTokens?: number;
+  /** 能力声明（未声明不下发） */
+  reasoning?: boolean;
+  input?: Array<'text' | 'image' | 'audio' | 'video'>;
   known: boolean;
   source: string;
 }

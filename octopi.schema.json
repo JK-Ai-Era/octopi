@@ -332,11 +332,6 @@
                     "type": "string",
                     "minLength": 1
                   },
-                  "temperature": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 2
-                  },
                   "maxTokens": {
                     "type": "number",
                     "exclusiveMinimum": 0
@@ -363,11 +358,6 @@
                             "model": {
                               "type": "string",
                               "minLength": 1
-                            },
-                            "temperature": {
-                              "type": "number",
-                              "minimum": 0,
-                              "maximum": 2
                             },
                             "maxTokens": {
                               "type": "number",
@@ -1231,9 +1221,6 @@
           "type": "number",
           "exclusiveMinimum": 0
         },
-        "enableLLMSummary": {
-          "type": "boolean"
-        },
         "summaryModel": {
           "type": "string"
         }
@@ -1376,13 +1363,6 @@
             "enabled": {
               "type": "boolean"
             },
-            "backend": {
-              "type": "string",
-              "enum": [
-                "memory",
-                "file"
-              ]
-            },
             "ttlMs": {
               "type": "integer",
               "exclusiveMinimum": 0,
@@ -1392,9 +1372,6 @@
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
-            },
-            "dir": {
-              "type": "string"
             }
           }
         }

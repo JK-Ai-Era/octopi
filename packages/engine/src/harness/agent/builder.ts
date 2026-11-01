@@ -547,6 +547,8 @@ export class AgentBuilder {
   private _systemPrompt?: string;
   /** Skill 目录（SKILL.md）；build 时 discover 并注入 system prompt 索引 */
   private _skillDirectory?: string;
+  /** Skill id allowlist（agents[].skills）；未设置 = 全部启用 */
+  private _skillAllowlist?: string[];
   private _skillManager?: import('../extension/plugin-ecosystem/skills/types.js').SkillManager;
   /** 记忆检索（注入 system prompt MemoryLayer） */
   private _memoryStore?: import('../memory/types.js').MemoryStore;
@@ -798,6 +800,18 @@ export class AgentBuilder {
    */
   skillDirectory(dir: string): this {
     this._skillDirectory = expandHomePath(dir.trim());
+    return this;
+  }
+
+  /**
+   * Skill 启用清单（agents[].skills）：discover 只保留列出的 skill id。
+   * 不调用或传 undefined = 目录内全部启用。
+   *
+   * @param ids - 允许的 skill id 列表（SKILL.md 目录名）
+   * @returns this
+   */
+  skillAllowlist(ids: string[] | undefined): this {
+    this._skillAllowlist = ids;
     return this;
   }
 
@@ -1730,7 +1744,10 @@ export class AgentBuilder {
     // Skill：目录 discover（或外部注入的 manager）
     if (!this._skillManager && this._skillDirectory) {
       const { DefaultSkillManager } = await import('../extension/plugin-ecosystem/skills/manager.js');
-      const mgr = new DefaultSkillManager(this._skillDirectory);
+      const mgr = new DefaultSkillManager(
+        this._skillDirectory,
+        this._skillAllowlist ? { only: this._skillAllowlist } : undefined,
+      );
       try {
         await mgr.discover(this._skillDirectory);
         this._skillManager = mgr;

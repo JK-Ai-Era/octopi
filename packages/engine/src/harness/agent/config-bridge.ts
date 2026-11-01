@@ -279,6 +279,7 @@ async function buildAgent(
       (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined),
     persona: agentConfig.persona,
     skillDirectory: agentConfig.skillDirectory,
+    skills: agentConfig.skills,
     tools: agentConfig.tools,
     maxSessionRights: agentConfig.maxSessionRights,
     effectPolicy: agentConfig.effectPolicy ?? shared.effectPolicy,

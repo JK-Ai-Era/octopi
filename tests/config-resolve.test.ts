@@ -82,7 +82,6 @@ describe('resolveModelConfig', () => {
     const inline: ModelConfig = {
       provider: 'openai',
       model: 'gpt-4o',
-      temperature: 0.7,
       maxTokens: 4096,
       contextWindow: 128000,
     };
@@ -91,7 +90,6 @@ describe('resolveModelConfig', () => {
 
     expect(result.provider).toBe('openai');
     expect(result.model).toBe('gpt-4o');
-    expect(result.temperature).toBe(0.7);
     expect(result.maxTokens).toBe(4096);
     expect(result.contextWindow).toBe(128000);
   });

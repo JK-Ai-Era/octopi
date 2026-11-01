@@ -88,12 +88,20 @@ export class AnthropicProvider implements ModelProvider {
         this.models.push(entry);
       } else {
         this.models.push(entry.name);
-        if (entry.contextWindow != null || entry.maxOutputTokens != null || entry.temperature != null) {
+        if (
+          entry.contextWindow != null ||
+          entry.maxOutputTokens != null ||
+          entry.temperature != null ||
+          entry.reasoning != null ||
+          entry.input != null
+        ) {
           this.modelInfoMap.set(entry.name, {
             name: entry.name,
             contextWindow: entry.contextWindow,
             maxOutputTokens: entry.maxOutputTokens,
             temperature: entry.temperature,
+            reasoning: entry.reasoning,
+            input: entry.input,
           });
         }
       }

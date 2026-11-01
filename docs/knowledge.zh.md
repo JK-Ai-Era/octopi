@@ -294,7 +294,7 @@ Tier 3  Full        「原文」                knowledge_read
 | `service.port` | manageLocal 监听端口（缺省 **18280**；测试可用 `0`） |
 | `service.timeoutMs` | Service 请求超时（写路径；读路径 `12s`） |
 | `service.connectTimeoutMs` | manageLocal 启动握手等待（fork→ready，缺省 **30s**）；远程模式无独立连接阶段 |
-| `required` | **暂未生效**（无消费方，KNOWN-ISSUES 跟踪）——规划语义：Knowledge Service 不可用则 fail-closed |
+| `required` | `true` 时知识运行时未达 `ready` 拒绝新 run（run 准入闸门；缺省 `false` = fail-open）。`degraded`/`disabled` 期间**全部**新 run 被拒直至恢复——gateway 启动时会显式告警，重启网关可重试拉起 |
 | `recall` | 内容召回模式（见 §5） |
 | `autoInject.*` | 注入门槛（`minScore`/`minCoverage` 走检索侧）、条数、预算 |
 | `keywordWeight` | 关键词腿混合融合权重（检索侧） |
