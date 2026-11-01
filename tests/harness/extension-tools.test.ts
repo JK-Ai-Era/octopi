@@ -209,4 +209,85 @@ describe('extension tools', () => {
     ac.abort();
     await expect(pending).rejects.toThrow('ask_user aborted');
   });
+
+  it('ask_user should report human wait duration to the budget hook', async () => {
+    vi.useFakeTimers();
+    try {
+      let release!: (v: string) => void;
+      const reported: number[] = [];
+      const tool = createAskUserTool(
+        () => new Promise<string>((r) => { release = r; }),
+      );
+      const pending = tool.handler(
+        { question: 'q?' },
+        makeToolContext({
+          sessionId: 's1',
+          agentId: 'a1',
+          noteHumanWait: (ms) => reported.push(ms),
+        }),
+      );
+
+      // 等人 2h：时长必须回传预算层（方案A：等人不计入 wall-clock）
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+      release('late answer');
+      const result = (await pending) as { answer: string };
+      expect(result.answer).toBe('late answer');
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toBe(2 * 60 * 60 * 1000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ask_user should still report wait when the callback fails (run continues)', async () => {
+    const reported: number[] = [];
+    const tool = createAskUserTool(() => Promise.reject(new Error('channel down')));
+    await expect(
+      tool.handler(
+        { question: 'q?' },
+        makeToolContext({
+          sessionId: 's1',
+          agentId: 'a1',
+          noteHumanWait: (ms) => reported.push(ms),
+        }),
+      ),
+    ).rejects.toThrow('channel down');
+    // 回调失败时 run 会继续执行：等待真实发生，必须照常回传（F4）
+    expect(reported).toHaveLength(1);
+  });
+
+  it('ask_user should not lose the answer when the budget hook throws', async () => {
+    const tool = createAskUserTool(async () => 'the answer');
+    const result = (await tool.handler(
+      { question: 'q?' },
+      makeToolContext({
+        sessionId: 's1',
+        agentId: 'a1',
+        noteHumanWait: () => {
+          throw new Error('hook boom');
+        },
+      }),
+    )) as { answer: string };
+    // 预算回传是旁路记账：它抛错不得把已到手的答案变成工具错误
+    expect(result.answer).toBe('the answer');
+  });
+
+  it('ask_user should not report human wait when aborted while waiting', async () => {
+    const ac = new AbortController();
+    const reported: number[] = [];
+    const tool = createAskUserTool(() => new Promise<string>(() => {}));
+    const pending = tool.handler(
+      { question: 'q?' },
+      makeToolContext({
+        sessionId: 's1',
+        agentId: 'a1',
+        abortSignal: ac.signal,
+        noteHumanWait: (ms) => reported.push(ms),
+      }),
+    );
+    ac.abort();
+    await expect(pending).rejects.toThrow('ask_user aborted');
+    // abort 路径经 reject 跳过回传（run 已终止，无需扣减）
+    expect(reported).toHaveLength(0);
+  });
 });

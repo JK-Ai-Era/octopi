@@ -58,6 +58,8 @@ const TOKEN_WINDOW = 10;
 
 export class RunMetricsCollector {
   private readonly startTime = Date.now();
+  /** 人类输入等待累计（ask_user 等回传）；elapsedMs 口径与 Budget 一致：等人不算运行 */
+  private humanWaitMs = 0;
   private globalIteration = 0;
   private totalToolCalls = 0;
   private nominalTotalTokens = 0;
@@ -100,6 +102,19 @@ export class RunMetricsCollector {
     if (this.tokenDeltas.length > TOKEN_WINDOW) this.tokenDeltas.shift();
     const last = this.turnSummaries[this.turnSummaries.length - 1];
     if (last) last.tokenDelta += delta;
+  }
+
+  /**
+   * 记录人类输入等待时长（ask_user 等阻塞式人机工具回传）。
+   * Guard 的 hardWallClockMs 是 burn 阀，口径与 Budget wall-clock 对齐：等人不算运行。
+   * 累计以存续时长封顶（并行等待/超报不得把 elapsedMs 扣成 0 之外的假值）。
+   *
+   * @param ms - 本次等待时长（毫秒）
+   */
+  addHumanWaitMs(ms: number): void {
+    if (ms > 0) {
+      this.humanWaitMs = Math.min(this.humanWaitMs + ms, Date.now() - this.startTime);
+    }
   }
 
   /**
@@ -229,6 +244,7 @@ export class RunMetricsCollector {
     return this.nominalTotalTokens;
   }
 
+  /** 存续时长（含人类等待；展示/账本口径）。裁决口径见 buildContext（活跃时长） */
   get elapsedMs(): number {
     return Date.now() - this.startTime;
   }
@@ -271,7 +287,7 @@ export class RunMetricsCollector {
       iteration: this.globalIteration,
       totalToolCalls: this.totalToolCalls,
       nominalTotalTokens: this.nominalTotalTokens,
-      elapsedMs: Date.now() - this.startTime,
+      elapsedMs: Math.max(0, Date.now() - this.startTime - this.humanWaitMs),
       recentSummaries: this.turnSummaries.slice(-8),
       metrics,
       recoveryHistory: [...this.recoveryHistory],

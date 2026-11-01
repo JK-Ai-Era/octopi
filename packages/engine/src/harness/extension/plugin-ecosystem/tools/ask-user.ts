@@ -7,6 +7,9 @@
  * 无超时（2026-10-26 拍板）：需要用户确认的问题不能被时间自动跳过。
  * 退出只有两路：会话中止（abortSignal）或 Gateway 取消（ASK_USER_CANCELLED 哨兵）。
  * definition 不声明 timeoutMs，工具总线（runWithToolLimits）因此不设看门狗。
+ *
+ * 等待时长经 context.noteHumanWait 回传预算层（2026-11-01）：等人不计入
+ * wall-clock，用户多久之后回答都不会触发「运行时间达到预算上限」误杀。
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
@@ -80,34 +83,55 @@ export function createAskUserTool(callback: AskUserCallback): RegisteredTool {
 
       const abortSignal = context?.abortSignal;
 
-      const answer = await new Promise<string>((resolve, reject) => {
-        const cleanup = () => {
-          abortSignal?.removeEventListener('abort', onAbort);
-        };
-        const onAbort = () => {
-          cleanup();
-          reject(new Error('ask_user aborted'));
-        };
-
-        if (abortSignal) {
-          abortSignal.addEventListener('abort', onAbort, { once: true });
-          if (abortSignal.aborted) {
-            onAbort();
-            return;
-          }
+      // 等人时长回传预算层（方案A）：等人不计入 wall-clock。abort（run 已终止）
+      // 不回传；回调自身失败时 run 会继续执行，等待真实发生，照常回传。回传是
+      // 旁路记账：它抛错不得吞掉已到手的用户答案。
+      const waitStartedAt = Date.now();
+      const reportHumanWait = (): void => {
+        try {
+          context?.noteHumanWait?.(Date.now() - waitStartedAt);
+        } catch {
+          // 只吞记账通道的抛错：预算回传失败不应改变工具结果（无其他路径可抛）
         }
+      };
 
-        callback(question, options, ctx).then(
-          (value) => {
+      let answer: string;
+      try {
+        answer = await new Promise<string>((resolve, reject) => {
+          const cleanup = () => {
+            abortSignal?.removeEventListener('abort', onAbort);
+          };
+          const onAbort = () => {
             cleanup();
-            resolve(value);
-          },
-          (err) => {
-            cleanup();
-            reject(err instanceof Error ? err : new Error(String(err)));
-          },
-        );
-      });
+            reject(new Error('ask_user aborted'));
+          };
+
+          if (abortSignal) {
+            abortSignal.addEventListener('abort', onAbort, { once: true });
+            if (abortSignal.aborted) {
+              onAbort();
+              return;
+            }
+          }
+
+          callback(question, options, ctx).then(
+            (value) => {
+              cleanup();
+              resolve(value);
+            },
+            (err) => {
+              cleanup();
+              reject(err instanceof Error ? err : new Error(String(err)));
+            },
+          );
+        });
+      } catch (error) {
+        if (!abortSignal?.aborted) {
+          reportHumanWait();
+        }
+        throw error;
+      }
+      reportHumanWait();
 
       if (answer === ASK_USER_CANCELLED) {
         return { answer: null, error: 'aborted while waiting for user' };

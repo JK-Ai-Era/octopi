@@ -3,8 +3,9 @@
  * 设计：arch/budget-redesign.md
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { RegisteredTool } from '@octopi-agent/core/types.js';
 import { BudgetPolicyEngine, DEFAULT_BUDGET } from '@octopi-agent/engine/harness/run/budget/budget.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import { RunMetricsCollector } from '@octopi-agent/engine/harness/run/reliability/run-metrics-collector.js';
@@ -81,6 +82,132 @@ describe('RunBudget（P0 安全阀）', () => {
       // reset 后仍用配置的 1ms；再测 checkHardOnly 结构
       expect(budget.checkHardOnly().report.hard.wallClockMs).toBe(1);
     }
+  });
+});
+
+describe('wall-clock 口径：人类输入等待不计入（方案A）', () => {
+  it('addHumanWaitMs 从 wall-clock 扣除，等人不触发 hard', () => {
+    vi.useFakeTimers();
+    try {
+      const budget = new BudgetPolicyEngine({ maxWallClockMs: 1000 });
+      vi.advanceTimersByTime(5000);
+      // 对照：未记等待时存续 5s ≥ 1s，已超限
+      expect(budget.checkHardOnly().status).toBe('hard');
+
+      budget.addHumanWaitMs(5000);
+      const after = budget.checkHardOnly();
+      expect(after.status).toBe('ok');
+      expect(after.report.elapsedMs).toBe(0);
+      expect(after.report.humanWaitMs).toBe(5000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reset 清零等待累计（超报以存续时长封顶，F6）', () => {
+    vi.useFakeTimers();
+    try {
+      const budget = new BudgetPolicyEngine();
+      vi.advanceTimersByTime(10_000);
+      // 超报：封顶为存续时长，不得让累计超过存续把安全阀静默归零
+      budget.addHumanWaitMs(999_000);
+      expect(budget.report().humanWaitMs).toBe(10_000);
+      budget.reset();
+      expect(budget.report().humanWaitMs).toBe(0);
+      expect(budget.report().elapsedMs).toBeLessThan(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('RunMetricsCollector：Guard hardWallClockMs 阀同口径扣减（F1a）', () => {
+    vi.useFakeTimers();
+    try {
+      const c = new RunMetricsCollector();
+      vi.advanceTimersByTime(10_000);
+      c.addHumanWaitMs(6_000);
+      expect(c.buildContext({}).elapsedMs).toBe(4_000);
+
+      // 超报封顶：elapsedMs 不得扣成负值/长期归零
+      const capped = new RunMetricsCollector();
+      vi.advanceTimersByTime(10_000);
+      capped.addHumanWaitMs(999_000);
+      expect(capped.buildContext({}).elapsedMs).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('真实装配链路：noteHumanWait 送达工具，扣减后 run 不被 wall_clock 误杀', async () => {
+    const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
+    let call = 0;
+    let hookDelivered = false;
+    const model: ModelProvider = {
+      name: 'mock',
+      chat: async () => ({
+        content: 'done',
+        model: 'mock',
+        finishReason: 'stop' as const,
+        usage: makeTokenUsage({ promptTokens: 1, completionTokens: 1 }),
+      }),
+      stream: async function* () {
+        call += 1;
+        if (call === 1) {
+          yield { type: 'tool_call', toolCall: { id: 'p1', name: 'probe', arguments: '{}' } };
+          yield {
+            type: 'done',
+            finishReason: 'tool_calls',
+            usage: makeTokenUsage({ promptTokens: 1, completionTokens: 1 }),
+          };
+          return;
+        }
+        yield { type: 'content', content: 'done' };
+        yield { type: 'done', usage: makeTokenUsage({ promptTokens: 1, completionTokens: 1 }) };
+      },
+      isAvailable: async () => true,
+      getModelInfo: () => null,
+      getModelInfos: () => [],
+    };
+
+    // 模拟 ask_user：工具真实等待 2.5s 并把等待时长回传预算层。
+    // maxWallClockMs=500：扣除生效 → elapsedMs≈活跃时长（典型 ~40ms，余量 ~380ms）
+    // 无任何预算事件；若钩子断链（等待照常计入），首个 turn_end（存续 ≥2.5s）必触发
+    // budget.wrap_up。阈值须大于「工具执行前」的活跃时长，否则 beforeToolCall
+    // 硬闸会先停 run（probe 不执行，测不到钩子——踩过一次）；余量也须远离
+    // CI 抖动区间（132ms 假红教训，F3）。
+    const probe: RegisteredTool = {
+      definition: { name: 'probe', description: 'claims human wait', parameters: {} },
+      handler: async (_args, context) => {
+        hookDelivered = typeof context.noteHumanWait === 'function';
+        const waitStartedAt = Date.now();
+        await new Promise((r) => setTimeout(r, 2500));
+        context.noteHumanWait?.(Date.now() - waitStartedAt);
+        return 'ok';
+      },
+    };
+
+    const built = await new AgentBuilder()
+      .model(model)
+      .tool(probe)
+      .agentId('budget-wait')
+      .constitution({ mode: 'off' })
+      .systemPrompt('t')
+      .effectPolicy({ opsAudit: 'off' })
+      .budget({ maxWallClockMs: 500 })
+      .build({ autoLoadSubsystems: false });
+
+    const events: string[] = [];
+    for await (const e of built.runner.handle(
+      'budget-wait-sess',
+      { role: 'user', content: 'go', timestamp: Date.now() },
+      { systemPrompt: '', agentId: 'budget-wait', sessionId: 'budget-wait-sess' },
+    )) {
+      events.push(e.type);
+    }
+
+    expect(events.filter((t) => t === 'budget.wrap_up' || t === 'budget.exceeded'), '等待扣除后不得有任何预算事件').toEqual([]);
+    expect(hookDelivered, 'noteHumanWait must reach the tool through real assembly').toBe(true);
+    expect(call, '预算若把 run 掐在首turn，第二次模型调用不会发生').toBe(2);
   });
 });
 

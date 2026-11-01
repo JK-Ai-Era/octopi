@@ -431,6 +431,13 @@ export async function* runAgentWithReliability(
   config: AgentLoopConfig,
   harness: CoreReliabilityHarness,
   signal?: AbortSignal,
+  options?: {
+    /**
+     * 本 Run 的工具运行时（Runner/Agent.run 显式传入，与 runScope.toolRuntime 同一对象）。
+     * noteHumanWait 钩子装在它身上；显式传参消除 ALS 隐式绑定的错绑面（可绑到外层 run）。
+     */
+    toolRuntime?: import('../run-scope.js').RunToolRuntime;
+  },
 ): AsyncGenerator<HarnessLoopEvent> {
   const state = createInitialState(
     (harness.config as ReliabilityConfig | undefined)?.checkpointInterval ?? 15,
@@ -438,11 +445,29 @@ export async function* runAgentWithReliability(
   const relConfig = { ...DEFAULT_RELIABILITY_CONFIG, ...(harness.config as ReliabilityConfig | undefined) };
 
   // per-run Budget：从 harness 模板克隆，避免长驻进程 / 并发 session 共享计数
-  let budget = harness.budget;
-  if (budget) {
-    budget = new BudgetPolicyEngine(
-      budget.getConfig() as import('../budget/budget.js').BudgetPolicyConfig,
-    );
+  const templateBudget = harness.budget;
+  const budget: BudgetPolicyEngine | undefined = templateBudget
+    ? new BudgetPolicyEngine(
+        templateBudget.getConfig() as import('../budget/budget.js').BudgetPolicyConfig,
+      )
+    : undefined;
+  // 方案A（2026-11-01）：等人不计入 wall-clock。ask_user 等阻塞式人机工具经
+  // noteHumanWait 回传等待时长，per-run 预算与 metrics collector 同口径扣除
+  // （Guard hardWallClockMs 同为 burn 阀，口径必须一致）。装配优先显式传入的
+  // toolRuntime，缺失时退回 RunScope ALS；都拿不到则不挂，等待照常计入
+  // （口径收紧方向，不放松预算）。compose 不覆盖：宿主自挂的统计不被静默顶掉。
+  {
+    const toolRuntime = options?.toolRuntime ?? getRunScope()?.toolRuntime;
+    if (toolRuntime) {
+      const runBudget = budget;
+      const collector = state.collector;
+      const prevNoteHumanWait = toolRuntime.noteHumanWait;
+      toolRuntime.noteHumanWait = (ms: number) => {
+        prevNoteHumanWait?.(ms);
+        runBudget?.addHumanWaitMs(ms);
+        collector.addHumanWaitMs(ms);
+      };
+    }
   }
   /** P1：run 级用量账本（只记账，不 kill） */
   const ledger = new UsageLedger();

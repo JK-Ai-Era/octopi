@@ -362,7 +362,9 @@ export class Agent {
       agentRevision: options?.runScope?.agentRevision,
     };
 
-    let gen = runAgentWithReliability(context, config, harness, signal);
+    let gen = runAgentWithReliability(context, config, harness, signal, {
+      toolRuntime: runScope.toolRuntime,
+    });
     gen = withRunScope(runScope, gen);
     if (resolved) {
       return withResolvedModel(resolved, gen);

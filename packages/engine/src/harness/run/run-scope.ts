@@ -45,6 +45,8 @@ export interface RunToolRuntime {
   homeWrite?: boolean;
   /** Run-level securityDegraded hook */
   noteSecurityDegraded?: (reason: string) => void;
+  /** 人类输入等待回传（预算 wall-clock 扣减）；由 run-agent 挂接 per-run Budget */
+  noteHumanWait?: (ms: number) => void;
   /** ops 审计回传（ops P2）：动作/越权写入 → 统一审计账本 */
   recordOpsEvent?: (record: { event: string; data: Record<string, unknown> }) => void;
   /** L2 级别 */

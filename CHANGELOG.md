@@ -108,6 +108,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.6 (2026-11-01)
+
+### fix(budget): ask_user 等人时长不计入 wall-clock——修「答案到达即被判停」误杀
+
+- **问题**（2026-11-01 13:34 实际发生）：ask_user 无超时等人（2026-10-26 拍板）与 wall-clock 安全阀冲突——工具阻塞等人的整段时间被计为「运行时长」，用户一回答、ask_user 一返回，turn 边界 `checkHardOnly()` 立判 hard，run 以「运行时间达到预算上限」停止，答案被吞。
+- **口径修正**：wall-clock 安全阀的职责是防引擎挂死/空转，不是限制人的响应时间，等人不算运行。`BudgetPolicyEngine` 新增 `addHumanWaitMs()`（累计以存续时长封顶：并行等待/超报不得把安全阀静默归零）；`elapsedMs`（hard 裁决与 wrap-up/advisory 阈值同源）扣除累计人类输入等待；`BudgetReport` 增加 `humanWaitMs`（诊断字段，additive）。**语义收窄（behavior note）**：`BudgetReport.elapsedMs` 由「run 存续时长」变为「引擎活跃运行时长」；observer/账本展示仍为存续时长（两口径并存，各有用途）。RunGuard `hardWallClockMs`（burn 阀）同口径对齐：`RunMetricsCollector.addHumanWaitMs`，checkpoint 裁决用活跃时长——否则同一误杀会经第二个阀复现。
+- **接线**：`ToolExecutionContext.noteHumanWait` 新契约字段（`runAgentWithReliability` 显式接收 `toolRuntime` 参数装配，缺失时退回 RunScope ALS；compose 不覆盖宿主自挂钩子）；`ask_user` 等待结束后回传等待时长（abort 不回传；回调自身失败时 run 会继续，照常回传；回传抛错不吞已到手的答案）。钩子缺失时等待照常计入（口径收紧方向，不放松预算）。
+- **方案B 不在本版**：run 停止后答案到达的自动唤醒续跑（挂起态 + 续跑注入）另立开放项 `arch/open-problems.md` OP-RG-6。
+- **验证**：新增 8 测——预算扣除/封顶/reset 单测 ×2、Guard 阀同口径扣减 ×1、ask_user 回传/回调失败回传/钩子抛错保护/abort 不回传 ×4、真实装配链路行为 ×1（run 存续 > 预算仍 `completed`；钩子断链时必触发 `budget.wrap_up` 的对照成立，时序余量 ~380ms 抗 CI 抖动）；独立评审（独立会话 fresh-eyes + 变异测试核验）7 项 findings 已逐条核实处置；全量测试 + lint + build 全绿。
+
+---
+
 ## v0.98.5 (2026-11-01)
 
 ### fix(wisdom): 召回死锁与重复入库双修复——trial 轮转保底曝光 + 提取去重闭环

@@ -9,6 +9,10 @@
  * - 默认仅 wall-clock 安全阀（6h，可配）
  * - maxIterations / maxToolCalls 仅显式配置时硬停
  * - 成本/配额策略见后续 budgetPolicy（P3）；账本见 UsageLedger（P1）
+ *
+ * wall-clock 口径（2026-11-01）：安全阀管的是「引擎活跃运行时长」，不是 run 的
+ * 存续时长。ask_user 等阻塞式人机工具经 addHumanWaitMs 回传的等待时长从
+ * elapsedMs 中扣除——等人不算运行，与「ask_user 无超时」（2026-10-26 拍板）一致。
  */
 
 // ── 配置 ──
@@ -46,7 +50,10 @@ export interface BudgetReport {
   toolCalls: number;
   /** 诊断累计（Σ nominalTotalTokens）；**禁止**作为默认 hard 单位 */
   nominalTokens: number;
+  /** 活跃运行时长（已扣除人类输入等待）；wall-clock 裁决口径 */
   elapsedMs: number;
+  /** 已扣除的人类输入等待时长（ask_user 等阻塞式人机工具回传） */
+  humanWaitMs: number;
   remaining: {
     iterations: number | null;
     toolCalls: number | null;
@@ -79,6 +86,7 @@ export class BudgetPolicyEngine {
   private iterations = 0;
   private toolCalls = 0;
   private nominalTokens = 0;
+  private humanWaitMs = 0;
   private startTime: number;
 
   constructor(config?: Partial<BudgetPolicyConfig>) {
@@ -91,6 +99,7 @@ export class BudgetPolicyEngine {
     this.iterations = 0;
     this.toolCalls = 0;
     this.nominalTokens = 0;
+    this.humanWaitMs = 0;
     this.startTime = Date.now();
   }
 
@@ -102,7 +111,7 @@ export class BudgetPolicyEngine {
     reason?: BudgetEvaluation['reason'];
     report: BudgetReport;
   } {
-    const elapsedMs = Date.now() - this.startTime;
+    const elapsedMs = this.activeElapsedMs();
     if (elapsedMs >= this.config.maxWallClockMs) {
       return { status: 'hard', reason: 'wall_clock', report: this.buildReport('timeout') };
     }
@@ -160,6 +169,24 @@ export class BudgetPolicyEngine {
     if (tokens > 0) this.nominalTokens += tokens;
   }
 
+  /**
+   * 记录人类输入等待时长（ask_user 等阻塞式人机工具回传）。
+   * 从 wall-clock 计量中扣除：等人不算引擎运行时长。
+   * 累计以存续时长封顶（等待是存续的子集；并行等待/超报不得把安全阀静默归零）。
+   *
+   * @param ms - 本次等待时长（毫秒）
+   */
+  addHumanWaitMs(ms: number): void {
+    if (ms > 0) {
+      this.humanWaitMs = Math.min(this.humanWaitMs + ms, Date.now() - this.startTime);
+    }
+  }
+
+  /** 活跃运行时长 = 存续时长 - 人类输入等待（不小于 0） */
+  private activeElapsedMs(): number {
+    return Math.max(0, Date.now() - this.startTime - this.humanWaitMs);
+  }
+
   report(): BudgetReport {
     return this.checkHardOnly().report;
   }
@@ -169,13 +196,14 @@ export class BudgetPolicyEngine {
   }
 
   private buildReport(status: BudgetStatus): BudgetReport {
-    const elapsedMs = Date.now() - this.startTime;
+    const elapsedMs = this.activeElapsedMs();
     return {
       status,
       iterations: this.iterations,
       toolCalls: this.toolCalls,
       nominalTokens: this.nominalTokens,
       elapsedMs,
+      humanWaitMs: this.humanWaitMs,
       remaining: {
         iterations:
           this.config.maxIterations !== undefined

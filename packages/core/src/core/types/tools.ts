@@ -222,6 +222,13 @@ export interface ToolExecutionContext {
   /** Execute-time degradation hook (run-level securityDegraded). */
   noteSecurityDegraded?: (reason: string) => void;
   /**
+   * 人类输入等待回传（预算口径）：ask_user 等阻塞式人机工具在等待结束后回传等待时长，
+   * 预算层从 wall-clock 中扣除——等人不算引擎运行时长（wall-clock 安全阀只管活跃运行，
+   * 不因用户思考/离场而误杀 run）。由 Runner 经 RunToolRuntime 注入；
+   * 缺失时等待照常计入（口径收紧方向，不放松预算）。
+   */
+  noteHumanWait?: (ms: number) => void;
+  /**
    * 工具部分输出通道（展示用途；如长命令的中间输出）。
    *
    * 经 Loop `AgentTool.execute` 的 `onUpdate` 转发，最终到达 UI 的
