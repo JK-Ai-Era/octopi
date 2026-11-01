@@ -468,22 +468,6 @@ export interface ContextLayerHealthDto {
   };
 }
 
-/** 前 N 轮装配摘要（timeline 用） */
-export interface ContextLayerTurnSummaryDto {
-  assembledAt?: number;
-  /** system 组用量 */
-  usedTokens: number;
-  /** 易变快照组用量（E8 分账；无 snapshot 层时缺省） */
-  usedSnapshotTokens?: number;
-  systemBudget: number;
-  /** system 组纳入（去重；双 runtime 时为主行） */
-  included: LayerRuntimeViewDto['id'][];
-  dropped: LayerRuntimeViewDto['id'][];
-  /** snapshot 组纳入/丢弃（与 included/dropped 可能同 id，如 runtime 双份） */
-  snapshotIncluded?: LayerRuntimeViewDto['id'][];
-  snapshotDropped?: LayerRuntimeViewDto['id'][];
-}
-
 export interface RunScopeViewDto {
   sessionId: string;
   agentId: string;

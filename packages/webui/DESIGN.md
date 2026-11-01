@@ -111,6 +111,6 @@
 2. 渲染预算摘要（E8 分账：systemBudget / usedTokens / usedSnapshotTokens）。
 3. 按 `placement` 分两组渲染 layer band：**System · 缓存稳定前缀**（跨轮逐字节稳定）与 **本轮快照 · 易变**（进 turn_context）；双 runtime 条目分行（锚点份 / 易变份）；Information（L8）单独 strip。
 4. 用 status → 徽章/色语义映射，禁止颜色-only。
-5. 选中层 → 详情：budget vs tokens、reason、dropped、sources、preview。
+5. 点击层卡片 → 详情就地展开在卡片下方（placement / budget vs tokens / reason / dropped / sources / preview）；再次点击收起。
 6. 事件 `context.layers.*` 到达时局部刷新，避免整页重置滚动。
 7. Focus/demo 模式只改变布局密度与是否展开 preview，不改变数据字段。

@@ -543,6 +543,14 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 
 .ctx-stack { display: grid; gap: 6px; }
 
+/* 层卡片手风琴：层详情就地展开在卡片下方，与卡片拼成一块 */
+.ctx-stack-item { display: flex; flex-direction: column; }
+
+.ctx-stack-item.is-open .ctx-band {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
 .ctx-band {
   display: grid;
   grid-template-columns: 4px 1fr;
@@ -582,6 +590,18 @@ button.ctx-band {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.ctx-band-top-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ctx-band-caret {
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1;
 }
 
 .ctx-band-name {
@@ -737,13 +757,11 @@ button.ctx-band {
   padding: 10px;
 }
 
-.ctx-detail-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  margin-bottom: 8px;
-  color: var(--color-text);
+/* 就地展开的层详情：贴住上方卡片底边 */
+.ctx-detail-inline {
+  margin-top: -1px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .ctx-kv {
@@ -836,42 +854,6 @@ button.ctx-band {
 
 .ctx-health-item .k { color: var(--color-muted); }
 .ctx-health-item .v { font-family: var(--font-mono); font-size: 12px; }
-
-.ctx-timeline {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 2px;
-}
-
-.ctx-timeline-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 28px;
-}
-
-.ctx-timeline-label {
-  font-size: 10px;
-  color: var(--color-muted);
-  font-family: var(--font-mono);
-}
-
-.ctx-timeline-bars {
-  display: grid;
-  gap: 2px;
-}
-
-.ctx-timeline-cell {
-  width: 18px;
-  height: 8px;
-  border-radius: 2px;
-  background: #e5e7eb;
-}
-
-.ctx-timeline-cell.on { background: var(--color-ok); }
-.ctx-timeline-cell.bad { background: #fca5a5; }
 
 @media (max-width: 1024px) {
   .ctx-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

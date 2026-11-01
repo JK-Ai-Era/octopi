@@ -1,5 +1,5 @@
 /**
- * Web Runtime Store — context.layers.assembled + timeline
+ * Web Runtime Store — context.layers.assembled
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -62,7 +62,7 @@ describe('OctopiRuntimeStore context.layers.assembled', () => {
     expect(layers?.layers.find((l) => l.id === 'wisdom')?.status).toBe('unregistered');
   });
 
-  it('多轮装配追加 timeline 摘要', () => {
+  it('多轮装配以最后一轮快照覆盖 inspector.contextLayers', () => {
     const client = mockClient();
     const store = new OctopiRuntimeStore(client);
 
@@ -80,10 +80,8 @@ describe('OctopiRuntimeStore context.layers.assembled', () => {
       } as AgentEventEnvelope);
     }
 
-    const timeline = store.getState().chat.inspector.contextLayersTimeline;
-    expect(timeline?.length).toBe(2);
-    expect(timeline?.[0]?.included).toContain('persona');
-    // runtime reason=empty → 不计入 dropped/error
-    expect(timeline?.[0]?.dropped ?? []).not.toContain('persona');
+    const layers = store.getState().chat.inspector.contextLayers;
+    expect(layers?.usedTokens).toBe(1100);
+    expect(layers?.assembledAt).toBe(101);
   });
 });

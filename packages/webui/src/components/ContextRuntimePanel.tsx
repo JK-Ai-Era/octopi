@@ -97,18 +97,21 @@ export function ContextRuntimePanel({
   onRefreshLayers,
 }: ContextRuntimePanelProps) {
   const snapshot = inspector.contextLayers;
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  /** 展开中的层（单开手风琴）：null = 全部收起 */
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
   const [loadingContent, setLoadingContent] = useState(false);
 
   const layers = (snapshot?.layers ?? []) as LayerRow[];
   const rowKey = (l: LayerRow): string => `${l.id}#${rowPlacement(l)}`;
-  const selected = layers.length
-    ? (layers.find((l) => rowKey(l) === selectedKey) ?? layers[0])
-    : null;
 
-  const selectLayer = async (layer: LayerRow) => {
-    setSelectedKey(rowKey(layer));
+  const toggleLayer = async (layer: LayerRow) => {
+    const key = rowKey(layer);
+    if (expandedKey === key) {
+      setExpandedKey(null);
+      return;
+    }
+    setExpandedKey(key);
     if (layer.content || !onRefreshLayers) return;
     setLoadingContent(true);
     try {
@@ -136,6 +139,7 @@ export function ContextRuntimePanel({
           : '无';
 
   const renderBand = (layer: LayerRow) => {
+    const isOpen = expandedKey === rowKey(layer);
     const meta = LAYER_META[layer.id];
     const status = STATUS_META[layer.status] ?? STATUS_META.idle;
     const placement = PLACEMENT_META[rowPlacement(layer)];
@@ -154,8 +158,9 @@ export function ContextRuntimePanel({
       <button
         key={rowKey(layer)}
         type="button"
-        className={`ctx-band ${selected && rowKey(selected) === rowKey(layer) ? 'ctx-band-selected' : ''}`}
-        onClick={() => { void selectLayer(layer); }}
+        className={`ctx-band ${isOpen ? 'ctx-band-selected' : ''}`}
+        aria-expanded={isOpen}
+        onClick={() => { void toggleLayer(layer); }}
       >
         <div className="ctx-band-stripe" style={{ background: meta.hue }} />
         <div className="ctx-band-body">
@@ -167,7 +172,10 @@ export function ContextRuntimePanel({
                 <span className="ctx-layer-note">运行时 · {rowRoleLabel(layer)}</span>
               )}
             </div>
-            <span className={`ctx-badge ${badgeCls}`}>{badgeLabel}</span>
+            <div className="ctx-band-top-right">
+              <span className={`ctx-badge ${badgeCls}`}>{badgeLabel}</span>
+              <span className="ctx-band-caret" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+            </div>
           </div>
           <div className="ctx-band-meta">
             <span className={`ctx-placement ${placement.cls}`}>{placement.label}</span>
@@ -195,6 +203,88 @@ export function ContextRuntimePanel({
           </div>
         </div>
       </button>
+    );
+  };
+
+  /** 层详情：就地展开在所属卡片下方（不再依赖底部独立区块） */
+  const renderDetail = (layer: LayerRow) => {
+    const placement = PLACEMENT_META[rowPlacement(layer)];
+    return (
+      <div className="ctx-detail ctx-detail-inline">
+        <div className="ctx-kv">
+          <span className="k">id</span>
+          <span className="v">{layer.id}</span>
+          <span className="k">placement</span>
+          <span className={`v ${placement.cls}`}>{placement.label}</span>
+          <span className="k">priority</span>
+          <span className="v">{layer.priority}</span>
+          <span className="k">order</span>
+          <span className="v">{layer.order}</span>
+          <span className="k">droppable</span>
+          <span className="v">{String(layer.droppable)}</span>
+          <span className="k">budget</span>
+          <span className="v">
+            {layer.budgetTokens != null && layer.budgetTokens > 0
+              ? `${formatTokens(layer.budgetTokens)}（硬顶）`
+              : rowPlacement(layer) === 'snapshot'
+                ? '无硬顶 · 计入快照组'
+                : snapshot?.structureReserve != null
+                  ? `无硬顶 · 共享 contentBudget ${formatTokens(Math.max(0, snapshot.systemBudget - snapshot.structureReserve))}`
+                  : '无硬顶 · contentBudget 未随快照下发'}
+          </span>
+          <span className="k">tokens</span>
+          <span className="v">{formatTokens(layer.tokens)}</span>
+          <span className="k">sources</span>
+          <span className="v">{layer.sources?.join(', ') || '—'}</span>
+          <span className="k">reason</span>
+          <span className={`v ${layer.reason ? (layer.status === 'error' ? 'status-error' : 'status-warn') : ''}`}>
+            {layer.reason || '—'}
+          </span>
+        </div>
+        {layer.dropped && (
+          <div className="small status-warn" style={{ marginTop: 6 }}>
+            dropped: {layer.dropped}
+          </div>
+        )}
+
+        <div className="ctx-section-title" style={{ marginTop: 10 }}>层内容</div>
+        {loadingContent ? (
+          <div className="small muted" style={{ marginTop: 6 }}>正在加载层内容…</div>
+        ) : layer.content ? (
+          <div className="ctx-layer-content">
+            <div className="ctx-layer-content-meta">
+              <span className="mono">
+                {layer.content.length} chars · {formatTokens(layer.tokens)} tokens
+              </span>
+            </div>
+            <pre className="ctx-layer-content-body">{layer.content}</pre>
+          </div>
+        ) : layer.preview ? (
+          <div className="ctx-layer-content">
+            <div className="ctx-layer-content-meta">
+              <span className="mono muted">preview（未含全文）</span>
+            </div>
+            <pre className="ctx-layer-content-body">{layer.preview}</pre>
+          </div>
+        ) : (
+          <div className="small muted" style={{ marginTop: 6 }}>
+            {layer.status === 'empty' || layer.status === 'unregistered' || layer.status === 'idle'
+              ? '本层本轮无正文。'
+              : '无层内容。请确认 contextAssembler.includeLayerContent=true 并重新装配一轮。'}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderLayerItem = (layer: LayerRow) => {
+    const key = rowKey(layer);
+    const isOpen = expandedKey === key;
+    return (
+      <div key={key} className={`ctx-stack-item ${isOpen ? 'is-open' : ''}`}>
+        {renderBand(layer)}
+        {isOpen && renderDetail(layer)}
+      </div>
     );
   };
 
@@ -250,60 +340,6 @@ export function ContextRuntimePanel({
               <span className="k">configured</span>
               <span className="v">{inspector.contextHealth.configured ? 'yes' : 'no'}</span>
             </div>
-          </div>
-        </section>
-      )}
-
-      {(inspector.contextLayersTimeline?.length ?? 0) > 0 && (
-        <section className="panel sidebar-section">
-          <div className="sidebar-title">近轮 Timeline</div>
-          <div className="small muted" style={{ marginBottom: 6 }}>
-            每列一轮 · 上行=system 纳入 · 下行=快照纳入 · L1–L7
-          </div>
-          <div className="ctx-timeline">
-            {(inspector.contextLayersTimeline ?? []).map((turn, idx) => {
-              const sysIds = turn.included;
-              const snapIds = turn.snapshotIncluded ?? [];
-              return (
-                <div
-                  key={idx}
-                  className="ctx-timeline-col"
-                  title={`system ${formatTokens(turn.usedTokens)}${turn.usedSnapshotTokens != null ? ` / 快照 ${formatTokens(turn.usedSnapshotTokens)}` : ''} / 预算 ${formatTokens(turn.systemBudget)}`}
-                >
-                  <div className="ctx-timeline-label">T{idx + 1}</div>
-                  <div className="ctx-timeline-bars">
-                    {(Object.keys(LAYER_META) as Array<keyof typeof LAYER_META>).map((id) => {
-                      const on = sysIds.includes(id);
-                      const bad = turn.dropped.includes(id);
-                      return (
-                        <div
-                          key={`sys-${id}`}
-                          className={`ctx-timeline-cell ${on ? 'on' : bad ? 'bad' : ''}`}
-                          style={on ? { background: LAYER_META[id].hue } : undefined}
-                          title={`system · ${LAYER_META[id].label} ${on ? '纳入' : bad ? '丢弃/失败' : '—'}`}
-                        />
-                      );
-                    })}
-                  </div>
-                  {(turn.snapshotIncluded != null || turn.usedSnapshotTokens != null) && (
-                    <div className="ctx-timeline-bars">
-                      {(Object.keys(LAYER_META) as Array<keyof typeof LAYER_META>).map((id) => {
-                        const on = snapIds.includes(id);
-                        const bad = (turn.snapshotDropped ?? []).includes(id);
-                        return (
-                          <div
-                            key={`snap-${id}`}
-                            className={`ctx-timeline-cell ${on ? 'on' : bad ? 'bad' : ''}`}
-                            style={on ? { background: LAYER_META[id].hue } : undefined}
-                            title={`快照 · ${LAYER_META[id].label} ${on ? '纳入' : bad ? '丢弃/失败' : '—'}`}
-                          />
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
           </div>
         </section>
       )}
@@ -391,7 +427,7 @@ export function ContextRuntimePanel({
               装配完成后，这里按 order 显示 system 组契约层（缓存稳定前缀）。
             </div>
           )}
-          {systemRows.length > 0 && <div className="ctx-stack">{systemRows.map(renderBand)}</div>}
+          {systemRows.length > 0 && <div className="ctx-stack">{systemRows.map(renderLayerItem)}</div>}
         </div>
 
         {/* ── 本轮快照组：易变 ── */}
@@ -438,7 +474,7 @@ export function ContextRuntimePanel({
                   </span>
                 </div>
               </div>
-              <div className="ctx-stack">{snapshotRows.map(renderBand)}</div>
+              <div className="ctx-stack">{snapshotRows.map(renderLayerItem)}</div>
             </>
           ) : (
             <div className="ctx-empty">
@@ -483,91 +519,6 @@ export function ContextRuntimePanel({
             分馏关系：Information（session）→ 提炼 → Memory / Cognition / Wisdom → 再作为快照择取注入本轮 turn_context。
             对话正文见中栏消息列表。
           </div>
-        </div>
-
-        <div className="ctx-section-title">层详情</div>
-        <div className="ctx-detail">
-          {!selected ? (
-            <div className="small muted">选择一层查看 placement / budget / reason / sources / 正文。</div>
-          ) : (
-            <>
-              <div className="ctx-detail-title">
-                <i className="ctx-dot" style={{ background: LAYER_META[selected.id].hue }} />
-                <span className="ctx-layer-n">L{LAYER_META[selected.id].n}</span>
-                {LAYER_META[selected.id].label}
-                {rowRoleLabel(selected) && (
-                  <span className="ctx-layer-note">运行时 · {rowRoleLabel(selected)}</span>
-                )}
-                <span className={`ctx-badge ${(STATUS_META[selected.status] ?? STATUS_META.idle).cls}`}>
-                  {(STATUS_META[selected.status] ?? STATUS_META.idle).label}
-                </span>
-              </div>
-              <div className="ctx-kv">
-                <span className="k">id</span>
-                <span className="v">{selected.id}</span>
-                <span className="k">placement</span>
-                <span className={`v ${PLACEMENT_META[rowPlacement(selected)].cls}`}>
-                  {PLACEMENT_META[rowPlacement(selected)].label}
-                </span>
-                <span className="k">priority</span>
-                <span className="v">{selected.priority}</span>
-                <span className="k">order</span>
-                <span className="v">{selected.order}</span>
-                <span className="k">droppable</span>
-                <span className="v">{String(selected.droppable)}</span>
-                <span className="k">budget</span>
-                <span className="v">
-                  {selected.budgetTokens != null && selected.budgetTokens > 0
-                    ? `${formatTokens(selected.budgetTokens)}（硬顶）`
-                    : rowPlacement(selected) === 'snapshot'
-                      ? '无硬顶 · 计入快照组'
-                      : snapshot?.structureReserve != null
-                        ? `无硬顶 · 共享 contentBudget ${formatTokens(Math.max(0, snapshot.systemBudget - snapshot.structureReserve))}`
-                        : '无硬顶 · contentBudget 未随快照下发'}
-                </span>
-                <span className="k">tokens</span>
-                <span className="v">{formatTokens(selected.tokens)}</span>
-                <span className="k">sources</span>
-                <span className="v">{selected.sources?.join(', ') || '—'}</span>
-                <span className="k">reason</span>
-                <span className={`v ${selected.reason ? (selected.status === 'error' ? 'status-error' : 'status-warn') : ''}`}>
-                  {selected.reason || '—'}
-                </span>
-              </div>
-              {selected.dropped && (
-                <div className="small status-warn" style={{ marginTop: 6 }}>
-                  dropped: {selected.dropped}
-                </div>
-              )}
-
-              <div className="ctx-section-title" style={{ marginTop: 10 }}>层内容</div>
-              {loadingContent ? (
-                <div className="small muted" style={{ marginTop: 6 }}>正在加载层内容…</div>
-              ) : selected.content ? (
-                <div className="ctx-layer-content">
-                  <div className="ctx-layer-content-meta">
-                    <span className="mono">
-                      {selected.content.length} chars · {formatTokens(selected.tokens)} tokens
-                    </span>
-                  </div>
-                  <pre className="ctx-layer-content-body">{selected.content}</pre>
-                </div>
-              ) : selected.preview ? (
-                <div className="ctx-layer-content">
-                  <div className="ctx-layer-content-meta">
-                    <span className="mono muted">preview（未含全文）</span>
-                  </div>
-                  <pre className="ctx-layer-content-body">{selected.preview}</pre>
-                </div>
-              ) : (
-                <div className="small muted" style={{ marginTop: 6 }}>
-                  {selected.status === 'empty' || selected.status === 'unregistered' || selected.status === 'idle'
-                    ? '本层本轮无正文。'
-                    : '无层内容。请确认 contextAssembler.includeLayerContent=true 并重新装配一轮。'}
-                </div>
-              )}
-            </>
-          )}
         </div>
       </section>
 

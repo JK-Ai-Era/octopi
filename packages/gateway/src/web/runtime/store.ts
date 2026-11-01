@@ -46,56 +46,15 @@ import type {
   AssembleManifest,
   ContextLayerId,
 } from '@octopi-agent/engine/harness/context/layer-types.js';
-import type {
-  ContextLayerHealthDto,
-  ContextLayerTurnSummaryDto,
-  LayerRuntimeViewDto,
-} from '../sdk/client.js';
+import type { ContextLayerHealthDto } from '../sdk/client.js';
 import type {
   ObserverStatusDto,
   RunMessagesSnapshotDto,
   RunObservatorySnapshotDto,
 } from '../sdk/client.js';
 
-/** 近 N 轮 layer timeline 上限 */
-const CONTEXT_TURN_HISTORY_MAX = 20;
-
 /** 打开会话时先取末尾一页；向上滚动再往前拼页（仅影响 UI 展示，不影响 LLM 装配） */
 const HISTORY_PAGE_SIZE = 100;
-
-/**
- * 装配快照 → 近轮 timeline 摘要（唯一推导处）。
- *
- * E8 双组分账：system 行进 included/dropped，snapshot 行进 snapshotIncluded/snapshotDropped；
- * 同 id 双条目（如 runtime 双份）按 placement 分列，id 在各组内去重（system 主行优先）。
- *
- * @param snapshot - System 装配快照
- * @returns 轮次摘要
- */
-function summaryFromSnapshot(snapshot: ContextLayersSnapshot): ContextLayerTurnSummaryDto {
-  const isSnapshotRow = (l: { placement?: 'system' | 'snapshot' }): boolean =>
-    l.placement === 'snapshot';
-  const uniq = (rows: Array<{ id: string }>): LayerRuntimeViewDto['id'][] =>
-    [...new Set(rows.map((l) => l.id))] as LayerRuntimeViewDto['id'][];
-  return {
-    assembledAt: snapshot.assembledAt,
-    usedTokens: snapshot.usedTokens,
-    usedSnapshotTokens: snapshot.usedSnapshotTokens,
-    systemBudget: snapshot.systemBudget,
-    included: uniq(snapshot.layers.filter((l) => l.included && !isSnapshotRow(l))),
-    dropped: uniq(
-      snapshot.layers.filter(
-        (l) => (l.status === 'dropped' || l.status === 'error') && !isSnapshotRow(l),
-      ),
-    ),
-    snapshotIncluded: uniq(snapshot.layers.filter((l) => l.included && isSnapshotRow(l))),
-    snapshotDropped: uniq(
-      snapshot.layers.filter(
-        (l) => (l.status === 'dropped' || l.status === 'error') && isSnapshotRow(l),
-      ),
-    ),
-  };
-}
 
 // ──────────────────────────────────────
 // Events
@@ -223,8 +182,6 @@ export interface InspectorState {
   compact?: CompactStatus;
   /** System 装配快照（产品 L1–L7；context.layers.assembled / REST） */
   contextLayers?: ContextLayersSnapshot;
-  /** 近 N 轮装配摘要（timeline） */
-  contextLayersTimeline?: ContextLayerTurnSummaryDto[];
   /** Agent 数据面健康（产品 L1–L7 store 计数；REST） */
   contextHealth?: ContextLayerHealthDto;
   /** Run 观测投影（Observer 通道） */
@@ -1199,16 +1156,6 @@ export class OctopiRuntimeStore extends EventTarget {
       const patch: Partial<InspectorState> = {};
       if (layers) {
         patch.contextLayers = layers;
-        const turn = summaryFromSnapshot(layers);
-        const prev = cached?.inspector?.contextLayersTimeline ?? this.chat.inspector.contextLayersTimeline ?? [];
-        const last = prev[prev.length - 1];
-        const isDup =
-          last &&
-          layers.assembledAt !== undefined &&
-          last.assembledAt === layers.assembledAt;
-        patch.contextLayersTimeline = isDup
-          ? [...prev]
-          : [...prev, turn].slice(-20);
       }
       if (health) {
         patch.contextHealth = health;
@@ -2005,20 +1952,9 @@ export class OctopiRuntimeStore extends EventTarget {
             fallback: d.fallback,
             fallbackError: d.fallbackError,
           });
-          const turn = summaryFromSnapshot(snapshot);
-          const prevTimeline = this.chat.inspector.contextLayersTimeline ?? [];
-          const last = prevTimeline[prevTimeline.length - 1];
-          const isDup =
-            last &&
-            snapshot.assembledAt !== undefined &&
-            last.assembledAt === snapshot.assembledAt;
-          const nextTimeline = isDup
-            ? prevTimeline
-            : [...prevTimeline, turn].slice(-CONTEXT_TURN_HISTORY_MAX);
           this.chat.inspector = {
             ...this.chat.inspector,
             contextLayers: snapshot,
-            contextLayersTimeline: nextTimeline,
           };
           inspectorChanged = true;
           // 装配后刷新数据面健康（打开会话时 Agent 可能尚未 build）
@@ -2203,19 +2139,9 @@ export class OctopiRuntimeStore extends EventTarget {
           fallback: d.fallback,
           fallbackError: d.fallbackError,
         });
-        const turn = summaryFromSnapshot(snapshot);
-        const prevTimeline = inspector.contextLayersTimeline ?? [];
-        const last = prevTimeline[prevTimeline.length - 1];
-        const isDup =
-          last &&
-          snapshot.assembledAt !== undefined &&
-          last.assembledAt === snapshot.assembledAt;
         inspector = {
           ...inspector,
           contextLayers: snapshot,
-          contextLayersTimeline: isDup
-            ? prevTimeline
-            : [...prevTimeline, turn].slice(-CONTEXT_TURN_HISTORY_MAX),
         };
       }
     }

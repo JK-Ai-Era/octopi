@@ -108,6 +108,29 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.7 (2026-11-01)
+
+### feat(webui): 上下文层详情改为卡片下就地展开
+
+- **背景**：右栏「上下文」页签点击层卡片后，详情只出现在面板底部独立的「层详情」区块，需滚动往返，层与其详情被割裂。
+- **改动**：点击卡片即在**该卡片下方**展开层详情（placement / budget / tokens / sources / reason / dropped / 正文或 preview），卡片加 `▾/▸` 折叠指示与 `aria-expanded`；再次点击收起，单开手风琴（同时只展开一层）；原「点选后按需拉取层内容」的按需加载行为保留。底部独立「层详情」区块及其选层联动一并移除，`.ctx-detail-title` 样式随之删除。
+- **同时移除「近轮 Timeline」区块**（大哥判断意义不大）：面板不再有逐轮 L1–L7 纳入格矩阵，配套 `.ctx-timeline*` 样式删除。
+- **行为变化**：不再默认选中首层——打开面板时全部收起，避免首层详情常驻占用高度。
+- **验证**：`packages/webui` `tsc -b && vite build` 通过，`npm run lint` 通过；`packages/webui/DESIGN.md` 交互说明同步。
+
+### refactor(gateway)!: 退役 `contextLayersTimeline` 装配历史通路
+
+- **背景**：该字段最初是为「点某一轮查看各轮装配差异」准备的，但差分层一直缺数据基础：
+  1. **历史从未落盘**——`context.layers.assembled` 只经 `runner.emitObserved()` 进 EventBus 与 ObserverHub；Gateway `lastContextLayers`（`gateway.ts:430`）与 ObserverHub `contextLayersBySession`（`hub.ts:149`）都是「每会话只留最后一次」的内存 Map，`context.layers.assembled` 不进 session jsonl。历史只存在于浏览器在线期间 WS 累积的 store 数组（上限 20），刷新即失。
+  2. **粒度不足**——`summaryFromSnapshot()` 只保留层 id 的 `included/dropped/snapshotIncluded/snapshotDropped` 集合与总量 token，没有每层 tokens / order / priority / reason，且同 id 双份（runtime 锚点份与易变份）被去重合并。即便历史存在也只能回答「某层在不在」，回答不了「涨了多少、被谁挤掉、为什么」。
+- **改动**：删除 `web/runtime/store.ts` 的 `contextLayersTimeline` 字段、`summaryFromSnapshot()` 推导、`CONTEXT_TURN_HISTORY_MAX` 常量与三处累计点（打开会话播种、前台事件、后台会话）；删除 `web/sdk/client.ts` 的 `ContextLayerTurnSummaryDto`。`InspectorState.contextLayers`（当前轮快照）保留不变。
+- **BREAKING**：`InspectorState.contextLayersTimeline` 与导出的 `ContextLayerTurnSummaryDto` 移除。仓库内无其他消费者；第三方若读取该字段需改读 `contextLayers`（仅当前轮）。
+- **测试**：`tests/web/runtime-context-layers.test.ts` 的 timeline 用例改写为「多轮装配以最后一轮快照覆盖 `inspector.contextLayers`」，保留对 last-snapshot-wins 行为的覆盖。
+- **后续**：若重启「跨轮装配差异」洞察，需独立设计「每轮装配落盘（append-only，正文走内容寻址 blob 引用）+ 结构化 diff + 保留策略」，不是恢复本字段。
+- **验证**：`npm run build` 与 `npm run lint` 通过；`npx vitest run tests/web` 71/71 通过。
+
+---
+
 ## v0.98.6 (2026-11-01)
 
 ### fix(budget): ask_user 等人时长不计入 wall-clock——修「答案到达即被判停」误杀
