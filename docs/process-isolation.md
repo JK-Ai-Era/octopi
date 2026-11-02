@@ -286,7 +286,9 @@ an explicit `opsAuditPath` makes the journal shared at your own risk): `ops.jail
 (jail intent × probed backend), `ops.command.executed`
 (unified action record: argv, cwd, exit code, duration, `escalated`, `confirmed`,
 jail summary, origin), `ops.system_path.write` (writes outside the effect roots), `ops.policy.degraded`,
-and `ops.config.security_changed`.
+`ops.config.security_changed`, `ops.kill_switch.tripped`, and `ops.knowledge.run_refused`
+(run-admission refusals under `knowledge.required` — same ledger + observed-event
+treatment as the drift/kill-switch guards).
 Entries form a hash chain (`verify()` detects edits, insertions, and mid-file
 truncation; **tail truncation or whole-file deletion needs an external witness** —
 that is the P5 export tier, per the honesty principle). On top of that, a

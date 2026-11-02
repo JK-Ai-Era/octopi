@@ -31,6 +31,7 @@ export type OpsAuditEvent =
   | 'ops.system_path.write'
   | 'ops.policy.degraded'
   | 'ops.config.security_changed'
+  | 'ops.knowledge.run_refused'
   | 'ops.escalation.requested'
   | 'ops.escalation.denied'
   | 'ops.privileged.exec'

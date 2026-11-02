@@ -50,36 +50,51 @@ describe('dispatcher 咽喉接线（wrapInflightTracking.execute）', () => {
     return { inbox: undefined, execute } as never;
   }
 
-  it('知识未 ready：run 在咽喉被拒（错误带前缀，inner 不被触达）', async () => {
+  it('知识未 ready：run 在咽喉被拒（错误带前缀，inner 不被触达）+ 三件套记账', async () => {
     const gw = gatewayWithKnowledge('degraded');
     const inner = fakeInner();
+    const recordAdmissionRefusal = vi.fn();
     const wrapped = (
       gw as never as {
         wrapInflightTracking(r: unknown, i: unknown): { execute(req: unknown): AsyncIterable<unknown> };
       }
-    ).wrapInflightTracking({} as never, inner);
+    ).wrapInflightTracking({ recordAdmissionRefusal } as never, inner);
 
-    const iter = wrapped.execute({} as never);
+    const iter = wrapped.execute({ agentId: 'a1', sessionId: 's1' } as never);
     await expect(
       (async () => {
         for await (const _ of iter) void _;
       })(),
     ).rejects.toThrow(/^knowledge_required:/);
     expect((inner as never as { execute: ReturnType<typeof vi.fn> }).execute).not.toHaveBeenCalled();
+    // 三件套对齐（ops P2）：与 security_config_drift / kill_switch_active 同待遇
+    expect(recordAdmissionRefusal).toHaveBeenCalledTimes(1);
+    expect(recordAdmissionRefusal).toHaveBeenCalledWith(
+      'ops.knowledge.run_refused',
+      expect.objectContaining({
+        state: 'degraded',
+        action: 'refuse_new_run',
+        reason: expect.stringMatching(/^knowledge_required:/),
+        origin: { agentId: 'a1', sessionId: 's1' },
+      }),
+      { agentId: 'a1', sessionId: 's1' },
+    );
   });
 
-  it('知识 ready：run 正常透达 inner', async () => {
+  it('知识 ready：run 正常透达 inner（不记账）', async () => {
     const gw = gatewayWithKnowledge('ready');
     const inner = fakeInner();
+    const recordAdmissionRefusal = vi.fn();
     const wrapped = (
       gw as never as {
         wrapInflightTracking(r: unknown, i: unknown): { execute(req: unknown): AsyncIterable<unknown> };
       }
-    ).wrapInflightTracking({} as never, inner);
+    ).wrapInflightTracking({ recordAdmissionRefusal } as never, inner);
 
     const events: unknown[] = [];
     for await (const ev of wrapped.execute({} as never)) events.push(ev);
     expect(events).toEqual(['run-event']);
     expect((inner as never as { execute: ReturnType<typeof vi.fn> }).execute).toHaveBeenCalledTimes(1);
+    expect(recordAdmissionRefusal).not.toHaveBeenCalled();
   });
 });

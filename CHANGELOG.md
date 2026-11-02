@@ -108,6 +108,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.14 (2026-11-02)
+
+### feat(knowledge): required 可运维性两件收口 — manageLocal 子进程自愈 + 拒 run 三件套审计
+
+- **自愈（拍板）**：manageLocal 子进程意外退出/首启失败 → 指数退避自动重启（1s→2s→…封顶 60s，无限次——宿主活着就一直试；退避清零有 60s 稳定期，「起来即死」型 crash-loop 不会钉死在 1s 退避）；恢复 ready 即放行 run。`knowledge.required` 的拒 run 窗口从「直到网关重启」缩为「直到子进程回来」。失败/中止统一清理（作废旧代 exit 回调 + 兜停孤儿进程，防端口占用放大故障）。生命周期事件 `knowledge.service.{exited,restarting,recovered,restart_failed}` 经 gateway 事件总线广播 WS；`recovered` 后自动重挂 SSE 进度订阅并补扫错过的 `describe-pending`（停机闸防停机后反手拉起）。进程假死（不退出、健康探针无 watchdog）不在自愈范围，见 docs/knowledge.md 知识面边界。
+- **三件套审计（拍板，对齐 ops P2 评审项）**：`knowledge_required` 拒 run 与 `security_config_drift`/`kill_switch_active` 同待遇——`recordOpsAudit('ops.knowledge.run_refused', …)`（ops 账本，含 state/action/origin）+ `emitObserved`（Observer Hub/EventBus）+ run 通道报错。新增 Runner 公开口 `recordAdmissionRefusal(event, data, origin)`（账本+观测双写；准入拒绝发生在 run 起点之前，origin 补锚，且不受上一轮 run 的 `effectOpsAudit` 粘滞值影响——否则审计会被静默吞掉）；`ops.knowledge.run_refused` 入 `OpsAuditEvent` 词表。
+- 评审修复（提交前，fresh-eyes P0×1/P1×3/P2×12 核实）：**P0** stop() 与在途重启无交会——停机后孤儿复活/`recovered` 重建 runtime（launchLocal 中止闸 + started 闸锁死）；**P1** 健康失败孤儿不兜停（一次抖动放大 30s+ 拒 run，清理下沉 launchLocal 共享）、五处 `as never` 断型、recovered 后重挂/补扫无用例；**P2** 粘滞 opsAudit 吞账、recovered 双扫、退避无稳定期、`recordOpsEvent` 与工具上下文同名回调冲突（改名）、docs 账本枚举补齐、其余小项。
+- 测试 +9（退避纯函数、退出→重启→恢复、首启失败重试、连续失败 attempt 递增、stop 取消挂起重试、stop×在途重启竞态锁、孤儿兜停锁、recovered 重挂/单扫锁、闸门三件套断言）。文档：knowledge.md/.zh（required/状态行语义 + 修正「required 暂未生效」陈旧句 + 假死边界）、docs/process-isolation.md/.zh（账本枚举）、arch/NEXT-STEPS.md。
+
+---
+
 ## v0.98.13 (2026-11-02)
 
 ### feat(knowledge): LLM describe 端口落地（B 方案）— gateway 代生成 + 强制来源标注

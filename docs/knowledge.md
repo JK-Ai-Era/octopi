@@ -75,7 +75,7 @@ The Knowledge data plane is a **standalone HTTP Service** (sole writer), not an 
 - **Contract** (internal spec, not public): token → `(tenantId, gatewayId)`; business keys must not be forged from the body
 - **Wiring**: `knowledge.service.manageLocal` (default `true`) → **fork a child process** on this machine to bring up the Service, default port **18280**; `manageLocal: false` + `baseUrl` → connect to remote only; neither → knowledge plane `disabled`
 - **Single writer**: `knowledge.db.writer.lock` (held by the **Service process**, not the Gateway)
-- **State**: `ready` / `degraded` / `disabled` (visible when the Service fails to start; `knowledge.required` fail-closed is planned but **not yet effective** — see KNOWN-ISSUES)
+- **State**: `ready` / `degraded` / `disabled` (`knowledge.required` fail-closed is effective: non-`ready` refuses new runs, each refusal audited as `ops.knowledge.run_refused`; manageLocal failures **self-heal** with exponential-backoff restart, so `degraded` is transient. Known boundary: a hung-but-alive child process is not covered — self-heal triggers on process exit/start failure only)
 
 #### 2.1.1 In-process thread boundaries (do not push heavy work back onto the main thread)
 
@@ -293,7 +293,7 @@ Retrieval results are **returned itemized with sources**; no silent merging.
 | `service.port` | manageLocal listen port (default **18280**; tests may use `0`) |
 | `service.timeoutMs` | Service request timeout (write path; reads use `12s`) |
 | `service.connectTimeoutMs` | manageLocal startup handshake wait (fork→ready, default **30s**); remote mode has no separate connect phase |
-| `required` | When `true`, new runs are refused unless the Knowledge Service is `ready` (run-admission gate; default `false` = fail-open). A `degraded`/`disabled` state refuses **all** new runs until recovery — the gateway logs a startup warning and a restart retries boot |
+| `required` | When `true`, new runs are refused unless the Knowledge Service is `ready` (run-admission gate; default `false` = fail-open). Every refusal is audited (`ops.knowledge.run_refused` → ops ledger + observed event). manageLocal child failures **self-heal**: exponential-backoff restart (1s→60s cap, unlimited), so refusals last only while the service is down — not until a Gateway restart |
 | `recall` | Content recall mode (see §5) |
 | `autoInject.*` | Injection thresholds (`minScore`/`minCoverage` are retriever-side), count, budget |
 | `keywordWeight` | Hybrid fusion weight for the keyword leg (retriever) |

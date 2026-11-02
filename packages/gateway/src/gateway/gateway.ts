@@ -3403,6 +3403,9 @@ export class Gateway {
           ...(embForVec?.sqliteVecExtensionPath
             ? { sqliteVecExtensionPath: embForVec.sqliteVecExtensionPath }
             : {}),
+          // 子进程生命周期观测：WS 可见（exited/restarting/recovered/restart_failed）；
+          // recovered 后重挂 SSE 进度订阅并补扫错过的 describe-pending
+          onLifecycle: (e) => void this.handleKnowledgeLifecycle(e).catch(() => undefined),
         });
         this.knowledgeRuntimeRef = rt;
         void this.startKnowledgeProgressForwarding().catch(() => undefined);
@@ -3410,6 +3413,42 @@ export class Gateway {
       })();
     }
     return this.knowledgeRuntimePromise;
+  }
+
+  /**
+   * Knowledge Service 生命周期观测（宿主级，自愈 2026-11-02）：
+   * exited/restarting/recovered/restart_failed → WS 事件；recovered 后重挂 SSE
+   * 订阅（旧连接随子进程死亡）并补扫错过的 describe-pending。
+   */
+  private async handleKnowledgeLifecycle(evt: {
+    type: string;
+    data: Record<string, unknown>;
+  }): Promise<void> {
+    // P0-1 gateway 侧闸：停机后生命周期事件不得反手拉起新 runtime/SSE
+    if (!this.started) return;
+    const ts = Date.now();
+    const event = {
+      type: evt.type,
+      sessionId: '*',
+      timestamp: ts,
+      data: evt.data,
+    } as unknown as AgentEvent;
+    this.emitEvent(event);
+    for (const adapter of this.streamingAdapters) {
+      // 系统级生命周期：广播给全部 WS 会话（同 broadcastIssue）
+      adapter.broadcastEvent('*', event);
+    }
+    if (evt.type === 'knowledge.service.recovered') {
+      try {
+        // 前向订阅幂等门拦的是「已挂」，旧 SSE 已死必须显式作废再重挂；
+        // startKnowledgeProgressForwarding 尾部自带 sweep 补扫（勿重复调用）
+        this.knowledgeProgressForward?.();
+        this.knowledgeProgressForward = undefined;
+        await this.startKnowledgeProgressForwarding();
+      } catch {
+        /* 自愈后重挂失败不影响 run；下次 recovered 再试 */
+      }
+    }
   }
 
   /**
@@ -5070,6 +5109,20 @@ export class Gateway {
           tracker.getKnowledgeState(),
         );
         if (gateError) {
+          // 三件套对齐（ops P2）：与 security_config_drift / kill_switch_active 同待遇——
+          // 账本 + 观测 + run 通道报错。required 拒 run 是知识面故障下最响的事件，
+          // 不得只留用户侧报错（监控盲区/审计缺口）。
+          const origin = { agentId: req.agentId, sessionId: req.sessionId };
+          runner.recordAdmissionRefusal(
+            'ops.knowledge.run_refused',
+            {
+              state: tracker.getKnowledgeState(),
+              action: 'refuse_new_run',
+              reason: gateError,
+              origin,
+            },
+            origin,
+          );
           return (async function* () {
             throw new Error(gateError);
           })();

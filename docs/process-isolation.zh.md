@@ -248,7 +248,7 @@ JSONL 账本（缺省 `<OCTOPI_HOME>/audit/ops.<agentId>.jsonl`——按 agent �
 并发追加各为单写者，链严格成立；显式 `opsAuditPath` 共享文件需自担并发风险）追加：
 `ops.jail.state`（jail 意图 × 实测后端）、`ops.command.executed`（统一动作记录：argv、cwd、退出码、耗时、`escalated`、
 `confirmed`、jail 摘要、归属）、`ops.system_path.write`（效应 root 之外的写入）、`ops.policy.degraded`、
-`ops.config.security_changed`。账目
+`ops.config.security_changed`、`ops.kill_switch.tripped`、`ops.knowledge.run_refused`（`knowledge.required` 的 run 准入拒绝——与漂移/急停守卫同待遇，账本+观测双写）。账目
 成 hash 链（`verify()` 可查改写/插入/中段截断；**尾部截断与整文件删除需外部见证**——
 即 P5 外送档，见诚实性原则）。在此之上还有**安全配置漂移守卫**：启动期对安全相关字段
 （顶层 `effectPolicy`/`security`、per-agent `effectPolicy`/`tools`、插件加载路径）做指纹

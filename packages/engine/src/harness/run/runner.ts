@@ -627,9 +627,19 @@ export class SessionAwareRunner {
    *
    * @param event - §7 事件词表
    * @param data - 事件载荷（hash 走 canonicalJson，键序无关）
+   * @param opts.ignoreRunOverride - true = 忽略 run 级 effectOpsAudit 粘滞值
+   *   （准入拒绝发生在 run 起点之前，不受上一轮 run 的 opsAudit:'off' 影响）
    */
-  private recordOpsAudit(event: OpsAuditEvent, data: Record<string, unknown>): void {
-    if ((this.effectOpsAudit ?? this.config.effectPolicy?.opsAudit ?? 'on') !== 'on') return;
+  private recordOpsAudit(
+    event: OpsAuditEvent,
+    data: Record<string, unknown>,
+    opts?: { ignoreRunOverride?: boolean },
+  ): void {
+    const mode =
+      (opts?.ignoreRunOverride ? undefined : this.effectOpsAudit) ??
+      this.config.effectPolicy?.opsAudit ??
+      'on';
+    if (mode !== 'on') return;
     if (!this.opsJournal) {
       // 缺省按 agent 分文件：多 agent 并发追加同一文件会共享 tail → seq 撞号，
       // verify 会误报断裂。分文件 = 各自单写者，链严格成立。
@@ -664,6 +674,35 @@ export class SessionAwareRunner {
         `ops_audit_write_failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * 对外 ops 记账口（账本 + 观测双写）——run 准入拒绝等发生在 Runner 执行流之外、
+   * 但属同一 ops 语义面的事件（如 gateway 侧 knowledge.required 闸门）用它对齐
+   * `ops.config.security_changed` / `ops.kill_switch.tripped` 的三件套待遇。
+   * （不叫 recordOpsEvent：与工具上下文的同名回调（仅账本）区分。）
+   *
+   * @param event - §7 事件词表
+   * @param data - 事件载荷（hash 走 canonicalJson，入账本）
+   * @param origin - 触发者锚点（观测事件的 agentId/sessionId；账本锚未落定时补锚）
+   */
+  recordAdmissionRefusal(
+    event: OpsAuditEvent,
+    data: Record<string, unknown>,
+    origin: { agentId: string; sessionId: string },
+  ): void {
+    // 账本按 agent 分文件：事件发生在 run 起点之前（如准入拒绝）时锚未落定，用 origin 补锚
+    if (!this.opsAuditAgentId) this.opsAuditAgentId = origin.agentId;
+    if (!this.opsAuditSessionId) this.opsAuditSessionId = origin.sessionId;
+    // 准入拒绝不受上一轮 run 的 effectOpsAudit 粘滞值影响（否则审计缺口重现）
+    this.recordOpsAudit(event, data, { ignoreRunOverride: true });
+    this.emitObserved({
+      type: event,
+      timestamp: Date.now(),
+      agentId: origin.agentId,
+      sessionId: origin.sessionId,
+      data: { ...data },
+    } as never);
   }
 
   /** 外送收口（懒建；仅配置了宿主侧收口路径时启用） */

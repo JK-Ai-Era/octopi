@@ -76,7 +76,7 @@ Knowledge 数据面是 **独立 HTTP Service**（唯一写者），不是 Gatewa
 - **契约**（内部规格，不对外）：token → `(tenantId, gatewayId)`；业务键不从 body 伪造
 - **装配**：`knowledge.service.manageLocal`（默认 `true`）→ 本机 **fork 子进程**拉起 Service，缺省端口 **18280**；`manageLocal: false` + `baseUrl` → 只连远程；二者皆无 → 知识面 `disabled`
 - **单写者**：`knowledge.db.writer.lock`（由 **Service 进程**持有，不是 Gateway）
-- **状态**：`ready` / `degraded` / `disabled`（Service 起不来时可感知；`knowledge.required` fail-closed 规划中**暂未生效**——见 KNOWN-ISSUES）
+- **状态**：`ready` / `degraded` / `disabled`（`knowledge.required` fail-closed 已生效：非 `ready` 拒新 run，每次拒绝记 `ops.knowledge.run_refused` 审计；manageLocal 故障**自愈**（指数退避自动重启），`degraded` 为过渡态。已知边界：子进程假死（存活但不健康）不在自愈范围——自愈仅由进程退出/启动失败触发）
 
 #### 2.1.1 进程内线程边界（勿把重活塞回主线程）
 
@@ -294,7 +294,7 @@ Tier 3  Full        「原文」                knowledge_read
 | `service.port` | manageLocal 监听端口（缺省 **18280**；测试可用 `0`） |
 | `service.timeoutMs` | Service 请求超时（写路径；读路径 `12s`） |
 | `service.connectTimeoutMs` | manageLocal 启动握手等待（fork→ready，缺省 **30s**）；远程模式无独立连接阶段 |
-| `required` | `true` 时知识运行时未达 `ready` 拒绝新 run（run 准入闸门；缺省 `false` = fail-open）。`degraded`/`disabled` 期间**全部**新 run 被拒直至恢复——gateway 启动时会显式告警，重启网关可重试拉起 |
+| `required` | `true` 时知识面非 `ready` 就拒新 run（run 准入闸门；缺省 `false` = fail-open）。每次拒绝记审计（`ops.knowledge.run_refused` → ops 账本 + 观测事件）。manageLocal 故障**自愈**：指数退避自动重启（1s→60s 封顶、无限次），拒 run 窗口=服务缺席窗口，不再拖到网关重启 |
 | `recall` | 内容召回模式（见 §5） |
 | `autoInject.*` | 注入门槛（`minScore`/`minCoverage` 走检索侧）、条数、预算 |
 | `keywordWeight` | 关键词腿混合融合权重（检索侧） |

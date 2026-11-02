@@ -233,6 +233,51 @@ describe('事件接线 + 手动触发', () => {
   });
 });
 
+describe('自愈 recovered 重挂（P1-3/P2-4 锁）', () => {
+  it('recovered → 重挂 SSE 前向订阅并补扫一次（勿双扫）', async () => {
+    const client = fakeClient();
+    let subscribeCount = 0;
+    const { gw } = gatewayWith(client, {
+      levels: { mini: { primary: 'p/m1' } },
+      subscribe: () => {
+        subscribeCount += 1;
+      },
+    });
+    (gw as never as { started: boolean }).started = true;
+    await gw.startKnowledgeProgressForwarding();
+    expect(subscribeCount).toBe(1);
+    await new Promise((r) => setTimeout(r, 30)); // forwarding 尾部 sweep 是 fire-and-forget
+    expect(client.listDescribePending).toHaveBeenCalledTimes(1); // forwarding 尾部的 sweep
+
+    await (
+      gw as never as { handleKnowledgeLifecycle(e: unknown): Promise<void> }
+    ).handleKnowledgeLifecycle({ type: 'knowledge.service.recovered', data: {} });
+    expect(subscribeCount).toBe(2); // 旧 SSE 已死，重挂
+    await new Promise((r) => setTimeout(r, 30));
+    // P2-4：recovered 只补扫一次（重挂路径尾部）——修复前 handler+tail 双份 = 3 次
+    expect(client.listDescribePending).toHaveBeenCalledTimes(2);
+  });
+
+  it('停机后（started=false）生命周期事件被闸掉：不重挂、不新建 runtime', async () => {
+    const client = fakeClient();
+    let subscribeCount = 0;
+    const { gw } = gatewayWith(client, {
+      levels: { mini: { primary: 'p/m1' } },
+      subscribe: () => {
+        subscribeCount += 1;
+      },
+    });
+    (gw as never as { started: boolean }).started = true;
+    await gw.startKnowledgeProgressForwarding();
+    (gw as never as { started: boolean }).started = false;
+    await (
+      gw as never as { handleKnowledgeLifecycle(e: unknown): Promise<void> }
+    ).handleKnowledgeLifecycle({ type: 'knowledge.service.recovered', data: {} });
+    expect(subscribeCount).toBe(1);
+    expect(client.listDescribePending).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('WebApiRouter 手动 describe 路由（P1-1 真接线锁）', () => {
   interface CallResult {
     status: number;
