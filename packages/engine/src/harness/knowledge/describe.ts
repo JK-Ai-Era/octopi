@@ -70,10 +70,25 @@ export async function generateKnowledgeDescription(
     if (!trimmed) {
       return { description: heuristicDescription(source), source: 'heuristic' };
     }
-    return { description: trimmed.slice(0, 300), source: 'llm' };
+    return { description: normalizeGeneratedDescription(trimmed), source: 'llm' };
   } catch {
     return { description: heuristicDescription(source), source: 'heuristic' };
   }
+}
+
+/**
+ * 描述文本归一：折叠空白为单行、剥行首列表标记，钳 300 字符。
+ *
+ * generatedDescription 会拼进系统提示的 catalog `purpose:` 行（layers.ts）；
+ * 多行文本可伪造额外 catalog 行/指令行（内容→LLM→system prompt 间接注入面），
+ * 必须在**写入侧**归一，而不是只靠渲染侧。
+ */
+export function normalizeGeneratedDescription(text: string): string {
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/^[\-*#>·•]+\s*/, '')
+    .trim()
+    .slice(0, 300);
 }
 
 /**
@@ -88,5 +103,7 @@ export function heuristicDescription(source: {
 }): string {
   const loc = source.location.replace(/[\\/]+$/, '');
   const tail = loc.split(/[\\/]/).filter(Boolean).slice(-2).join('/');
-  return `derived: ${source.kind} corpus «${source.displayName}»${tail ? ` (${tail})` : ''}; search when you need what this corpus documents`;
+  return normalizeGeneratedDescription(
+    `derived: ${source.kind} corpus «${source.displayName}»${tail ? ` (${tail})` : ''}; search when you need what this corpus documents`,
+  );
 }

@@ -2,6 +2,8 @@
  * KnowledgeClient — Gateway 侧 RPC（不打开 knowledge.db）
  */
 
+import type { KnowledgeSourceKind } from './types.js';
+
 export interface KnowledgeClientOptions {
   baseUrl: string;
   token: string;
@@ -314,8 +316,38 @@ export class KnowledgeClient {
     );
   }
 
-  describeSource(sourceId: string): Promise<{ generatedDescription: string; source: string }> {
-    return this.request('POST', `/v1/sources/${encodeURIComponent(sourceId)}/describe`);
+  describeSource(
+    sourceId: string,
+    input?: { description: string; source?: 'llm' | 'heuristic' },
+  ): Promise<{ generatedDescription: string; source: string }> {
+    return this.request(
+      'POST',
+      `/v1/sources/${encodeURIComponent(sourceId)}/describe`,
+      input as unknown,
+    );
+  }
+
+  /** B 方案取素材（Service 侧密钥扫描把关；blocked=true 时无 sample） */
+  getDescribeSample(sourceId: string): Promise<
+    | {
+        blocked: false;
+        meta: { displayName: string; kind: KnowledgeSourceKind; location: string };
+        sample: string;
+      }
+    | { blocked: true; secretHits: string[] }
+  > {
+    return this.request(
+      'GET',
+      `/v1/sources/${encodeURIComponent(sourceId)}/describe-sample`,
+      undefined,
+      undefined,
+      { read: true },
+    );
+  }
+
+  /** 待 LLM 升级的源 id（boot sweep 用） */
+  listDescribePending(): Promise<string[]> {
+    return this.request('GET', '/v1/describe-pending', undefined, undefined, { read: true });
   }
 
   listChunks(

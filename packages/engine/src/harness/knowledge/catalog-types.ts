@@ -18,6 +18,8 @@ export interface KnowledgeCatalogItem {
   status?: string;
   /** 一行用途说明（人工 description 或 generatedDescription） */
   description?: string;
+  /** description 的生成方（信任分级 human > llm > heuristic）；仅自动描述时存在 */
+  descriptionSource?: 'human' | 'llm' | 'heuristic';
   /** global | project | session */
   scopeLevel?: string;
   /** 规模粗标，如 "~1.2k files" / "small" */

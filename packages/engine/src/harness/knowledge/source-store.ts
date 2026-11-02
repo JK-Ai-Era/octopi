@@ -68,12 +68,23 @@ function toCatalogItem(
   source: KnowledgeSource,
   extras?: { fileCount?: number; topics?: string[] },
 ): KnowledgeCatalogItem {
+  const human = source.description?.trim();
+  const generated = source.generatedDescription?.trim();
   return {
     id: source.id,
     displayName: source.displayName,
     kind: source.kind,
     status: statusBucket(source.status),
-    description: source.description?.trim() || source.generatedDescription?.trim() || undefined,
+    description: human || generated || undefined,
+    // 信任分级（human > llm > heuristic）；blocked_secret 的文本是启发式，归 heuristic 档
+    ...(human
+      ? { descriptionSource: 'human' as const }
+      : generated
+        ? {
+            descriptionSource:
+              source.generatedDescriptionSource === 'llm' ? ('llm' as const) : ('heuristic' as const),
+          }
+        : {}),
     scopeLevel: source.scopeRef.level,
     scaleLabel: scaleLabel(source, extras?.fileCount),
     location: source.location,
@@ -104,6 +115,10 @@ function rowToSource(row: Record<string, unknown>): KnowledgeSource {
     description: row.description == null ? undefined : String(row.description),
     generatedDescription:
       row.generated_description == null ? undefined : String(row.generated_description),
+    generatedDescriptionSource:
+      row.generated_description_source == null
+        ? undefined
+        : (String(row.generated_description_source) as KnowledgeSource['generatedDescriptionSource']),
     catalogPriority: row.catalog_priority == null ? undefined : Number(row.catalog_priority),
     hiddenFromCatalog: Number(row.hidden_from_catalog) === 1,
     authRef: row.auth_ref == null ? undefined : String(row.auth_ref),
@@ -155,6 +170,7 @@ export class KnowledgeSourceStore {
       displayName,
       description: input.description,
       generatedDescription: input.generatedDescription,
+      generatedDescriptionSource: input.generatedDescriptionSource,
       catalogPriority: input.catalogPriority,
       hiddenFromCatalog: input.hiddenFromCatalog ?? false,
       authRef: input.authRef,
@@ -198,6 +214,14 @@ export class KnowledgeSourceStore {
               patch.generatedDescription === null
                 ? undefined
                 : patch.generatedDescription,
+          }
+        : {}),
+      ...(patch.generatedDescriptionSource !== undefined
+        ? {
+            generatedDescriptionSource:
+              patch.generatedDescriptionSource === null
+                ? undefined
+                : patch.generatedDescriptionSource,
           }
         : {}),
       ...(patch.catalogPriority !== undefined ? { catalogPriority: patch.catalogPriority } : {}),
@@ -872,9 +896,10 @@ export class KnowledgeSourceStore {
         `INSERT INTO knowledge_sources (
           id, kind, location, scope_level, scope_key, sync_json, status, coverage,
           errors_json, display_name, description, generated_description,
+          generated_description_source,
           catalog_priority, hidden_from_catalog, auth_ref, network_json, discover_json,
           last_polled_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           kind=excluded.kind,
           location=excluded.location,
@@ -887,6 +912,7 @@ export class KnowledgeSourceStore {
           display_name=excluded.display_name,
           description=excluded.description,
           generated_description=excluded.generated_description,
+          generated_description_source=excluded.generated_description_source,
           catalog_priority=excluded.catalog_priority,
           hidden_from_catalog=excluded.hidden_from_catalog,
           auth_ref=excluded.auth_ref,
@@ -908,6 +934,7 @@ export class KnowledgeSourceStore {
         source.displayName,
         source.description ?? null,
         source.generatedDescription ?? null,
+        source.generatedDescriptionSource ?? null,
         source.catalogPriority ?? null,
         source.hiddenFromCatalog ? 1 : 0,
         source.authRef ?? null,

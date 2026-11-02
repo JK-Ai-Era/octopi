@@ -216,7 +216,13 @@ export class KnowledgeLayer extends BaseLayer {
       const head = `- ${tags.join(' ')}`;
       const lines = [head];
       const desc = item.description?.trim();
-      if (desc) lines.push(`  purpose: ${desc}`);
+      // 强制标注（2026-11-02）：LLM 生成的描述会注入 prompt，必须可溯源；
+      // heuristic 文本自带 "derived:" 前缀、human 为权威默认，均不加标
+      if (desc) {
+        lines.push(
+          item.descriptionSource === 'llm' ? `  purpose: [llm] ${desc}` : `  purpose: ${desc}`,
+        );
+      }
       if (item.topics?.length) lines.push(`  topics: ${item.topics.join(' · ')}`);
       return lines.join('\n');
     };

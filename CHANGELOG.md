@@ -108,6 +108,26 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.13 (2026-11-02)
+
+### feat(knowledge): LLM describe 端口落地（B 方案）— gateway 代生成 + 强制来源标注
+
+- **架构（2026-11-02 拍板 B 方案）**：LLM 调用收敛在 gateway（凭证/调用面不进 Knowledge Service）。settle 时 Service 先落启发式 `generatedDescription` 并发 `describe-pending` 事件；gateway 经 `models.level`（mini→standard；未配置=仅启发式，绝不偷用主模型）生成 LLM 描述，从 `POST /v1/sources/:id/describe` 写入口以 `source: 'llm'` 回写；boot sweep（`GET /v1/describe-pending`）补错过窗口；手动触发 LLM 优先、启发式兜底。
+- **素材（拍板）**：源元数据 + 20 条 logical path + 路径派生 topics + 文件头 chunk（ordinal=0），总预算 4000 字符；在 Service 内组装并**过密钥形态扫描**——命中即 `blocked_secret`（素材不出 Service、不升级）。
+- **强制来源标注**：新增 `generated_description_source` 列（含旧库迁移；purge 标脏同清）；catalog `descriptionSource` 信任分级 human > llm > heuristic；llm 的 `purpose` 行注入系统提示时带 `[llm]` 前缀（启发式文本保留 `derived:` 自标）。
+- **新 REST 面**：describe 写入口（body `{description, source}`）、`GET …/describe-sample`（出 Service 边界的素材+封锁形态）、`GET /v1/describe-pending`；worker RPC / KnowledgeClient 同步传递。
+- **修复（假接线）**：`knowledge.catalog.autoDescribe=false` 从未传进 manageLocal 子进程——v0.98.11 的闸门在 gateway boot 调用点漏传 `tuning.autoDescribe`，「false=不自动生成」在真路径上是死的。已接线并加 boot-hop 回归锁。
+- **修复（并发）**：describe worker 按快照迭代队列，处理期间新入队的 id 会被漏掉（sweep 只处理 1/2）；改为活队列排水。
+- 测试 +25（素材组装/写入口/归因/settle/封锁/pending/purge/catalog 分级 + REST 真往返；gateway 端口/选型/升级流/事件接线/手动/boot hop）。文档：knowledge.md/.zh、KNOWN-ISSUES/.zh、arch/knowledge-layer.md、arch/knowledge-service-http.md、arch/NEXT-STEPS.md。
+
+### fix(knowledge): 独立评审修复（del-58397277）— settle 15s 重发环 / 描述注入面 / 手动入口真接线 / sweep 预算
+
+- **P0 修复**：`startReconciler` 每 15s 对稳态源反复触发 settle 钩子，原实现每 tick 重写启发式并重发 `describe-pending` → gateway 每 tick 一次 LLM 调用（无界 token 成本 + purpose 行抖动击穿前缀缓存）。现：llm 归因不降级不重发、文本无变化不写不发（补回归用例）。
+- **P1 修复**：(1) `autoDescribeKnowledgeSource` 原为死代码（无路由/SDK 调用方）而文档承诺「手动触发」——真接线 `POST /api/v1/agents/:id/knowledge/sources/:sid/describe` 路由 + `describeKnowledgeSource` SDK + 路由级用例；(2) 描述直达系统提示 catalog 行且保留换行（内容→LLM→system prompt 间接注入面）——写入侧强制单行归一（`normalizeGeneratedDescription`：折叠空白 + 剥行首列表标记 + 300 钳制，写入口与漏斗同用）；(3) boot sweep 无上限（存量启发式源首发即全语料 LLM 花费）——单 boot 限量 20 条滴灌。
+- **P2 修复**：LLM 调用加 30s 超时（超时即弃、启发式保底）；`models.level` 配置了却解析不到 provider 时显式 warn；升级流程先判模型再取素材（未配置 level 时零 HTTP/SQL 成本）。
+
+---
+
 ## v0.98.12 (2026-11-02)
 
 ### refactor(config)!: 配置键审计 §1c 收口 — 死键删除（温度链 / enableLLMSummary / summary.cache 后端）

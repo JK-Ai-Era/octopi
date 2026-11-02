@@ -10,7 +10,13 @@ import { KnowledgeSourceStore } from './source-store.js';
 import { KnowledgeIndexStore } from './index-store.js';
 import { MembershipStore } from './membership-store.js';
 import { KnowledgeIngest, type IngestProgressEvent } from './ingest.js';
-import { generateKnowledgeDescription } from './describe.js';
+import {
+  generateKnowledgeDescription,
+  normalizeGeneratedDescription,
+  type KnowledgeDescribeResult,
+} from './describe.js';
+import { assembleDescribeSample, DESCRIBE_SAMPLE_MAX_CHARS } from './describe-sample.js';
+import { scanSecretShapes } from './secret-scan.js';
 import type { KnowledgeSource, KnowledgeSourceInput } from './types.js';
 import type { KnowledgeJobControlState } from './job-control-state.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
@@ -43,6 +49,22 @@ export interface WriteRegisterResult extends KnowledgeSource {
 export interface WriteDescribeResult {
   generatedDescription: string;
   source: string;
+}
+
+/** gateway 代生成（B 方案）的抽样出 Service 边界形态：密钥扫描在此把关 */
+export type WriteDescribeSampleResult =
+  | {
+      blocked: false;
+      meta: { displayName: string; kind: string; location: string };
+      sample: string;
+    }
+  | { blocked: true; secretHits: string[] };
+
+/** describe 写入口（gateway 回写 LLM 描述） */
+export interface WriteDescribeInput {
+  description: string;
+  /** 缺省 'llm'（写入口的调用方是 gateway 的 LLM describe 流程） */
+  source?: 'llm' | 'heuristic';
 }
 
 export interface WriteReprocessResult {
@@ -91,7 +113,15 @@ export interface KnowledgeWriteService {
     identity: WriteIdentity,
     sourceId: string,
   ): Promise<{ id: string; purgedFiles: number }>;
-  describeSource(identity: WriteIdentity, sourceId: string): Promise<WriteDescribeResult | null>;
+  describeSource(
+    identity: WriteIdentity,
+    sourceId: string,
+    input?: WriteDescribeInput,
+  ): Promise<WriteDescribeResult | null>;
+  /** 抽样出 Service 边界（gateway 代生成取素材）；密钥命中即封锁不外发 */
+  describeSample(identity: WriteIdentity, sourceId: string): Promise<WriteDescribeSampleResult | null>;
+  /** 待 LLM 升级的源（heuristic/legacy 归因且无人工描述），供 gateway boot sweep */
+  listDescribePending(identity: WriteIdentity): Promise<string[]>;
 
   reindexSource(sourceId: string): Promise<void>;
   /** 按路径强制重解析（中止态自动 resume） */
@@ -393,19 +423,73 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
   async describeSource(
     identity: WriteIdentity,
     sourceId: string,
+    input?: WriteDescribeInput,
   ): Promise<WriteDescribeResult | null> {
     await this.assertSourceOwner(identity, sourceId);
     const src = this.sources.get(sourceId);
     if (!src) return null;
-    const paths = this.db.raw
-      .prepare(
-        'SELECT logical_path FROM knowledge_memberships WHERE source_id = ? ORDER BY logical_path LIMIT 20',
-      )
-      .all(sourceId) as Array<{ logical_path: string }>;
-    const sample = paths.map((p) => p.logical_path).join('\n') || src.location;
-    const r = await generateKnowledgeDescription(src, sample, { enabled: true });
-    this.sources.update(sourceId, { generatedDescription: r.description });
+    if (input?.description != null) {
+      // 写入口（B 方案回写）：调用方是 gateway 的 LLM describe 流程；内容在出 Service 前过密钥扫描，
+      // 但描述会进系统提示 catalog 行——写入侧强制单行归一（防多行注入伪造 catalog 行）
+      const text = normalizeGeneratedDescription(input.description);
+      if (!text) {
+        throw Object.assign(new Error('description empty'), { code: 'bad_request' });
+      }
+      const source = input.source === 'heuristic' ? 'heuristic' : 'llm';
+      this.sources.update(sourceId, {
+        generatedDescription: text,
+        generatedDescriptionSource: source,
+      });
+      return { generatedDescription: text, source };
+    }
+    const r = await this.describeWithSample(src);
+    this.sources.update(sourceId, {
+      generatedDescription: r.description,
+      generatedDescriptionSource: r.source === 'disabled' ? 'heuristic' : r.source,
+    });
     return { generatedDescription: r.description, source: r.source };
+  }
+
+  async describeSample(
+    identity: WriteIdentity,
+    sourceId: string,
+  ): Promise<WriteDescribeSampleResult | null> {
+    await this.assertSourceOwner(identity, sourceId);
+    const src = this.sources.get(sourceId);
+    if (!src) return null;
+    const sample = assembleDescribeSample(this.db, sourceId);
+    // 密钥形态封锁：命中即不外发样本（fail-safe，同 generateKnowledgeDescription 口径）
+    const secretHits = scanSecretShapes(sample);
+    if (secretHits.length > 0) return { blocked: true, secretHits };
+    return {
+      blocked: false,
+      meta: { displayName: src.displayName, kind: src.kind, location: src.location },
+      sample,
+    };
+  }
+
+  async listDescribePending(identity: WriteIdentity): Promise<string[]> {
+    // 待升级 = 有启发式/legacy 自动描述、无人工描述、归因非 llm（legacy NULL 视为 heuristic）
+    const rows = this.db.raw
+      .prepare(
+        `SELECT id FROM knowledge_sources
+          WHERE generated_description IS NOT NULL
+            AND description IS NULL
+            AND (generated_description_source IS NULL OR generated_description_source = 'heuristic')
+            AND status NOT IN ('removed', 'disabled')
+            AND (registered_by IS NULL OR registered_by = '' OR registered_by = ?)`,
+      )
+      .all(identity.gatewayId) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  /** 启发式/封锁描述生成（无 describePort：Service 侧永不含 LLM 出网，B 方案拍板） */
+  private describeWithSample(src: KnowledgeSource): Promise<KnowledgeDescribeResult> {
+    const sample = assembleDescribeSample(this.db, src.id);
+    return generateKnowledgeDescription(src, sample, {
+      enabled: true,
+      sampleChars: DESCRIBE_SAMPLE_MAX_CHARS,
+    });
   }
 
   private async assertSourceOwner(identity: WriteIdentity, sourceId: string): Promise<void> {
@@ -569,14 +653,27 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
         try {
           const src = sources.get(sourceId);
           if (!src || src.description?.trim()) return;
-          const paths = this.db.raw
-            .prepare(
-              'SELECT logical_path FROM knowledge_memberships WHERE source_id = ? ORDER BY logical_path LIMIT 20',
-            )
-            .all(sourceId) as Array<{ logical_path: string }>;
-          const sample = paths.map((p) => p.logical_path).join('\n') || src.location;
-          const r = await generateKnowledgeDescription(src, sample, { enabled: true });
-          sources.update(sourceId, { generatedDescription: r.description });
+          // llm 归因是更高信任档：settle 不降级、不重发（B 方案 2026-11-02）
+          if (src.generatedDescriptionSource === 'llm') return;
+          const r = await this.describeWithSample(src);
+          const source = r.source === 'disabled' ? 'heuristic' : r.source;
+          // startReconciler 每 15s 对稳态源反复触发本钩子（ingest.ts）：文本无变化则
+          // 不写不发，掐断「每 tick 重发 describe-pending → gateway 每 tick LLM 升级」成本环
+          if (src.generatedDescription === r.description) return;
+          sources.update(sourceId, {
+            generatedDescription: r.description,
+            generatedDescriptionSource: source,
+          });
+          // B 方案（2026-11-02 拍板）：LLM 描述由 gateway 代生成。
+          // 启发式落库即发升级信号；blocked_secret（抽样含密钥形态）不发——素材不得外发。
+          if (source === 'heuristic') {
+            this.emitProgress({
+              type: 'source',
+              sourceId,
+              status: 'describe-pending',
+              detail: 'llm upgrade eligible',
+            });
+          }
         } catch {
           /* describe 失败不影响索引 */
         }
@@ -604,6 +701,37 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     return () => {
       this.progressCbs.delete(cb);
     };
+  }
+
+  /** Writer 自产事件（describe-pending 等）；归属补齐口径与 IngestProgressEvent 一致 */
+  private emitProgress(evt: IngestProgressEvent): void {
+    let out = evt;
+    if (evt.sourceId && evt.registeredBy === undefined) {
+      try {
+        const row = this.db.raw
+          .prepare('SELECT tenant_id, registered_by, visibility FROM knowledge_sources WHERE id = ?')
+          .get(evt.sourceId) as
+          | { tenant_id?: string; registered_by?: string; visibility?: string }
+          | undefined;
+        if (row) {
+          out = {
+            ...evt,
+            tenantId: row.tenant_id,
+            registeredBy: row.registered_by,
+            visibility: row.visibility,
+          };
+        }
+      } catch {
+        /* 源已删时保持原事件；SSE 侧按无归属放行到 fallback */
+      }
+    }
+    for (const cb of this.progressCbs) {
+      try {
+        cb(out);
+      } catch {
+        /* SSE 订阅方异常不得打断 describe */
+      }
+    }
   }
 
   async dispose(): Promise<void> {

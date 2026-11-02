@@ -1570,6 +1570,14 @@ export class OctopiClient {
     return data?.data as { ok: true; sourceId: string; status: string };
   }
 
+  /** 手动触发 describe（LLM 升级优先；未配置 models.level / 失败回退 Service 启发式） */
+  async describeKnowledgeSource(agentId: string, sourceId: string): Promise<void> {
+    await this.postJson(
+      `/agents/${agentId}/knowledge/sources/${encodeURIComponent(sourceId)}/describe`,
+      {},
+    );
+  }
+
   /** 中止某源索引任务 */
   async abortKnowledgeSourceJobs(
     agentId: string,

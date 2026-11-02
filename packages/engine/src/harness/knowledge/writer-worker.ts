@@ -160,7 +160,17 @@ async function main(): Promise<void> {
             data = await write.removeSource(identity!, String(args.sourceId));
             break;
           case 'describeSource':
-            data = await write.describeSource(identity!, String(args.sourceId));
+            data = await write.describeSource(
+              identity!,
+              String(args.sourceId),
+              args.input as import('./writer-service.js').WriteDescribeInput | undefined,
+            );
+            break;
+          case 'describeSample':
+            data = await write.describeSample(identity!, String(args.sourceId));
+            break;
+          case 'listDescribePending':
+            data = await write.listDescribePending(identity!);
             break;
           case 'reindexSource':
             await write.reindexSource(String(args.sourceId));

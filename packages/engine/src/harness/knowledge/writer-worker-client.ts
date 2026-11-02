@@ -12,6 +12,8 @@ import type {
   WriteResumeStats,
   WriteRegisterResult,
   WriteDescribeResult,
+  WriteDescribeInput,
+  WriteDescribeSampleResult,
   WriteReprocessResult,
 } from './writer-service.js';
 import type { KnowledgeSource } from './types.js';
@@ -302,9 +304,29 @@ export class WorkerWriteService implements KnowledgeWriteService {
   async describeSource(
     identity: WriteIdentity,
     sourceId: string,
+    input?: WriteDescribeInput,
   ): Promise<WriteDescribeResult | null> {
     try {
-      return (await this.call('describeSource', { identity, sourceId })) as never;
+      return (await this.call('describeSource', { identity, sourceId, input })) as never;
+    } catch (e) {
+      this.rethrow(e);
+    }
+  }
+
+  async describeSample(
+    identity: WriteIdentity,
+    sourceId: string,
+  ): Promise<WriteDescribeSampleResult | null> {
+    try {
+      return (await this.call('describeSample', { identity, sourceId })) as never;
+    } catch (e) {
+      this.rethrow(e);
+    }
+  }
+
+  async listDescribePending(identity: WriteIdentity): Promise<string[]> {
+    try {
+      return (await this.call('listDescribePending', { identity })) as never;
     } catch (e) {
       this.rethrow(e);
     }

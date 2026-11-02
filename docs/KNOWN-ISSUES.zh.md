@@ -88,7 +88,7 @@
 - **§1c 收口删除的配置键（v0.98.12，BREAKING）**：`contextEngine.enableLLMSummary`、`summary.cache.{backend,dir}`、`agents[].model.temperature`（含 `fallbackModels[].temperature`）——从无消费方；迁移见 CHANGELOG v0.98.12（LLM 摘要有自动回退；memory 缓存经 `maxEntries`/`ttlMs` 保留；采样温度在 `models.providers[].models[].temperature`）。现按未知键启动告警。
 - **Knowledge Service 调参键仅 `manageLocal` 生效**（`embed.*` / `load.*` / `index.*` / `keywordWeight` / `autoInject.{minScore,minCoverage}` / `hint.minScore` / `catalog.autoDescribe` / `promotion.*` / `service.connectTimeoutMs`）：远程（`baseUrl`）Service 由其自身部署配置——远程模式下这些键被静默忽略。
 - **`documents.extract.backend: 't0-only'` 属前瞻项**：档位钉死已接线（probe / hasBackendFor / extract 共用同一档位决策），但当前全部后端都是 t0 档——T1/T2 后端落地前 `auto` 与 `t0-only` 可观测行为相同。
-- **generatedDescription 现为启发式生成**：LLM describe 端口死于 Gateway→Service 拆分（v0.98.11 已删除 gateway 死链）；索引稳定钩子与 `POST /sources/:id/describe` 均写启发式描述。LLM 增强描述需在 Service 侧接回。
+- **LLM 描述依赖 `models.level`**（v0.98.13）：`generatedDescription` 仅在 `models.level.mini`/`standard` 解析到 provider 时升级为 LLM 版（与后台任务共用选型面）；未配置则保持启发式（绝不偷用主模型）。素材在 Service 内过密钥形态扫描，命中即封锁（`blocked_secret`）、素材不出 Service。
 
 
 ## 压缩摘要路径 — 已知边界（2026-10，F8 review 跟进）

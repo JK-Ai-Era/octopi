@@ -1028,6 +1028,22 @@ export class WebApiRouter {
         }
       }
 
+      // 手动触发 describe：LLM 升级优先（models.level 已配置时），否则/失败回退 Service 启发式
+      const knowledgeDescribeMatch = relativePath.match(
+        /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/describe$/,
+      );
+      if (knowledgeDescribeMatch && method === 'POST') {
+        try {
+          await this.gateway.autoDescribeKnowledgeSource(knowledgeDescribeMatch[2]);
+          return this.json(res, 200, { ok: true, data: { id: knowledgeDescribeMatch[2] } });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       // 中止索引任务：单源 / 全部
       const knowledgeAbortSourceMatch = relativePath.match(
         /^\/agents\/([^/]+)\/knowledge\/sources\/([^/]+)\/abort$/,

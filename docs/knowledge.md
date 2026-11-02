@@ -298,7 +298,7 @@ Retrieval results are **returned itemized with sources**; no silent merging.
 | `autoInject.*` | Injection thresholds (`minScore`/`minCoverage` are retriever-side), count, budget |
 | `keywordWeight` | Hybrid fusion weight for the keyword leg (retriever) |
 | `hint.minScore` | Minimum score for hintable hits (retriever) |
-| `catalog.*` | system catalog entry count, auto-describe switch (`false` = no description generated after index settles) |
+| `catalog.*` | system catalog entry count, auto-describe switch (`false` = the whole automatic describe chain goes silent — settle heuristic + LLM upgrade; manual describe unaffected) |
 | `embed.*` | Embedding phase on/off, batch/rate/concurrency, egress secret policy (was `index.embedding` / `index.phaseB.*` / `index.embedSecretPolicy` before v0.98.11) |
 | `index.*` | Keyword leg switch, ingest queue depth, per-format file limits |
 | `load.*` | Parse concurrency, watch debounce, disk watermark alert |
@@ -347,7 +347,7 @@ POST   /api/v1/agents/:id/knowledge/resume
 - **Auto-ingest on register** (`POST …/sources` → in-Service `ingestSource`); `reindex` = explicit full rebuild (supersede). No extra “rebuild” click is required after registration to start parsing.
 - **reindex = supersede**: first invalidate this source’s queued/running jobs, then full rescan from disk (do not confuse with “continue”: continue = clear aborted state and keep going).
 - **Delete** cleans indexes and usage traces (compliance erasure); removing a directory uses `removePathTree` for sub-paths; a File is purged only at zero claims.
-- Auto-describe is available by default and can disable outbound calls; sample after a sensitive-pattern scan; triggered by reconcile **once the source is stable** (do not hang it off a short `idle` timeout).
+- **Auto-describe (B-plan, gateway-generated)**: on settle the Service writes a heuristic `generatedDescription` (attribution `heuristic`) and emits a `describe-pending` event; the Gateway upgrades it to an **LLM description** via `models.level` (mini→standard; unset = heuristic only, never the main model) and writes it back through `POST /sources/:id/describe` with `source: 'llm'`. Samples (source metadata + 20 logical paths + derived topics + file-head chunks) are assembled and **secret-shape scanned inside the Service** — a hit blocks egress (`blocked_secret`, no upgrade, sample never leaves the Service). Attribution persists (`generated_description_source`) and is exposed as catalog `descriptionSource` (**human > llm > heuristic**; LLM-sourced `purpose` lines carry a `[llm]` prefix in the system prompt). Triggered **once the source is stable** (do not hang it off a short `idle` timeout); `catalog.autoDescribe: false` silences the whole automatic chain (manual describe still works).
 - **Session attachments (temporary uploads)**: land in `sessions/<sid>/attachments/`, this session only; message side is a `FileBlock` pointer + a turn-side untrusted material block (body text). Optionally **promote to searchable** (register a `scopeRef: session` source) or **file under a project** (promote=move, not automatic promotion). API: `/api/v1/sessions/:id/attachments`; known boundaries in [`KNOWN-ISSUES.md`](./KNOWN-ISSUES.md).
 - External sources may carry **`authRef`** (named credentials in the vault), **`network`** (`allowPrivateNetwork` / timeouts), **`discover`** (sitemap/crawl budgets). Failures/skips **do not delete** already-ingested chunks.
 - Provenance: hits use the stable logical **`path`**; the full URL is stored as `external_url` on the file record.

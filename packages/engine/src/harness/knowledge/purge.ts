@@ -58,8 +58,11 @@ export class KnowledgePurger {
     const source = this.sources.get(sourceId);
     if (!source) return false;
     if (!source.generatedDescription) return false;
-    // 人工 description 权威不动；只清自动描述，待重生成
-    this.sources.update(sourceId, { generatedDescription: null });
+    // 人工 description 权威不动；只清自动描述（含生成方归因），待重生成
+    this.sources.update(sourceId, {
+      generatedDescription: null,
+      generatedDescriptionSource: null,
+    });
     return true;
   }
 }

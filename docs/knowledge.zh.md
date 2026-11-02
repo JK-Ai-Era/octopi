@@ -299,7 +299,7 @@ Tier 3  Full        「原文」                knowledge_read
 | `autoInject.*` | 注入门槛（`minScore`/`minCoverage` 走检索侧）、条数、预算 |
 | `keywordWeight` | 关键词腿混合融合权重（检索侧） |
 | `hint.minScore` | hintable 命中最低分（检索侧） |
-| `catalog.*` | system 目录条数、自动描述开关（`false` = 索引稳定后不生成描述） |
+| `catalog.*` | system 目录条数、自动描述开关（`false` = 全自动描述链整体静默——settle 启发式 + LLM 升级都不跑；手动触发不受限） |
 | `embed.*` | 向量化开关、批/限速/并发、外发密钥策略（v0.98.11 前为 `index.embedding` / `index.phaseB.*` / `index.embedSecretPolicy`） |
 | `index.*` | 关键词腿开关、ingest 队列深度、按格式文件限额 |
 | `load.*` | 解析并发、watch 防抖、磁盘水位告警 |
@@ -348,7 +348,7 @@ POST   /api/v1/agents/:id/knowledge/resume
 - **注册即自动 ingest**（`POST …/sources` → Service 内 `ingestSource`）；`reindex` = 显式全量重建（supersede）。注册后无需再点「重建」才解析。
 - **reindex = supersede**：先作废本源 queued/running，再按磁盘全量重扫（勿与「继续」混淆：继续=清中止态接着跑）。
 - **删除**会清理索引与使用痕迹（合规可抹除）；目录移出用 `removePathTree` 清子路径；零认领 File 才 purge。
-- 自动描述默认可用，可关闭外发；抽样前做敏感形态扫描；**源稳定后**由 reconcile 触发（勿挂 `idle` 短超时）。
+- 自动描述（B 方案，gateway 代生成）：索引稳定后 Service 先落启发式 `generatedDescription`（归因 `heuristic`）并发 `describe-pending` 事件；Gateway 经 `models.level`（mini→standard；未配置=仅启发式，不偷用主模型）生成 **LLM 描述**，从 `POST /sources/:id/describe` 写入口以 `source: 'llm'` 回写。素材（源元数据+20 条 logical path+路径派生 topics+文件头 chunk）在 **Service 内组装并过密钥形态扫描**——命中即封锁（`blocked_secret`，不升级、素材不出 Service）。生成方归因持久化（`generated_description_source`）并以 catalog `descriptionSource` 暴露（**human > llm > heuristic**；llm 来源的 `purpose` 行在系统提示中带 `[llm]` 前缀）。**源稳定后**触发（勿挂 `idle` 短超时）；`catalog.autoDescribe: false` 让全自动链整体静默（手动触发不受限）。
 - **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。可选 **升为可检索**（注册 `scopeRef: session` 源）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`；已知边界见 [`KNOWN-ISSUES.zh.md`](./KNOWN-ISSUES.zh.md)。
 - 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
 - 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。

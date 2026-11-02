@@ -29,6 +29,9 @@ export interface KnowledgeScopeRef {
   key: string;
 }
 
+/** generatedDescription 生成方（信任分级 human > llm > heuristic） */
+export type KnowledgeGeneratedDescriptionSource = 'heuristic' | 'llm' | 'blocked_secret';
+
 export type KnowledgeSourceStatus =
   | 'pending'
   | 'discovering'
@@ -99,6 +102,8 @@ export interface KnowledgeSource {
   description?: string;
   /** 自动描述（可被 description 覆盖） */
   generatedDescription?: string;
+  /** 自动描述生成方（信任分级：llm 优于 heuristic；blocked_secret=抽样含密钥形态，未外发） */
+  generatedDescriptionSource?: KnowledgeGeneratedDescriptionSource;
   catalogPriority?: number;
   hiddenFromCatalog?: boolean;
   /** CredentialStore 凭证名（密钥不进本库） */
@@ -122,6 +127,7 @@ export type KnowledgeSourceInput = {
   displayName?: string;
   description?: string;
   generatedDescription?: string;
+  generatedDescriptionSource?: KnowledgeGeneratedDescriptionSource;
   catalogPriority?: number;
   hiddenFromCatalog?: boolean;
   status?: KnowledgeSourceStatus;
@@ -147,6 +153,8 @@ export type KnowledgeSourcePatch = Partial<
   displayName?: string | null;
   description?: string | null;
   generatedDescription?: string | null;
+  /** 传 null 可清除（与 generatedDescription 同清） */
+  generatedDescriptionSource?: KnowledgeGeneratedDescriptionSource | null;
   authRef?: string | null;
   network?: KnowledgeSourceNetwork | null;
   discover?: KnowledgeSourceDiscover | null;

@@ -383,9 +383,20 @@ export class KnowledgeHttpApp {
       json(res, 200, { ok: true, data: await this.write.resumeSource(params.sid!) });
     });
 
-    this.route('POST', '/v1/sources/:sid/describe', async (_req, res, ctx, params) => {
+    this.route('POST', '/v1/sources/:sid/describe', async (_req, res, ctx, params, body) => {
       try {
-        const data = await this.write.describeSource(this.identityOf(ctx), params.sid!);
+        // 写入口（B 方案）：body {description,source} = gateway 回写 LLM 描述；无 body = 本地启发式生成
+        const input = body as { description?: unknown; source?: unknown } | undefined;
+        const data = await this.write.describeSource(
+          this.identityOf(ctx),
+          params.sid!,
+          input?.description != null
+            ? {
+                description: String(input.description),
+                ...(input.source === 'heuristic' ? { source: 'heuristic' as const } : {}),
+              }
+            : undefined,
+        );
         if (!data) return err(res, 404, 'source_not_found', 'source not found');
         json(res, 200, { ok: true, data });
       } catch (e) {
@@ -393,6 +404,25 @@ export class KnowledgeHttpApp {
           err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
         }
       }
+    });
+
+    this.route('GET', '/v1/sources/:sid/describe-sample', async (req, res, ctx, params) => {
+      try {
+        const data = await this.write.describeSample(this.identityOf(ctx), params.sid!);
+        if (!data) return err(res, 404, 'source_not_found', 'source not found');
+        json(res, 200, { ok: true, data });
+      } catch (e) {
+        if (!mapWriteError(res, e)) {
+          err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
+        }
+      }
+    });
+
+    this.route('GET', '/v1/describe-pending', async (req, res, ctx) => {
+      json(res, 200, {
+        ok: true,
+        data: await this.write.listDescribePending(this.identityOf(ctx)),
+      });
     });
 
     this.route('POST', '/v1/jobs/abort', async (_req, res, ctx) => {

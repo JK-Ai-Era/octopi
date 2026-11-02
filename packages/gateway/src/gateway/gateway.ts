@@ -366,6 +366,9 @@ const GIT_STATUS_MAX_CONCURRENCY = 4;
 /** git-status 读缓存条目上限（超出淘汰最旧） */
 const GIT_STATUS_CACHE_MAX_ENTRIES = 256;
 
+/** LLM describe boot sweep 单次上限（存量启发式源批量升级的滴灌预算；余量留给后续 boot） */
+const DESCRIBE_BOOT_SWEEP_CAP = 20;
+
 /**
  * 并发闸门：上限内发放一次性归还句柄，超出返回 null。
  *
@@ -3394,6 +3397,9 @@ export class Gateway {
           embed: tuning.embed,
           ingest: tuning.ingest,
           retriever: tuning.retriever,
+          // v0.98.11 闸门补线：catalog.autoDescribe 必须进 manageLocal 子进程，
+          // 否则「false=不自动生成」在 Service 钩子上永远不触发（假接线）
+          autoDescribe: tuning.autoDescribe,
           ...(embForVec?.sqliteVecExtensionPath
             ? { sqliteVecExtensionPath: embForVec.sqliteVecExtensionPath }
             : {}),
@@ -3448,8 +3454,108 @@ export class Gateway {
       for (const adapter of this.streamingAdapters) {
         adapter.broadcastEvent('*', event);
       }
+      // B 方案：Service settle 发 describe-pending → gateway 代生成 LLM 描述
+      const d = event.data as { type?: string; status?: string; sourceId?: string };
+      if (d?.type === 'source' && d?.status === 'describe-pending' && d.sourceId) {
+        this.enqueueKnowledgeDescribe(String(d.sourceId));
+      }
     });
     this.knowledgeProgressForward = stop;
+    // 启动补偿：处理 gateway 重启期间错过的 describe-pending（启发式已落库、待 LLM 升级）
+    void this.sweepKnowledgeDescribe().catch(() => undefined);
+  }
+
+  /** LLM describe 升级队列（单飞；失败即弃，启发式保底） */
+  private knowledgeDescribeQueue = new Set<string>();
+  private knowledgeDescribeRunning = false;
+
+  /**
+   * models.level 选型（mini → standard）：describe 是全局后台小任务，与摘要/标题同选型面。
+   * 未配置 level = LLM 描述不启用（启发式照旧）——显式配置即开启，不偷偷烧主模型。
+   */
+  private resolveDescribeModel(): { provider: ModelProvider; model?: string } | null {
+    for (const levelName of ['mini', 'standard'] as const) {
+      const primary = this.config.levels?.[levelName]?.primary;
+      if (!primary) continue;
+      const slash = primary.indexOf('/');
+      const provider = slash > 0 ? this.providers.get(primary.slice(0, slash)) : undefined;
+      if (provider) return { provider, model: primary.slice(slash + 1) };
+      // 配了 level 却解析不到 provider：显式告警（勿静默），否则「LLM 描述不生效」无从排查
+      console.warn(
+        `[Knowledge] describe model unresolved (models.level.${levelName}=${primary}) — llm describe stays heuristic`,
+      );
+    }
+    return null;
+  }
+
+  private enqueueKnowledgeDescribe(sourceId: string): void {
+    // catalog.autoDescribe=false：全自动链（事件+sweep）整体静默；手动触发不受限
+    if (this.config.knowledge?.catalog?.autoDescribe === false) return;
+    if (!sourceId) return;
+    this.knowledgeDescribeQueue.add(sourceId);
+    void this.runKnowledgeDescribeWorker();
+  }
+
+  private async runKnowledgeDescribeWorker(): Promise<void> {
+    if (this.knowledgeDescribeRunning) return;
+    this.knowledgeDescribeRunning = true;
+    try {
+      // 活队列排水（勿用快照）：处理期间经事件/sweep 新入队的 id 也要被消费
+      for (;;) {
+        const next = this.knowledgeDescribeQueue.values().next();
+        if (next.done) break;
+        this.knowledgeDescribeQueue.delete(next.value);
+        try {
+          await this.upgradeKnowledgeDescribe(next.value);
+        } catch (e) {
+          console.warn(
+            `[Knowledge] llm describe failed (${next.value}): ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+    } finally {
+      this.knowledgeDescribeRunning = false;
+    }
+  }
+
+  /**
+   * LLM 升级一条 generatedDescription（heuristic → llm）。
+   * 素材封锁 / 未配置 models.level / LLM 失败 → 返回 false，启发式保底不动。
+   */
+  private async upgradeKnowledgeDescribe(sourceId: string): Promise<boolean> {
+    // 先判模型再取素材：未配置 models.level 时零 HTTP/SQL 成本
+    const bound = this.resolveDescribeModel();
+    if (!bound) return false;
+    const client = await this.getKnowledgeClient();
+    const sample = await client.getDescribeSample(sourceId);
+    if (sample.blocked) return false;
+    const { buildKnowledgeDescribePort } = await import('./knowledge-describe.js');
+    const { generateKnowledgeDescription } = await import(
+      '@octopi-agent/engine/harness/knowledge/describe.js'
+    );
+    const { DESCRIBE_SAMPLE_MAX_CHARS } = await import(
+      '@octopi-agent/engine/harness/knowledge/describe-sample.js'
+    );
+    const r = await generateKnowledgeDescription(sample.meta, sample.sample, {
+      enabled: true,
+      describePort: buildKnowledgeDescribePort(bound.provider, bound.model),
+      sampleChars: DESCRIBE_SAMPLE_MAX_CHARS,
+    });
+    if (r.source !== 'llm') return false;
+    await client.describeSource(sourceId, { description: r.description, source: 'llm' });
+    return true;
+  }
+
+  /** boot sweep：补处理错过的 describe-pending（事件断线/重启窗口） */
+  private async sweepKnowledgeDescribe(): Promise<void> {
+    if (this.config.knowledge?.catalog?.autoDescribe === false) return;
+    const client = await this.getKnowledgeClient();
+    const ids = await client.listDescribePending();
+    // 存量部署的启发式源可能很多：单次 boot 限量滴灌（20/boot），避免首发时全语料 LLM 花费
+    // （余量留给后续 boot 补扫；不加后台定时器）
+    for (const id of ids.slice(0, DESCRIBE_BOOT_SWEEP_CAP)) {
+      this.enqueueKnowledgeDescribe(id);
+    }
   }
 
   /**
@@ -3991,8 +4097,12 @@ export class Gateway {
     };
   }
 
-  /** 手动触发 describe（REST → Service 生成 generatedDescription；自动描述由 Service 索引稳定钩子驱动） */
+  /**
+   * 手动触发 describe：LLM 升级优先（models.level 已配置时），否则/失败回退 Service 启发式。
+   * 手动路径不受 catalog.autoDescribe 闸门约束（闸门只管全自动链）。
+   */
   async autoDescribeKnowledgeSource(sourceId: string): Promise<void> {
+    if (await this.upgradeKnowledgeDescribe(sourceId)) return;
     const client = await this.getKnowledgeClient();
     await client.describeSource(sourceId);
   }

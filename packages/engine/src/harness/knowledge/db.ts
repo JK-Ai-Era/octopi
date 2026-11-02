@@ -163,6 +163,7 @@ export class KnowledgeDatabase {
         display_name          TEXT NOT NULL,
         description           TEXT,
         generated_description TEXT,
+        generated_description_source TEXT,
         catalog_priority      INTEGER,
         hidden_from_catalog   INTEGER NOT NULL DEFAULT 0,
         last_polled_at        INTEGER,
@@ -293,6 +294,10 @@ export class KnowledgeDatabase {
       { name: 'discover_json', ddl: `discover_json TEXT` },
       { name: 'auth_ref', ddl: `auth_ref TEXT` },
       { name: 'last_polled_at', ddl: `last_polled_at INTEGER` },
+      {
+        name: 'generated_description_source',
+        ddl: `generated_description_source TEXT`,
+      },
     ]);
     alterIfMissing('knowledge_projects', [
       { name: 'tenant_id', ddl: `tenant_id TEXT NOT NULL DEFAULT 'default'` },
