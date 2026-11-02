@@ -108,6 +108,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.18 (2026-11-03)
+
+### feat(session): 大附件默认本地关键词 top-k 召回
+
+- **真实局部召回**：上传解析成功即建立 Session 私有关键词投影；`focus` 跨附件全局取 `inject.recallTopK`（默认 6），注入带行号的片段。`targets` 仅缩小本轮已选附件，不能扩大权限；小附件全文保留，召回缺失/无命中回退结构+工具。默认不注册 Knowledge source、不触发 embedding；显式「升为可检索」才进 Knowledge ingest。
+- **可重建与生命周期**：抽取 hash 与文件代次校验陈旧投影；长行代码不丢尾部；删除/promote/session 清理同步清索引。附件写操作跨 Service 实例进程内串行，损坏 manifest 不再被当空表覆盖；显式重建完整成功后原子替换并持久化元数据。
+- **配置收口**：删除 `knowledge.attachments.inject.inventory` 与 `knowledge.attachments.tools.attachmentsRootReadOnly`（清单/只读安全行为继续无条件保留），CFG012 将旧值移入 `_legacy` 并告警；`recallTopK` 已接入 Gateway→Runner 真实链路，不再报未接线。嵌入式 AgentBuilder 无 Gateway 模型快照时用当前会话模型做轻量意图分流。
+- **验证**：附件服务/召回 25 项及真实 Runner 端到端用例通过；全量构建、lint、Vitest 与 `arch/check-sync.sh` 通过。独立评审发现的并发覆盖、损坏 manifest 覆盖及重建漏 await 已修复并回归。
+
+### refactor(config)!: 删除附件冗余配置开关（BREAKING）
+
+`knowledge.attachments.inject.inventory` 和 `knowledge.attachments.tools.attachmentsRootReadOnly` 从 schema 删除；加载/doctor 通过 CFG012 迁移并保留原值到 `_legacy`，不静默吞配置。
+
+---
+
 ## v0.98.16 (2026-11-03)
 
 ### refactor(config)!: 清除「已决定不做 / 已被取代」的 4 个配置键（BREAKING）

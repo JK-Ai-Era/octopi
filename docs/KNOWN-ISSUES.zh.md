@@ -40,9 +40,9 @@
 
 **状态：** 主链已落地（v0.54.x）；规格为内部文档（含 as-built 与遗留清单，不对外）
 
-- **大文件默认不全文注入**：超出 `inject.fullTextMaxChars` 只注开头（约 `headChars`），模型可能再 `file_read`——属分层策略，非缺陷。
+- **大文件局部召回**：超出 `inject.fullTextMaxChars` 时，局部问题按 `inject.recallTopK` 注入带行号的关键词片段；索引缺失/陈旧、零命中或查询失败回退结构开头（约 `headChars`）+ `file_read`。
 - **文档抽取**：会话附件与 Knowledge ingest 共用 `harness/capabilities/document`（`documents.*`）；未启用抽取/无后端时仍只落盘不进召回。
-- **默认不建 Knowledge source**：检索需显式「升为可检索」或 promote。
+- **本地召回不等于注册 Knowledge**：上传默认建 Session 私有、可重建的关键词投影，不建 Knowledge source，也不在发送路径做 embedding。`knowledge_search` / 源管理仍需显式「升为可检索」；持久化到项目需 promote。
 - **manifest 无跨请求锁**：并发上传同会话可能互相覆盖登记（单用户 Web 场景低发）。
 - **上传 API 为 JSON+base64**：超大文件宜后续 multipart。
 - **FileBlock 经 convertToLlm 变为文字指针**：非 provider 原生 file 附件格式。
@@ -78,7 +78,6 @@
 顶层映射守卫只查段级键；以下**子键** schema 接受但暂无消费方（配置了不生效）：
 
 - **`plugins.configs`**（按插件配置）：schema 接受并已透传过边界，但尚无任何代码把它翻译成 `PluginLoaderConfig.pluginEntries`——`PluginLoader` 本身是**读** `pluginEntries` 的（`enabled` + `config` → `api.pluginConfig`），缺的是 gateway 那一段接线。
-- **`knowledge.attachments.inject.recallTopK` / `knowledge.attachments.inject.inventory` / `knowledge.attachments.tools.attachmentsRootReadOnly`**：schema 接受但从未被读取（注入结果里的 `inventory` 是输出字段，并非此开关）；gateway 只转发 `fullTextMaxChars` / `intent` / `intentTimeoutMs` / `emptyMessagePrompt`。注：`recallTopK` 无消费方的根因是附件 top-k 召回功能本身未实现（`recall_tools` 注入模式只发前 N 行）；`attachmentsRootReadOnly` 已无意义——工具层本就无条件拒绝对附件根的写操作。
 - **`models.mode` — 键已删除（v0.98.16）**：provider/模型合并行为固定；该键不再被接受（按未知键告警，`octopi doctor --fix` 会把它搬进 `_legacy`）。
 - **`session.reset` / `session.maintenance` — 键已删除（v0.98.16）**：从无消费方（v0.86.37 已从 `GatewayConfig` 作为死面移除），且日重置/存储清理功能已决定不做。`SessionConfigSchema` 不再是 `.passthrough()`——`session` 只接受 `dmScope` / `idleExpiryMs`，其他子键现按未知键报告。
 - **Wisdom/cognition steward 调参 — 键已删除（v0.98.11，BREAKING）**：原未接线键 `wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens` 与 `cognition.conceptualize` / `cognition.plasticity` / `cognition.consolidation` / `cognition.retrieval` / `cognition.capacity.{warnNodes,warnEdges}` / `cognition.identity.candidateBandLo` / `cognition.relations.{requireCue,allowCooccurEscalation}` **不再被 `octopi.json` 接受**（此前在该处也从不生效）；steward 调参写在各子系统 `config.yaml` 的 `metadata.config`。`octopi.json` 侧消费的是：`*.enabled`、`wisdom.capacity.hardCap`、`wisdom.injection.{coreMaxItems,scenarioMaxItems,trialMaxItems,trialVisible}`（core/scenario/trialVisible 自 v0.97.25；trialMaxItems 自 v0.98.5）、`cognition.identity.{mergeThreshold,candidateBandHi}`、`cognition.relations.causesMinIndependentMemories`、`cognition.capacity.{stopNodes,stopEdges}`（消费粒度已按 `wire-agent-builder.ts` 核实，2026-11-01）。

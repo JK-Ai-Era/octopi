@@ -6,8 +6,8 @@
  * - 本模块：schema **接受**但**无消费方**的键——配置合法却毫无效果，是最隐蔽的一类静默，
  *   启动路径必须显式告警（写路径消费方接入后本表同步收窄）。
  *
- * 表的准确性以代码消费面为准（e.g. `knowledge.attachments.inject.fullTextMaxChars/intent*` 已接线，
- * 同段的 `recallTopK/inventory` 未接线）。收窄本表 = 实现消费方；新增未接线键 = 补行 + KNOWN-ISSUES 同步。
+ * 表的准确性以代码消费面为准（例如附件注入的 `fullTextMaxChars` / `intent` / `recallTopK` 均有生产消费方）。
+ * 收窄本表 = 实现消费方；新增未接线键 = 补行 + KNOWN-ISSUES 同步。
  *
  * 覆盖边界：对象路径（含嵌套叶子）；数组段（agents[] / channels[] 等）内部不做下标粒度扫描，
  * 数组段自身的未接线子键需另行跟踪。
@@ -21,11 +21,6 @@ const UNWIRED_PREFIXES: readonly string[] = [
   'compact',
   // 逐插件配置：穿过边界但 PluginLoader 不读
   'plugins.configs',
-  // 附件注入/工具旋钮：gateway 只转发 fullTextMaxChars/intent/intentTimeoutMs/emptyMessagePrompt，
-  // 以下三个无消费方（inventory 是注入产物字段而非配置开关）
-  'knowledge.attachments.inject.recallTopK',
-  'knowledge.attachments.inject.inventory',
-  'knowledge.attachments.tools.attachmentsRootReadOnly',
 ];
 
 /**

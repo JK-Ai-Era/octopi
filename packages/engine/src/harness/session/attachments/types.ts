@@ -17,6 +17,12 @@ export interface AttachmentParseInfo {
   ok: boolean;
   chars?: number;
   error?: string;
+  /** sha256(originalHash + NUL + fullExtractText)，由解析/索引构建写入 */
+  extractHash?: string;
+  /** 抽取文件建索引时的大小与 mtime/ctime；代次变化才重读全文验 hash */
+  extractBytes?: number;
+  extractMtimeMs?: number;
+  extractCtimeMs?: number;
 }
 
 /** 单条会话附件（manifest 条目） */

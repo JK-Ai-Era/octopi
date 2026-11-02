@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionAttachmentService } from '@octopi-agent/engine/harness/session/attachments/service.js';
@@ -136,21 +136,21 @@ describe('inject builders', () => {
     expect(blocks[0]?.text).toBe(DEFAULT_EMPTY_ATTACHMENT_PROMPT);
     expect(blocks.some((b) => b.type === 'file' && b.name === 'n.md')).toBe(true);
 
-    const g = buildAttachmentGroundingText(
+    const g = await buildAttachmentGroundingText(
       [a],
       {
         fullTextMaxChars: 1000,
         readText: (id, max) => svc.readExtractedText('s', id, max),
         absolutePath: (id) => svc.resolveAbsolutePath('s', id),
       },
-      'full',
+      { mode: 'full', reason: 'small' },
     );
-    expect(g).toContain('body text here');
-    expect(g).toContain('trust="untrusted"');
+    expect(g.text).toContain('body text here');
+    expect(g.text).toContain('trust="untrusted"');
     await rm(sessionsDir, { recursive: true, force: true });
   });
 
-  it('large extract uses structure head when planMode=structure_tools (not truncated full)', () => {
+  it('large extract uses structure head when planMode=structure_tools (not truncated full)', async () => {
     const big = 'L'.repeat(5000);
     const item = {
       id: 'att1',
@@ -160,21 +160,177 @@ describe('inject builders', () => {
       parse: { ok: true, chars: 5000 },
       sizeBytes: 5000,
     } as never;
-    const g = buildAttachmentGroundingText(
+    const g = await buildAttachmentGroundingText(
       [item],
       {
         fullTextMaxChars: 100,
-        headLines: 3,
         // 模拟 readText 截断
         readText: () => big.slice(0, 100),
         absolutePath: () => '/tmp/big.md',
       },
-      'structure_tools',
+      { mode: 'structure_tools', reason: 'whole document' },
     );
-    expect(g).toContain('结构/开头摘要');
-    expect(g).not.toContain('已达注入上限');
+    expect(g.text).toContain('结构/开头摘要');
+    expect(g.text).not.toContain('已达注入上限');
     // 不应注入完整 5k 正文（只给开头）
-    expect(g!.length).toBeLessThan(1200);
+    expect(g.text!.length).toBeLessThan(1200);
+  });
+});
+
+describe('attachment local recall', () => {
+  it('defaults to a session-local index without creating a Knowledge source', async () => {
+    const sessionsDir = await mkdtemp(join(tmpdir(), 'octopi-att-recall-'));
+    try {
+      const svc = new SessionAttachmentService({ sessionsDir });
+      const item = await svc.save('s', {
+        name: 'guide.md',
+        data: `${'opening\n'.repeat(20)}# Retention\nAttachments expire with this session.`,
+      });
+      expect(item.searchableSourceId).toBeUndefined();
+      const hits = await svc.recall('s', 'retention', [item.id], 6);
+      expect(hits).toHaveLength(1);
+      expect(hits?.[0]?.text).toContain('expire with this session');
+      expect(hits?.[0]?.startLine).toBeGreaterThan(20);
+      expect(await svc.recall('other-session', 'retention', [item.id], 6)).toEqual([]);
+    } finally {
+      await rm(sessionsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('injects actual top-k passages and keeps small attachments in full', async () => {
+    const sessionsDir = await mkdtemp(join(tmpdir(), 'octopi-att-recall-'));
+    try {
+      const svc = new SessionAttachmentService({ sessionsDir });
+      const big = await svc.save('s', {
+        name: 'large.md',
+        data: `${'intro\n'.repeat(30)}# Isolation\nThe session attachment recall index is private.`,
+      });
+      const small = await svc.save('s', { name: 'small.md', data: 'small attachment must stay complete' });
+      const result = await buildAttachmentGroundingText(
+        [big, small],
+        {
+          fullTextMaxChars: 20,
+          recallTopK: 1,
+          readText: (id, max) => svc.readExtractedText('s', id, max),
+          absolutePath: (id) => svc.resolveAbsolutePath('s', id),
+          recall: (query, ids, limit) => svc.recall('s', query, ids, limit),
+        },
+        { mode: 'recall_tools', focus: 'recall index', targets: ['large.md'], reason: 'local' },
+      );
+      expect(result.recallHits).toBe(1);
+      expect(result.text).toContain('The session attachment recall index is private');
+      expect(result.text).toContain('small attachment must stay complete');
+      expect(result.text).not.toContain('intro\nintro');
+      expect(result.text).toContain('trust="untrusted"');
+    } finally {
+      await rm(sessionsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ranks globally across targets and never lets targets expand the selected attachments', async () => {
+    const sessionsDir = await mkdtemp(join(tmpdir(), 'octopi-att-recall-'));
+    try {
+      const svc = new SessionAttachmentService({ sessionsDir });
+      const a = await svc.save('s', { name: 'a.md', data: 'alpha beta gamma\nunique alpha topic' });
+      const b = await svc.save('s', { name: 'b.md', data: 'alpha beta gamma\nother alpha topic' });
+      const seenIds: string[][] = [];
+      const result = await buildAttachmentGroundingText(
+        [a],
+        {
+          fullTextMaxChars: 1,
+          recallTopK: 1,
+          readText: (id, max) => svc.readExtractedText('s', id, max),
+          absolutePath: (id) => svc.resolveAbsolutePath('s', id),
+          recall: (query, ids, limit) => {
+            seenIds.push(ids);
+            return svc.recall('s', query, ids, limit);
+          },
+        },
+        { mode: 'recall_tools', focus: 'alpha', targets: ['b.md'], reason: 'local' },
+      );
+      expect(seenIds).toEqual([]);
+      expect(result.recallHits).toBe(0);
+      expect(result.fallbackAttachmentIds).toEqual([a.id]);
+      expect(result.text).toContain('结构/开头摘要');
+      expect(result.text).not.toContain('other alpha topic');
+      expect(b.searchableSourceId).toBeUndefined();
+    } finally {
+      await rm(sessionsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to structure for missing/corrupt/stale indexes and removes deleted projections', async () => {
+    const sessionsDir = await mkdtemp(join(tmpdir(), 'octopi-att-recall-'));
+    try {
+      const svc = new SessionAttachmentService({ sessionsDir });
+      const item = await svc.save('s', {
+        name: 'large.md',
+        data: `${'intro\n'.repeat(30)}target passage after the opening`,
+      });
+      const indexPath = join(svc.attachmentRoot('s'), '.recall-index.json');
+      await writeFile(indexPath, '{broken', 'utf8');
+      const fallback = await buildAttachmentGroundingText(
+        [item],
+        {
+          fullTextMaxChars: 20,
+          readText: (id, max) => svc.readExtractedText('s', id, max),
+          absolutePath: (id) => svc.resolveAbsolutePath('s', id),
+          recall: (query, ids, limit) => svc.recall('s', query, ids, limit),
+        },
+        { mode: 'recall_tools', focus: 'target passage', reason: 'local' },
+      );
+      expect(fallback.fallbackAttachmentIds).toEqual([item.id]);
+      expect(fallback.text).toContain('结构/开头摘要');
+
+      await svc.save('s', { name: 'other.md', data: 'other' });
+      expect(await readFile(indexPath, 'utf8')).toBe('{broken');
+
+      await svc.rebuildRecall('s');
+      await writeFile(svc.resolveAbsolutePath('s', item.id), 'changed extract', 'utf8');
+      expect(await svc.recall('s', 'target', [item.id], 6)).toBeNull();
+      await svc.delete('s', item.id);
+      const index = JSON.parse(await readFile(indexPath, 'utf8')) as { attachments: Record<string, unknown> };
+      expect(index.attachments[item.id]).toBeUndefined();
+    } finally {
+      await rm(sessionsDir, { recursive: true, force: true });
+    }
+  });
+  it('serializes concurrent saves across service instances and refuses corrupt manifests', async () => {
+    const sessionsDir = await mkdtemp(join(tmpdir(), 'octopi-attach-writes-'));
+    try {
+      const first = new SessionAttachmentService({ sessionsDir });
+      const second = new SessionAttachmentService({ sessionsDir });
+      const [a, b] = await Promise.all([
+        first.save('s', { name: 'a.md', data: 'alpha attachment' }),
+        second.save('s', { name: 'b.md', data: 'beta attachment' }),
+      ]);
+      expect(first.list('s').map((item) => item.name).sort()).toEqual(['a.md', 'b.md']);
+      expect(await first.recall('s', 'alpha', [a.id], 6)).toHaveLength(1);
+      expect(await second.recall('s', 'beta', [b.id], 6)).toHaveLength(1);
+
+      const manifestPath = join(first.attachmentRoot('s'), '.manifest.json');
+      const before = await readFile(manifestPath, 'utf8');
+      await writeFile(manifestPath, '{broken', 'utf8');
+      await expect(first.save('s', { name: 'c.md', data: 'must not overwrite' })).rejects.toThrow();
+      expect(await readFile(manifestPath, 'utf8')).toBe('{broken');
+      expect(before).toContain('a.md');
+    } finally {
+      await rm(sessionsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('indexes long minified code tails without dropping content', async () => {
+    const sessionsDir = await mkdtemp(join(tmpdir(), 'octopi-attach-long-line-'));
+    const svc = new SessionAttachmentService({ sessionsDir });
+    try {
+      const code = `const prefix = '${'x'.repeat(17_000)}'; const targetTail = 'local-needle';`;
+      const item = await svc.save('s', { name: 'minified.js', data: code });
+      const hits = await svc.recall('s', 'local-needle', [item.id], 6);
+      expect(hits?.[0]?.text).toContain('local-needle');
+      expect(hits?.[0]?.text).toContain('targetTail');
+    } finally {
+      await rm(sessionsDir, { recursive: true, force: true });
+    }
   });
 });
 

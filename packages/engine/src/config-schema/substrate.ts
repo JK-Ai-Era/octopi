@@ -136,15 +136,9 @@ export const KnowledgeConfigSchema = z.object({
         .object({
           fullTextMaxChars: z.number().int().positive().optional(),
           recallTopK: z.number().int().positive().max(50).optional(),
-          inventory: z.boolean().optional(),
           intent: z.enum(['llm', 'off']).optional(),
           intentTimeoutMs: z.number().int().positive().optional(),
           emptyMessagePrompt: z.string().optional(),
-        })
-        .optional(),
-      tools: z
-        .object({
-          attachmentsRootReadOnly: z.boolean().optional(),
         })
         .optional(),
     })

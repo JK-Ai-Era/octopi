@@ -1830,9 +1830,6 @@
                   "exclusiveMinimum": 0,
                   "maximum": 50
                 },
-                "inventory": {
-                  "type": "boolean"
-                },
                 "intent": {
                   "type": "string",
                   "enum": [
@@ -1847,14 +1844,6 @@
                 },
                 "emptyMessagePrompt": {
                   "type": "string"
-                }
-              }
-            },
-            "tools": {
-              "type": "object",
-              "properties": {
-                "attachmentsRootReadOnly": {
-                  "type": "boolean"
                 }
               }
             }

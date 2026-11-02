@@ -5374,6 +5374,7 @@ export class Gateway {
         sessionsDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
         sessionAttachmentInject: {
           fullTextMaxChars: this.config.knowledge?.attachments?.inject?.fullTextMaxChars,
+          recallTopK: this.config.knowledge?.attachments?.inject?.recallTopK,
           intent: this.config.knowledge?.attachments?.inject?.intent,
           intentTimeoutMs: this.config.knowledge?.attachments?.inject?.intentTimeoutMs,
           emptyMessagePrompt: this.config.knowledge?.attachments?.inject?.emptyMessagePrompt,

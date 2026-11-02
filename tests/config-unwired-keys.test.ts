@@ -16,17 +16,13 @@ describe('detectUnwiredConfigKeys', () => {
       plugins: { loadPaths: ['./p'], configs: { myplug: { a: 1 } } },
       knowledge: {
         attachments: {
-          inject: { recallTopK: 5, inventory: true },
-          tools: { attachmentsRootReadOnly: true },
+          inject: { recallTopK: 5 },
         },
       },
     };
     const detected = detectUnwiredConfigKeys(raw);
     for (const expected of [
       'compact',
-      'knowledge.attachments.inject.recallTopK',
-      'knowledge.attachments.inject.inventory',
-      'knowledge.attachments.tools.attachmentsRootReadOnly',
       'plugins.configs',
     ]) {
       expect(detected, `missing unwired report: ${expected}`).toContain(expected);

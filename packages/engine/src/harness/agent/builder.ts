@@ -1366,6 +1366,7 @@ export class AgentBuilder {
 
     const runner = new SessionAwareRunner(agent, harness, store, {
       ...this._runnerConfig,
+      defaultIntentProvider: this._model,
       toolIsolation: this._toolIsolation ?? this._runnerConfig?.toolIsolation,
       effectPolicy: this._effectPolicy ?? this._runnerConfig?.effectPolicy,
       confirmEffect: this._confirmEffect ?? this._runnerConfig?.confirmEffect,

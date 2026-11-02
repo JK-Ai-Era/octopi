@@ -305,7 +305,7 @@ Tier 3  Full        「原文」                knowledge_read
 | `load.*` | 解析并发、watch 防抖、磁盘水位告警 |
 | `promotion.metrics` | 使用计量阈值（供后续提升信号，**不**直接写 Memory） |
 | `promotion.stewardOnConverge` | `false` = 不产出晋升候选 |
-| `attachments.*` | 会话附件限额与注入（`inject.intent` / `fullTextMaxChars`）；见 OP-15 规格 |
+| `attachments.*` | 会话附件限额与注入（`inject.intent` / `fullTextMaxChars` / `recallTopK`）；见 OP-15 规格 |
 
 文档抽取配置在 **`documents.*`**（与 Knowledge worker / Gateway **同源** `createDocumentPortFromConfig`）：`extract.backend`（`auto`|`t0-only` 档位钉死）、`extract.timeoutMs/maxFileBytes`、`legacy.converter=soffice` + `sofficePath/cacheDir/cacheMaxBytes/maxInputBytes`。
 
@@ -349,7 +349,7 @@ POST   /api/v1/agents/:id/knowledge/resume
 - **reindex = supersede**：先作废本源 queued/running，再按磁盘全量重扫（勿与「继续」混淆：继续=清中止态接着跑）。
 - **删除**会清理索引与使用痕迹（合规可抹除）；目录移出用 `removePathTree` 清子路径；零认领 File 才 purge。
 - 自动描述（B 方案，gateway 代生成）：索引稳定后 Service 先落启发式 `generatedDescription`（归因 `heuristic`）并发 `describe-pending` 事件；Gateway 经 `models.level`（mini→standard；未配置=仅启发式，不偷用主模型）生成 **LLM 描述**，从 `POST /sources/:id/describe` 写入口以 `source: 'llm'` 回写。素材（源元数据+20 条 logical path+路径派生 topics+文件头 chunk）在 **Service 内组装并过密钥形态扫描**——命中即封锁（`blocked_secret`，不升级、素材不出 Service）。生成方归因持久化（`generated_description_source`）并以 catalog `descriptionSource` 暴露（**human > llm > heuristic**；llm 来源的 `purpose` 行在系统提示中带 `[llm]` 前缀，WebUI 源列表对档位显示徽标）。LLM 描述是**生成时点快照**：语料变化不会自动重写（settle 不降级 `llm`），语料实质变化后请手动重新生成。**源稳定后**触发（勿挂 `idle` 短超时）；`catalog.autoDescribe: false` 让全自动链整体静默（手动触发不受限）。
-- **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。可选 **升为可检索**（注册 `scopeRef: session` 源）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`；已知边界见 [`KNOWN-ISSUES.zh.md`](./KNOWN-ISSUES.zh.md)。
+- **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。解析成功后默认建 **Session 私有、可重建的关键词投影**：局部问题按 `inject.recallTopK` 注入带行号片段，失败回退结构+工具，发送路径不做 embedding。本地投影**不注册 Knowledge source**。可选 **升为可检索**（注册 `scopeRef: session` 源供 Knowledge 检索）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`；已知边界见 [`KNOWN-ISSUES.zh.md`](./KNOWN-ISSUES.zh.md)。
 - 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
 - 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。
 - Host API 经 **KnowledgeClient** → Service；Gateway 进程内**无** ingest 写路径。

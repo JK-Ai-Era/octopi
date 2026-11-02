@@ -193,13 +193,9 @@ export interface KnowledgeRuntimeConfig {
     inject?: {
       fullTextMaxChars?: number;
       recallTopK?: number;
-      inventory?: boolean;
       intent?: 'llm' | 'off';
       intentTimeoutMs?: number;
       emptyMessagePrompt?: string;
-    };
-    tools?: {
-      attachmentsRootReadOnly?: boolean;
     };
   };
 }

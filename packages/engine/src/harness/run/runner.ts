@@ -190,9 +190,12 @@ export interface SessionAwareRunnerConfig {
   /** credentials.requireBindings（SEC-3c）：无绑定凭证不可 resolve */
   requireCredentialBindings?: boolean;
   confirmEffect?: import("../extension/execution-environment/effect-policy.js").ConfirmEffect;
+  /** 附件轻量意图分流的默认 provider（仅无 Gateway 模型快照时回退）。 */
+  defaultIntentProvider?: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider;
   /** 附件注入参数（knowledge.attachments.inject；缺省用内建默认） */
   sessionAttachmentInject?: {
     fullTextMaxChars?: number;
+    recallTopK?: number;
     intent?: 'llm' | 'off';
     intentTimeoutMs?: number;
     emptyMessagePrompt?: string;
@@ -607,6 +610,8 @@ export class SessionAwareRunner {
   }>;
   /** 模型快照解析器（Gateway 注入；每 run 只调一次） */
   private resolveModelOverride?: SessionAwareRunnerConfig['resolveModelOverride'];
+  /** 无 Gateway 快照时，附件轻量意图分流回退到 Builder 的当前会话 provider。 */
+  private defaultIntentProvider?: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider;
 
   constructor(agent: Agent, harness: ReliabilityHarness, store: TypedSessionStore, config?: SessionAwareRunnerConfig & { events?: import('@octopi-agent/core/primitives/event-bus.js').EventBus }) {
     this.agent = agent;
@@ -617,6 +622,7 @@ export class SessionAwareRunner {
     this._events = config?.events;
     this._observerHub = config?.observerHub;
     this.resolveModelOverride = config?.resolveModelOverride;
+    this.defaultIntentProvider = config?.defaultIntentProvider;
   }
 
   /**
@@ -1830,26 +1836,23 @@ export class SessionAwareRunner {
                     fullTextMaxChars: this.config.sessionAttachmentInject?.fullTextMaxChars ?? 12_000,
                     intent: this.config.sessionAttachmentInject?.intent ?? 'llm',
                     timeoutMs: this.config.sessionAttachmentInject?.intentTimeoutMs ?? 800,
-                    resolver: resolvedModel?.provider
-                      ? createLlmIntentResolver(resolvedModel.provider)
+                    resolver: resolvedModel?.provider ?? this.defaultIntentProvider
+                      ? createLlmIntentResolver((resolvedModel?.provider ?? this.defaultIntentProvider)!)
                       : undefined,
                   },
                 );
-                attachmentText = buildAttachmentGroundingText(
+                const grounding = await buildAttachmentGroundingText(
                   items,
                   {
                     fullTextMaxChars: this.config.sessionAttachmentInject?.fullTextMaxChars ?? 12_000,
+                    recallTopK: this.config.sessionAttachmentInject?.recallTopK ?? 6,
                     readText: (id, max) => attachSvc.readExtractedText(sessionId, id, max),
                     absolutePath: (id) => attachSvc.resolveAbsolutePath(sessionId, id),
+                    recall: (query, ids, limit) => attachSvc.recall(sessionId, query, ids, limit),
                   },
-                  plan.mode === 'full' ? 'full' : plan.mode,
+                  plan,
                 );
-                if (plan.focus && attachmentText) {
-                  attachmentText = attachmentText.replace(
-                    '</session-attachments>',
-                    `\n检索焦点: ${plan.focus}\n</session-attachments>`,
-                  );
-                }
+                attachmentText = grounding.text;
               }
             }
           } catch (attErr) {

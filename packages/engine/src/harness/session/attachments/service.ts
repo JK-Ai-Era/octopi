@@ -7,7 +7,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveSessionAttachmentsPaths } from './paths.js';
@@ -27,6 +27,21 @@ import {
 } from './types.js';
 import type { DocumentPort } from '../../capabilities/document/types.js';
 import { isDocumentExtractError } from '../../capabilities/document/errors.js';
+import { SessionAttachmentRecallIndex, attachmentExtractHash } from './recall-index.js';
+
+/** 同一进程内跨 Service 实例的 Session 写临界区，避免多文件上传末写覆盖。 */
+const sessionWriteTails = new Map<string, Promise<void>>();
+
+function serializeSessionWrite<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = sessionWriteTails.get(sessionId) ?? Promise.resolve();
+  const current = previous.then(operation, operation);
+  const tail = current.then(() => undefined, () => undefined);
+  sessionWriteTails.set(sessionId, tail);
+  void tail.finally(() => {
+    if (sessionWriteTails.get(sessionId) === tail) sessionWriteTails.delete(sessionId);
+  });
+  return current;
+}
 
 export interface SessionAttachmentServiceOptions {
   /** 通常 `OCTOPI_HOME/sessions` */
@@ -109,6 +124,7 @@ export class SessionAttachmentService {
    * @throws 超限 / 类型不允许
    */
   async save(sessionId: string, input: AttachmentUploadInput): Promise<SessionAttachment> {
+    return serializeSessionWrite(sessionId, async () => {
     const name = sanitizeAttachmentName(input.name);
     const ext = attachmentExtension(name);
     if (this.limits.allowedExtensions.length > 0 && ext && !this.limits.allowedExtensions.includes(ext)) {
@@ -214,8 +230,95 @@ export class SessionAttachmentService {
     }
 
     manifest.items.push(item);
+    await this.indexSavedAttachment(sessionId, item);
     await this.writeManifest(sessionId, manifest);
     return item;
+    });
+  }
+
+  /**
+   * 上传解析成功后默认建立 Session 私有关键词投影，不注册 Knowledge source。
+   * 索引是可重建降级面：失败不影响原件与抽取文本的保存。
+   */
+  private async indexSavedAttachment(sessionId: string, item: SessionAttachment): Promise<void> {
+    if (!item.extractPath || !item.parse?.ok) return;
+    const root = this.attachmentRoot(sessionId);
+    const rel = item.extractPath;
+    const abs = join(root, rel);
+    if (!isPathInside(root, abs)) return;
+    try {
+      const text = readFileSync(abs, 'utf8');
+      await new SessionAttachmentRecallIndex(root).upsert(item, text, item.path);
+      const stat = statSync(abs);
+      Object.assign(item.parse!, {
+        extractHash: attachmentExtractHash(item, text),
+        extractBytes: stat.size,
+        extractMtimeMs: stat.mtimeMs,
+        extractCtimeMs: stat.ctimeMs,
+      });
+    } catch {
+      // 投影失败仅使本轮召回走 structure_tools，不损失附件读取能力。
+    }
+  }
+
+  /**
+   * 查询本轮附件的本地关键词召回；索引不可用由调用方回退 structure_tools。
+   *
+   * @param sessionId - 会话 id
+   * @param query - 局部检索焦点
+   * @param attachmentIds - 本轮已授权的附件范围
+   * @param limit - 全局 top-k
+   */
+  async recall(
+    sessionId: string,
+    query: string,
+    attachmentIds: string[],
+    limit: number,
+  ) {
+    const attachments = attachmentIds
+      .map((id) => this.get(sessionId, id))
+      .filter((a): a is SessionAttachment => a != null && a.status !== 'promoted');
+    try {
+      return await new SessionAttachmentRecallIndex(this.attachmentRoot(sessionId))
+        .search(query, attachments, limit);
+    } catch {
+      // 缺失/损坏/陈旧索引：与零命中区分，统一由注入层回退 structure_tools。
+      return null;
+    }
+  }
+
+  /**
+   * 从 manifest + 完整抽取文本重建本地投影；全部读取成功后才替换旧投影。
+   * 普通发送不调用此重路径，索引不可用时仍按 structure_tools 降级。
+   *
+   * @param sessionId - 会话 id
+   */
+  async rebuildRecall(sessionId: string): Promise<void> {
+    return serializeSessionWrite(sessionId, async () => {
+    const manifest = this.readManifest(sessionId);
+    const items = manifest.items
+      .filter((a) => a.status !== 'promoted' && a.extractPath && a.parse?.ok)
+      .map((attachment) => {
+        const text = this.readExtractedText(sessionId, attachment.id);
+        const stat = statSync(join(this.attachmentRoot(sessionId), attachment.extractPath!));
+        return { attachment, text, stat, sourcePath: attachment.path };
+      });
+    if (items.some((item) => item.text == null)) {
+      throw new Error('attachment extract unavailable; recall index was not replaced');
+    }
+    await new SessionAttachmentRecallIndex(this.attachmentRoot(sessionId)).rebuild(
+      items.map((item) => ({ ...item, text: item.text! })),
+    );
+    for (const { attachment, text, stat } of items) {
+      Object.assign(attachment.parse!, {
+        extractHash: attachmentExtractHash(attachment, text!),
+        extractBytes: stat.size,
+        extractMtimeMs: stat.mtimeMs,
+        extractCtimeMs: stat.ctimeMs,
+      });
+    }
+    await this.writeManifest(sessionId, manifest);
+    });
   }
 
   /**
@@ -225,6 +328,7 @@ export class SessionAttachmentService {
    * @param attachmentId - 附件 id
    */
   async delete(sessionId: string, attachmentId: string): Promise<boolean> {
+    return serializeSessionWrite(sessionId, async () => {
     const manifest = this.readManifest(sessionId);
     const idx = manifest.items.findIndex((i) => i.id === attachmentId);
     if (idx < 0) return false;
@@ -245,8 +349,14 @@ export class SessionAttachmentService {
       }
     }
     manifest.items.splice(idx, 1);
+    try {
+      await new SessionAttachmentRecallIndex(root).remove(attachmentId);
+    } catch {
+      // 索引缺失/损坏时已不可召回；原件与登记删除仍须完成。
+    }
     await this.writeManifest(sessionId, manifest);
     return true;
+    });
   }
 
   /**
@@ -255,8 +365,10 @@ export class SessionAttachmentService {
    * @param sessionId - 会话 id
    */
   async deleteAll(sessionId: string): Promise<void> {
+    return serializeSessionWrite(sessionId, async () => {
     const root = this.attachmentRoot(sessionId);
     await rm(root, { recursive: true, force: true });
+    });
   }
 
   /**
@@ -271,12 +383,14 @@ export class SessionAttachmentService {
     attachmentId: string,
     sourceId: string,
   ): Promise<SessionAttachment> {
+    return serializeSessionWrite(sessionId, async () => {
     const manifest = this.readManifest(sessionId);
     const item = manifest.items.find((i) => i.id === attachmentId);
     if (!item) throw new Error(`attachment not found: ${attachmentId}`);
     item.searchableSourceId = sourceId;
     await this.writeManifest(sessionId, manifest);
     return item;
+    });
   }
 
   /**
@@ -291,13 +405,20 @@ export class SessionAttachmentService {
     attachmentId: string,
     info: { projectKey: string; targetSourceId?: string },
   ): Promise<SessionAttachment> {
+    return serializeSessionWrite(sessionId, async () => {
     const manifest = this.readManifest(sessionId);
     const item = manifest.items.find((i) => i.id === attachmentId);
     if (!item) throw new Error(`attachment not found: ${attachmentId}`);
     item.status = 'promoted';
     item.promoted = { ...info, at: Date.now() };
+    try {
+      await new SessionAttachmentRecallIndex(this.attachmentRoot(sessionId)).remove(attachmentId);
+    } catch {
+      // 可重建投影清理失败不阻断权威 promote 状态迁移。
+    }
     await this.writeManifest(sessionId, manifest);
     return item;
+    });
   }
 
   /**
@@ -355,15 +476,18 @@ export class SessionAttachmentService {
       const raw = readFileSync(manifestPath, 'utf8');
       const parsed = JSON.parse(raw) as AttachmentManifest;
       return { sessionId, version: 1, items: parsed.items ?? [] };
-    } catch {
-      return { sessionId, version: 1, items: [] };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { sessionId, version: 1, items: [] };
+      }
+      throw err;
     }
   }
 
   private async writeManifest(sessionId: string, manifest: AttachmentManifest): Promise<void> {
     const { root, manifestPath } = resolveSessionAttachmentsPaths(this.sessionsDir, sessionId);
     await mkdir(root, { recursive: true });
-    const tmp = `${manifestPath}.${process.pid}.tmp`;
+    const tmp = `${manifestPath}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(tmp, JSON.stringify(manifest, null, 2));
     await rename(tmp, manifestPath);
   }

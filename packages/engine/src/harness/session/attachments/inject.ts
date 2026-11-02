@@ -5,7 +5,8 @@
  */
 
 import type { ContentBlock, FileBlock, Message } from '@octopi-agent/core/types.js';
-import type { SessionAttachment } from './types.js';
+import type { AttachmentInjectPlan, SessionAttachment } from './types.js';
+import type { AttachmentRecallHit } from './recall-index.js';
 
 export const ATTACHMENT_GROUNDING_SOURCE = 'sessionAttachment' as const;
 
@@ -16,16 +17,20 @@ export const DEFAULT_EMPTY_ATTACHMENT_PROMPT =
 export interface AttachmentInjectOptions {
   /** 全文阈值（字符）；超过走结构 */
   fullTextMaxChars: number;
-  /** 结构模式下每文件头几行 */
-  headLines?: number;
+  /** 局部召回条数（默认 6） */
+  recallTopK?: number;
   /** 结构模式下每文件开头字符（默认 3500） */
   headChars?: number;
-  /** 空正文模板 */
-  emptyMessagePrompt?: string;
-  /** 读取抽取文本 */
+  /** 读取抽取文本；maxChars 仅用于结构/全文注入，不用于召回索引 */
   readText: (attachmentId: string, maxChars: number) => string | null;
   /** 附件绝对地址（给 LLM） */
   absolutePath: (attachmentId: string) => string;
+  /** Session 私有索引查询；不得越出传入的附件范围 */
+  recall?: (
+    query: string,
+    attachmentIds: string[],
+    limit: number,
+  ) => Promise<AttachmentRecallHit[] | null>;
 }
 
 export interface AttachmentInjectResult {
@@ -85,21 +90,33 @@ export function buildAttachmentMessageContent(
   };
 }
 
+export interface AttachmentGroundingResult {
+  /** turn 侧不可信资料块；无附件为 null */
+  text: string | null;
+  /** 实际执行的局部召回命中数 */
+  recallHits: number;
+  /** 局部召回不可用/零命中后回退结构的附件 */
+  fallbackAttachmentIds: string[];
+}
+
 /**
- * 构造 turn 侧附件资料块（不可信）
+ * 构造 turn 侧附件资料块（不可信）。
+ * 局部计划跨附件全局 top-k；召回不可用或零命中时逐附件回退结构。
  *
  * @param attachments - 参与本轮的附件
- * @param opts - 注入选项
- * @param planMode - 分层形态；缺省按体积自动
+ * @param opts - 注入与受限召回选项
+ * @param plan - LLM/确定性分流产生的完整计划；缺省按体积自动
+ * @returns 包装后的资料块及召回/降级观测信息
  */
-export function buildAttachmentGroundingText(
+export async function buildAttachmentGroundingText(
   attachments: SessionAttachment[],
   opts: AttachmentInjectOptions,
-  planMode?: 'full' | 'structure_tools' | 'recall_tools' | 'overview_tools',
-): string | null {
-  if (attachments.length === 0) return null;
+  plan?: AttachmentInjectPlan,
+): Promise<AttachmentGroundingResult> {
+  if (attachments.length === 0) {
+    return { text: null, recallHits: 0, fallbackAttachmentIds: [] };
+  }
 
-  const headLines = opts.headLines ?? 20;
   const inventory = attachments
     .map((a, i) => {
       const abs = opts.absolutePath(a.id);
@@ -117,6 +134,44 @@ export function buildAttachmentGroundingText(
     '',
   ];
 
+  const recallCandidates = plan?.mode === 'recall_tools' && plan.focus?.trim() && opts.recall
+    ? attachments.filter((a) =>
+      a.kind !== 'image' &&
+      (a.parse?.chars ?? 0) > opts.fullTextMaxChars)
+    : [];
+  const recallCandidateIds = new Set(recallCandidates.map((a) => a.id));
+  const hitsByAttachment = new Map<string, AttachmentRecallHit[]>();
+  const fallbackAttachmentIds: string[] = [];
+  if (recallCandidates.length > 0 && plan?.focus && opts.recall) {
+    // targets 仅缩小本轮已选附件；不在其中/不存在的目标绝不扩大读取范围。
+    const requestedNames = new Set((plan.targets ?? []).map((name) => name.toLowerCase()));
+    const selected = requestedNames.size > 0
+      ? recallCandidates.filter((a) => requestedNames.has(a.name.toLowerCase()))
+      : recallCandidates;
+    const selectedIds = new Set(selected.map((a) => a.id));
+    for (const a of recallCandidates) {
+      if (!selectedIds.has(a.id)) fallbackAttachmentIds.push(a.id);
+    }
+    try {
+      const hits = selected.length > 0
+        ? await opts.recall(plan.focus, selected.map((a) => a.id), opts.recallTopK ?? 6)
+        : [];
+      if (hits) {
+        for (const hit of hits) {
+          if (!selectedIds.has(hit.attachmentId)) continue;
+          const group = hitsByAttachment.get(hit.attachmentId) ?? [];
+          group.push(hit);
+          hitsByAttachment.set(hit.attachmentId, group);
+        }
+      }
+    } catch {
+      // 查询失败仅降级该组大附件为结构，不影响其余全文/路径注入。
+    }
+    for (const a of selected) {
+      if (!hitsByAttachment.has(a.id)) fallbackAttachmentIds.push(a.id);
+    }
+  }
+
   for (const a of attachments) {
     const abs = opts.absolutePath(a.id);
     parts.push(`## ${a.name}`);
@@ -127,38 +182,48 @@ export function buildAttachmentGroundingText(
       continue;
     }
 
-    // 注意：readText 可能已截断，禁止用返回值 length 判断是否「大文件」
-    const text = opts.readText(a.id, opts.fullTextMaxChars);
-    if (!text) {
-      parts.push(`（未解析或无可读文本；可用 file_read 深读）`);
-      parts.push(`路径: ${abs}`);
+    const hits = hitsByAttachment.get(a.id) ?? [];
+    if (hits.length > 0) {
+      parts.push(`以下是与局部焦点「${plan?.focus}」相关的关键词召回片段：`);
+      for (const hit of hits) {
+        parts.push(`### ${hit.symbol ? `${hit.symbol} · ` : ''}第 ${hit.startLine}-${hit.endLine} 行`);
+        parts.push(hit.text);
+      }
+      parts.push('路径: ' + abs);
       parts.push('');
       continue;
     }
 
-    const declaredChars = a.parse?.chars ?? text.length;
-    const isLarge = declaredChars > opts.fullTextMaxChars;
-    const mode = planMode ?? (isLarge ? 'structure_tools' : 'full');
-    if (mode === 'full') {
+    // readText 可能已截断，禁止用返回值 length 判断是否「大文件」。
+    const isLarge = (a.parse?.chars ?? 0) > opts.fullTextMaxChars;
+    // 小文件在混合计划中仍须全文；大文件的结构/全文按各自阈值读取。
+    const readLimit = isLarge ? Math.max(opts.fullTextMaxChars, opts.headChars ?? 3500) : opts.fullTextMaxChars;
+    const text = opts.readText(a.id, readLimit);
+    if (!text) {
+      parts.push('（未解析或无可读文本；可用 file_read 深读）');
+      parts.push(`路径: ${abs}`);
+      parts.push('');
+      continue;
+    }
+    const mode = plan?.mode ?? (isLarge ? 'structure_tools' : 'full');
+    if (mode === 'full' || (!isLarge && !recallCandidateIds.has(a.id))) {
       parts.push(text);
-      if (isLarge) {
-        parts.push(`…（已达注入上限；完整内容请 file_read）`);
-      }
-    } else if (mode === 'recall_tools') {
-      parts.push(text.split('\n').slice(0, headLines).join('\n'));
-      parts.push(`…（局部焦点模式；深读用 file_read / knowledge_read）`);
+      if (isLarge) parts.push('…（已达注入上限；完整内容请 file_read）');
     } else {
-      // structure / overview：给足开头（而非仅几行），让「这文件是干嘛的」尽量不必再 read
       const headChars = Math.min(opts.headChars ?? 3500, text.length);
       parts.push(text.slice(0, headChars));
-      parts.push(`…（结构/开头摘要；全文请 file_read）`);
+      parts.push('…（结构/开头摘要；全文请 file_read）');
     }
     parts.push(`路径: ${abs}`);
     parts.push('');
   }
 
   parts.push('</session-attachments>');
-  return parts.join('\n');
+  return {
+    text: parts.join('\n'),
+    recallHits: [...hitsByAttachment.values()].reduce((n, hits) => n + hits.length, 0),
+    fallbackAttachmentIds,
+  };
 }
 
 /**

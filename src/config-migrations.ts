@@ -668,6 +668,64 @@ export function applyRemovedKeys(raw: RawObject): boolean {
   return true;
 }
 
+// ── CFG012：v0.98.18 附件配置收口 ──
+
+const REMOVED_ATTACHMENT_KEY_PATHS = [
+  ['knowledge', 'attachments', 'inject', 'inventory'],
+  ['knowledge', 'attachments', 'tools', 'attachmentsRootReadOnly'],
+] as const;
+
+function findRemovedAttachmentKeys(raw: RawObject): string[] {
+  return REMOVED_ATTACHMENT_KEY_PATHS
+    .filter((path) => readPathWithParent(raw, path).found)
+    .map((path) => path.join('.'));
+}
+
+/** 检测已删除的附件冗余配置。 */
+export function detectRemovedAttachmentKeys(raw: RawObject): MigrationFinding | null {
+  const hits = findRemovedAttachmentKeys(raw);
+  if (hits.length === 0) return null;
+  return {
+    id: 'CFG012',
+    severity: 'warn',
+    message: `${hits.join(', ')} removed in v0.98.18 (inventory always retained; attachment roots always read-only)`,
+    hint: 'delete them, or run `octopi doctor --fix` to move them into _legacy',
+    autoFixable: true,
+  };
+}
+
+/** 将废弃附件配置原值收进 _legacy；不改变 recallTopK 等有效配置。 */
+export function applyRemovedAttachmentKeys(raw: RawObject): boolean {
+  const hits = findRemovedAttachmentKeys(raw);
+  if (hits.length === 0) return false;
+  if (!isPlainObject(raw._legacy)) raw._legacy = {};
+  const legacy = raw._legacy as RawObject;
+  if (!isPlainObject(legacy.removedKeys)) legacy.removedKeys = {};
+  const bucket = legacy.removedKeys as RawObject;
+  for (const path of REMOVED_ATTACHMENT_KEY_PATHS) {
+    const found = readPathWithParent(raw, path);
+    if (!found.found) continue;
+    const key = path.join('.');
+    if (!(key in bucket)) bucket[key] = found.value;
+    delete found.parent[found.key];
+  }
+  return true;
+}
+
+function readPathWithParent(
+  raw: RawObject,
+  path: readonly string[],
+): { found: true; parent: RawObject; key: string; value: unknown } | { found: false } {
+  let parent = raw;
+  for (const key of path.slice(0, -1)) {
+    const next = parent[key];
+    if (!isPlainObject(next)) return { found: false };
+    parent = next;
+  }
+  const key = path[path.length - 1]!;
+  return key in parent ? { found: true, parent, key, value: parent[key] } : { found: false };
+}
+
 /**
  * 检测顶层 providers 旧数组
  *
@@ -723,6 +781,7 @@ export const CONFIG_MIGRATION_RULES: ConfigMigrationRule[] = [
   { id: 'CFG007', detect: detectScalarCoercion, apply: (raw) => coerceKnownScalarTypes(raw) },
   { id: 'CFG010', detect: detectSessionStore, apply: applySessionStore },
   { id: 'CFG011', detect: detectRemovedKeys, apply: applyRemovedKeys },
+  { id: 'CFG012', detect: detectRemovedAttachmentKeys, apply: applyRemovedAttachmentKeys },
 ];
 
 /**

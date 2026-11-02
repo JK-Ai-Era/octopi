@@ -203,6 +203,27 @@ describe('config-migrations', () => {
     expect(detectConfigMigrations(raw).some((f) => f.id === 'CFG011')).toBe(false);
   });
 
+  it('moves superseded attachment toggles into _legacy without changing recallTopK (CFG012)', () => {
+    const raw: Record<string, unknown> = {
+      knowledge: {
+        attachments: {
+          inject: { recallTopK: 3, inventory: false },
+          tools: { attachmentsRootReadOnly: true },
+        },
+      },
+      _legacy: { removedKeys: { 'knowledge.attachments.inject.inventory': true } },
+    };
+    expect(detectConfigMigrations(raw).find((f) => f.id === 'CFG012')?.autoFixable).toBe(true);
+    applyConfigMigrations(raw);
+    const attachments = (raw.knowledge as any).attachments;
+    expect(attachments.inject).toEqual({ recallTopK: 3 });
+    expect(attachments.tools).toEqual({});
+    const bucket = (raw._legacy as any).removedKeys;
+    expect(bucket['knowledge.attachments.inject.inventory']).toBe(true);
+    expect(bucket['knowledge.attachments.tools.attachmentsRootReadOnly']).toBe(true);
+    expect(detectConfigMigrations(raw).some((f) => f.id === 'CFG012')).toBe(false);
+  });
+
   it('v0.98.16 删除键在 doctor 里只报 CFG011，不再附带 ZOD Unrecognized key', async () => {
     const raw = {
       models: {
