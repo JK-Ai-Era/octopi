@@ -70,7 +70,6 @@
 **状态**：schema 接受这些键，但目前**没有任何消费方**——配置了也不生效。记录在此以免被误当作已接线的行为。顶层映射守卫（`tests/config-gateway-top-level-mapping.test.ts`）分类的是**顶层**键（其 `CLASSIFICATION` 表）；子键缺口以下方清单为准，并由 `src/config-schema/unwired-keys.ts` 检测。自 v0.98.8 起 `loadConfig` 在启动时对这些键**显式告警**——仍不生效，但不再静默。
 
 - **`compact`**（compact 能力缺省：`defaultProtectHead` / `defaultProtectTail` / `defaultTargetTokens` / `defaultMode`）：会话压缩实际读取 `contextEngine` 键（`protectFirstN` / `protectLastN` / `targetTokens`）；能力级缺省目前无消费方。
-- **`session.reset` / `session.maintenance`**（每日/空闲重置与存储清理旋钮）：`session` 是 passthrough schema 块，但 engine 与 gateway 均不消费这些字段（v0.86.37 已将其从 `GatewayConfig` 类型中作为死面移除）。
 
 以下不是缺陷——宿主层直接消费、刻意不经 `GatewayConfig` 的键：`channels`、`web`、`webSearch`、`summary`、`defaults`（由 `src/cli/daemon.ts` / `src/config.ts` 消费）。
 
@@ -78,12 +77,12 @@
 
 顶层映射守卫只查段级键；以下**子键** schema 接受但暂无消费方（配置了不生效）：
 
-- **`plugins.configs`**（按插件配置）：已透传过边界，但 `PluginLoader` 尚不读取。
-- **`knowledge.attachments.inject.recallTopK` / `knowledge.attachments.inject.inventory` / `knowledge.attachments.tools.attachmentsRootReadOnly`**：schema 接受但从未被读取（注入结果里的 `inventory` 是输出字段，并非此开关）；gateway 只转发 `fullTextMaxChars` / `intent` / `intentTimeoutMs` / `emptyMessagePrompt`。
-- **`models.mode`**（`merge` / `replace`）：无消费方；provider/模型合并行为目前固定。
-- **`session` passthrough 附加键**（`reset` / `maintenance` 及任何拼写错误的键）：`SessionConfigSchema` 是 `.passthrough()`；实际只消费 `dmScope` / `idleExpiryMs`。
+- **`plugins.configs`**（按插件配置）：schema 接受并已透传过边界，但尚无任何代码把它翻译成 `PluginLoaderConfig.pluginEntries`——`PluginLoader` 本身是**读** `pluginEntries` 的（`enabled` + `config` → `api.pluginConfig`），缺的是 gateway 那一段接线。
+- **`knowledge.attachments.inject.recallTopK` / `knowledge.attachments.inject.inventory` / `knowledge.attachments.tools.attachmentsRootReadOnly`**：schema 接受但从未被读取（注入结果里的 `inventory` 是输出字段，并非此开关）；gateway 只转发 `fullTextMaxChars` / `intent` / `intentTimeoutMs` / `emptyMessagePrompt`。注：`recallTopK` 无消费方的根因是附件 top-k 召回功能本身未实现（`recall_tools` 注入模式只发前 N 行）；`attachmentsRootReadOnly` 已无意义——工具层本就无条件拒绝对附件根的写操作。
+- **`models.mode` — 键已删除（v0.98.16）**：provider/模型合并行为固定；该键不再被接受（按未知键告警，`octopi doctor --fix` 会把它搬进 `_legacy`）。
+- **`session.reset` / `session.maintenance` — 键已删除（v0.98.16）**：从无消费方（v0.86.37 已从 `GatewayConfig` 作为死面移除），且日重置/存储清理功能已决定不做。`SessionConfigSchema` 不再是 `.passthrough()`——`session` 只接受 `dmScope` / `idleExpiryMs`，其他子键现按未知键报告。
 - **Wisdom/cognition steward 调参 — 键已删除（v0.98.11，BREAKING）**：原未接线键 `wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens` 与 `cognition.conceptualize` / `cognition.plasticity` / `cognition.consolidation` / `cognition.retrieval` / `cognition.capacity.{warnNodes,warnEdges}` / `cognition.identity.candidateBandLo` / `cognition.relations.{requireCue,allowCooccurEscalation}` **不再被 `octopi.json` 接受**（此前在该处也从不生效）；steward 调参写在各子系统 `config.yaml` 的 `metadata.config`。`octopi.json` 侧消费的是：`*.enabled`、`wisdom.capacity.hardCap`、`wisdom.injection.{coreMaxItems,scenarioMaxItems,trialMaxItems,trialVisible}`（core/scenario/trialVisible 自 v0.97.25；trialMaxItems 自 v0.98.5）、`cognition.identity.{mergeThreshold,candidateBandHi}`、`cognition.relations.causesMinIndependentMemories`、`cognition.capacity.{stopNodes,stopEdges}`（消费粒度已按 `wire-agent-builder.ts` 核实，2026-11-01）。
-- **`gateway.debugRest`**：`gateway.port` / `gateway.host` 自 v0.98.8 起已接线（`src/cli/listen-config.ts`，daemon / WebUI / TUI 共用——优先级 CLI `--port` > `gateway.*` > `channels[type=http]` > 缺省）。语义：任一端口来源（`--port` / `gateway.port` / `channels[]`）存在即启动监听；`apiKey` / `path` / `corsOrigins` 仍只取 `channels[type=http]`；`gateway.host` 只改变绑定地址（自身不启动监听）；监听启动时未配置 `apiKey` 会打印无鉴权告警。`debugRest` 仍无消费方。
+- **`gateway.debugRest` — 键已删除（v0.98.16）**：`gateway.port` / `gateway.host` 自 v0.98.8 起已接线（`src/cli/listen-config.ts`，daemon / WebUI / TUI 共用——优先级 CLI `--port` > `gateway.*` > `channels[type=http]` > 缺省）。语义：任一端口来源（`--port` / `gateway.port` / `channels[]`）存在即启动监听；`apiKey` / `path` / `corsOrigins` 仍只取 `channels[type=http]`；`gateway.host` 只改变绑定地址（自身不启动监听）；监听启动时未配置 `apiKey` 会打印无鉴权告警。`debugRest` 从无消费方——`/debug/*` 路由实际由 `observer.webPanel` 门控——故删除该键。
 - **`documents.legacy.converter: 'remote'`（枚举值——前瞻性预留）**：`converter` 键本身已接线（`createLegacyConverterFromConfig` 认 `'none'`＝关闭 / `'soffice'`）；`'remote'` 值（MinerU / WPS / 云转换）是前瞻性预留、暂无实现——配置它会返回 `null`（不做 legacy 转换），抽取静默退回 T0-only。属值级缺口：无法用 `unwired-keys.ts` 的路径规则表达，仅在此记录。
 - **§1c 收口删除的配置键（v0.98.12，BREAKING）**：`contextEngine.enableLLMSummary`、`summary.cache.{backend,dir}`、`agents[].model.temperature`（含 `fallbackModels[].temperature`）——从无消费方；迁移见 CHANGELOG v0.98.12（LLM 摘要有自动回退；memory 缓存经 `maxEntries`/`ttlMs` 保留；采样温度在 `models.providers[].models[].temperature`）。现按未知键启动告警。
 - **Knowledge Service 调参键仅 `manageLocal` 生效**（`embed.*` / `load.*` / `index.*` / `keywordWeight` / `autoInject.{minScore,minCoverage}` / `hint.minScore` / `catalog.autoDescribe` / `promotion.*` / `service.connectTimeoutMs`）：远程（`baseUrl`）Service 由其自身部署配置——远程模式下这些键被静默忽略。

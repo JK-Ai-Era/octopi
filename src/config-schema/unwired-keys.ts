@@ -19,21 +19,14 @@
 const UNWIRED_PREFIXES: readonly string[] = [
   // compact 能力级缺省（会话压缩实际读 contextEngine 键）
   'compact',
-  // gateway 覆盖段：port/host 已接线（daemon 监听覆盖），debugRest 无消费方
-  'gateway.debugRest',
   // 逐插件配置：穿过边界但 PluginLoader 不读
   'plugins.configs',
-  // 模型合并策略：无消费方，合并行为固定
-  'models.mode',
   // 附件注入/工具旋钮：gateway 只转发 fullTextMaxChars/intent/intentTimeoutMs/emptyMessagePrompt，
   // 以下三个无消费方（inventory 是注入产物字段而非配置开关）
   'knowledge.attachments.inject.recallTopK',
   'knowledge.attachments.inject.inventory',
   'knowledge.attachments.tools.attachmentsRootReadOnly',
 ];
-
-/** `session` 为 passthrough 块（防 typo 静默吞）：除消费键外的直接子键均未接线 */
-const SESSION_CONSUMED_KEYS: readonly string[] = ['dmScope', 'idleExpiryMs'];
 
 /**
  * 收集 raw 对象树上的全部点路径（对象中间节点与叶子都收集）
@@ -58,8 +51,11 @@ function collectPaths(val: unknown, path: string, out: Set<string>): void {
 /**
  * 检测配置中「已声明但尚未接线」（配置了不生效）的键
  *
+ * `session` 已收紧为显式 schema（v0.98.16）：其未知子键由 `detectUnknownConfigKeys`
+ * 按 typo 处理，本模块不再单列 `session.*`（否则同一问题会在启动时报两次）。
+ *
  * @param raw - raw 配置对象（未过 Zod；形状与 octopi.json 一致）
- * @returns 命中的规则路径数组（每条规则至多报告一次；session 块按未消费子键逐个报告）
+ * @returns 命中的规则路径数组（每条规则至多报告一次）
  */
 export function detectUnwiredConfigKeys(raw: unknown): string[] {
   if (raw === null || typeof raw !== 'object') return [];
@@ -72,15 +68,5 @@ export function detectUnwiredConfigKeys(raw: unknown): string[] {
       out.push(prefix);
     }
   }
-
-  const session = (raw as Record<string, unknown>).session;
-  if (session !== null && typeof session === 'object' && !Array.isArray(session)) {
-    for (const key of Object.keys(session as Record<string, unknown>)) {
-      if (!SESSION_CONSUMED_KEYS.includes(key)) {
-        out.push(`session.${key}`);
-      }
-    }
-  }
-
   return out;
 }

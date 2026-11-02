@@ -44,7 +44,7 @@ describe('config-schema composition (engine + webui + gateway)', () => {
     const r = validateConfig({
       ...minimalEngine,
       web: { dir: './web', host: 'local' },
-      gateway: { port: 8787, host: 'lan', debugRest: true },
+      gateway: { port: 8787, host: 'lan' },
     });
     expect(r.success).toBe(true);
     expect(r.data?.web?.dir).toBe('./web');

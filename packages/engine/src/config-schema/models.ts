@@ -80,7 +80,6 @@ const EmbeddingModelConfigSchema = z.object({
 });
 
 export const ModelsConfigSchema = z.object({
-  mode: z.enum(['merge', 'replace']).optional(),
   providers: z.record(z.string(), ModelProviderConfigSchema),
   level: z.record(z.string(), LevelConfigSchema).optional(),
   embedding: EmbeddingModelConfigSchema.optional(),

@@ -68,7 +68,7 @@ const CLASSIFICATION: Record<string, Classification> = {
   gateway: {
     kind: 'host-consumed',
     where:
-      'daemon listen override port/host (src/cli/listen-config.ts) + toGatewayConfig hitlWebhook；debugRest 仍未接线（unwired-keys 启动告警 + KNOWN-ISSUES 跟踪）',
+      'daemon listen override port/host (src/cli/listen-config.ts) + toGatewayConfig hitlWebhook',
   },
   web: { kind: 'host-consumed', where: 'daemon listenHost + octopi webui start (src/cli/daemon.ts, src/cli/webui.ts)' },
 };

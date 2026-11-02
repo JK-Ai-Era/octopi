@@ -824,8 +824,6 @@ export interface EmbeddingModelConfig {
 
 /** 新格式的 models 配置 */
 export interface ModelsConfig {
-  /** 合并模式：merge=与 builtin 合并，replace=完全替代 */
-  mode?: 'merge' | 'replace';
   /** Provider 映射（key = provider 名称） */
   providers: Record<string, ModelProviderConfig>;
   /** 模型级别映射（子系统通过级别名引用具体模型） */

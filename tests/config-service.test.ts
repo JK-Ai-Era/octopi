@@ -177,6 +177,15 @@ describe('unknown config keys（防 Zod strip 吞 typo）', () => {
     expect(unknown).toContain('agents[0].model.temperature');
   });
 
+  it('v0.98.16 session 收紧为显式 schema：session 内 typo 变未知键', () => {
+    const raw = {
+      ...minimalConfig(),
+      session: { dmScope: 'main', idleExpireMs: 1000 }, // typo：idleExpiryMs
+    };
+    const unknown = detectUnknownConfigKeys(raw);
+    expect(unknown).toContain('session.idleExpireMs');
+  });
+
   it('assertNoUnknownConfigKeys：typo 拒绝（写路径 fail-loud）', () => {
     expect(() => assertNoUnknownConfigKeys(minimalConfig())).not.toThrow();
     expect(() =>

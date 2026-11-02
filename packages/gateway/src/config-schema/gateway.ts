@@ -14,8 +14,6 @@ export const GatewayOverrideConfigSchema = z
   .object({
     port: z.number().int().positive().optional(),
     host: NetworkHostSchema.optional(),
-    /** 调试 REST 前缀等进程面开关；不含业务策略 */
-    debugRest: z.boolean().optional(),
     /**
      * HITL 异步确认的 webhook 通道（ops P5 双通道之一；进程面传输，非业务策略）。
      * 待确认推送到 owner 侧端点（HMAC-SHA256 签名 `x-octopi-signature`）；

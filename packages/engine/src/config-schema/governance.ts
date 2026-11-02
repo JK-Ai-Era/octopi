@@ -33,11 +33,18 @@ export const CredentialsConfigSchema = z.object({
   requireBindings: z.boolean().optional(),
 });
 
+/**
+ * `session` — 会话运行时语义
+ *
+ * 显式对象（非 passthrough）：本段的全部合法键即下面两个。此前的 `.passthrough()`
+ * 让任意子键（含 typo）静默通过，只能靠 unwired-keys 表事后兜底；收紧后未知子键
+ * 由 `detectUnknownConfigKeys` 按 typo 告警（写路径拒绝），与其余显式段的语义一致。
+ */
 export const SessionConfigSchema = z.object({
   dmScope: z.enum(['main', 'per-peer', 'per-channel-peer']).optional(),
   /** 上下文租约（毫秒）。显式配置才生效；缺省不截断 LLM 窗口 */
   idleExpiryMs: z.number().int().positive().optional(),
-}).passthrough();
+});
 
 /**
  * `toolIsolation` — 工具效应面策略

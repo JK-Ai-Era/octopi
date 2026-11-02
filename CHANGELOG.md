@@ -108,6 +108,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.16 (2026-11-03)
+
+### refactor(config)!: 清除「已决定不做 / 已被取代」的 4 个配置键（BREAKING）
+
+- **`session.reset` / `session.maintenance` 删除**：日重置 / 存储清理功能已于 v0.86.37 决定不做（当时即从 `GatewayConfig` 作死面移除），键属收尾残留。本次一并把 `SessionConfigSchema` 从 `.passthrough()` **收紧为显式 schema**——只接受 `dmScope` / `idleExpiryMs`，其余子键（含 typo）交给 `detectUnknownConfigKeys` 报未知键。此前 passthrough 让 `session` 内任何拼写错误静默通过，只能靠 `unwired-keys` 事后兜底。
+- **`models.mode` 删除**（`merge` / `replace`）：provider/模型合并行为早已固定写死，键从无消费方。
+- **`gateway.debugRest` 删除**：`/debug/*` 路由实际由 `observer.webPanel` 门控（`RunObservatory` 在 `webPanel=false` 时返回 null），该键从未被读取。
+- **存量配置迁移（CFG011）**：`gateway` 本是 `.strict()`、`session` 现已收紧——带这些键的旧配置会校验失败。新增迁移规则把它们搬进 `_legacy.removedKeys`：`loadConfig` 只告警不落盘（启动不拒），`octopi doctor --fix` 才写回。同时把 `_legacy` 加入 `unknown-keys` 的合法白名单（此前迁移产物会被误报为 typo）。
+- **doctor 不再重复误报**：`checkZod` 改为在迁移后的副本上校验。此前带 `gateway.debugRest` 的配置会同时报 CFG011 与 `ZOD001 Unrecognized key: "debugRest"`，后者读起来像结构性错误，实际只是「删掉这个废弃键」。现在只留一条可修复的 CFG011。
+- **验证**：带全部 4 个旧键的配置端到端 `loadConfig` 通过，键被摘除且告警列出全部 4 项。测试：CFG011 迁移用例（键搬入 `_legacy`、同段合法键保留、`gateway.port` 不受影响）、`session` typo 变未知键的用例、unwired-keys 表收窄断言。
+- **同步**：`octopi.schema.json` 重新生成（gateway/models/session 三段叶子收缩）；`docs/KNOWN-ISSUES{.md,.zh.md}` 删两条、改两条，并把 `plugins.configs` / `recallTopK` 的措辞修正为核实后的真实原因（前者缺 gateway 翻译层、后者功能未实现）；`arch/NEXT-STEPS.md` 重写为三大块分列（压缩/摘要架构、附件 top-k 召回、插件系统规范）。
+
+> **对读者**：删掉的四个键此前**都不生效**——移除不改变任何运行时行为，只是不再接受配置。若要保留原值，`octopi doctor --fix` 会存入 `_legacy.removedKeys`。
+
+---
+
 ## v0.98.15 (2026-11-02)
 
 ### feat(webui): 信任分级徽标 + 知识服务生命周期标记（呈现面收尾）

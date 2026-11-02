@@ -593,6 +593,81 @@ export function applySessionStore(raw: RawObject): boolean {
   return true;
 }
 
+// ── CFG011：v0.98.16 删除的无消费方配置键 ──
+
+/**
+ * v0.98.16 从 schema 删除的键（决定不做 / 已被取代）
+ *
+ * `session` 改为显式 schema、`gateway` 本就是 `.strict()`——存量配置若仍带这些键，
+ * 校验会直接失败（strict 段）或变成 typo 告警（session）。迁移把它们原样收进
+ * `_legacy`，语义与 session.store 先例一致：**loadConfig 只告警（内存迁移，保证校验
+ * 不因存量键失败），doctor --fix 才落盘**。
+ */
+const REMOVED_KEY_PATHS: ReadonlyArray<readonly [string, string]> = [
+  ['session', 'reset'],
+  ['session', 'maintenance'],
+  ['models', 'mode'],
+  ['gateway', 'debugRest'],
+];
+
+/**
+ * 收集 raw 中仍存在的删除键路径
+ *
+ * @param raw - 配置对象
+ * @returns 形如 `session.reset` 的路径数组（顺序同 REMOVED_KEY_PATHS）
+ */
+function findRemovedKeys(raw: RawObject): string[] {
+  const hits: string[] = [];
+  for (const [section, key] of REMOVED_KEY_PATHS) {
+    if (isPlainObject(raw[section]) && key in (raw[section] as RawObject)) {
+      hits.push(`${section}.${key}`);
+    }
+  }
+  return hits;
+}
+
+/**
+ * 检测 v0.98.16 删除键
+ *
+ * @param raw - 配置对象
+ * @returns finding 或 null
+ */
+export function detectRemovedKeys(raw: RawObject): MigrationFinding | null {
+  const hits = findRemovedKeys(raw);
+  if (hits.length === 0) return null;
+  return {
+    id: 'CFG011',
+    severity: 'warn',
+    message: `${hits.join(', ')} removed in v0.98.16 (never took effect / superseded)`,
+    hint: 'delete them, or run `octopi doctor --fix` to move them into _legacy',
+    autoFixable: true,
+  };
+}
+
+/**
+ * 将 v0.98.16 删除键移入 `_legacy`（原值保留，不做语义转换）
+ *
+ * @param raw - 配置对象
+ * @returns 是否变更
+ */
+export function applyRemovedKeys(raw: RawObject): boolean {
+  const hits = findRemovedKeys(raw);
+  if (hits.length === 0) return false;
+  if (!isPlainObject(raw._legacy)) raw._legacy = {};
+  const legacy = raw._legacy as RawObject;
+  if (!isPlainObject(legacy.removedKeys)) legacy.removedKeys = {};
+  const bucket = legacy.removedKeys as RawObject;
+  for (const path of hits) {
+    const [section, key] = path.split('.') as [string, string];
+    const from = raw[section] as RawObject;
+    if (!isPlainObject(bucket[path])) bucket[path] = from[key];
+    delete from[key];
+    // 段内已空则整段移除，避免留下 `{}` 触发别的迁移探测
+    if (Object.keys(from).length === 0) delete raw[section];
+  }
+  return true;
+}
+
 /**
  * 检测顶层 providers 旧数组
  *
@@ -647,6 +722,7 @@ export const CONFIG_MIGRATION_RULES: ConfigMigrationRule[] = [
   { id: 'CFG006', detect: detectTopLevelProviders, apply: (raw) => migrateTopLevelProviders(raw).changed },
   { id: 'CFG007', detect: detectScalarCoercion, apply: (raw) => coerceKnownScalarTypes(raw) },
   { id: 'CFG010', detect: detectSessionStore, apply: applySessionStore },
+  { id: 'CFG011', detect: detectRemovedKeys, apply: applyRemovedKeys },
 ];
 
 /**

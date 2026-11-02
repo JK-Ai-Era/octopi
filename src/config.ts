@@ -14,7 +14,7 @@ import type {
 } from '@octopi-agent/engine/config.js';
 import { flattenModels, resolveModelConfig } from '@octopi-agent/engine/config.js';
 import { validateConfigOrThrow } from './config-schema.js';
-import { applyLegacyBudget, detectConfigMigrations } from './config-migrations.js';
+import { applyLegacyBudget, applyRemovedKeys, detectConfigMigrations } from './config-migrations.js';
 import { detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
 import { detectUnwiredConfigKeys } from './config-schema/unwired-keys.js';
 import { expandEnvPlaceholders as expandEnvPlaceholdersShared } from '@octopi-agent/engine/config-admin/env.js';
@@ -52,6 +52,10 @@ export function applyConfigMigrations(raw: Record<string, unknown>): void {
   if ('budget' in raw) {
     delete raw.budget;
   }
+  // v0.98.16 删除键：`gateway` 是 .strict()、`session` 已收紧为显式 schema——存量配置
+  // 若仍带这些键会校验失败。此处内存搬进 _legacy（不落盘；落盘走 doctor --fix）。
+  // 告警已由上方 detectConfigMigrations 的 CFG011 finding 打印。
+  applyRemovedKeys(raw);
 }
 
 /**

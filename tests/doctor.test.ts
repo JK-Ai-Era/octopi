@@ -167,6 +167,64 @@ describe('config-migrations', () => {
     expect(detectConfigMigrations(raw).some((f) => f.id === 'CFG010')).toBe(false);
   });
 
+  it('moves v0.98.16 removed keys into _legacy on apply (CFG011)', () => {
+    const raw: Record<string, unknown> = {
+      session: { dmScope: 'main', reset: { daily: true }, maintenance: { prune: true } },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: 'https://api.openai.com/v1',
+            apiKey: '${OPENAI_API_KEY}',
+            api: 'openai-completions',
+            models: [{ id: 'gpt-5.5' }],
+          },
+        },
+        mode: 'replace',
+      },
+      gateway: { port: 8787, debugRest: true },
+      agents: [{ id: 'a', model: 'openai/gpt-5.5', home: '/tmp/a' }],
+    };
+    const findings = detectConfigMigrations(raw);
+    const cfg011 = findings.find((f) => f.id === 'CFG011');
+    expect(cfg011?.autoFixable).toBe(true);
+    expect(cfg011?.message).toContain('session.reset');
+
+    applyConfigMigrations(raw);
+    expect((raw.session as Record<string, unknown>).dmScope).toBe('main');
+    expect((raw.session as Record<string, unknown>).reset).toBeUndefined();
+    expect((raw.models as Record<string, unknown>).mode).toBeUndefined();
+    expect((raw.gateway as Record<string, unknown>).debugRest).toBeUndefined();
+    expect((raw.gateway as Record<string, unknown>).port).toBe(8787);
+    const bucket = (raw._legacy as any).removedKeys;
+    expect(bucket['session.reset']).toEqual({ daily: true });
+    expect(bucket['session.maintenance']).toEqual({ prune: true });
+    expect(bucket['models.mode']).toBe('replace');
+    expect(bucket['gateway.debugRest']).toBe(true);
+    expect(detectConfigMigrations(raw).some((f) => f.id === 'CFG011')).toBe(false);
+  });
+
+  it('v0.98.16 删除键在 doctor 里只报 CFG011，不再附带 ZOD Unrecognized key', async () => {
+    const raw = {
+      models: {
+        providers: {
+          p: { baseUrl: 'https://x/v1', apiKey: 'k', api: 'openai-completions', models: [{ id: 'm' }] },
+        },
+      },
+      agents: [{ id: 'a', model: 'p/m' }],
+      gateway: { port: 8787, debugRest: true },
+      session: { dmScope: 'main', reset: { daily: true } },
+    };
+    const { validateConfig } = await import('../src/config-schema.js');
+    // 未迁移的 raw 在 .strict() 段会额外报 unrecognized_keys —— 这正是 checkZod 要规避的重复噪音
+    expect(validateConfig(raw).success).toBe(false);
+
+    applyConfigMigrations(raw);
+    const after = validateConfig(raw);
+    expect(after.success, JSON.stringify(after.errors)).toBe(true);
+    expect((raw.gateway as Record<string, unknown>).debugRest).toBeUndefined();
+    expect((raw.session as Record<string, unknown>).reset).toBeUndefined();
+  });
+
   it('coerces string port to number', () => {
     const raw = {
       channels: [{ type: 'http', port: '3000' }],

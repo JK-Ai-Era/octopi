@@ -600,13 +600,6 @@
     "models": {
       "type": "object",
       "properties": {
-        "mode": {
-          "type": "string",
-          "enum": [
-            "merge",
-            "replace"
-          ]
-        },
         "providers": {
           "type": "object",
           "propertyNames": {
@@ -2382,8 +2375,7 @@
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
         }
-      },
-      "additionalProperties": {}
+      }
     },
     "toolIsolation": {
       "type": "string",
@@ -3228,9 +3220,6 @@
               "minLength": 1
             }
           ]
-        },
-        "debugRest": {
-          "type": "boolean"
         },
         "hitlWebhook": {
           "type": "object",

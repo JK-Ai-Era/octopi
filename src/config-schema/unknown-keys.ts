@@ -10,7 +10,14 @@
 import { OctopiConfigSchema } from './index.js';
 
 /** 合法过时键（迁移消费，不算 typo；与 loadConfig 的 warn-only 迁移语义一致） */
-const LEGACY_KEYS = new Set(['budget', 'supervisor', 'distributedIntelligence']);
+const LEGACY_KEYS = new Set([
+  'budget',
+  'supervisor',
+  'distributedIntelligence',
+  // 迁移产出容器：`octopi doctor --fix` 把被删/被取代的键搬到这里留存（CFG002/CFG006/CFG010/CFG011）。
+  // schema 不声明它（运行时忽略），但它不是 typo——否则每次迁移后启动都会误报。
+  '_legacy',
+]);
 
 /** 合法元数据键（JSON Schema 关联等，VSCode 等工具写入，运行时本就忽略但绝非 typo） */
 const METADATA_KEYS = new Set(['$schema']);

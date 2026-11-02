@@ -13,7 +13,6 @@ describe('detectUnwiredConfigKeys', () => {
   it('reports documented unwired keys (KNOWN-ISSUES tracking surface)', () => {
     const raw = {
       compact: { defaultProtectHead: 5, defaultProtectTail: 20, defaultTargetTokens: 4000, defaultMode: 'auto' },
-      models: { mode: 'replace' },
       plugins: { loadPaths: ['./p'], configs: { myplug: { a: 1 } } },
       knowledge: {
         attachments: {
@@ -21,24 +20,26 @@ describe('detectUnwiredConfigKeys', () => {
           tools: { attachmentsRootReadOnly: true },
         },
       },
-      gateway: { debugRest: true },
-      session: { reset: { daily: true }, maintenance: { prune: true }, typo: 1 },
     };
     const detected = detectUnwiredConfigKeys(raw);
     for (const expected of [
       'compact',
-      'models.mode',
       'knowledge.attachments.inject.recallTopK',
       'knowledge.attachments.inject.inventory',
       'knowledge.attachments.tools.attachmentsRootReadOnly',
       'plugins.configs',
-      'gateway.debugRest',
-      'session.reset',
-      'session.maintenance',
-      'session.typo',
     ]) {
       expect(detected, `missing unwired report: ${expected}`).toContain(expected);
     }
+  });
+
+  it('no longer reports keys removed in v0.98.16', () => {
+    const raw = {
+      models: { mode: 'replace' },
+      gateway: { debugRest: true },
+      session: { reset: { daily: true }, maintenance: { prune: true } },
+    };
+    expect(detectUnwiredConfigKeys(raw)).toEqual([]);
   });
 
   it('does not report consumed keys (no false positives)', () => {

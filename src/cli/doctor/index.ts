@@ -20,6 +20,7 @@ import { expandHomePath, getOctopiHome } from '@octopi-agent/engine/paths.js';
 import { validateConfig } from '../../config-schema.js';
 import {
   applyConfigMigrations,
+  CONFIG_MIGRATION_RULES,
   detectConfigMigrations,
   expandEnvPlaceholders,
   parseConfigJson,
@@ -287,8 +288,43 @@ function checkLayout(
 
 // ── Zod / 语义 ──
 
+/**
+ * 静默跑一遍全部迁移规则（只用于预演校验，不改磁盘、不打日志）
+ *
+ * doctor 已通过 `detectConfigMigrations` 单独报告迁移项，这里只需要一个「迁移后形状」
+ * 喂给 Zod，避免同一个旧键被报两次。
+ *
+ * @param raw - 就地迁移的配置副本
+ */
+function applyMigrationsQuietly(raw: Record<string, unknown>): void {
+  for (const rule of CONFIG_MIGRATION_RULES) {
+    try {
+      rule.apply(raw);
+    } catch {
+      // 单条规则失败不应阻断结构校验：残留的旧键会由 Zod/迁移项各自报告，这里不吞诊断
+    }
+  }
+}
+
+/**
+ * Zod 结构校验
+ *
+ * 在**迁移后**的副本上校验：CFG011 等删除键会先被搬进 `_legacy`，否则 `.strict()` 段
+ * （如 `gateway`）会额外报一条 `Unrecognized key`，让用户误以为配置有结构性错误——
+ * 而实际只需「删掉这个已废弃的键」（迁移项已单独报告）。
+ *
+ * @param raw - 未展开、未迁移的 raw 配置
+ * @returns Zod 相关 findings
+ */
 function checkZod(raw: unknown): DoctorFinding[] {
-  const result = validateConfig(raw);
+  const probe =
+    raw !== null && typeof raw === 'object'
+      ? (JSON.parse(JSON.stringify(raw)) as Record<string, unknown>)
+      : raw;
+  if (probe !== null && typeof probe === 'object') {
+    applyMigrationsQuietly(probe as Record<string, unknown>);
+  }
+  const result = validateConfig(probe);
   if (result.success) {
     return [
       {
