@@ -108,6 +108,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.15 (2026-11-02)
+
+### feat(webui): 信任分级徽标 + 知识服务生命周期标记（呈现面收尾）
+
+- **descriptionSource 徽标**：知识源列表/详情的自动描述行显示信任分级徽标——`LLM 生成`（blue）/ `启发式`（grey）/ `启发式 · 密钥封锁`（warn，附「素材未外发」说明）；归因缺失（旧库）按启发式显示。目的：LLM 文本读起来像权威，管理面必须一眼区分人工/模型推断（v0.98.13 强制归因的消费端）。数据链：Service `generated_description_source` → gateway 透传 → web SDK `KnowledgeSourceDto` 补类型字段（运行时字段 v0.98.13 起已在，本批只补声明+渲染）。
+- **KnowledgeServiceStatus 常驻标记**（对齐 PRIVILEGED 标记范式）：订阅 WS `knowledge.service.{exited,restarting,restart_failed,recovered}`——`exited`/`restart_failed` 红标常驻、`restarting` 橙标（含 attempt/退避秒数）、`recovered` 绿条 5s 后归于零占位；tooltip 带 reason/error。`knowledge.required` 模式下服务缺席=全站拒 run，运维在控制台一眼可见（v0.98.14 自愈事件此前只有 console/WS 无观众）。
+- 纯前端消费，后端契约零改动（除 `/health` 补 `knowledge` 状态字段）。测试 +5（徽标三档+脏值兜底、生命周期状态机/瞬态归零/seed 纠偏/connect 接线锁/所有权、blocked→clean 归因回退回归）。
+
+### fix: 评审修复（提交前）— 状态指示器语义与两条老病根
+
+- **P0**：生命周期标记原是纯事件流——换页/网关重启后漏报或陈旧红标长期化。补齐「状态指示器」语义：`/health` 新增 `knowledge` 状态（顺带兑现 `getKnowledgeState` 注释里「供 /health」的已声明未消费承诺），组件 mount/WS 重连以 health seed 纠偏，事件降为低延迟增量。
+- **P1**：settle 归因卡死——`blocked_secret` 与 `heuristic` 共享同一启发式文本，去重只比文本导致「封锁→清洁」永不回退、该源永远拿不到 LLM 升级；修复并补回归。组件所有权（借用的 client 卸载不 disconnect）、connect 接线锁入测试、`exited` 的 code/signal 进 tooltip（OOM/被 kill 的唯一诊断信息）、reason 中文化。
+- **P2**：徽标未知归因值兜底启发式（防脏值打崩面板）、密钥封锁落 console.warn（仅规则名，现场可查）、LLM 描述「时点快照」语义入 docs、lint 门禁补 `tsc -p packages/webui`（此前 webui 类型错误不进 CI）。**范围外留拍板**：WebUI「重新生成描述」按钮（SDK 方法已有、入口未接）。
+
+---
+
 ## v0.98.14 (2026-11-02)
 
 ### feat(knowledge): required 可运维性两件收口 — manageLocal 子进程自愈 + 拒 run 三件套审计

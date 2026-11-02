@@ -76,7 +76,7 @@ Knowledge 数据面是 **独立 HTTP Service**（唯一写者），不是 Gatewa
 - **契约**（内部规格，不对外）：token → `(tenantId, gatewayId)`；业务键不从 body 伪造
 - **装配**：`knowledge.service.manageLocal`（默认 `true`）→ 本机 **fork 子进程**拉起 Service，缺省端口 **18280**；`manageLocal: false` + `baseUrl` → 只连远程；二者皆无 → 知识面 `disabled`
 - **单写者**：`knowledge.db.writer.lock`（由 **Service 进程**持有，不是 Gateway）
-- **状态**：`ready` / `degraded` / `disabled`（`knowledge.required` fail-closed 已生效：非 `ready` 拒新 run，每次拒绝记 `ops.knowledge.run_refused` 审计；manageLocal 故障**自愈**（指数退避自动重启），`degraded` 为过渡态。已知边界：子进程假死（存活但不健康）不在自愈范围——自愈仅由进程退出/启动失败触发）
+- **状态**：`ready` / `degraded` / `disabled`（`knowledge.required` fail-closed 已生效：非 `ready` 拒新 run，每次拒绝记 `ops.knowledge.run_refused` 审计；manageLocal 故障**自愈**（指数退避自动重启），`degraded` 为过渡态——生命周期以状态标记显示在 WebUI 顶栏。已知边界：子进程假死（存活但不健康）不在自愈范围——自愈仅由进程退出/启动失败触发）
 
 #### 2.1.1 进程内线程边界（勿把重活塞回主线程）
 
@@ -348,7 +348,7 @@ POST   /api/v1/agents/:id/knowledge/resume
 - **注册即自动 ingest**（`POST …/sources` → Service 内 `ingestSource`）；`reindex` = 显式全量重建（supersede）。注册后无需再点「重建」才解析。
 - **reindex = supersede**：先作废本源 queued/running，再按磁盘全量重扫（勿与「继续」混淆：继续=清中止态接着跑）。
 - **删除**会清理索引与使用痕迹（合规可抹除）；目录移出用 `removePathTree` 清子路径；零认领 File 才 purge。
-- 自动描述（B 方案，gateway 代生成）：索引稳定后 Service 先落启发式 `generatedDescription`（归因 `heuristic`）并发 `describe-pending` 事件；Gateway 经 `models.level`（mini→standard；未配置=仅启发式，不偷用主模型）生成 **LLM 描述**，从 `POST /sources/:id/describe` 写入口以 `source: 'llm'` 回写。素材（源元数据+20 条 logical path+路径派生 topics+文件头 chunk）在 **Service 内组装并过密钥形态扫描**——命中即封锁（`blocked_secret`，不升级、素材不出 Service）。生成方归因持久化（`generated_description_source`）并以 catalog `descriptionSource` 暴露（**human > llm > heuristic**；llm 来源的 `purpose` 行在系统提示中带 `[llm]` 前缀）。**源稳定后**触发（勿挂 `idle` 短超时）；`catalog.autoDescribe: false` 让全自动链整体静默（手动触发不受限）。
+- 自动描述（B 方案，gateway 代生成）：索引稳定后 Service 先落启发式 `generatedDescription`（归因 `heuristic`）并发 `describe-pending` 事件；Gateway 经 `models.level`（mini→standard；未配置=仅启发式，不偷用主模型）生成 **LLM 描述**，从 `POST /sources/:id/describe` 写入口以 `source: 'llm'` 回写。素材（源元数据+20 条 logical path+路径派生 topics+文件头 chunk）在 **Service 内组装并过密钥形态扫描**——命中即封锁（`blocked_secret`，不升级、素材不出 Service）。生成方归因持久化（`generated_description_source`）并以 catalog `descriptionSource` 暴露（**human > llm > heuristic**；llm 来源的 `purpose` 行在系统提示中带 `[llm]` 前缀，WebUI 源列表对档位显示徽标）。LLM 描述是**生成时点快照**：语料变化不会自动重写（settle 不降级 `llm`），语料实质变化后请手动重新生成。**源稳定后**触发（勿挂 `idle` 短超时）；`catalog.autoDescribe: false` 让全自动链整体静默（手动触发不受限）。
 - **会话附件（临时上传）**：落 `sessions/<sid>/attachments/`，仅本 session；消息侧为 `FileBlock` 指针 + turn 侧不可信资料块（正文）。可选 **升为可检索**（注册 `scopeRef: session` 源）或 **归入项目**（promote=move，非自动提升）。API：`/api/v1/sessions/:id/attachments`；已知边界见 [`KNOWN-ISSUES.zh.md`](./KNOWN-ISSUES.zh.md)。
 - 外源可带 **`authRef`**（指向 credentials 命名凭证）、**`network`**（`allowPrivateNetwork` / 超时）、**`discover`**（sitemap/crawl 预算）。失败/skip **不删**已入库 chunks。
 - 溯源：命中用稳定逻辑 **`path`**；完整 URL 在文件记录 `external_url`。

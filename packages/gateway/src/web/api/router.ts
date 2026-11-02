@@ -69,6 +69,9 @@ export class WebApiRouter {
           data: {
             status: 'ok',
             agents: this.gateway.getRegisteredAgents(),
+            // 状态指示器 seed（兑现 getKnowledgeState「供 /health」的注释承诺）：
+            // WebUI 生命周期标记 mount/WS 重连时以此为准，事件仅作低延迟增量
+            knowledge: this.gateway.getKnowledgeState(),
             effectPolicy: this.gateway.getEffectPolicyStatus(),
             // ops P4：常驻 PRIVILEGED 标记（不是一次性 toast）的数据源
             privileged: await this.gateway.getPrivilegedStatus(),

@@ -8,6 +8,7 @@ import {
   type KnowledgeSourceDetailDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import { OpFeedback, useOpFeedback } from './OpFeedback';
+import { DescriptionSourceBadge } from './DescriptionSourceBadge';
 
 interface FileRow {
   path: string;
@@ -278,7 +279,11 @@ export function SourceDetailPanel({
       <div className="small mono muted">{detail.location}</div>
       {detail.description && <div className="small">{detail.description}</div>}
       {detail.generatedDescription && (
-        <div className="small muted">自动描述：{detail.generatedDescription}</div>
+        <div className="small muted">
+          自动描述：
+          <DescriptionSourceBadge source={detail.generatedDescriptionSource} />
+          {detail.generatedDescription}
+        </div>
       )}
       {detail.scopeRef.level === 'project' && (
         <div className="small muted">

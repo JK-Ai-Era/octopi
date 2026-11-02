@@ -657,9 +657,16 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
           if (src.generatedDescriptionSource === 'llm') return;
           const r = await this.describeWithSample(src);
           const source = r.source === 'disabled' ? 'heuristic' : r.source;
-          // startReconciler 每 15s 对稳态源反复触发本钩子（ingest.ts）：文本无变化则
-          // 不写不发，掐断「每 tick 重发 describe-pending → gateway 每 tick LLM 升级」成本环
-          if (src.generatedDescription === r.description) return;
+          // startReconciler 每 15s 对稳态源反复触发本钩子（ingest.ts）：文本与归因都
+          // 无变化则不写不发，掐断「每 tick 重发 describe-pending → gateway 每 tick
+          // LLM 升级」成本环。归因必须参与比较——blocked_secret 与 heuristic 共享同一
+          // 启发式文本，只比文本会让「封锁→清洁」的归因回退永远卡死（评审 P1-1）
+          if (
+            src.generatedDescription === r.description &&
+            src.generatedDescriptionSource === source
+          ) {
+            return;
+          }
           sources.update(sourceId, {
             generatedDescription: r.description,
             generatedDescriptionSource: source,

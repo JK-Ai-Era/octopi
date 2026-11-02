@@ -45,6 +45,10 @@ export async function generateKnowledgeDescription(
   const secretHits = scanSecretShapes(sample);
 
   if (secretHits.length > 0) {
+    // 封锁现场（仅规则名，不泄密）：上线后这是唯一可查的触发线索（评审 P2-4）
+    console.warn(
+      `[Knowledge] describe sample blocked by secret scan (rules: ${secretHits.join(', ')}); falling back to heuristic`,
+    );
     return {
       description: heuristicDescription(source),
       source: 'blocked_secret',

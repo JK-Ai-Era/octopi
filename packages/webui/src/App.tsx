@@ -2,6 +2,7 @@ import { useState } from 'react';
 import ChatWorkspace from './components/ChatWorkspace';
 import { KnowledgeAdminPanel } from './components/KnowledgeAdminPanel';
 import { PrivilegedBadge } from './components/PrivilegedBadge';
+import { KnowledgeServiceStatus } from './components/KnowledgeServiceStatus';
 import { SettingsWorkspace } from './components/SettingsWorkspace';
 
 type Surface = 'playground' | 'knowledge' | 'settings';
@@ -43,6 +44,8 @@ export default function App() {
         <div className="app-header-actions">
           {/* ops P4 §8.1：常驻 PRIVILEGED 标记（非一次性 toast） */}
           <PrivilegedBadge />
+          {/* 自愈可见性（v0.98.14）：知识服务生命周期常驻标记，正常时零占位 */}
+          <KnowledgeServiceStatus />
           {surface === 'playground' && (
             <button
               type="button"

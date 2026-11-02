@@ -8,6 +8,7 @@ import {
   type KnowledgeSourceDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import { SourceDetailPanel } from './SourceDetailPanel';
+import { DescriptionSourceBadge } from './DescriptionSourceBadge';
 import { AgentKnowledgeView } from './AgentKnowledgeView';
 import { OpFeedback, useOpFeedback } from './OpFeedback';
 import { resolveDefaultBase } from '../gateway-base';
@@ -151,7 +152,9 @@ function SourceRow({
           </div>
           {source.generatedDescription && (
             <div className="small muted">
-              自动：{source.generatedDescription.slice(0, 120)}
+              自动：
+              <DescriptionSourceBadge source={source.generatedDescriptionSource} />
+              {source.generatedDescription.slice(0, 120)}
             </div>
           )}
           {!source.description && !source.generatedDescription && (

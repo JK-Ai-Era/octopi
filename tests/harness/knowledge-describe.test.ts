@@ -339,6 +339,28 @@ describe('settle 钩子（自动链：启发式落库 + describe-pending 升级�
       db.close();
     }
   });
+  it('P1-1 回归：blocked_secret → 清洁样本后归因回退 heuristic 并重发升级信号', async () => {
+    const { db, write } = await setup();
+    try {
+      const src = registerReady(write, 'unblock');
+      seed(write, src.id, [{ path: 'a.md', heads: [SECRET_LINE] }]);
+      const events: Array<{ status?: string }> = [];
+      write.onProgress((e) => events.push(e));
+      await write.startIngestRuntime();
+      write.ingest.onSourceSettled?.(src.id);
+      await until(() => Boolean(write.sources.get(src.id)?.generatedDescription));
+      expect(write.sources.get(src.id)!.generatedDescriptionSource).toBe('blocked_secret');
+
+      // 内容清理干净：启发式文本不变（同路径），但归因必须回退、升级信号必须重发
+      db.raw.prepare('UPDATE knowledge_chunks SET text = ? WHERE ordinal = 0').run('clean head now');
+      write.ingest.onSourceSettled?.(src.id);
+      await until(() => write.sources.get(src.id)?.generatedDescriptionSource === 'heuristic');
+      expect(events.filter((e) => e.status === 'describe-pending').length).toBe(1);
+    } finally {
+      write.dispose();
+      db.close();
+    }
+  });
 });
 
 describe('listDescribePending（gateway boot sweep 的升级候选）', () => {

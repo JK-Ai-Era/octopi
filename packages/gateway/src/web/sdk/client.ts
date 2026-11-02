@@ -220,6 +220,8 @@ export interface KnowledgeSourceDto {
   displayName: string;
   description?: string;
   generatedDescription?: string;
+  /** generatedDescription 生成方归因（v0.98.13 强制标注；信任分级 human > llm > heuristic 的数据源） */
+  generatedDescriptionSource?: 'heuristic' | 'llm' | 'blocked_secret';
   catalogPriority?: number;
   hiddenFromCatalog?: boolean;
   authRef?: string;
@@ -889,12 +891,15 @@ export class OctopiClient {
     agents: AgentSummary[];
     /** ops P4：特权部署状态（UI 常驻 PRIVILEGED 标记数据源） */
     privileged?: { active: boolean; reasons: string[] };
+    /** Knowledge 运行时状态（WebUI 生命周期标记的 seed/重连同步源） */
+    knowledge?: 'starting' | 'disabled' | 'ready' | 'degraded';
   }> {
     const data = await this.getJson('/health');
     return {
       status: String(data?.data?.status ?? data?.status ?? 'unknown'),
       agents: (data?.data?.agents as AgentSummary[]) ?? [],
       privileged: (data?.data?.privileged as { active: boolean; reasons: string[] } | undefined) ?? undefined,
+      knowledge: (data?.data?.knowledge as 'starting' | 'disabled' | 'ready' | 'degraded' | undefined) ?? undefined,
     };
   }
 
