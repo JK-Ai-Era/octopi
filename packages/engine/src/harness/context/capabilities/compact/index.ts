@@ -17,7 +17,7 @@ export type {
   CompactMode,
   CompactOptions,
   CompactOutcome,
-  CompactSummarizeFn,
+  SummarizeFunction,
   CompactTokenEstimator,
   CreateCompactEngineOptions,
 } from './types.js';

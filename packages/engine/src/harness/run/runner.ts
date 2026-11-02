@@ -2597,10 +2597,7 @@ export class SessionAwareRunner {
         sessionId: string;
         agentId: string;
         messages: Message[];
-        summarize?: (
-          messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[],
-          opts?: { maxTokens?: number },
-        ) => Promise<string>;
+        summarize?: import('../context/types.js').SummarizeFunction;
         compactTargetTokens?: number;
         /** task 快照：交接式摘要指令尾部注入 */
         taskSnapshot?: string;
@@ -2614,10 +2611,7 @@ export class SessionAwareRunner {
         /** 摘要覆盖终点（tailStart，不含） */
         coveredMessageCount?: number;
       }>;
-      summarize?: (
-        messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[],
-        opts?: { maxTokens?: number },
-      ) => Promise<string>;
+      summarize?: import('../context/types.js').SummarizeFunction;
       compactTargetTokens?: number;
     },
   ): Promise<{

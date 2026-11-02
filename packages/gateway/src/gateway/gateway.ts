@@ -2455,9 +2455,8 @@ export class Gateway {
     const modelRef = this.readSessionModelId(session.metadata);
     const { createProviderSummarize } = await import('@octopi-agent/engine/harness/context/summarize.js');
     const { resolveModelRef } = await import('@octopi-agent/engine/harness/run/model/index.js');
-    type SummarizeFn = (messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
 
-    let summarize: SummarizeFn | undefined;
+    let summarize: import('@octopi-agent/engine').SummarizeFunction | undefined;
     const bound = modelRef
       ? resolveModelRef(modelRef, {
           providers: this.providers,

@@ -9,8 +9,11 @@
 
 import type { Message } from '@octopi-agent/core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { SummarizeFunction } from './capabilities/compact/types.js';
 
 export type { LLMMessage, LLMToolDefinition };
+/** 族 A 摘要执行契约：单源定义在 capabilities/compact/types.ts（此处再导出保持域内引用面稳定）。 */
+export type { SummarizeFunction };
 
 // ── 引擎信息 ──
 
@@ -148,32 +151,6 @@ export interface ContextCompactSnapshot {
   /** 上次主动压缩后的视图 token 估算 */
   lastProactiveTokens?: number;
 }
-
-/**
- * 摘要调用函数
- *
- * 由 Harness 层注入，ContextEngine 用它调用 LLM 生成摘要。
- * 这样 ContextEngine 不直接依赖 ModelProvider，保持解耦。
- *
- * 契约（迭代式更新）：`options.previousSummary` 已按约定嵌入 `messages` 正文
- * （"Previous summary: …" 段），实现方无需再读 opts 拼 prompt；**返回值即完整
- * 更新后的摘要**，调用方不得再与旧摘要拼接。
- *
- * @param messages - 摘要请求消息（system 指令 + 用户正文；非原始对话序列）
- * @param options - 摘要选项
- * @returns 完整更新后的摘要文本
- */
-export type SummarizeFunction = (
-  messages: LLMMessage[],
-  options?: {
-    /** 上次摘要（已嵌入 messages 正文；仅作元信息回传） */
-    previousSummary?: string;
-    /** 摘要 token 预算 */
-    maxTokens?: number;
-    /** 自定义指令 */
-    instructions?: string;
-  }
-) => Promise<string>;
 
 // ── 组装结果 ──
 

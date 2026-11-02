@@ -15,15 +15,24 @@ export type CompactMode =
   | 'auto';
 
 /**
- * Compact 摘要函数契约：`options.previousSummary` 已嵌入 `messages` 正文
- * （"Previous summary: …" 段），**返回值即完整更新后的摘要**（不与旧摘要拼接）。
+ * 摘要执行函数（族 A 交接式摘要的唯一执行契约，manual / proactive / overflow 共用）。
+ *
+ * 契约（迭代式更新）：`options.previousSummary` 已按约定嵌入 `messages` 正文
+ * （"Previous summary: …" 段），实现方无需再读 opts 拼 prompt；**返回值即完整
+ * 更新后的摘要**，调用方不得再与旧摘要拼接。
+ *
+ * @param messages - 摘要请求消息（system 指令 + 用户正文；非原始对话序列）
+ * @param options - 摘要选项
+ * @returns 完整更新后的摘要文本
  */
-export type CompactSummarizeFn = (
+export type SummarizeFunction = (
   messages: LLMMessage[],
   options?: {
     /** 上次摘要（已嵌入 messages 正文；仅作元信息回传） */
     previousSummary?: string;
+    /** 摘要 token 预算 */
     maxTokens?: number;
+    /** 自定义指令 */
     instructions?: string;
   },
 ) => Promise<string>;
@@ -40,8 +49,8 @@ export interface CompactOptions {
   mode?: CompactMode;
   /** conversation 策略或显式 policy / id；经 buildSystemPrompt 产指令，要求 output:'text' 策略 */
   summarizePolicy?: SummaryPolicy | string;
-  /** 兼容 ContextEngine 注入的 SummarizeFunction */
-  summarizeFn?: CompactSummarizeFn;
+  /** 注入的摘要执行函数（族 A；契约见 SummarizeFunction） */
+  summarizeFn?: SummarizeFunction;
   onSummarizeFail?: 'truncate' | 'keep_partial';
   estimator?: CompactTokenEstimator;
   previousSummary?: string;
@@ -87,6 +96,10 @@ export interface CompactOutcome {
   /** 本次是否产出了**新的**语义摘要（评审 F1）：false 时 summary 只是旧摘要兜底，
    *  调用方不得据此推进覆盖计数/覆盖点（否则未摘要的中段会被记成「已覆盖」）。 */
   fresh?: boolean;
+  /** 本次是否真正发起过摘要 LLM 调用（成功/失败均算）：冷却时间戳只随 true 推进（F8R-01）。
+   *  必填（与族 B CompressResult.summarizeAttempted 姿态一致）：机械/早退路径
+   *  （empty、within_target、too_short、head_tail_only）显式 false，不许留空。 */
+  summarizeAttempted: boolean;
   coverage?: SummaryCoverage;
   /** Message[] 或纯文本结果，由入口决定 */
   view: Message[] | string;

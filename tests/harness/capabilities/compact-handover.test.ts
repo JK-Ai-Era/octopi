@@ -72,6 +72,7 @@ describe('交接式摘要：指令形态与注入', () => {
     expect(tail).toContain('<session_tasks>');
     expect(tail.indexOf('<session_tasks>')).toBeGreaterThan(tail.indexOf('Evidence pointers'));
     expect(out.summary).toBe(CLEAN_HANDOFF);
+    expect(out.summarizeAttempted).toBe(true);
   });
 
   it('task 快照渲染 includeGuidance=false：只留状态，不带对话引导语', () => {
@@ -84,6 +85,78 @@ describe('交接式摘要：指令形态与注入', () => {
     expect(bare).not.toContain('task_complete');
     const full = renderSessionTasksInjection(tasks as never);
     expect(full).toContain('说明');
+  });
+
+  it('无 summarizeFn 机械路径：summarizeAttempted=false（冷却不得被机械降级推进）', async () => {
+    const engine = createCompactEngine();
+    const messages = Array.from({ length: 8 }, (_, i) => userMsg(`m${i}-content`));
+    const out = await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+    });
+    expect(out.fresh).toBeFalsy();
+    expect(out.summarizeAttempted).toBe(false);
+  });
+
+  it('empty_middle：不发空摘要请求，summarizeAttempted=false', async () => {
+    const summarize = vi.fn(async () => CLEAN_HANDOFF);
+    const engine = createCompactEngine();
+    // 空正文消息文本化为空 → 不允许发空 user / 空 New content（严格网关红线）
+    const messages = Array.from({ length: 8 }, () => userMsg(''));
+    const out = await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: summarize,
+    });
+    expect(summarize).not.toHaveBeenCalled();
+    expect(out.summarizeAttempted).toBe(false);
+  });
+
+  it('window_exhausted：请求构造不出即返回，summarizeAttempted=false', async () => {
+    const summarize = vi.fn(async () => CLEAN_HANDOFF);
+    const engine = createCompactEngine();
+    const messages = Array.from({ length: 8 }, (_, i) => userMsg(`m${i}-content`));
+    const out = await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: summarize,
+      // 窗口装不下文本化请求（input+output 超窗）→ providerMaxTokens<256，走 window_exhausted 守卫
+      contextWindow: 200,
+      maxOutputTokens: 50,
+    });
+    expect(summarize).not.toHaveBeenCalled();
+    expect(out.summarizeAttempted).toBe(false);
+  });
+
+  it('文本化工具结果三形态（error/字符串/对象）走共享 toolResultBody 序列化', async () => {
+    let body = '';
+    const summarize = vi.fn(async (m: LLMMessage[]) => {
+      body = String(m[m.length - 1]!.content);
+      return CLEAN_HANDOFF;
+    });
+    const engine = createCompactEngine();
+    const toolMsg: Message = {
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolResults: [
+        { toolCallId: 't1', name: 'a', result: 'str-body' },
+        { toolCallId: 't2', name: 'b', result: undefined, error: 'boom' },
+        { toolCallId: 't3', name: 'c', result: { k: 1 } },
+      ],
+    };
+    await engine.compactMessages([toolMsg, userMsg('tail-context')], {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: summarize,
+    });
+    expect(body).toContain('str-body');
+    expect(body).toContain('{"error":"boom"}');
+    expect(body).toContain('{"k":1}');
   });
 });
 
@@ -126,6 +199,8 @@ describe('交接式摘要：输出闸门（续写污染防护）', () => {
     // 不静默存坏摘要（原文续写会让折叠掉的中段信息全丢）
     expect(out.summary).toBe('old summary');
     expect(out.summary).not.toContain('<function=');
+    // 失败也算发起过（成功/失败均算）：冷却推进诚实性（F8R-01）
+    expect(out.summarizeAttempted).toBe(true);
     expect(Array.isArray(out.view)).toBe(true);
   });
 

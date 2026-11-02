@@ -1343,7 +1343,7 @@ export class DefaultContextEngine implements ContextEngine {
       lastProactiveCoverEnd: tailStart,
       lastProactiveTokens: tokensAfter,
       // 校准基只写「实际请求」口径（见 assemble 处注释）：此处不量请求，故不写 lastEstimatedTokens
-      lastProactiveLlmAt: summarize ? Date.now() : state?.lastProactiveLlmAt,
+      lastProactiveLlmAt: outcome.summarizeAttempted ? Date.now() : state?.lastProactiveLlmAt,
     });
 
     return {

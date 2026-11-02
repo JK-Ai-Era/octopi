@@ -108,6 +108,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.17 (2026-11-03)
+
+### refactor(engine)!: 摘要契约单源化 + `CompactOutcome.summarizeAttempted` 必填
+
+**BREAKING**：`CompactSummarizeFn` 公开导出移除（`@octopi-agent/engine/harness/*` 子路径面可观察）。迁移：改用同形状的 `SummarizeFunction`——单源在 `capabilities/compact/types.ts`，`harness/context/types.js` 与顶层 `@octopi-agent/engine` 继续导出，形状无变化。
+
+- **类型单源**：`SummarizeFunction`（原 context/types）与 `CompactSummarizeFn`（原 compact/types）合一；顺手消灭第三份契约别名（gateway `SummarizeFn` 本地类型、runner `compactSession` 内联签名改用单源类型）
+- **`CompactOutcome.summarizeAttempted: boolean`（必填，与族 B `CompressResult` 姿态一致）**：是否真正发起过摘要 LLM 调用（成功/失败均算）；机械/早退路径（empty/within_target/too_short/head_tail_only）显式 false；`structuralCompact` 写 `lastProactiveLlmAt` 改用该字段判定——内置引擎行为恒等（fresh⇒attempted），补正的是外部 `CompactEngine` 实现的诚实性，与 F8R-01「冷却只随真发起推进」对齐
+- `formatMessagesAsText` 复用 `toolResultBody` 缓存序列化（逐字节等价；摘要投影同吃该缓存，toolResult 不可变性前提已在注释注明）
+- 测试：summarizeAttempted 五态锚（成功/闸门二次污染失败/无 summarizeFn/empty_middle/window_exhausted）+ 工具结果三形态文本化 + 冷却诚实性消费锚（`tests/harness/compact-cooldown-honesty.test.ts`）
+- 定性：本提交 = 批一 P1 **契约子集**；摘要包装/占位文案/账本/截断兜底单源化随 P2 三件套删除一并收口（`arch/compaction-architecture.md` §4 已同步），事件词汇定性随 P5 文档批
+
 ## v0.98.16 (2026-11-03)
 
 ### refactor(config)!: 清除「已决定不做 / 已被取代」的 4 个配置键（BREAKING）
