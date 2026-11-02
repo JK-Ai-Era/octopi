@@ -97,7 +97,7 @@ export interface CompactOutcome {
    *  调用方不得据此推进覆盖计数/覆盖点（否则未摘要的中段会被记成「已覆盖」）。 */
   fresh?: boolean;
   /** 本次是否真正发起过摘要 LLM 调用（成功/失败均算）：冷却时间戳只随 true 推进（F8R-01）。
-   *  必填（与族 B CompressResult.summarizeAttempted 姿态一致）：机械/早退路径
+   *  必填（显式标注，杜绝空值歧义）：机械/早退路径
    *  （empty、within_target、too_short、head_tail_only）显式 false，不许留空。 */
   summarizeAttempted: boolean;
   coverage?: SummaryCoverage;

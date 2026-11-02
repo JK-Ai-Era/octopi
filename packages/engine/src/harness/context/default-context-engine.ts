@@ -3,14 +3,13 @@
  *
  * Harness 层的默认实现，整合所有组件：
  * - MessageSelector：消息选择
- * - Compressor：压缩（截断 + LLM 摘要）
+ * - capabilities/compact：压缩执行（交接摘要 + 机械降级阶梯；本引擎只做触发/状态）
  * - BudgetAllocator：预算分配
  * - TokenEstimator：Token 估算
  *
  * 特性：
  * - 四区域划分（头部保护 + 中间可压缩 + 尾部保护）
  * - 边界对齐（不拆分 tool_call/tool_result 对）
- * - 工具结果预处理（清除旧工具输出）
  * - 迭代式摘要（传入上次摘要，更新而非重建）
  * - 实际 token 数回写
  */
@@ -29,14 +28,12 @@ import type {
   TokenEstimator,
   SummarizeFunction,
   MessageSelector,
-  Compressor,
   BudgetAllocator,
   ContextEmitFn,
   ContextCompactSnapshot,
 } from './types.js';
 import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.js';
 import { toolResultBody } from './tool-result-body.js';
-import { buildToolCallLedger } from './llm-summarizer.js';
 import {
   agedToolResultPointer,
   agedToolArgDigest,
@@ -48,7 +45,6 @@ import {
   type ToolResultAgingPlan,
 } from './tool-result-aging.js';
 import { DefaultMessageSelector } from './message-selector.js';
-import { HybridCompressor } from './hybrid-compressor.js';
 import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
@@ -59,15 +55,19 @@ import {
   isTurnStartContent,
 } from './turn-envelope.js';
 import { createCompactEngine } from './capabilities/compact/index.js';
-import type { CompactEngine } from './capabilities/compact/index.js';
+import type { CompactEngine, CompactOutcome } from './capabilities/compact/index.js';
+import {
+  asSummaryMessage,
+  isMechanicalNotice,
+  ledgerTruncate,
+  mechanicalDegrade,
+} from './capabilities/compact/index.js';
 
 // ── 配置 ──
 
 export interface DefaultContextEngineConfig {
   /** 消息选择策略 */
   messageSelector?: MessageSelector;
-  /** 压缩策略 */
-  compressor?: Compressor;
   /** 预算分配策略 */
   budgetAllocator?: BudgetAllocator;
   /** Token 估算器 */
@@ -147,16 +147,6 @@ interface CompactState {
 
 // ── 引擎实现 ──
 
-/** 摘要正文包装：确保带 [Conversation Summary] 标记，便于 extract / 调试 */
-function wrapContextSummary(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.includes('[Conversation Summary]')) return trimmed;
-  return `[Conversation Summary]\n\n${trimmed}`;
-}
-
-/** 供调用方/测试引用 */
-export { wrapContextSummary };
-
 export class DefaultContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
     id: 'default',
@@ -175,7 +165,6 @@ export class DefaultContextEngine implements ContextEngine {
 
     this.config = {
       messageSelector: config?.messageSelector ?? new DefaultMessageSelector(),
-      compressor: config?.compressor ?? new HybridCompressor(),
       budgetAllocator: config?.budgetAllocator ?? new DefaultBudgetAllocator(),
       tokenEstimator,
       router: config?.router ?? {},
@@ -214,11 +203,9 @@ export class DefaultContextEngine implements ContextEngine {
    *
    * 核心方法。根据 token 预算，选择最有价值的信息组装成 LLM 上下文。
    *
-   * 使用 SmartRouter 进行智能路由决策：
+   * 使用 SmartRouter 进行智能路由决策（Q2 B′ 后两路由）：
    * - fits: 不需要压缩
-   * - truncate_tool_results_only: 只截断工具输出
-   * - compact_only: 只做 LLM 摘要
-   * - compact_then_truncate: 先 LLM 摘要，再截断
+   * - compact: 走 compact 能力（有 summarize 出真摘要；无 summarize / 失败走机械降级阶梯）
    */
   async assemble(params: AssembleParams): Promise<AssembleResult> {
     const {
@@ -378,13 +365,10 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 4. 有溢出：SmartRouter 决定压缩策略
     //    传入 messagesBudget=0，因为 MessageSelector 已确认这些消息是溢出部分
-    //    SmartRouter 只负责决定压缩方式（truncate vs compact），不负责判断是否需要压缩
+    //    SmartRouter 只负责 fits/compact 判定，不负责判断是否需要压缩；
+    //    摘要 vs 机械由 compact 能力按「有 summarize 就出真摘要」决定（B′）
     const overflowTokens = estimator.estimateMessages(selection.overflow);
-    const routing = this.router.evaluate(
-      selection.overflow,
-      0,
-      !!summarize,
-    );
+    const routing = this.router.evaluate(selection.overflow, 0);
 
     // 5. 压缩溢出消息
     const state = this.states.get(stateKey);
@@ -393,6 +377,7 @@ export class DefaultContextEngine implements ContextEngine {
     let compressedOverflow: Message[];
     let droppedSummary: string | undefined;
     let overflowFresh = false;
+    let overflowSummary: string | undefined;
 
     // 计算溢出部分的压缩目标：head + selectedMiddle + tail 已占的 token
     // selection.estimatedTokens = head + selectedMiddle + tail 的 token 数
@@ -417,29 +402,20 @@ export class DefaultContextEngine implements ContextEngine {
         agingPlan,
       );
       switch (routing.route) {
-        case 'truncate_tool_results_only': {
-          const compressed = await this.config.compressor.compress({
-            messages: selection.overflow,
+        // B′（2026-11-03 拍板）：溢出统一走真摘要（打码降为机械降级阶梯第一级，
+        // 「只打码不摘要」路由已删——工具胖溢出也必须出交接摘要）
+        case 'compact': {
+          const outcome = await this.config.compactEngine.compactMessages(selection.overflow, {
+            protectHead: 0,
+            protectTail: 0,
             targetTokens: overflowTargetTokens,
+            // 无 requireSummary 语义：保持既有短路——预算内不压缩（auto）
+            mode: 'auto',
             previousSummary,
-            tokenEstimator: estimator,
-          });
-          compressedOverflow = compressed.result;
-          droppedSummary = compressed.droppedSummary;
-          break;
-        }
-
-        case 'compact_only':
-        case 'compact_then_truncate': {
-          const compressed = await this.config.compressor.compress({
-            messages: selection.overflow,
-            targetTokens: overflowTargetTokens,
-            previousSummary,
-            summarize,
+            summarizeFn: summarize,
             // 摘要素材只随摘要请求走：无 summarize 的机械降级不携带（评审 L1）
             taskSnapshot: summarize ? taskSnapshot : undefined,
-            tokenEstimator: estimator,
-            llmPrefix: overflowLlmPrefix,
+            estimator,
             // F8 统一契约：预算/折叠区间/窗口/事件与 manual、proactive 同源
             summaryBudget: this.config.summaryBudget,
             foldRange: {
@@ -449,29 +425,38 @@ export class DefaultContextEngine implements ContextEngine {
             },
             contextWindow: params.contextWindow,
             maxOutputTokens: params.maxOutputTokens,
+            onSummarizeFail: 'truncate',
+            llmPrefix: overflowLlmPrefix,
             emit: emit
-              ? (e) =>
-                  emit({
-                    type: 'context.compact.summarize_fallback',
-                    sessionId,
-                    reason: 'overflow',
-                    fallback: e.reason,
-                    cached: e.cached,
-                  })
+              ? (e) => {
+                  if (e.type === 'compact.summarize_fallback') {
+                    emit({
+                      type: 'context.compact.summarize_fallback',
+                      sessionId,
+                      reason: 'overflow',
+                      fallback: e.reason,
+                      cached: e.cached,
+                    });
+                  }
+                }
               : undefined,
           });
-          overflowFresh = compressed.fresh === true;
-          compressedOverflow = compressed.result;
-          droppedSummary = compressed.droppedSummary;
+          overflowFresh =
+            outcome.fresh === true &&
+            Boolean(outcome.summary) &&
+            !isMechanicalNotice(outcome.summary!);
+          overflowSummary = outcome.summary;
+          compressedOverflow = Array.isArray(outcome.view) ? outcome.view : selection.overflow;
+          droppedSummary = outcome.droppedSummary;
           break;
         }
 
         default: {
-          // 兜底：保守降级（head + 工具账本 + tail），禁止只留 4 条
-          compressedOverflow = await this.conservativeTruncate(
-            selection.overflow,
+          // 兜底：账本截断（统一截断兜底，禁止只留 4 条）
+          compressedOverflow = ledgerTruncate(selection.overflow, {
+            targetTokens: overflowTargetTokens,
             estimator,
-          );
+          }).result;
           break;
         }
       }
@@ -483,11 +468,11 @@ export class DefaultContextEngine implements ContextEngine {
         error: err instanceof Error ? err.message : String(err),
         durationMs: Date.now() - overflowStart,
       });
-      // 压缩失败：保守降级，不中断本轮
-      compressedOverflow = await this.conservativeTruncate(
-        selection.overflow,
+      // 压缩失败：账本截断降级，不中断本轮
+      compressedOverflow = ledgerTruncate(selection.overflow, {
+        targetTokens: overflowTargetTokens,
         estimator,
-      );
+      }).result;
       droppedSummary = 'Context compact failed; fell back to truncation';
     }
 
@@ -523,7 +508,7 @@ export class DefaultContextEngine implements ContextEngine {
       ...overflowState,
       // 存摘要正文（而非 dropped 描述），供下次迭代更新
       previousSummary: overflowFresh
-        ? this.extractSummaryText(compressedOverflow) ?? overflowState?.previousSummary
+        ? overflowSummary ?? overflowState?.previousSummary
         : overflowState?.previousSummary,
     });
 
@@ -664,12 +649,14 @@ export class DefaultContextEngine implements ContextEngine {
           const extraTokens = estimator.estimateMessages(sinceCompact);
           if (extraTokens > targetMiddleTokens) {
             try {
-              const compressedExtra = await this.config.compressor.compress({
-                messages: sinceCompact,
+              // 机械增量压缩（B′ 阶梯：打码→账本截断；零 LLM）。
+              // minKeep=2 保持旧 TruncateCompressor 的增量形状：保底撑胖会在复用轮
+              // 挤出 overflow、意外补打摘要（复用轮零 LLM 是产品红线）
+              extra = mechanicalDegrade(sinceCompact, {
                 targetTokens: targetMiddleTokens,
-                tokenEstimator: estimator,
-              });
-              extra = compressedExtra.result;
+                estimator,
+                minKeep: 2,
+              }).result;
             } catch {
               // 机械压缩失败：保留增量原文（宁可胖，不可丢）
               extra = sinceCompact;
@@ -681,13 +668,19 @@ export class DefaultContextEngine implements ContextEngine {
       if (middle.length === 0) {
         return null;
       }
+      // 与增量分支对称：已达标不改写（旧 Hybrid 在预算内原样返回、不打码——
+      // 无谓的打码会让复用重建轮的视图字节漂移一次）
+      if (estimator.estimateMessages(middle) <= targetMiddleTokens) {
+        return { messages: [...head, ...middle, ...tail] };
+      }
       try {
-        const compressed = await this.config.compressor.compress({
-          messages: middle,
+        // 机械降级（B′ 阶梯：打码→账本截断；零 LLM；minKeep=2 同增量压缩的形状约定）
+        const degraded = mechanicalDegrade(middle, {
           targetTokens: targetMiddleTokens,
-          tokenEstimator: estimator,
+          estimator,
+          minKeep: 2,
         });
-        return { messages: [...head, ...compressed.result, ...tail] };
+        return { messages: [...head, ...degraded.result, ...tail] };
       } catch {
         return null;
       }
@@ -857,19 +850,21 @@ export class DefaultContextEngine implements ContextEngine {
       threshold,
     });
 
-    let compressed: Awaited<ReturnType<Compressor['compress']>>;
+    let outcome: CompactOutcome;
     try {
       // 缓存前缀 = 会话同形 system+history（禁止改字节）；摘要指令只挂在尾部
       const llmPrefix = this.buildLlmMessages(messages, systemPrompt, tools, agingPlan);
-      compressed = await this.config.compressor.compress({
-        messages: middle,
+      // requireSummary 语义 → mode 'structure_only'：机械截断达标也必须尝试摘要级
+      // （'auto' 的 within_target 短路会以机械返回冒充已摘要——v0.83 requireSummary 反对的模式）
+      outcome = await this.config.compactEngine.compactMessages(middle, {
+        protectHead: 0,
+        protectTail: 0,
         targetTokens: targetMiddleTokens,
+        mode: 'structure_only',
         previousSummary: state?.previousSummary,
-        summarize,
+        summarizeFn: summarize,
         taskSnapshot: params.taskSnapshot,
-        tokenEstimator: estimator,
-        requireSummary: true,
-        llmPrefix,
+        estimator,
         // F8 统一契约：预算/折叠区间与手动路径同源
         summaryBudget: this.config.summaryBudget,
         foldRange: {
@@ -881,16 +876,21 @@ export class DefaultContextEngine implements ContextEngine {
         },
         contextWindow: params.contextWindow,
         maxOutputTokens: params.maxOutputTokens,
+        onSummarizeFail: 'truncate',
+        llmPrefix,
         // F22：cache-miss 旁路透传可观测事件
         emit: emit
-          ? (e) =>
-              emit({
-                type: 'context.compact.summarize_fallback',
-                sessionId,
-                reason: 'proactive',
-                fallback: e.reason,
-                cached: e.cached,
-              })
+          ? (e) => {
+              if (e.type === 'compact.summarize_fallback') {
+                emit({
+                  type: 'context.compact.summarize_fallback',
+                  sessionId,
+                  reason: 'proactive',
+                  fallback: e.reason,
+                  cached: e.cached,
+                });
+              }
+            }
           : undefined,
       });
     } catch (err) {
@@ -906,18 +906,21 @@ export class DefaultContextEngine implements ContextEngine {
       return sticky ? { messages: sticky.messages } : { messages };
     }
 
-    const reduced = [...head, ...compressed.result, ...tail];
+    const body = Array.isArray(outcome.view) ? outcome.view : middle;
+    const reduced = [...head, ...body, ...tail];
     const reducedTokens = estimator.estimateMessages(reduced);
-    const actualSummary =
-      this.extractSummaryText(compressed.result) ?? state?.previousSummary;
 
-    // fresh（评审 F8-F1）= 本次产出**新的**语义摘要；false 时 actualSummary 只是旧摘要兜底：
+    // fresh（评审 F8-F1）= 本次产出**新的**语义摘要；false 时旧摘要只作兜底：
     // 机械降级丢掉的中段不得被记成「已覆盖」（否则 rebuildStickyView 增量起点越过后它们永远
     // 回不到视图——静默失忆）：previousSummary 与覆盖终点只在 fresh 时推进（宁可胖不丢）。
-    const fresh = compressed.fresh === true;
+    // isMechanicalNotice 兜底：机械占位永不冒充语义摘要。
+    const fresh =
+      outcome.fresh === true &&
+      Boolean(outcome.summary) &&
+      !isMechanicalNotice(outcome.summary!);
     this.states.set(stateKey, {
       ...state,
-      previousSummary: fresh ? actualSummary : state?.previousSummary,
+      previousSummary: fresh ? outcome.summary : state?.previousSummary,
       lastEstimatedTokens: reducedTokens,
       // 增长门计数随任何**完成的压缩轮**推进（含机械降级）——它是「自上次压缩新增条数」的
       // 基数与压缩态粘滞标记；若只随 fresh 推进，无摘要会话每轮被判全量新增、复用分支
@@ -929,7 +932,7 @@ export class DefaultContextEngine implements ContextEngine {
       lastProactiveFullTokens: currentTokens,
       // 只在 LLM 摘要调用真正发起过时推进冷却时间戳（成功/失败均算发起，防打爆）；
       // 复用重建与未发起调用的机械降级不得推进此字段
-      lastProactiveLlmAt: compressed.summarizeAttempted ? Date.now() : state?.lastProactiveLlmAt,
+      lastProactiveLlmAt: outcome.summarizeAttempted ? Date.now() : state?.lastProactiveLlmAt,
     });
 
     emit?.({
@@ -944,88 +947,8 @@ export class DefaultContextEngine implements ContextEngine {
 
     return {
       messages: reduced,
-      droppedSummary: compressed.droppedSummary ?? 'Older turns proactively summarized',
+      droppedSummary: outcome.droppedSummary ?? 'Older turns proactively summarized',
     };
-  }
-
-  /**
-   * 保守降级（overflow **middle 替换体**）：工具账本说明 + 近尾
-   * 外层 head/tail 由 assemble 重组拼接，此处不得重复携带。
-   *
-   * @param messages - 待降级消息（overflow 段）
-   * @param _estimator - token 估算器（保留签名对称）
-   * @returns 降级后的消息列表
-   */
-  private async conservativeTruncate(
-    messages: Message[],
-    _estimator: TokenEstimator,
-  ): Promise<Message[]> {
-    const keepCount = Math.min(Math.max(6, Math.ceil(messages.length * 0.15)), messages.length);
-    const kept = messages.slice(-keepCount);
-    const dropped = messages.slice(0, messages.length - keepCount);
-    // 无可丢弃：原样返回（禁止「0 removed」假通知膨胀）
-    if (dropped.length === 0) {
-      return [...messages];
-    }
-    const body = buildToolCallLedger(dropped);
-    const notice: Message = {
-      role: 'user',
-      content: body
-        ? `[Context truncated: ${dropped.length} earlier messages removed to fit context window]\n[Tool call ledger — do NOT redo these unless explicitly asked]\n${body}`
-        : `[Context truncated: ${dropped.length} earlier messages removed to fit context window]`,
-      timestamp: Date.now(),
-      metadata: { source: 'contextSummary' as const },
-    };
-    return [notice, ...kept];
-  }
-
-  /**
-   * 从压缩结果中提取语义摘要正文（contextSummary 标记或 [Conversation Summary] 前缀）。
-   * 机械降级的占位说明（[Context truncated / [Context compressed / [Structural compact]）
-   * 不算语义摘要：把它们当摘要存入 previousSummary 会污染增量合并输入，
-   * 并让复用分支拿到假摘要、掩盖「从未真正摘要」的事实。
-   */
-  private extractSummaryText(compressed: Message[]): string | undefined {
-    for (const m of compressed) {
-      if (
-        m.metadata?.source === 'contextSummary' &&
-        typeof m.content === 'string' &&
-        m.content.trim() &&
-        !this.isMechanicalNotice(m.content)
-      ) {
-        return m.content;
-      }
-    }
-    for (const m of compressed) {
-      if (
-        typeof m.content === 'string' &&
-        m.content.includes('[Conversation Summary]') &&
-        !this.isMechanicalNotice(m.content)
-      ) {
-        return m.content;
-      }
-    }
-    return undefined;
-  }
-
-  /**
-   * 机械降级占位说明判别（非语义摘要）：首条实质行以占位标记开头即认定。
-   * 只看首行而非全文 includes——真实摘要引用这些字符串（如记录「曾发生截断」）不得被误杀。
-   *
-   * @param text - 候选摘要正文
-   * @returns 是否为机械占位说明
-   */
-  private isMechanicalNotice(text: string): boolean {
-    for (const raw of text.split('\n')) {
-      const line = raw.trim();
-      if (!line || line === '[Conversation Summary]') continue;
-      return (
-        line.startsWith('[Context truncated:') ||
-        line.startsWith('[Context compressed:') ||
-        line.startsWith('[Structural compact]')
-      );
-    }
-    return false;
   }
 
   /**
@@ -1088,21 +1011,11 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
-   * 摘要消息构造（装配/度量共用）——禁止在别处手抄此形状，防口径漂移
+   * 摘要消息构造（装配/度量共用）——包装/覆盖行渲染单源在 capabilities/compact/messages.ts，
+   * 禁止在别处手抄此形状，防口径漂移
    */
   private contextSummaryMessage(summary: string, coveredEnd?: number): Message {
-    // 覆盖边界行（评审 F11）：按覆盖点动态渲染，不写进 previousSummary——
-    // 写进摘要文本会把过期数字烘死、随失败累积、还会被当 Previous summary 回喂模型。
-    const coverage =
-      coveredEnd && coveredEnd > 0
-        ? `\n\n[Coverage] This handoff covers the conversation up to message ${coveredEnd}; later messages appear verbatim and take precedence.`
-        : '';
-    return {
-      role: 'user',
-      content: wrapContextSummary(`${summary}${coverage}`),
-      timestamp: Date.now(),
-      metadata: { source: 'contextSummary' as const },
-    };
+    return asSummaryMessage(summary, coveredEnd);
   }
 
   /**
@@ -1304,7 +1217,7 @@ export class DefaultContextEngine implements ContextEngine {
     const fresh =
       outcome.fresh === true &&
       Boolean(outcome.summary) &&
-      !this.isMechanicalNotice(outcome.summary!);
+      !isMechanicalNotice(outcome.summary!);
 
     if (!fresh) {
       // 失败语义（F9/F10）：状态不推进（增长门/冷却不被失败重置），报数不虚降（tokensAfter

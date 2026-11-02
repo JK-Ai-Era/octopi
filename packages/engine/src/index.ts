@@ -47,9 +47,6 @@ export type {
   MessageSelector,
   SelectResult,
   SelectOptions,
-  Compressor,
-  CompressParams,
-  CompressResult,
   BudgetAllocator,
   BudgetAllocateParams,
   BudgetAllocateResult,
@@ -192,9 +189,6 @@ export { DefaultContextEngine } from './harness/context/default-context-engine.j
 export type { DefaultContextEngineConfig } from './harness/context/default-context-engine.js';
 export { HeuristicTokenEstimator, estimateTextTokens } from './harness/context/index.js';
 export { DefaultMessageSelector } from './harness/context/message-selector.js';
-export { TruncateCompressor } from './harness/context/truncate-compressor.js';
-export { LLMSummaryCompressor } from './harness/context/llm-summarizer.js';
-export { HybridCompressor } from './harness/context/hybrid-compressor.js';
 export { DefaultBudgetAllocator } from './harness/context/budget-allocator.js';
 export { SmartRouter } from './harness/context/smart-router.js';
 export type { SmartRouterConfig, Route, RoutingDecision } from './harness/context/smart-router.js';

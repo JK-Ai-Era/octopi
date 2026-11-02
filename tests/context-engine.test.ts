@@ -4,7 +4,7 @@
  * 测试新的上下文引擎接口和实现：
  * - TokenEstimator
  * - MessageSelector
- * - Compressors
+ * - 机械降级阶梯（B′：打码 → 账本截断）
  * - BudgetAllocator
  * - DefaultContextEngine
  */
@@ -34,9 +34,12 @@ import {
   TOOL_RESULT_CHARS_PER_TOKEN,
 } from '@octopi-agent/engine/harness/context/token-constants.js';
 import { DefaultMessageSelector } from '@octopi-agent/engine/harness/context/message-selector.js';
-import { TruncateCompressor } from '@octopi-agent/engine/harness/context/truncate-compressor.js';
-import { LLMSummaryCompressor } from '@octopi-agent/engine/harness/context/llm-summarizer.js';
-import { HybridCompressor } from '@octopi-agent/engine/harness/context/hybrid-compressor.js';
+import {
+  maskFatToolResults,
+  ledgerTruncate,
+  mechanicalDegrade,
+  TOOL_RESULT_PLACEHOLDER,
+} from '@octopi-agent/engine/harness/context/capabilities/compact/mechanical.js';
 import { DefaultBudgetAllocator } from '@octopi-agent/engine/harness/context/budget-allocator.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 import { SmartRouter } from '@octopi-agent/engine/harness/context/smart-router.js';
@@ -468,146 +471,10 @@ describe('DefaultMessageSelector', () => {
   });
 });
 
-// ── Compressor 测试 ──
+// ── 机械降级阶梯（B′）测试 ──
 
-describe('TruncateCompressor', () => {
-  let compressor: TruncateCompressor;
-  let estimator: HeuristicTokenEstimator;
-
-  beforeEach(() => {
-    compressor = new TruncateCompressor();
-    estimator = new HeuristicTokenEstimator();
-  });
-
-  it('should return empty result for empty messages', async () => {
-    const result = await compressor.compress({
-      messages: [],
-      targetTokens: 1000,
-      tokenEstimator: estimator,
-    });
-
-    expect(result.result).toEqual([]);
-    expect(result.estimatedTokens).toBe(0);
-  });
-
-  it('should not compress if within budget', async () => {
-    const messages = [
-      createMessage('user', 'Hello'),
-      createMessage('assistant', 'Hi'),
-    ];
-
-    const result = await compressor.compress({
-      messages,
-      targetTokens: 10000,
-      tokenEstimator: estimator,
-    });
-
-    expect(result.result.length).toBe(2);
-  });
-
-  it('should truncate messages when over budget', async () => {
-    const messages = Array.from({ length: 20 }, (_, i) =>
-      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i} with some content`)
-    );
-
-    const result = await compressor.compress({
-      messages,
-      targetTokens: 50, // Very small budget
-      tokenEstimator: estimator,
-    });
-
-    expect(result.result.length).toBeLessThan(messages.length);
-    expect(result.droppedSummary).toBeDefined();
-  });
-
-  it('should insert summary message', async () => {
-    const messages = Array.from({ length: 20 }, (_, i) =>
-      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}`)
-    );
-
-    const result = await compressor.compress({
-      messages,
-      targetTokens: 50,
-      tokenEstimator: estimator,
-    });
-
-    // First message should be user-role summary (avoid mid-conversation system)
-    expect(result.result[0].role).toBe('user');
-    expect(result.result[0].content).toContain('compressed');
-  });
-});
-
-describe('LLMSummaryCompressor', () => {
-  let compressor: LLMSummaryCompressor;
-  let estimator: HeuristicTokenEstimator;
-
-  beforeEach(() => {
-    compressor = new LLMSummaryCompressor();
-    estimator = new HeuristicTokenEstimator();
-  });
-
-  it('should fallback to truncation without summarize function', async () => {
-    const messages = Array.from({ length: 20 }, (_, i) =>
-      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}`)
-    );
-
-    const result = await compressor.compress({
-      messages,
-      targetTokens: 50,
-      tokenEstimator: estimator,
-    });
-
-    // Should fallback to truncation
-    expect(result.result.length).toBeLessThan(messages.length);
-  });
-
-  it('should use summarize function when provided', async () => {
-    const messages = Array.from({ length: 10 }, (_, i) =>
-      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}`)
-    );
-
-    const mockSummarize: SummarizeFunction = vi.fn().mockResolvedValue('Test summary');
-
-    const result = await compressor.compress({
-      messages,
-      targetTokens: 50,
-      summarize: mockSummarize,
-      tokenEstimator: estimator,
-    });
-
-    expect(mockSummarize).toHaveBeenCalled();
-    expect(result.result[0].content).toContain('Test summary');
-  });
-
-  it('should fallback to truncation on summarize error', async () => {
-    const messages = Array.from({ length: 10 }, (_, i) =>
-      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}`)
-    );
-
-    const mockSummarize: SummarizeFunction = vi.fn().mockRejectedValue(new Error('LLM error'));
-
-    const result = await compressor.compress({
-      messages,
-      targetTokens: 50,
-      summarize: mockSummarize,
-      tokenEstimator: estimator,
-    });
-
-    // Should fallback to truncation
-    expect(result.result.length).toBeLessThan(messages.length);
-  });
-});
-
-describe('HybridCompressor', () => {
-  let compressor: HybridCompressor;
-  let estimator: HeuristicTokenEstimator;
-
-  beforeEach(() => {
-    compressor = new HybridCompressor();
-    estimator = new HeuristicTokenEstimator();
-  });
-
-  it('should preprocess old tool results', async () => {
+describe('maskFatToolResults', () => {
+  it('旧工具输出超阈值打码、最近工作现场保留（不丢轮次）', () => {
     // 使用超过阈值（200字符）的工具结果
     const oldToolResult = createToolResultMessage('call_1', 'read_file', 'A'.repeat(500));
     const recentToolResult = createToolResultMessage('call_2', 'read_file', 'B'.repeat(500));
@@ -622,28 +489,166 @@ describe('HybridCompressor', () => {
       createMessage('assistant', 'New file read'),
     ];
 
-    // 计算原始 token 数，用刚好低于原始 token 数的值作为目标
-    const originalTokens = estimator.estimateMessages(messages);
-    // 使用略低于原始 token 数的值：强制触发压缩，但预处理后能放下
-    const targetTokens = originalTokens - 50;
+    const { result, maskedCount } = maskFatToolResults(messages);
 
-    const result = await compressor.compress({
-      messages,
-      targetTokens,
-      tokenEstimator: estimator,
-    });
-
-    // Old tool result should be truncated (超过阈值)
-    const processedOldResult = result.result.find(m =>
+    // 旧工具结果被打码（超阈值）
+    const processedOldResult = result.find(m =>
       m.role === 'tool' && m.toolResults?.[0]?.toolCallId === 'call_1'
     );
-    expect(processedOldResult?.toolResults?.[0]?.result).toContain('archived');
+    expect(processedOldResult?.toolResults?.[0]?.result).toBe(TOOL_RESULT_PLACEHOLDER);
 
-    // Recent tool result should be preserved
-    const processedRecentResult = result.result.find(m =>
+    // 最近工具结果保留
+    const processedRecentResult = result.find(m =>
       m.role === 'tool' && m.toolResults?.[0]?.toolCallId === 'call_2'
     );
     expect(processedRecentResult?.toolResults?.[0]?.result).toBe('B'.repeat(500));
+    expect(maskedCount).toBe(1);
+    // 不丢轮次：消息条数不变
+    expect(result).toHaveLength(messages.length);
+  });
+
+  it('error 结果永不打码（错误可追溯性优先）', () => {
+    const messages = [
+      createMessage('user', 'go'),
+      createToolCallMessage('read_file', { path: '/x' }),
+      createMessage('tool', '', {
+        toolResults: [
+          { toolCallId: 'c_err', name: 'read_file', result: null, error: 'E: ' + 'e'.repeat(400) },
+        ],
+      }),
+      createToolCallMessage('probe'),
+      createToolResultMessage('c_ok', 'probe', 'ok'),
+    ];
+    const { result, maskedCount } = maskFatToolResults(messages);
+    const err = result.find(m => m.role === 'tool' && m.toolResults?.[0]?.toolCallId === 'c_err');
+    expect(err?.toolResults?.[0]?.error).toContain('E:');
+    expect(err?.toolResults?.[0]?.result).toBeNull();
+    expect(maskedCount).toBe(0);
+  });
+});
+
+describe('ledgerTruncate', () => {
+  let estimator: HeuristicTokenEstimator;
+
+  beforeEach(() => {
+    estimator = new HeuristicTokenEstimator();
+  });
+
+  it('无可丢弃时不插假「0 removed」通知', () => {
+    const messages = [
+      createMessage('user', 'a'),
+      createMessage('assistant', 'b'),
+      createMessage('user', 'c'),
+    ];
+    const { result, droppedCount } = ledgerTruncate(messages, { targetTokens: 1, estimator });
+    expect(droppedCount).toBe(0);
+    expect(result).toHaveLength(3);
+    expect(result.every((m) => !String(m.content).includes('0 earlier messages removed'))).toBe(
+      true,
+    );
+  });
+
+  it('超预算时从头丢弃到保底，插账本说明（user + contextSummary）', () => {
+    const messages = Array.from({ length: 20 }, (_, i) =>
+      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i} with some content`)
+    );
+
+    const { result, droppedCount } = ledgerTruncate(messages, { targetTokens: 50, estimator });
+
+    expect(droppedCount).toBeGreaterThan(0);
+    expect(result.length).toBeLessThan(messages.length + 1);
+    // 首条应为 user 角色账本说明（避免中段 system）
+    expect(result[0].role).toBe('user');
+    expect(result[0].metadata?.source).toBe('contextSummary');
+    expect(String(result[0].content)).toContain('Context truncated');
+  });
+
+  it('tool_call/tool_result 对同进同出：保留尾不起于孤儿结果', () => {
+    const messages: Message[] = [createMessage('user', 'go')];
+    for (let i = 0; i < 8; i++) {
+      messages.push(createToolCallMessage(`t${i}`, { i }));
+      messages.push(createToolResultMessage(`call_${i}`, `t${i}`, `r${i} ` + 'x'.repeat(200)));
+    }
+    const { result } = ledgerTruncate(messages, { targetTokens: 20, estimator });
+    // 首条是账本说明；其后第一条保留消息不得是孤儿 tool 结果
+    const firstKept = result[1];
+    expect(firstKept?.role).not.toBe('tool');
+    expect(firstKept?.toolResults?.length ?? 0).toBe(0);
+  });
+
+  it('连续 tool 结果收尾：孤儿边界回退切点，kept 不清空（宁可胖，不可拆对）', () => {
+    const messages: Message[] = [
+      createMessage('user', 'go'),
+      createToolCallMessage('t1', { i: 1 }),
+      createToolResultMessage('call_1', 't1', 'r1'),
+      createToolCallMessage('t2', { i: 2 }),
+      createToolResultMessage('call_2', 't2', 'r2'),
+      createToolResultMessage('call_2b', 't2', 'r3'),
+    ];
+    const { result, droppedCount } = ledgerTruncate(messages, {
+      targetTokens: 1,
+      estimator,
+      minKeep: 2,
+    });
+    // 回退而非向前吞光：kept 起于 assistant（对完整），且不少于保底
+    const kept = result.slice(1);
+    expect(droppedCount).toBeGreaterThan(0);
+    expect(kept.length).toBeGreaterThanOrEqual(2);
+    expect(kept[0]?.role).not.toBe('tool');
+  });
+
+  it('minKeep 为纯保底（不叠 15%）：长列表保 2 就是 2', () => {
+    const messages = Array.from({ length: 50 }, (_, i) => createMessage('user', `m${i}`));
+    const { result } = ledgerTruncate(messages, {
+      targetTokens: 1,
+      estimator,
+      minKeep: 2,
+    });
+    // notice + 恰 2 条近尾（15% 口径会留 8——minKeep 必须压住 15%）
+    expect(result).toHaveLength(3);
+    expect(String(result[1]?.content)).toContain('m48');
+    expect(String(result[2]?.content)).toContain('m49');
+  });
+});
+
+describe('mechanicalDegrade', () => {
+  let estimator: HeuristicTokenEstimator;
+
+  beforeEach(() => {
+    estimator = new HeuristicTokenEstimator();
+  });
+
+  it('打码后达标即止（第一级），不再账本截断', () => {
+    const messages = [
+      createMessage('user', 'Read files'),
+      createToolCallMessage('read_file', { path: '/a' }),
+      createToolResultMessage('call_1', 'read_file', 'A'.repeat(2000)),
+      createToolCallMessage('read_file', { path: '/b' }),
+      createToolResultMessage('call_2', 'read_file', 'B'.repeat(2000)),
+      createMessage('assistant', 'done'),
+    ];
+    const targetTokens = estimator.estimateMessages(messages);
+    const { result, droppedSummary } = mechanicalDegrade(messages, {
+      targetTokens,
+      estimator,
+    });
+    // 打码把旧胖结果降为占位符后达标：不丢任何轮次、不插截断说明
+    expect(droppedSummary).toBe('Old tool outputs masked');
+    expect(result).toHaveLength(messages.length);
+    expect(result.every((m) => !String(m.content).startsWith('[Context truncated:'))).toBe(true);
+  });
+
+  it('打码不够再账本截断（第二级）', () => {
+    const messages = Array.from({ length: 20 }, (_, i) =>
+      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i} ` + 'x'.repeat(80))
+    );
+    const { result, droppedSummary } = mechanicalDegrade(messages, {
+      targetTokens: 20,
+      estimator,
+    });
+    expect(droppedSummary).toContain('truncated');
+    expect(String(result[0].content)).toContain('Context truncated');
+    expect(result.length).toBeLessThan(messages.length + 1);
   });
 });
 
@@ -978,6 +983,43 @@ describe('DefaultContextEngine', () => {
 
 // ── SmartRouter 测试 ──
 
+describe('Q2 B′ 连线', () => {
+  it('工具胖溢出出真摘要：不再「只打码不摘要」', async () => {
+    // 旧 truncate_tool_results_only 触发面：工具结果冗长 + 溢出 + 有 summarize。
+    // 关掉主动压缩隔离溢出路；旧实现 0ms 静默打码，B′ 后必须发真摘要并进视图。
+    // 胖结果必须落在**旧**区（选择器保留最近段，溢出的是最旧消息）。
+    const messages: Message[] = [createMessage('user', 'go')];
+    for (let i = 0; i < 6; i++) {
+      messages.push(createToolCallMessage('read_file', { path: `/f${i}` }));
+      messages.push(createToolResultMessage(`call_${i}`, 'read_file', 'R'.repeat(3000)));
+    }
+    messages.push(createMessage('user', 'wrap up'));
+    const summarize = vi.fn().mockResolvedValue('SUMMARIZED-HANDOFF');
+    const engine = new DefaultContextEngine({
+      protectFirstN: 1,
+      protectLastN: 1,
+      targetTokens: 0,
+      proactiveCompactRatio: 0,
+    });
+    const result = await engine.assemble({
+      sessionId: 'bp-wire',
+      messages,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 4000,
+      // 窗口须放得下摘要请求（prefix≈全史+max_tokens）；窗口小于全史时是
+      // 窗口守卫的如实失败→机械降级场景（另一行为，勿混进本钉）
+      contextWindow: 32000,
+      summarize,
+    });
+    expect(summarize).toHaveBeenCalled();
+    const text = JSON.stringify(result.messages);
+    expect(text).toContain('SUMMARIZED-HANDOFF');
+    // 打码只是降级阶梯第一级：本例有 summarize，不得以打码占位冒充压缩结果
+    expect(text).not.toContain(TOOL_RESULT_PLACEHOLDER);
+  });
+});
+
 describe('SmartRouter', () => {
   let router: SmartRouter;
   let estimator: HeuristicTokenEstimator;
@@ -994,27 +1036,27 @@ describe('SmartRouter', () => {
         createMessage('assistant', 'Hi'),
       ];
 
-      const decision = router.evaluate(messages, 100000, true);
+      const decision = router.evaluate(messages, 100000);
 
       expect(decision.route).toBe('fits');
       expect(decision.shouldCompact).toBe(false);
       expect(decision.overflowTokens).toBe(0);
     });
 
-    it('should return compact_only when overflow and no tool results', () => {
+    it('should return compact when overflow', () => {
       const messages = Array.from({ length: 50 }, (_, i) =>
         createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i} with some content`)
       );
 
-      const decision = router.evaluate(messages, 100, true);
+      const decision = router.evaluate(messages, 100);
 
-      expect(decision.route).toBe('compact_only');
+      expect(decision.route).toBe('compact');
       expect(decision.shouldCompact).toBe(true);
       expect(decision.overflowTokens).toBeGreaterThan(0);
     });
 
-    it('should return truncate_tool_results_only when large tool results', () => {
-      // 创建大量冗长的工具结果
+    it('工具胖溢出也走 compact（B′：弃「只打码不摘要」路由）', () => {
+      // 原 truncate_tool_results_only 场景：工具结果冗长——现仍出真摘要（机械打码在降级阶梯里）
       const messages = [
         createMessage('user', 'Read files'),
         createToolCallMessage('read_file', { path: '/test.txt' }),
@@ -1022,21 +1064,9 @@ describe('SmartRouter', () => {
         createMessage('assistant', 'Done'),
       ];
 
-      const decision = router.evaluate(messages, 200, true);
+      const decision = router.evaluate(messages, 200);
 
-      expect(decision.route).toBe('truncate_tool_results_only');
-      expect(decision.shouldCompact).toBe(true);
-      expect(decision.toolResultReducibleChars).toBeGreaterThan(0);
-    });
-
-    it('should return compact_only when no summarize function', () => {
-      const messages = Array.from({ length: 50 }, (_, i) =>
-        createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}`)
-      );
-
-      const decision = router.evaluate(messages, 100, false);
-
-      expect(decision.route).toBe('compact_only');
+      expect(decision.route).toBe('compact');
       expect(decision.shouldCompact).toBe(true);
     });
 
@@ -1049,7 +1079,7 @@ describe('SmartRouter', () => {
       const rawEstimatedTokens = estimator.estimateMessages(messages);
       // SmartRouter applies SAFETY_MARGIN (1.2x), so estimatedTokens is ceil(raw * 1.2)
       const expectedEstimatedTokens = Math.ceil(rawEstimatedTokens * 1.2);
-      const decision = router.evaluate(messages, expectedEstimatedTokens - 10, true);
+      const decision = router.evaluate(messages, expectedEstimatedTokens - 10);
 
       expect(decision.overflowTokens).toBeGreaterThan(0);
       expect(decision.estimatedTokens).toBe(expectedEstimatedTokens);

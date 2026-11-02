@@ -2,7 +2,7 @@
  * 交接式摘要契约（2026-10-28 拍板）——所有摘要路径的**单一指令源**。
  *
  * F8 模板统一：手动压缩（compactCore.summarizeMiddle）与 proactive/overflow
- * （LLMSummaryCompressor）共用本模板、指令构造与预算语义，保证 previousSummary
+ * （summarizeFn 执行器）共用本模板、指令构造与预算语义，保证 previousSummary
  * 只有一种格式在迭代合并——两套模板轮流并入是压缩行为不可控的根源。
  *
  * 模板结构是拍板物（四段式）；规则行只约束行为，不改结构。F-d 硬约束
@@ -13,7 +13,7 @@ import { buildSystemPrompt } from '../summary/executor.js';
 import { buildPolicyRegistry } from '../summary/resolver.js';
 import type { SummaryPolicy } from '../summary/types.js';
 
-/** 交接书四段式任务（summarizeFn / LLMSummaryCompressor 共用，保持指令对齐）。
+/** 交接书四段式任务（manual/proactive/overflow 共用同一 summarizeFn 执行管道，保持指令对齐）。
  * 反回声纪律（评审 F15）：指令里不出现任何工具调用/角色标记字面量——负面示例本身会教坏模型
  * 且引发闸门自命中；证据允许单行短引用（F4：引用≠污染）。 */
 export const HANDOVER_SUMMARY_TASK = [

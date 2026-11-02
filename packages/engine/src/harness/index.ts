@@ -101,9 +101,6 @@ export {
   CHARS_PER_TOKEN,
 } from './context/index.js';
 export { DefaultMessageSelector } from './context/message-selector.js';
-export { TruncateCompressor } from './context/truncate-compressor.js';
-export { LLMSummaryCompressor } from './context/llm-summarizer.js';
-export { HybridCompressor } from './context/hybrid-compressor.js';
 export { DefaultBudgetAllocator } from './context/budget-allocator.js';
 export { SmartRouter } from './context/smart-router.js';
 export type { SmartRouterConfig, Route, RoutingDecision } from './context/smart-router.js';

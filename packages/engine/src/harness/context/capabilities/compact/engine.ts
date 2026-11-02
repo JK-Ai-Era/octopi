@@ -19,6 +19,8 @@ import {
   buildHandoverUserContent,
   clampSummaryProviderCap,
 } from './handover.js';
+import { asSummaryMessage, MECHANICAL_NOTICE_STRUCTURAL } from './messages.js';
+import { mechanicalDegrade } from './mechanical.js';
 import { estimateLLMMessages } from '../../token-estimator.js';
 import type {
   CompactEngine,
@@ -157,18 +159,6 @@ function formatMessagesAsText(messages: Message[]): string {
   return parts.join('\n\n---\n\n');
 }
 
-function asSummaryMessage(summary: string): Message {
-  const body = summary.includes('[Conversation Summary]')
-    ? summary
-    : `[Conversation Summary]\n\n${summary}`;
-  return {
-    role: 'user',
-    content: body,
-    timestamp: Date.now(),
-    metadata: { source: 'contextSummary' as const },
-  };
-}
-
 /**
  * 创建 CompactEngine
  *
@@ -227,8 +217,8 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     }
 
     if (summarizeFn) {
-      // 交接式契约单源（F8 模板统一）：模板/指令/合并语义全走 handover.ts——
-      // 与 LLMSummaryCompressor 逐字同构，previousSummary 只有一种格式在迭代合并
+      // 交接式契约单源（F8 模板统一）：模板/指令/合并语义全走 handover.ts，
+      // previousSummary 只有一种格式在迭代合并（P2 后 manual/proactive/overflow 唯一执行管道）
       const prompt = buildHandoverPrompt({
         maxTokens,
         summarizePolicy: policy,
@@ -265,7 +255,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       const windowCapOf = (msgs: LLMMessage[]): number =>
         clampSummaryProviderCap({
           hardCap,
-          // estimateLLMMessages 口径含 tool_calls/content block/消息开销（同 llm-summarizer）
+          // estimateLLMMessages 口径含 tool_calls/content block/消息开销（tool_calls 全量计入）
           inputTokens: estimateLLMMessages(msgs),
           contextWindow: opts.contextWindow,
           maxOutputTokens: opts.maxOutputTokens,
@@ -283,7 +273,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         opts.emit?.({ type: 'compact.summarize_fallback', reason: 'window_guard', cached: false });
       }
       if (providerMaxTokens < 256) {
-        // F8R-06 可观测：最终失败也是 cache-miss 旁路结果，与 compressor 侧对称上报
+        // F8R-06 可观测：最终失败也是 cache-miss 旁路结果，与旁路切换对称上报
         opts.emit?.({ type: 'compact.summarize_fallback', reason: 'window_exhausted', cached: false });
         return { error: 'window_exhausted:summary request cannot fit the model window', summarizeAttempted: false };
       }
@@ -305,6 +295,11 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           });
         };
         const text = await invokeGuardedSummarize(invoke, echoSource);
+        // 空白摘要（空串/纯空白）按失败降级（旧 LLMSummaryCompressor 的 trim 守卫在此收口）：
+        // 空白冒充 fresh 摘要会把 previousSummary 写成空白并推进覆盖点——静默失忆红线
+        if (!text.trim()) {
+          return { error: 'empty_output', summarizeAttempted: true };
+        }
         return { summary: text, coverage: 'full', summarizeAttempted: true };
       } catch (err) {
         // 吞两类抛错并转 error 通道交 onSummarizeFail 降级：① provider 报错/超时；
@@ -375,7 +370,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       // slice(-0) === slice(0) 返回全量：protectTail=0 时 tail 必须显式为空
       const tail = protectTail > 0 ? messages.slice(-protectTail) : [];
       const dropped = messages.length - head.length - tail.length;
-      const placeholder = asSummaryMessage(`[Structural compact] dropped ${dropped} middle messages (head_tail_only)`);
+      const placeholder = asSummaryMessage(`${MECHANICAL_NOTICE_STRUCTURAL} dropped ${dropped} middle messages (head_tail_only)`);
       const view = [...head, placeholder, ...tail];
       return {
         ok: true,
@@ -400,26 +395,34 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           return { ok: true, compacted: true, reason: 'partial', tokensBefore, tokensAfter: estimator.estimateMessages(view), summary: opts.previousSummary, fresh: false, summarizeAttempted: summarized.summarizeAttempted, view };
         }
         if (isMessages) {
-          const view = messages.slice(-Math.max(protectTail, 4));
+          // 机械降级阶梯（B′）：打码（不丢轮次）→ 账本截断；旧摘要留 summary 字段
+          // （视图由 sticky 重建注入，覆盖点不推进——宁可胖不丢）。
+          // 兜底口径：LLM 已发起（失败/空白）→ 旧 fallbackTruncate 保底 max(6,15%)；
+          // 未发起（无 summarize/空段/窗口不足）→ 旧机械口径保 2（TruncateCompressor）
+          const degraded = mechanicalDegrade(messages, {
+            targetTokens,
+            estimator,
+            minKeep: summarized.summarizeAttempted ? undefined : 2,
+          });
           return {
             ok: true,
             compacted: true,
-            reason: 'summarize_failed_truncate',
+            reason: `summarize_failed:${summarized.error ?? 'no_output'}`,
             tokensBefore,
-            tokensAfter: estimator.estimateMessages(view),
-            // 摘要失败时旧摘要仍有效：summary 字段保留之（与 structure_only 失败兜底同款）
+            tokensAfter: estimator.estimateMessages(degraded.result),
+            // 摘要失败时旧摘要仍有效：summary 字段保留之（机械占位永不冒充摘要）
             summary: opts.previousSummary,
             fresh: false,
             summarizeAttempted: summarized.summarizeAttempted,
-            view,
-            droppedSummary: 'middle dropped; summarizer unavailable',
+            view: degraded.result,
+            droppedSummary: degraded.droppedSummary ?? 'middle degraded; summarizer unavailable',
           };
         }
         const view = text.slice(0, 500);
         return {
           ok: true,
           compacted: true,
-          reason: 'summarize_failed_truncate',
+          reason: `summarize_failed:${summarized.error ?? 'no_output'}`,
           tokensBefore,
           summary: opts.previousSummary,
           fresh: false,
@@ -428,7 +431,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         };
       }
       // 摘要即完整更新（previousSummary 已随 prompt 交给 summarizeFn 合并；
-      // 与 LLMSummaryCompressor / summary executor 同一「迭代式更新」契约），不得再事后拼接
+      // 与 summary executor 同一「迭代式更新」契约），不得再事后拼接
       const summary = summarized.summary;
       if (!isMessages) {
         return {
@@ -460,14 +463,15 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       };
     }
 
-    // structure_only（默认）
+    // structure_only（默认）。'auto' 无独立执行体：仅在上方做 within_target 短路后
+    // 落到这里与 structure_only 同路径（新增 mode 分支时勿误改此隐式契约）
     if (!isMessages) {
       const maxTokens = opts.maxSummaryTokens ?? summarySoftTargetTokens(tokensBefore, opts.summaryBudget);
       const summarized = await summarizeMiddle(text, opts, maxTokens);
       if (!summarized.summary) {
         const head = text.slice(0, Math.max(200, Math.floor(text.length * 0.15)));
         const tail = text.slice(-Math.max(200, Math.floor(text.length * 0.15)));
-        const view = `${head}\n\n[Structural compact]\n\n${tail}`;
+        const view = `${head}\n\n${MECHANICAL_NOTICE_STRUCTURAL}\n\n${tail}`;
         return {
           ok: true,
           compacted: true,
@@ -514,34 +518,48 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     const middleText = formatMessagesAsText(middle);
     const summarized = await summarizeMiddle(middleText, opts, maxSummaryTokens);
 
-    // 摘要即完整更新（previousSummary 已随 prompt 交给 summarizeFn 合并）；
-    // 摘要失败时仍保留旧摘要兜底
-    let summary = opts.previousSummary ?? '';
-    let fresh = false;
-    if (summarized.summary) {
-      summary = summarized.summary;
-      fresh = true;
-    } else if (!summary) {
-      const placeholder = `[Structural compact] dropped ${middle.length} middle messages`;
-      if (onFail === 'keep_partial') {
-        summary = placeholder;
-      } else {
-        const view = [...head, asSummaryMessage(placeholder), ...tail];
+    // 摘要即完整更新（previousSummary 已随 prompt 交给 summarizeFn 合并）。
+    // 失败语义（B′ 机械降级阶梯）：旧摘要兜底走 summary 字段/状态（视图由 sticky 重建
+    // 注入，覆盖点不推进——宁可胖不丢）；keep_partial 显式要求旧摘要进视图；
+    // 其余走打码（不丢轮次）→ 账本截断，与自动路径旧 fallbackTruncate 形状一致。
+    if (!summarized.summary) {
+      if (onFail === 'keep_partial' && opts.previousSummary) {
+        const view = [...head, asSummaryMessage(opts.previousSummary), ...tail];
         return {
           ok: true,
           compacted: true,
-          reason: 'summarize_failed_truncate',
+          reason: `summarize_failed:${summarized.error ?? 'no_output'}`,
           tokensBefore,
           tokensAfter: estimator.estimateMessages(view),
-          summary: placeholder,
+          summary: opts.previousSummary,
           fresh: false,
           summarizeAttempted: summarized.summarizeAttempted,
           view,
-          droppedSummary: `${middle.length} messages dropped; summarizer failed`,
         };
       }
+      const degraded = mechanicalDegrade(middle, {
+        targetTokens,
+        estimator,
+        minKeep: summarized.summarizeAttempted ? undefined : 2,
+      });
+      const view = [...head, ...degraded.result, ...tail];
+      return {
+        ok: true,
+        compacted: true,
+        reason: `summarize_failed:${summarized.error ?? 'no_output'}`,
+        tokensBefore,
+        tokensAfter: estimator.estimateMessages(view),
+        // 摘要失败时旧摘要仍有效：summary 字段保留之（机械占位永不冒充摘要）
+        summary: opts.previousSummary,
+        fresh: false,
+        summarizeAttempted: summarized.summarizeAttempted,
+        view,
+        droppedSummary:
+          degraded.droppedSummary ?? `${middle.length} messages degraded; summarizer failed`,
+      };
     }
 
+    const summary = summarized.summary;
     const view = [...head, asSummaryMessage(summary), ...tail];
     const tokensAfter = estimator.estimateMessages(view);
     opts.emit?.({ type: 'compact.end', reason: mode, cached: false });
@@ -549,12 +567,11 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     return {
       ok: true,
       compacted: true,
-      // fresh=false（摘要失败仅旧摘要兜底）不得报 'structure_only'——调用方据此不推进覆盖
-      reason: fresh ? 'structure_only' : `summarize_failed:${summarized.error ?? 'no_output'}`,
+      reason: 'structure_only',
       tokensBefore,
       tokensAfter,
       summary,
-      fresh,
+      fresh: true,
       summarizeAttempted: summarized.summarizeAttempted,
       coverage: summarized.coverage ?? (middle.length > 0 ? 'partial' : 'full'),
       view,

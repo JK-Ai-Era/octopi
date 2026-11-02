@@ -239,9 +239,6 @@ harness/context/
 ├── default-context-engine.ts   # 消息窗口入口（状态键含 agentId）
 ├── smart-router.ts             # 智能路由决策
 ├── message-selector.ts         # 四区域消息选择
-├── hybrid-compressor.ts        # 混合压缩器
-├── llm-summarizer.ts           # LLM 摘要压缩
-├── truncate-compressor.ts      # 截断兜底
 ├── budget-allocator.ts         # Token 预算分配
 ├── token-estimator.ts          # HeuristicTokenEstimator
 ├── token-estimate-fns.ts

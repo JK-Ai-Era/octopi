@@ -108,6 +108,26 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.19 (2026-11-03)
+
+### refactor(engine)!: 压缩执行管道合一到 capabilities/compact，压缩器三件套退休
+
+**问题**：压缩执行存在**双管道**——手动 `structuralCompact` 走 `capabilities/compact`（交接式摘要），proactive/overflow/sticky 三路自动压缩走 `HybridCompressor`/`LLMSummaryCompressor`/`TruncateCompressor` 三件套。双管道各自持有一份摘要包装、机械占位文案、截断兜底与污染处置（自动路无闸门重试），已被多轮压缩改造（v0.97 交接式、v0.98.10–v0.98.17 契约收敛）事实掏空：三件套不再有独立存在价值，且持续制造漂移（自动路摘要产出的 `previousSummary` 存带包装消息体、手动路存正文）。
+
+**收敛（批一性质：退休，不做兼容层）**：
+
+- **执行管道合一**：proactive/overflow/sticky 全部改走 `compactMessages` 唯一管道。语义映射：proactive `requireSummary` → `mode:'structure_only'`（不得 within_target 短路——机械达标也必须尝试摘要级）；overflow → `mode:'auto'`（保留既有「预算内不压缩」短路）；sticky 机械增量 → 机械降级阶梯。触发语义（何时压缩、冷却、复用、状态推进）只搬家不改语义；自动路摘要从此统一过污染闸门（一次加严指令重试→二次抛错降级，Q3 补齐）。
+- **删除** `HybridCompressor`/`LLMSummaryCompressor`/`TruncateCompressor` 及 `Compressor`/`CompressParams`/`CompressResult`（三件套连契约）。
+- **机械降级阶梯（Q2 B′）**：工具输出打码降为阶梯第一级（零 LLM、不丢轮次、error 永不打码），「先打码、不够再账本截断」；SmartRouter 删 `truncate_tool_results_only` 路由与 2000/200 两魔数阈值，收敛为 `fits`/`compact`（原 `compact_only`/`compact_then_truncate` 自 v0.83 起即同一处理分支，判据删除后无区分基础，一并退休）。**行为差异（如实）**：工具胖溢出且有 summarize 时，过去 0ms 静默打码、现在一次 LLM 交接摘要（与手动路径同一阶梯）；无 summarize 行为不变（打码→账本截断）。
+- **截断兜底三→一**：`fallbackTruncate`/`TruncateCompressor`/`conservativeTruncate` 收敛为 `ledgerTruncate`（账本单源）。保底口径按调用点保留旧形状（`minKeep` 为**纯保底**，不叠 15%）：LLM 已发起后的失败兜底保 `max(6, 15%)`（旧 fallbackTruncate）；LLM 未发起（无 summarize/空段/窗口不足）的机械降级与「压到目标」的机械压缩保 2 条（旧 TruncateCompressor——保底撑胖会把粘滞增量挤出 overflow、在缓存重建轮补摘要，撞「复用轮零 LLM」红线）。
+- **重复件单源**：摘要包装（`asSummaryMessage`/`wrapSummaryText`；`wrapContextSummary` 与内联包装消亡）、机械占位文案 + `isMechanicalNotice` 识别串（`messages.ts` 单源——生产者与识别串同源）、`buildToolCallLedger` 迁入能力、`formatMessagesForSummary` 随文件消亡。`previousSummary` 存储形状统一为摘要正文（自动路原先存带包装消息体）。
+
+**BREAKING**：`Compressor`/`CompressParams`/`CompressResult`/`HybridCompressor`/`LLMSummaryCompressor`/`TruncateCompressor` 从 `@octopi-agent/engine` 导出面移除（deep import 在编译期即断）；`DefaultContextEngineConfig.compressor` 注入口删除（压缩执行注入口为 `compactEngine`）。`SmartRouter` 契约收窄：`Route = 'fits' | 'compact'`（三值收敛）、`evaluate(messages, messagesBudget)` 去掉 `hasSummarize` 参数（有无 summarize 改在执行管道内决定）、`RoutingDecision` 删 `toolResultReducibleChars`/`truncateOnlyThresholdChars` 字段、`SmartRouterConfig` 删两阈值字段。无平滑迁移——有意退休（拍板：不做兼容层）。
+
+**验证**：全量回归 3988 passed（391 files）+ lint 干净。行为钉随迁移落地：机械阶梯单测（打码/error 永不打码/账本截断对齐/阶梯顺序）、proactive-compact-tool-heavy（复用轮零 LLM、状态诚实、工具配对）、compact-sticky 三红线、context-task-snapshot（taskSnapshot 只随摘要请求走）、summarize-cache-prefix（llmPrefix 字节不变 + 预算语义）、compact-handover 五态锚（旧「双实现对照」用例随双管道消亡退役）。
+
+---
+
 ## v0.98.17 (2026-11-03)
 
 ### refactor(engine)!: 摘要契约单源化 + `CompactOutcome.summarizeAttempted` 必填

@@ -105,9 +105,9 @@ describe('createCompactEngine', () => {
     expect(out.compacted).toBe(true);
   });
 
-  it('无 summarizer 时 structure 回退截断占位', async () => {
+  it('无 summarizer 时 structure 走机械降级阶梯，占位不冒充摘要', async () => {
     const engine = createCompactEngine();
-    const messages = Array.from({ length: 6 }, (_, i) => userMsg(`x${i}`));
+    const messages = Array.from({ length: 20 }, (_, i) => userMsg(`x${i} ` + 'y'.repeat(80)));
     const out = await engine.compactMessages(messages, {
       protectHead: 1,
       protectTail: 1,
@@ -115,7 +115,13 @@ describe('createCompactEngine', () => {
       onSummarizeFail: 'truncate',
     });
     expect(out.compacted).toBe(true);
-    expect(out.summary ?? '').toContain('dropped');
+    expect(out.fresh).toBeFalsy();
+    expect(out.summarizeAttempted).toBe(false);
+    // 机械占位永不冒充语义摘要（summary 字段只留旧摘要；无旧摘要即空）
+    expect(out.summary).toBeUndefined();
+    // 失败视图 = head + 机械降级体（B′：账本截断说明 + 近尾）+ tail
+    const bodyTexts = (out.view as Message[]).map((m) => String(m.content));
+    expect(bodyTexts.some((t) => t.startsWith('[Context truncated:'))).toBe(true);
   });
 
   it('summaryPort 传参 fail-loud（v0.98.10 移除，不静默切换路径）', async () => {

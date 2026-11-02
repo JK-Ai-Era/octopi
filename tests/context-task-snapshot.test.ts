@@ -4,17 +4,18 @@
  * 交接式摘要（拍板路线）要求摘要指令尾部带**当前**任务快照；此前只有手动
  * compactStructural 路径透传，自动路径依赖注入历史里的旧快照副本。
  * 本测试钉住 AssembleParams.taskSnapshot → applyProactiveCompact / overflow
- * → CompressParams.taskSnapshot 的完整下沉。
+ * → CompactOptions.taskSnapshot 的完整下沉（P2 后压缩执行唯一管道 = compact 能力）。
  */
 import { describe, it, expect } from 'vitest';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 import type {
-  CompressParams,
-  Compressor,
-  CompressResult,
   MessageSelector,
   SummarizeFunction,
 } from '@octopi-agent/engine/harness/context/types.js';
+import type {
+  CompactEngine,
+  CompactOptions,
+} from '@octopi-agent/engine/harness/context/capabilities/compact/index.js';
 import type { Message } from '@octopi-agent/core/types.js';
 
 function msgs(n: number): Message[] {
@@ -25,25 +26,31 @@ function msgs(n: number): Message[] {
   }));
 }
 
-function capturingCompressor(calls: CompressParams[]): Compressor {
+function capturingCompactEngine(calls: CompactOptions[]): CompactEngine {
   return {
-    compress: async (p: CompressParams): Promise<CompressResult> => {
-      calls.push(p);
+    compactMessages: async (_messages, opts) => {
+      calls.push(opts ?? {});
       return {
-        result: [{ role: 'assistant', content: '[compact]', timestamp: Date.now() }],
-        estimatedTokens: 10,
+        ok: true,
+        compacted: true,
+        tokensBefore: 0,
         fresh: true,
         summarizeAttempted: true,
+        summary: '交接摘要',
+        view: [{ role: 'assistant', content: '[compact]', timestamp: Date.now() }],
       };
+    },
+    compactText: async () => {
+      throw new Error('not_implemented: compactText is not exercised in this test');
     },
   };
 }
 
 describe('自动压缩路径透传 taskSnapshot（F8R-05）', () => {
-  it('proactive 路径：compress 收到 AssembleParams.taskSnapshot', async () => {
-    const calls: CompressParams[] = [];
+  it('proactive 路径：compactMessages 收到 AssembleParams.taskSnapshot', async () => {
+    const calls: CompactOptions[] = [];
     const engine = new DefaultContextEngine({
-      compressor: capturingCompressor(calls),
+      compactEngine: capturingCompactEngine(calls),
       targetTokens: 50,
       proactiveCooldownMs: 0,
       protectFirstN: 2,
@@ -61,11 +68,11 @@ describe('自动压缩路径透传 taskSnapshot（F8R-05）', () => {
     expect(calls[0].taskSnapshot).toBe('TASK SNAPSHOT LIVE');
   });
 
-  it('预算分支（contextWindow 已知）：compress 收到 taskSnapshot', async () => {
+  it('预算分支（contextWindow 已知）：compactMessages 收到 taskSnapshot', async () => {
     // 钉独立代码点：预算路径 applyProactiveCompact 调用（与无窗口早分支不互为代表，评审 M2）
-    const calls: CompressParams[] = [];
+    const calls: CompactOptions[] = [];
     const engine = new DefaultContextEngine({
-      compressor: capturingCompressor(calls),
+      compactEngine: capturingCompactEngine(calls),
       targetTokens: 50,
       proactiveCooldownMs: 0,
       protectFirstN: 2,
@@ -85,7 +92,7 @@ describe('自动压缩路径透传 taskSnapshot（F8R-05）', () => {
     expect(calls[0].taskSnapshot).toBe('TASK SNAPSHOT LIVE');
   });
 
-  it('真实 HybridCompressor 链路：摘要请求尾部 user 带活任务快照（用户可见形状，评审 L2）', async () => {
+  it('真实 compact 链路：摘要请求尾部 user 带活任务快照（用户可见形状，评审 L2）', async () => {
     const captured: Array<Parameters<SummarizeFunction>[0]> = [];
     const summarize: SummarizeFunction = async (messages) => {
       captured.push(messages);
@@ -112,8 +119,8 @@ describe('自动压缩路径透传 taskSnapshot（F8R-05）', () => {
     expect(content).toContain('LIVE TASK ENTRY');
   });
 
-  it('overflow 路径：compress 收到 AssembleParams.taskSnapshot', async () => {
-    const calls: CompressParams[] = [];
+  it('overflow 路径：compactMessages 收到 AssembleParams.taskSnapshot', async () => {
+    const calls: CompactOptions[] = [];
     // 注入固定溢出的选择器：确定性进入 overflow 压缩分支
     const overflowSelector: MessageSelector = {
       select: (messages) => ({
@@ -126,7 +133,7 @@ describe('自动压缩路径透传 taskSnapshot（F8R-05）', () => {
       }),
     };
     const engine = new DefaultContextEngine({
-      compressor: capturingCompressor(calls),
+      compactEngine: capturingCompactEngine(calls),
       messageSelector: overflowSelector,
       // 关闭主动路径（ratio=0 不发新压缩），隔离 overflow 机制
       targetTokens: 0,
@@ -144,13 +151,13 @@ describe('自动压缩路径透传 taskSnapshot（F8R-05）', () => {
       summarize: async () => '交接摘要',
       taskSnapshot: 'TASK SNAPSHOT LIVE',
     });
-    // 溢出压缩是本用例唯一 compress 调用：精确断言该次（评审 L1）
+    // 溢出压缩是本用例唯一压缩执行调用：精确断言该次（评审 L1）
     expect(calls.length).toBe(1);
     expect(calls[0].taskSnapshot).toBe('TASK SNAPSHOT LIVE');
   });
 
-  it('机械截断路径不携带 taskSnapshot（无摘要请求不伪造素材，评审 L1 反向钉）', async () => {
-    const calls: CompressParams[] = [];
+  it('机械降级路径不携带 taskSnapshot（无摘要请求不伪造素材，评审 L1 反向钉）', async () => {
+    const calls: CompactOptions[] = [];
     const overflowSelector: MessageSelector = {
       select: (messages) => ({
         kept: messages.slice(0, 1),
@@ -161,14 +168,14 @@ describe('自动压缩路径透传 taskSnapshot（F8R-05）', () => {
         overflowTokens: 500,
       }),
     };
-    // 工具输出重的消息 + 无 summarize：只能走机械截断
+    // 工具输出重的消息 + 无 summarize：只能走机械降级（B′ 阶梯：打码→账本截断）
     const toolMsgs: Message[] = Array.from({ length: 6 }, (_, i) => ({
       role: 'tool' as Message['role'],
       content: `tool output ${i} ${'t'.repeat(2000)}`,
       timestamp: Date.now() + i,
     }));
     const engine = new DefaultContextEngine({
-      compressor: capturingCompressor(calls),
+      compactEngine: capturingCompactEngine(calls),
       messageSelector: overflowSelector,
       targetTokens: 0,
       proactiveCompactRatio: 0,
@@ -188,10 +195,10 @@ describe('自动压缩路径透传 taskSnapshot（F8R-05）', () => {
     expect(calls.every((c) => c.taskSnapshot === undefined)).toBe(true);
   });
 
-  it('未提供 taskSnapshot 时 compress 收到 undefined（无伪造素材）', async () => {
-    const calls: CompressParams[] = [];
+  it('未提供 taskSnapshot 时 compactMessages 收到 undefined（无伪造素材）', async () => {
+    const calls: CompactOptions[] = [];
     const engine = new DefaultContextEngine({
-      compressor: capturingCompressor(calls),
+      compactEngine: capturingCompactEngine(calls),
       targetTokens: 50,
       proactiveCooldownMs: 0,
       protectFirstN: 2,

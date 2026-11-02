@@ -6,6 +6,23 @@
 
 export { createCompactEngine, summarySoftTargetTokens, detectSummaryContamination } from './engine.js';
 export {
+  asSummaryMessage,
+  wrapSummaryText,
+  isMechanicalNotice,
+  SUMMARY_MARKER,
+  MECHANICAL_NOTICE_TRUNCATED,
+  MECHANICAL_NOTICE_COMPRESSED,
+  MECHANICAL_NOTICE_STRUCTURAL,
+} from './messages.js';
+export {
+  buildToolCallLedger,
+  maskFatToolResults,
+  ledgerTruncate,
+  mechanicalDegrade,
+  TOOL_RESULT_PLACEHOLDER,
+  TOOL_RESULT_MASK_THRESHOLD,
+} from './mechanical.js';
+export {
   HANDOVER_SUMMARY_TASK,
   buildHandoverPrompt,
   buildHandoverUserContent,

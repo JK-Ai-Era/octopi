@@ -237,9 +237,6 @@ harness/context/
 ├── default-context-engine.ts   # message-window entry (state key includes agentId)
 ├── smart-router.ts             # smart-routing decisions
 ├── message-selector.ts         # four-region message selection
-├── hybrid-compressor.ts        # hybrid compressor
-├── llm-summarizer.ts           # LLM summary compaction
-├── truncate-compressor.ts      # truncation fallback
 ├── budget-allocator.ts         # token budget allocation
 ├── token-estimator.ts          # HeuristicTokenEstimator
 ├── token-estimate-fns.ts

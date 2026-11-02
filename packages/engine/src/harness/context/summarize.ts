@@ -21,9 +21,9 @@ export interface CreateProviderSummarizeOptions {
 /**
  * 创建基于 ModelProvider 的摘要函数
  *
- * @param provider - 用于调用的模型提供者（宜用 mini/便宜档）
+ * @param provider - 用于调用的模型提供者
  * @param options - 模型名与温度
- * @returns SummarizeFunction；调用失败向上抛出，由 HybridCompressor 回退截断
+ * @returns SummarizeFunction；调用失败向上抛出，由 compact 能力机械降级阶梯兜底
  */
 export function createProviderSummarize(
   provider: ModelProvider,

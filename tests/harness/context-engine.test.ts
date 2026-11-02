@@ -12,11 +12,9 @@ import type {
   SelectResult,
   SelectOptions,
   TokenEstimator,
-  Compressor,
-  CompressParams,
-  CompressResult,
   AssembleParams,
 } from '@octopi-agent/engine/harness/context/types.js';
+import type { CompactEngine } from '@octopi-agent/engine/harness/context/capabilities/compact/index.js';
 import { HeuristicTokenEstimator } from '@octopi-agent/engine/harness/context/token-estimator.js';
 
 // ── 辅助函数 ──
@@ -68,7 +66,7 @@ describe('DefaultContextEngine', () => {
       });
     });
 
-    it('should not call Compressor when no overflow', async () => {
+    it('should not call compact engine when no overflow', async () => {
       const mockSelector: MessageSelector = {
         select: vi.fn().mockReturnValue({
           kept: makeMessages(5),
@@ -80,24 +78,22 @@ describe('DefaultContextEngine', () => {
         }),
       };
 
-      const compressSpy = vi.fn<Compressor['compress']>().mockResolvedValue({
-        result: [],
-        estimatedTokens: 0,
-        fresh: false,
-        summarizeAttempted: false,
-      });
-      const mockCompressor: Compressor = { compress: compressSpy };
+      const compactSpy = vi.fn<CompactEngine['compactMessages']>();
+      const mockCompact: CompactEngine = {
+        compactMessages: compactSpy,
+        compactText: vi.fn(),
+      };
 
       const engine = new DefaultContextEngine({
         messageSelector: mockSelector,
-        compressor: mockCompressor,
+        compactEngine: mockCompact,
       });
 
       const params = makeAssembleParams();
       const result = await engine.assemble(params);
 
-      // 没有溢出时不应调用 Compressor
-      expect(compressSpy).not.toHaveBeenCalled();
+      // 没有溢出时不应调用压缩执行
+      expect(compactSpy).not.toHaveBeenCalled();
       // 结果应该包含所有消息 + system prompt
       expect(result.messages.length).toBeGreaterThan(0);
     });
@@ -118,29 +114,30 @@ describe('DefaultContextEngine', () => {
         }),
       };
 
-      const compressSpy = vi.fn<Compressor['compress']>().mockResolvedValue({
-        result: [makeMessages(1, 'compressed')[0]],
-        estimatedTokens: 50,
-        fresh: false,
+      const compactSpy = vi.fn<CompactEngine['compactMessages']>().mockResolvedValue({
+        ok: true,
+        compacted: true,
+        tokensBefore: 0,
         summarizeAttempted: false,
+        view: [makeMessages(1, 'compressed')[0]],
       });
-      const mockCompressor: Compressor = { compress: compressSpy };
+      const mockCompact: CompactEngine = { compactMessages: compactSpy, compactText: vi.fn() };
 
       const engine = new DefaultContextEngine({
         messageSelector: mockSelector,
-        compressor: mockCompressor,
+        compactEngine: mockCompact,
       });
 
       const params = makeAssembleParams();
       await engine.assemble(params);
 
-      // Compressor 应该只收到 overflow 消息
-      expect(compressSpy).toHaveBeenCalled();
-      const compressArgs = compressSpy.mock.calls[0][0];
-      expect(compressArgs.messages).toEqual(overflowMsgs);
+      // 压缩执行应该只收到 overflow 消息
+      expect(compactSpy).toHaveBeenCalled();
+      const compactArgs = compactSpy.mock.calls[0][0] as Message[];
+      expect(compactArgs).toEqual(overflowMsgs);
       // 不应该包含 head 或 tail
-      expect(compressArgs.messages).not.toEqual(expect.arrayContaining(headMsgs));
-      expect(compressArgs.messages).not.toEqual(expect.arrayContaining(tailMsgs));
+      expect(compactArgs).not.toEqual(expect.arrayContaining(headMsgs));
+      expect(compactArgs).not.toEqual(expect.arrayContaining(tailMsgs));
     });
 
     it('should reassemble: head + compressed overflow + tail', async () => {
@@ -160,18 +157,20 @@ describe('DefaultContextEngine', () => {
         }),
       };
 
-      const mockCompressor: Compressor = {
-        compress: vi.fn().mockResolvedValue({
-          result: [compressedMsg],
-          estimatedTokens: 50,
-          fresh: false,
+      const mockCompact: CompactEngine = {
+        compactMessages: vi.fn().mockResolvedValue({
+          ok: true,
+          compacted: true,
+          tokensBefore: 0,
           summarizeAttempted: false,
+          view: [compressedMsg],
         }),
+        compactText: vi.fn(),
       };
 
       const engine = new DefaultContextEngine({
         messageSelector: mockSelector,
-        compressor: mockCompressor,
+        compactEngine: mockCompact,
       });
 
       const params = makeAssembleParams();
