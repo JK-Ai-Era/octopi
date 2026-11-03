@@ -25,6 +25,7 @@ import {
   parseTurnIdFromContent,
 } from '@octopi-agent/engine/harness/context/turn-envelope.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import { semanticHistory } from '@octopi-agent/engine/harness/context/capabilities/compact/index.js';
 import { TURN_SEMANTICS_MD } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
 
 function msg(role: Message['role'], content: string, extra?: Partial<Message>): Message {
@@ -318,11 +319,7 @@ describe('DefaultContextEngine 全回放', () => {
   });
 
   it('semanticHistory 剥 turn_context、丢 turn_end，保留 user_message', () => {
-    const engine = new DefaultContextEngine();
-    const sem = (
-      engine as unknown as { semanticHistory(ms: Message[]): Message[] }
-    ).semanticHistory;
-    const out = sem([
+    const out = semanticHistory([
       userTurn('t1', 'real-user-text', '<runtime_snapshot>PICKS</runtime_snapshot>'),
       turnEnd('t1'),
       msg('assistant', 'real-assistant-text'),

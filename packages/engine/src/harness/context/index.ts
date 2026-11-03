@@ -8,7 +8,6 @@ export type {
   AssembleParams,
   AssembleResult,
   IngestParams,
-  CompactResult,
   AfterTurnParams,
   TokenEstimator,
   SummarizeFunction,

@@ -108,6 +108,24 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.20 (2026-11-03)
+
+### refactor(engine): 切片手术迁入 capabilities/compact，修 head/tail 对齐缺口，CompactResult 收敛
+
+**问题**：①「怎么切」（边界对齐、语义过滤）留在 DefaultContextEngine 私有方法里，compact 能力自身反而用裸 `slice` 切 head/tail——**#10 缺口**：切点可能落在 tool_call/tool_result 对中间，head 停在带 toolCalls 的 assistant 上（视图里成悬空调用）、tail 起于 tool 结果（成孤儿结果），两者都会被严格网关 400（手动路径靠调用方先对齐才幸免，自动路的 compactMessages 直调用户暴露）；②结果契约三份并存：`CompactResult`（context/types）、compact 能力 `CompactOutcome`、runner/gateway 各自内联结构——字段漂移无人察觉。
+
+**收敛（P3，DefaultContextEngine 瘦身为触发/状态层）**：
+
+- **切片手术单源**：`alignViewSplit`/`semanticHistory` 迁入 `capabilities/compact/view-split.ts`；消息形状谓词（`isToolResultMessage`/`hasToolCall`）收口 `messages.ts`（机械阶梯/切片/消息选择器三处共用，**全库副本清零**）。引擎 5 处调用点改用能力实现，私有副本删除。
+- **修 #10**：compact 引擎三处消息切片（`head_tail_only` / `summary_only` keep_partial / `structure_only`）全部走 `alignViewSplit`；`protectHead`/`protectTail` 语义明确为「期望条数，对齐后实际条数可能不同（head 缩 / tail 扩）」。顺带补三个护栏：`tailCount=0` 越界读、protect 总和超长的畸形切片（head/tail 重叠）、`head_tail_only` 对齐后无可丢弃时如实报 `too_short`（不再插占位冒充压缩）。
+- **结果契约收敛**：`CompactResult` 删除；`CompactOutcome` 补 `coveredMessageCount`（E4 状态推进锚点）成为**唯一压缩结果契约**；`structuralCompact`/`compactStructural` 返回 `CompactOutcome`；传输投影单源：`CompactTransportOutcome = Omit<CompactOutcome,'view'>` + `toCompactTransport()`（能力层唯一实现，runner/gateway 引用——手抄字段表会静默丢新可选字段）；**view 不过锁面**（大对象且 UI 无需）。manual 对外 reason 词汇有意固定为 `structural`（历史 API 词汇，已注释声明）。
+
+**行为变化（如实）**：手动压缩「过短未压缩」的 `reason` 从 `structural`（借默认值）改为 `too_short`（与 compactMessages 同名的如实语义）；失败/过短返回补 `view`/`fresh`/`summarizeAttempted`（此前缺省）。锁面响应新增 `fresh`/`summarizeAttempted`/`coverage`/`coveredMessageCount` 显式字段为**增量**，不影响既有消费方。
+
+**验证**：全量回归 3999 passed（392 files）+ lint/typecheck-tests 干净 + arch/check-sync 绿。新增 #10 对齐钉（compact-p1：structure_only/summary_only keep_partial/head_tail_only 三形状校验——无悬空调用、无孤儿结果）、`alignViewSplit` 边界单测（tailCount=0/回退不过头/畸形切片夹取）、manual `too_short` reason 钉、传输投影钉（view 不过锁面）；semanticHistory 契约钉改能力单源导入（不再打私有访问补丁）。经 fresh-eyes 评审（1 blocker=版本纪律随落地闭环、1 major=传输投影单源化、4 minor 全修真）。
+
+---
+
 ## v0.98.19 (2026-11-03)
 
 ### refactor(engine)!: 压缩执行管道合一到 capabilities/compact，压缩器三件套退休

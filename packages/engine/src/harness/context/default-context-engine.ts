@@ -23,7 +23,6 @@ import type {
   AssembleParams,
   AssembleResult,
   IngestParams,
-  CompactResult,
   AfterTurnParams,
   TokenEstimator,
   SummarizeFunction,
@@ -50,17 +49,15 @@ import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
 import { isTurnAnchor } from './layer-types.js';
-import {
-  extractUserMessageText,
-  isTurnStartContent,
-} from './turn-envelope.js';
 import { createCompactEngine } from './capabilities/compact/index.js';
 import type { CompactEngine, CompactOutcome } from './capabilities/compact/index.js';
 import {
+  alignViewSplit,
   asSummaryMessage,
   isMechanicalNotice,
   ledgerTruncate,
   mechanicalDegrade,
+  semanticHistory,
 } from './capabilities/compact/index.js';
 
 // ── 配置 ──
@@ -612,10 +609,10 @@ export class DefaultContextEngine implements ContextEngine {
       state?.lastProactiveMessageCount != null || !!state?.previousSummary;
 
     // 边界对齐（不拆 tool_call/tool_result 对）——两形状都会被严格网关 400
-    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
+    const { headEnd, tailStart } = alignViewSplit(messages, protectFirstN, protectLastN);
     const head = messages.slice(0, headEnd);
     const tail = messages.slice(tailStart);
-    const middle = this.semanticHistory(messages.slice(headEnd, tailStart));
+    const middle = semanticHistory(messages.slice(headEnd, tailStart));
 
     const headTailTokens = estimator.estimateMessages(head) + estimator.estimateMessages(tail);
 
@@ -643,7 +640,7 @@ export class DefaultContextEngine implements ContextEngine {
         // 摘要覆盖到 lastProactiveCoverEnd（tailStart）；之后的消息是增量，必须保留
         const coverUpTo = state.lastProactiveCoverEnd ?? 0;
         const sinceIdx = Math.max(coverUpTo, headEnd);
-        const sinceCompact = this.semanticHistory(messages.slice(sinceIdx, tailStart));
+        const sinceCompact = semanticHistory(messages.slice(sinceIdx, tailStart));
         let extra: Message[] = sinceCompact;
         if (sinceCompact.length > 0) {
           const extraTokens = estimator.estimateMessages(sinceCompact);
@@ -952,65 +949,6 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
-   * 判断是否工具结果消息（视图边界对齐用）
-   *
-   * @param msg - 待判定消息
-   * @returns 是否为工具结果消息
-   */
-  private isToolResultMessage(msg: Message): boolean {
-    return msg.role === 'tool' || (msg.toolResults?.length ?? 0) > 0;
-  }
-
-  /**
-   * 视图切分边界对齐（不拆 tool_call/tool_result 对）
-   *
-   * head 不得停在带 toolCalls 的 assistant 上（其结果落入中间段，视图里会成悬空调用）；
-   * tail 不得起于 tool 结果（其调用在中间段，会成孤儿结果）——两种形状都会被严格网关 400。
-   *
-   * @param messages - 全量消息
-   * @param headCount - 期望头部条数
-   * @param tailCount - 期望尾部条数
-   * @returns 对齐后的 head 终点（不含）与 tail 起点（含）
-   */
-  private alignViewSplit(
-    messages: Message[],
-    headCount: number,
-    tailCount: number,
-  ): { headEnd: number; tailStart: number } {
-    let headEnd = Math.min(headCount, messages.length);
-    while (headEnd > 0 && (messages[headEnd - 1]?.toolCalls?.length ?? 0) > 0) {
-      headEnd--;
-    }
-    let tailStart = Math.max(0, messages.length - tailCount);
-    while (tailStart > headEnd && this.isToolResultMessage(messages[tailStart]!)) {
-      tailStart--;
-    }
-    return { headEnd, tailStart };
-  }
-
-  /**
-   * 压缩/摘要的语义输入：丢掉托管 system 与 turn 信封元数据
-   * （turn_context picks 不进 previousSummary——防陈旧择取固化进摘要）；
-   * turn_start 只保留 <user_message> 正文。
-   */
-  private semanticHistory(messages: Message[]): Message[] {
-    const out: Message[] = [];
-    for (const m of messages) {
-      if (m.role === 'system' && m.metadata?.source === 'systemPrompt') continue;
-      if (m.metadata?.source === 'turnEnd') continue;
-      if (m.metadata?.source === 'knowledgeGrounding') continue;
-      if (m.metadata?.source === 'runtimeSnapshot') continue;
-      if (m.metadata?.source === 'sessionAttachment') continue;
-      if (isTurnStartContent(m.content)) {
-        out.push({ ...m, content: extractUserMessageText(m.content) });
-        continue;
-      }
-      out.push(m);
-    }
-    return out;
-  }
-
-  /**
    * 摘要消息构造（装配/度量共用）——包装/覆盖行渲染单源在 capabilities/compact/messages.ts，
    * 禁止在别处手抄此形状，防口径漂移
    */
@@ -1039,7 +977,7 @@ export class DefaultContextEngine implements ContextEngine {
       return null;
     }
     // 边界对齐（不拆 tool_call/tool_result 对）：未对齐的 head/tail 会被严格网关 400
-    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
+    const { headEnd, tailStart } = alignViewSplit(messages, protectFirstN, protectLastN);
     return [
       ...messages.slice(0, headEnd),
       this.contextSummaryMessage(summary, coveredEnd),
@@ -1070,12 +1008,12 @@ export class DefaultContextEngine implements ContextEngine {
     // ——摘要没覆盖它们、tailStart 又随新消息前移，不显式保留会静默消失（评审 F12）。
     // rebuildStickyView 是带增量压缩的异步版布局；这里同步保留增量原文（宁可胖，不可丢）。
     const coverUpTo = state.lastProactiveCoverEnd ?? 0;
-    const { headEnd, tailStart: viewTailStart } = this.alignViewSplit(
+    const { headEnd, tailStart: viewTailStart } = alignViewSplit(
       messages,
       this.config.protectFirstN,
       this.config.protectLastN,
     );
-    const increment = this.semanticHistory(
+    const increment = semanticHistory(
       messages.slice(Math.max(coverUpTo, headEnd), viewTailStart),
     );
     const viewMsgs = this.stickyViewMessages(
@@ -1131,14 +1069,7 @@ export class DefaultContextEngine implements ContextEngine {
     /** 会话模型窗口/输出上限（评审 F5）：摘要请求硬顶按窗口钳制，防最满时压缩被 400 */
     contextWindow?: number;
     maxOutputTokens?: number;
-  }): Promise<{
-    summary?: string;
-    compacted: boolean;
-    reason?: string;
-    tokensBefore: number;
-    tokensAfter: number;
-    coveredMessageCount?: number;
-  }> {
+  }): Promise<CompactOutcome> {
     const { sessionId, messages, summarize, estimator } = params;
     // 同形前缀单源：优先调用方现成 llmPrefix；否则引擎内建。
     // system 字节取自会话托管 system 消息（source==='systemPrompt'）——它就是上一轮请求的逐字
@@ -1161,19 +1092,24 @@ export class DefaultContextEngine implements ContextEngine {
 
     if (messages.length <= protectFirstN + protectLastN) {
       return {
+        ok: true,
         summary: state?.previousSummary,
         compacted: false,
+        reason: 'too_short',
         tokensBefore,
         tokensAfter: tokensBefore,
         coveredMessageCount: state?.lastProactiveCoverEnd,
+        fresh: false,
+        summarizeAttempted: false,
+        view: messages,
       };
     }
 
     // 覆盖坐标与 applyProactiveCompact / rebuildStickyView 同一系：
     // 原始 messages 上 alignViewSplit → middle 语义历史 → 摘要；coverEnd = tailStart。
     // 禁止对 semanticHistory(全量) 切 protectHead/Tail（过滤数组下标 ≠ 原始下标，会丢消息）。
-    const { headEnd, tailStart } = this.alignViewSplit(messages, protectFirstN, protectLastN);
-    const middle = this.semanticHistory(messages.slice(headEnd, tailStart));
+    const { headEnd, tailStart } = alignViewSplit(messages, protectFirstN, protectLastN);
+    const middle = semanticHistory(messages.slice(headEnd, tailStart));
 
     const outcome = await this.config.compactEngine.compactMessages(
       middle,
@@ -1224,6 +1160,7 @@ export class DefaultContextEngine implements ContextEngine {
       // = tokensBefore），compacted=false + reason 显式上报。宁可胖不丢：中段原文仍在视图
       // （覆盖点未动），等下次成功摘要再折叠。
       return {
+        ok: true,
         summary: state?.previousSummary,
         compacted: false,
         reason: outcome.reason?.startsWith('summarize_failed')
@@ -1232,6 +1169,10 @@ export class DefaultContextEngine implements ContextEngine {
         tokensBefore,
         tokensAfter: tokensBefore,
         coveredMessageCount: state?.lastProactiveCoverEnd,
+        fresh: false,
+        summarizeAttempted: outcome.summarizeAttempted,
+        // 宁可胖不丢：中段原文仍在视图（覆盖点未动）
+        view: messages,
       };
     }
 
@@ -1260,11 +1201,17 @@ export class DefaultContextEngine implements ContextEngine {
     });
 
     return {
+      ok: true,
       summary,
       compacted: true,
       tokensBefore,
       tokensAfter,
       coveredMessageCount: tailStart,
+      fresh: true,
+      summarizeAttempted: outcome.summarizeAttempted,
+      coverage: outcome.coverage,
+      // 度量=装配严格同形：返还是摘要落位后的 sticky 视图（与 tokensAfter 同源）
+      view: viewMsgs ?? messages,
     };
   }
 
@@ -1292,7 +1239,7 @@ export class DefaultContextEngine implements ContextEngine {
     maxOutputTokens?: number;
     /** F22：cache-miss 旁路事件出口（manual 路可观测性，与 proactive/overflow 对称） */
     emit?: ContextEmitFn;
-  }): Promise<CompactResult> {
+  }): Promise<CompactOutcome> {
     const estimator = this.config.tokenEstimator;
     const stateKey = compactStateKey(input.sessionId, input.agentId);
     const result = await this.structuralCompact({
@@ -1311,14 +1258,12 @@ export class DefaultContextEngine implements ContextEngine {
       emit: input.emit,
     });
     return {
+      ...result,
       ok: true,
-      compacted: result.compacted,
-      // 失败语义如实透传（评审 F10）：summarize_failed:* 不得被 'structural' 盖成成功
+      // 失败语义如实透传（评审 F10）：summarize_failed:* 不得被 'structural' 盖成成功。
+      // 有意决定（P3 评审 F3）：manual 对外词汇固定为 'structural'（历史 API 词汇，
+      // UI/测试沿用）；内层 reason（structure_only 等）不透传，避免对外词汇漂移
       reason: result.reason ?? 'structural',
-      tokensBefore: result.tokensBefore,
-      tokensAfter: result.tokensAfter,
-      summary: result.summary,
-      coveredMessageCount: result.coveredMessageCount,
     };
   }
 

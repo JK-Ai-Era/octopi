@@ -40,6 +40,7 @@ import {
   mechanicalDegrade,
   TOOL_RESULT_PLACEHOLDER,
 } from '@octopi-agent/engine/harness/context/capabilities/compact/mechanical.js';
+import { alignViewSplit } from '@octopi-agent/engine/harness/context/capabilities/compact/view-split.js';
 import { DefaultBudgetAllocator } from '@octopi-agent/engine/harness/context/budget-allocator.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 import { SmartRouter } from '@octopi-agent/engine/harness/context/smart-router.js';
@@ -608,6 +609,31 @@ describe('ledgerTruncate', () => {
     expect(result).toHaveLength(3);
     expect(String(result[1]?.content)).toContain('m48');
     expect(String(result[2]?.content)).toContain('m49');
+  });
+});
+
+describe('alignViewSplit（P3 切片手术单源）', () => {
+  const msgs = (): Message[] => [
+    createMessage('user', 'u0'),
+    createToolCallMessage('t0', { i: 0 }),
+    createToolResultMessage('c0', 't0', 'r0'),
+    createMessage('user', 'u1'),
+    createToolCallMessage('t1', { i: 1 }),
+    createToolResultMessage('c1', 't1', 'r1'),
+  ];
+  it('tailCount=0 → 空尾且不越界读 messages[len]', () => {
+    expect(alignViewSplit(msgs(), 1, 0)).toEqual({ headEnd: 1, tailStart: 6 });
+  });
+  it('head 回退：裸切点停在带 toolCalls 的 assistant 上时退到其前', () => {
+    expect(alignViewSplit(msgs(), 2, 1).headEnd).toBe(1);
+  });
+  it('tail 回退：裸起点落在 tool 结果上时退到其调用', () => {
+    expect(alignViewSplit(msgs(), 0, 1).tailStart).toBe(4);
+  });
+  it('protect 总和超过长度时夹回合法切点（head/tail 不重叠）', () => {
+    const { headEnd, tailStart } = alignViewSplit(msgs(), 6, 6);
+    expect(headEnd).toBeLessThanOrEqual(tailStart);
+    expect(tailStart).toBe(6);
   });
 });
 

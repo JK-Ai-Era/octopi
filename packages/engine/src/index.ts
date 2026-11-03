@@ -40,7 +40,6 @@ export type {
   AssembleParams,
   AssembleResult,
   IngestParams,
-  CompactResult,
   AfterTurnParams,
   TokenEstimator,
   SummarizeFunction,
@@ -260,7 +259,8 @@ export type {
 } from './harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
 export { createSummaryPort, applyToolOutputGate, createCompactEngine } from './harness/context/capabilities/index.js';
 export { createDefaultDocumentPort, createDocumentPortFromConfig, DocumentExtractError } from './harness/capabilities/document/index.js';
-export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine } from './harness/context/capabilities/index.js';
+export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine, CompactOutcome, CompactTransportOutcome } from './harness/context/capabilities/index.js';
+export { toCompactTransport } from './harness/context/capabilities/compact/types.js';
 export type { DocumentPort, ExtractResult, ExtractSource } from './harness/capabilities/document/index.js';
 export type { ToolSet, ToolSetConfig } from './harness/extension/plugin-ecosystem/tools/tool-set.js';
 export { createWebSearchTool } from './harness/extension/plugin-ecosystem/tools/web-search.js';

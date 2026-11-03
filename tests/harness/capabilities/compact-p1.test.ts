@@ -168,6 +168,8 @@ describe('DefaultContextEngine 委托 compact', () => {
       messages: [userMsg('a'), userMsg('b')],
     });
     expect(result.compacted).toBe(false);
+    // P3 有意变化钉：过短 reason 如实为 'too_short'（不再借 'structural' 默认值）
+    expect(result.reason).toBe('too_short');
   });
 
   it('compactStructural tokensAfter = head+摘要+tail 粘性视图口径', async () => {
@@ -313,5 +315,129 @@ describe('交接式摘要：引擎级接线（同形前缀/边界标注）', () 
     expect(bad.coveredMessageCount).toBe(ok.coveredMessageCount); // 覆盖点未推进
     expect(String(bad.summary)).not.toContain('[Coverage]');
     expect(String(bad.summary)).toContain('Goal & status'); // 旧摘要兜底，中段原文视图里仍在
+  });
+});
+
+describe('#10 切片手术对齐（P3）', () => {
+  function asstCall(id: string): Message {
+    return {
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      toolCalls: [{ id, name: 'read_file', arguments: { path: '/a' } }],
+    };
+  }
+  function toolRes(id: string): Message {
+    return {
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolResults: [{ toolCallId: id, name: 'read_file', result: `r-${id}` }],
+    };
+  }
+  /** 形状校验：无悬空调用（call 后必有结果）、无孤儿结果（结果前必有 call） */
+  function assertToolPairsAligned(view: Message[]): void {
+    for (let i = 0; i < view.length; i++) {
+      const m = view[i]!;
+      if (m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0) {
+        const next = view[i + 1];
+        expect(
+          next && (next.role === 'tool' || (next.toolResults?.length ?? 0) > 0),
+          `dangling tool_call at view[${i}]`,
+        ).toBe(true);
+      }
+      if (m.role === 'tool' || (m.toolResults?.length ?? 0) > 0) {
+        const prev = view[i - 1];
+        expect(
+          prev && prev.role === 'assistant' && (prev.toolCalls?.length ?? 0) > 0,
+          `orphan tool_result at view[${i}]`,
+        ).toBe(true);
+      }
+    }
+  }
+
+  it('structure_only：head/tail 不拆 tool_call/tool_result 对', async () => {
+    const engine = createCompactEngine();
+    const messages: Message[] = [
+      userMsg('q0'),
+      asstCall('c0'),
+      toolRes('c0'),
+      userMsg('m1'),
+      userMsg('m2'),
+      userMsg('m3'),
+      userMsg('m4'),
+      userMsg('m5'),
+      asstCall('c1'),
+      toolRes('c1'),
+      userMsg('t1'),
+      userMsg('t2'),
+    ];
+    // protectHead=2 裸切恰停在带 toolCalls 的 assistant 上（→悬空调用）；
+    // protectTail=3 裸起点恰落在 tool 结果上（→孤儿结果）
+    const out = await engine.compactMessages(messages, {
+      protectHead: 2,
+      protectTail: 3,
+      mode: 'structure_only',
+      summarizeFn: async () => 'aligned-summary',
+    });
+    const view = out.view as Message[];
+    expect(view.some((m) => String(m.content).includes('aligned-summary'))).toBe(true);
+    assertToolPairsAligned(view);
+    // 对齐后 head 收缩（q0 后直接摘要，不携带悬空调用）
+    expect(String(view[0]!.content)).toBe('q0');
+    expect(String(view[1]!.content)).toContain('aligned-summary');
+  });
+
+  it('summary_only keep_partial：尾段同样对齐（不带孤儿 tool 结果）', async () => {
+    const engine = createCompactEngine();
+    const messages: Message[] = [
+      userMsg('q0'),
+      asstCall('c0'),
+      toolRes('c0'),
+      userMsg('m1'),
+      asstCall('c1'),
+      toolRes('c1'),
+    ];
+    // protectTail=1 裸起点恰落在 tool(c1) 结果上（孤儿风险）→ 回退保住 c1 对
+    const out = await engine.compactMessages(messages, {
+      protectHead: 0,
+      protectTail: 1,
+      mode: 'summary_only',
+      onSummarizeFail: 'keep_partial',
+      previousSummary: 'OLD-SUM',
+      summarizeFn: async () => {
+        throw new Error('provider 500');
+      },
+    });
+    const view = out.view as Message[];
+    // 视图 = 旧摘要 + 对齐尾段；尾段起于 assistant（call/result 成对）
+    expect(String(view[0]!.content)).toContain('OLD-SUM');
+    expect(view[1]?.role).toBe('assistant');
+    expect(view[2]?.role).toBe('tool');
+    assertToolPairsAligned(view);
+  });
+
+  it('head_tail_only：同样对齐（保底 head/tail 也不拆对）', async () => {
+    const engine = createCompactEngine();
+    const messages: Message[] = [
+      userMsg('q0'),
+      asstCall('c0'),
+      toolRes('c0'),
+      userMsg('m1'),
+      asstCall('c1'),
+      toolRes('c1'),
+      userMsg('t1'),
+    ];
+    const out = await engine.compactMessages(messages, {
+      protectHead: 2,
+      protectTail: 2,
+      mode: 'head_tail_only',
+    });
+    const view = out.view as Message[];
+    assertToolPairsAligned(view);
+    // protectTail=2 裸起点恰落在 tool 结果上（孤儿风险）→ 回退保住 call/result 对；
+    // head=2 裸切停在 call 上 → 对齐后 head 只留 q0
+    expect(String(view[0]!.content)).toBe('q0');
+    expect(String(view[view.length - 1]!.content)).toBe('t1');
   });
 });

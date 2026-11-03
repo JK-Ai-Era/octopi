@@ -93,6 +93,9 @@ export interface CompactOutcome {
   tokensBefore: number;
   tokensAfter?: number;
   summary?: string;
+  /** 摘要覆盖终点（下标，不含）= tailStart：E4 状态推进与重放共用锚点。
+   *  手动路径（structuralCompact）产出；失败/未新鲜摘要时携带旧值或留空。 */
+  coveredMessageCount?: number;
   /** 本次是否产出了**新的**语义摘要（评审 F1）：false 时 summary 只是旧摘要兜底，
    *  调用方不得据此推进覆盖计数/覆盖点（否则未摘要的中段会被记成「已覆盖」）。 */
   fresh?: boolean;
@@ -104,6 +107,24 @@ export interface CompactOutcome {
   /** Message[] 或纯文本结果，由入口决定 */
   view: Message[] | string;
   droppedSummary?: string;
+}
+
+/**
+ * 锁面/传输层结果投影：`CompactOutcome` 去 `view`（大对象，UI 无需，不过锁面）。
+ * 新增可选字段自动随契约流动——**禁止**在 runner/gateway 手抄字段表（会静默丢新字段）。
+ */
+export type CompactTransportOutcome = Omit<CompactOutcome, 'view'>;
+
+/**
+ * 把能力结果投影为传输结果（唯一投影实现）。
+ *
+ * @param result - 能力层压缩结果
+ * @returns 剥离 view 后的传输结果
+ */
+export function toCompactTransport(result: CompactOutcome): CompactTransportOutcome {
+  const { view: _view, ...rest } = result;
+  void _view; // 有意剥离：view 不过锁面
+  return rest;
 }
 
 export interface CompactEngine {

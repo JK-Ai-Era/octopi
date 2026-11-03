@@ -2386,14 +2386,7 @@ export class Gateway {
   async compactSession(
     sessionId: string,
     agentId?: string,
-  ): Promise<{
-    ok: boolean;
-    compacted: boolean;
-    reason?: string;
-    tokensBefore: number;
-    tokensAfter?: number;
-    summary?: string;
-  }> {
+  ): Promise<import('@octopi-agent/engine').CompactTransportOutcome> {
     const session = await this.store.load(sessionId);
     if (!session) {
       throw new Error(`Session "${sessionId}" not found`);
@@ -2430,15 +2423,7 @@ export class Gateway {
           fallback?: string;
           cached?: boolean;
         }) => void;
-      }) => Promise<{
-        ok: boolean;
-        compacted: boolean;
-        reason?: string;
-        tokensBefore: number;
-        tokensAfter?: number;
-        summary?: string;
-        coveredMessageCount?: number;
-      }>;
+      }) => Promise<import('@octopi-agent/engine').CompactOutcome>;
     };
     const structural = engine as StructuralEngine | undefined;
 
@@ -2448,6 +2433,7 @@ export class Gateway {
         compacted: false,
         reason: 'context engine does not support structural compact',
         tokensBefore: 0,
+        summarizeAttempted: false,
       };
     }
 

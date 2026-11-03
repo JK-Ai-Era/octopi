@@ -11,6 +11,29 @@
 
 import type { Message } from '@octopi-agent/core/types.js';
 
+// ── 消息形状谓词（切片手术与机械阶梯共用） ──
+
+/**
+ * 是否工具结果消息（role=tool 或携带 toolResults）。
+ *
+ * @param msg - 候选消息
+ * @returns 是否工具结果消息
+ */
+export function isToolResultMessage(msg: Message): boolean {
+  return msg.role === 'tool' || (msg.toolResults?.length ?? 0) > 0;
+}
+
+/**
+ * 是否携带工具调用的 assistant 消息（机械阶梯/消息选择器的对齐判别用；
+ * 切片对齐 alignViewSplit 沿用旧引擎的无角色判别以保持逐字节行为）。
+ *
+ * @param msg - 候选消息
+ * @returns 是否携带 toolCalls
+ */
+export function hasToolCall(msg: Message): boolean {
+  return msg.role === 'assistant' && (msg.toolCalls?.length ?? 0) > 0;
+}
+
 // ── 摘要包装（族 A 交接摘要的视图载体） ──
 
 /** 摘要标记（extract / 调试 / 幂等包装判别共用） */

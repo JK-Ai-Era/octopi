@@ -15,7 +15,11 @@
 import type { Message } from '@octopi-agent/core/types.js';
 import { toolResultBody } from '../../tool-result-body.js';
 import { HeuristicTokenEstimator } from '../../token-estimator.js';
-import { MECHANICAL_NOTICE_TRUNCATED } from './messages.js';
+import {
+  MECHANICAL_NOTICE_TRUNCATED,
+  hasToolCall,
+  isToolResultMessage,
+} from './messages.js';
 
 /**
  * 打码占位（中性归档措辞——禁止诱导重跑）。
@@ -58,14 +62,6 @@ export function buildToolCallLedger(messages: Message[]): string {
     }
   }
   return lines.join('\n');
-}
-
-function isToolResultMessage(msg: Message): boolean {
-  return msg.role === 'tool' || (msg.toolResults?.length ?? 0) > 0;
-}
-
-function hasToolCall(msg: Message): boolean {
-  return msg.role === 'assistant' && (msg.toolCalls?.length ?? 0) > 0;
 }
 
 /**

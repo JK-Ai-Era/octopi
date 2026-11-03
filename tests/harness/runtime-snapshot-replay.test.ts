@@ -13,6 +13,7 @@ import type { ModelProvider, LLMRequest } from '@octopi-agent/core/interfaces/mo
 import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import { semanticHistory } from '@octopi-agent/engine/harness/context/capabilities/compact/index.js';
 import { extractLayerQuery } from '@octopi-agent/engine/harness/context/layer-types.js';
 import { resolveGroundingQuery } from '@octopi-agent/engine/harness/knowledge/grounding.js';
 
@@ -50,11 +51,8 @@ describe('runtimeSnapshot 全回放（E8 + 全回放）', () => {
   });
 
   it('semanticHistory 排除快照等引擎载体（不进 previousSummary）', () => {
-    const engine = new DefaultContextEngine();
-    // semanticHistory 是摘要/压缩的语义输入过滤器；直接锚定其契约
-    const sem = (
-      engine as unknown as { semanticHistory(ms: Message[]): Message[] }
-    ).semanticHistory;
+    // semanticHistory 是摘要/压缩的语义输入过滤器（P3 起单源在 capabilities/compact）；直接锚定其契约
+    const sem = semanticHistory;
     const messages = [
       msg('user', 'real-user-text'),
       snap('SNAPSHOT-TEXT'),

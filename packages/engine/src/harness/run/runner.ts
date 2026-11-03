@@ -56,6 +56,7 @@ import { join } from 'node:path';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
 import { readSessionCompact, writeSessionCompact } from '../session/compact.js';
 import type { ContextCompactSnapshot } from '../context/types.js';
+import { toCompactTransport } from '../context/capabilities/compact/types.js';
 import {
   InProcessSessionLock,
   type SessionLease,
@@ -2601,27 +2602,11 @@ export class SessionAwareRunner {
         compactTargetTokens?: number;
         /** task 快照：交接式摘要指令尾部注入 */
         taskSnapshot?: string;
-      }) => Promise<{
-        ok: boolean;
-        compacted: boolean;
-        reason?: string;
-        tokensBefore: number;
-        tokensAfter?: number;
-        summary?: string;
-        /** 摘要覆盖终点（tailStart，不含） */
-        coveredMessageCount?: number;
-      }>;
+      }) => Promise<import('../context/capabilities/compact/types.js').CompactOutcome>;
       summarize?: import('../context/types.js').SummarizeFunction;
       compactTargetTokens?: number;
     },
-  ): Promise<{
-    ok: boolean;
-    compacted: boolean;
-    reason?: string;
-    tokensBefore: number;
-    tokensAfter?: number;
-    summary?: string;
-  }> {
+  ): Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome> {
     const release = await this.acquireLock(sessionId);
     try {
       const session = await this.store.load(sessionId);
@@ -2631,6 +2616,7 @@ export class SessionAwareRunner {
           compacted: false,
           reason: 'session not found',
           tokensBefore: 0,
+          summarizeAttempted: false,
         };
       }
 
@@ -2657,7 +2643,9 @@ export class SessionAwareRunner {
         await this.store.save(sessionId, session);
       }
 
-      return result;
+      // 传输投影：view 不过锁面（大对象，UI 无需）——唯一投影实现在能力层
+      //（禁止手抄字段表：新可选字段会静默丢失，评审 P3 major）
+      return toCompactTransport(result);
     } finally {
       release();
     }

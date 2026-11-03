@@ -14,6 +14,11 @@ export {
   MECHANICAL_NOTICE_COMPRESSED,
   MECHANICAL_NOTICE_STRUCTURAL,
 } from './messages.js';
+export { alignViewSplit, semanticHistory } from './view-split.js';
+export {
+  isToolResultMessage,
+  hasToolCall,
+} from './messages.js';
 export {
   buildToolCallLedger,
   maskFatToolResults,
@@ -34,6 +39,7 @@ export type {
   CompactMode,
   CompactOptions,
   CompactOutcome,
+  CompactTransportOutcome,
   SummarizeFunction,
   CompactTokenEstimator,
   CreateCompactEngineOptions,

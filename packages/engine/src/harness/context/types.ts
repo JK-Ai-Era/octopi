@@ -181,22 +181,6 @@ export interface IngestParams {
   message: Message;
 }
 
-// ── 压缩结果 ──
-
-export interface CompactResult {
-  ok: boolean;
-  compacted: boolean;
-  reason?: string;
-  tokensBefore: number;
-  tokensAfter?: number;
-  summary?: string;
-  /**
-   * 摘要覆盖终点（下标，**不含**）= tailStart。
-   * sticky 重建的增量起点；写 `messages.length` 会把 tail 误算进覆盖 → 滑出后丢消息。
-   */
-  coveredMessageCount?: number;
-}
-
 // ── 轮次后参数 ──
 
 export interface AfterTurnParams {

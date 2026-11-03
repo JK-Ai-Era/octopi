@@ -20,6 +20,7 @@ import {
   clampSummaryProviderCap,
 } from './handover.js';
 import { asSummaryMessage, MECHANICAL_NOTICE_STRUCTURAL } from './messages.js';
+import { alignViewSplit } from './view-split.js';
 import { mechanicalDegrade } from './mechanical.js';
 import { estimateLLMMessages } from '../../token-estimator.js';
 import type {
@@ -366,10 +367,26 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       if (messages.length <= protectHead + protectTail) {
         return { ok: true, compacted: false, reason: 'too_short', tokensBefore, summarizeAttempted: false, view: messages };
       }
-      const head = messages.slice(0, protectHead);
-      // slice(-0) === slice(0) 返回全量：protectTail=0 时 tail 必须显式为空
-      const tail = protectTail > 0 ? messages.slice(-protectTail) : [];
+      // #10 修复：边界对齐（不拆 tool_call/tool_result 对）；protectN 为期望条数
+      const { headEnd, tailStart } = alignViewSplit(messages, protectHead, protectTail);
+      const head = messages.slice(0, headEnd);
+      const tail = messages.slice(tailStart);
       const dropped = messages.length - head.length - tail.length;
+      // 对齐后无可丢弃（tail 退到 headEnd）：不得插占位冒充压缩（tokensAfter 会反涨，评审 P3 F）
+      if (dropped <= 0) {
+        opts.emit?.({ type: 'compact.end', reason: 'too_short', cached: true });
+        return {
+          ok: true,
+          compacted: false,
+          reason: 'too_short',
+          tokensBefore,
+          tokensAfter: tokensBefore,
+          summary: opts.previousSummary,
+          fresh: false,
+          summarizeAttempted: false,
+          view: messages,
+        };
+      }
       const placeholder = asSummaryMessage(`${MECHANICAL_NOTICE_STRUCTURAL} dropped ${dropped} middle messages (head_tail_only)`);
       const view = [...head, placeholder, ...tail];
       return {
@@ -390,8 +407,9 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       const summarized = await summarizeMiddle(text, opts, maxTokens);
       if (!summarized.summary) {
         if (onFail === 'keep_partial' && opts.previousSummary && isMessages) {
-          // slice(-0) === slice(0) 返回全量：protectTail=0 时 tail 必须显式为空
-          const view = [asSummaryMessage(opts.previousSummary), ...(protectTail > 0 ? messages.slice(-protectTail) : [])];
+          // #10 修复：尾段对齐（tail 不得起于孤儿 tool 结果）；protectTail=0 时尾段为空
+          const { tailStart } = alignViewSplit(messages, 0, protectTail);
+          const view = [asSummaryMessage(opts.previousSummary), ...messages.slice(tailStart)];
           return { ok: true, compacted: true, reason: 'partial', tokensBefore, tokensAfter: estimator.estimateMessages(view), summary: opts.previousSummary, fresh: false, summarizeAttempted: summarized.summarizeAttempted, view };
         }
         if (isMessages) {
@@ -506,10 +524,12 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       return { ok: true, compacted: false, reason: 'too_short', tokensBefore, summarizeAttempted: false, view: messages, summary: opts.previousSummary };
     }
 
-    const head = messages.slice(0, protectHead);
-    const middle = messages.slice(protectHead, Math.max(protectHead, messages.length - protectTail));
-    // slice(-0) === slice(0) 返回全量：protectTail=0 时 tail 必须显式为空
-    const tail = protectTail > 0 ? messages.slice(-protectTail) : [];
+    // #10 修复：head/tail 边界对齐（不拆 tool_call/tool_result 对）——protectN 为期望条数，
+    // 对齐后实际条数可能不同（head 缩 / tail 扩）；protectTail=0 时尾段自然为空
+    const { headEnd, tailStart } = alignViewSplit(messages, protectHead, protectTail);
+    const head = messages.slice(0, headEnd);
+    const middle = messages.slice(headEnd, tailStart);
+    const tail = messages.slice(tailStart);
 
     const headTailTokens = estimator.estimateMessages(head) + estimator.estimateMessages(tail);
     const maxSummaryTokens =
