@@ -182,6 +182,7 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
   name: string;
   description: string;
   executionMode?: 'parallel' | 'sequential';
+  source?: import('@octopi-agent/core/types.js').ToolSource;
   parameters?: Record<string, unknown>;
   execute: (
     toolCallId: string,
@@ -195,6 +196,7 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
     isError?: boolean;
     durationMs?: number;
     purpose?: string;
+    source?: import('@octopi-agent/core/types.js').ToolSource;
   }>;
 } {
   return {
@@ -202,6 +204,7 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
     description: tool.definition.description,
     // 与 convertToAgentTool 同构：purpose 统一装配（arch/tool-call-purpose.md）
     ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
+    ...(tool.source === undefined ? {} : { source: tool.source }),
     parameters: buildToolLlmParameters(tool.definition.parameters),
     execute: async (toolCallId, args, signal, onUpdate) => {
       const startTime = Date.now();
@@ -211,6 +214,10 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
         const purpose = resolveToolCallPurpose(tool.definition.name, rawArgs);
         const handlerArgs = prepareHandlerArgs(rawArgs, tool.definition);
         const scope = getRunScope();
+        const { isPluginToolPermitted } = await import('@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/plugin-tool.js');
+        if (!isPluginToolPermitted(tool, scope?.toolRuntime?.agentToolPolicy)) {
+          throw new Error(`Plugin tool "${tool.definition.name}" is not allowed for this agent`);
+        }
         const result = await tool.handler(handlerArgs, {
           sessionId: scope?.sessionId ?? 'unknown',
           agentId: scope?.agentId ?? 'unknown',
@@ -230,6 +237,7 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
           name: tool.definition.name,
           content: result,
           purpose,
+          ...(tool.source === undefined ? {} : { source: tool.source }),
           durationMs: Date.now() - startTime,
         };
       } catch (error) {
@@ -238,6 +246,7 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
           name: tool.definition.name,
           content: `Error: ${error instanceof Error ? error.message : String(error)}`,
           isError: true,
+          ...(tool.source === undefined ? {} : { source: tool.source }),
           durationMs: Date.now() - startTime,
         };
       }
@@ -5311,7 +5320,8 @@ export class Gateway {
 
     const builder = new AgentBuilder()
       .store(this.store)
-      .events(this.gatewayBus);
+      .events(this.gatewayBus)
+      .pluginTools(this.pluginManager.getTools());
 
     // F3/D5：observability 配置 → 观测装配（trace 落盘 + 采集意图）
     const { wireObservability } = await import('@octopi-agent/engine/config.js');

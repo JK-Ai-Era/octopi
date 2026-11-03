@@ -12,6 +12,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { ToolFileEffects } from '@octopi-agent/core/types/tools.js';
+import type { ToolPolicy } from '@octopi-agent/core/types/agent-definition.js';
 import type { ToolIsolationMode } from '../extension/execution-environment/isolation.js';
 
 /** 工具执行时可见的 Run 运行时上下文 */
@@ -95,10 +96,7 @@ export interface RunToolRuntime {
    */
   sessionRights?: import('../governance/session-acl/types.js').EffectiveSessionRights;
   /** SEC-2 static agent tool policy (agents[].tools) */
-  agentToolPolicy?: {
-    allow?: string[];
-    deny?: string[];
-  };
+  agentToolPolicy?: ToolPolicy;
 }
 
 /** 一次 Run 的作用域身份（I1） */

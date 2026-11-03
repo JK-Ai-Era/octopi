@@ -108,6 +108,26 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+---
+
+## v0.98.25 (2026-11-04)
+
+### feat(plugins): deliver Plugin Tools through authorized Agent mounts
+
+Plugin Tools are now registered into per-Agent ToolBuses and only exposed to a model when that Agent's tool policy explicitly names the Tool or uses `*`. Plugin Tools do not inherit Builtin's empty-allow behavior; `deny` wins at both projection and execution. Same-name registration against Builtin or another Agent Tool fails loudly instead of silently shadowing. Builtin's existing empty-allow behavior is unchanged.
+
+- Plugin Tools retain `ToolSource(kind: plugin, origin, trustLevel)` through `RegisteredTool`, `LoopAgentTool`, `tool.exec.end`, and persisted `ToolResult`. The host assigns the source; plugins cannot spoof it. The existing Gateway audit surface and RunScope/agent identities continue to own Principal, run, session, and agent attribution.
+- `ToolBus.execute()` reads the current RunScope `agentToolPolicy` before invoking a Plugin handler, so direct ToolBus calls cannot bypass Agent authorization. AgentBuilder applies the same check in the Loop handler path. `wireAgentBuilder` supplies the static `agents[].tools` policy used by Gateway. A plugin `fs-write` Tool defaults to sequential execution in the shared adapter, including manually constructed contribution records.
+- `RegisteredTool.executionMode` now carries the existing three-way ToolBus/Builder/Gateway mapping into LoopAgentTool, including Plugin Tools. The public `ToolSource` is also preserved in the Core Loop contracts; `messages.ts` includes it on persisted ToolResult records. No new session or run identity was added.
+- Removed the fake `allowed-list` network branch from `CapabilityEnforcer`: an unimplemented allowlist now fails closed instead of returning an unconditional allow. Existing `checkToolAccess` and `checkPathAccess` behavior is unchanged.
+- Updated `docs/plugin-system.md` and `docs/plugin-system.zh.md` with the P2 Tool lifecycle, explicit Agent `tools.allow` opt-in, deny precedence, attribution, and cooperative cancellation boundary. The scaffold and sample config now show an executable Tool authorization path without implying that `registerTool` itself exposes a Tool.
+
+**Verification**: 49 P2-focused tests pass, including ToolBus projection/execution deny, real AgentBuilder/Runner tool calls, RunScope direct ToolBus execution, `tool.exec.end` source, persisted ToolResult source, cooperative AbortSignal delivery, Gateway manifest→per-Agent model request projection, disabled plugin absence, fs-write sequential default, Builtin/MCP/Command compatibility, and full lint/build. The minimum independent review of the shared authorization and ToolBus found no P0/P1 bypass.
+
+**Boundary**: this does not claim process-level isolation, hot unload, or enforcement of arbitrary Node effects outside the Tool interface (OP-GATE remains separate). Tool mounting is not complete Command authorization; that is P3.
+
+---
+
 ## v0.98.24 (2026-11-04)
 
 ### fix(engine)!: 停止装配层每请求改写历史；机械降级改 purpose 账本；预算转为不变量驱动

@@ -6,7 +6,7 @@ Octopi plugins are **trusted, in-process extensions**. A plugin can contribute T
 
 ## Current implementation status
 
-This document describes the manifest-first loading foundation delivered in plugin v1 P1.
+This document describes the manifest-first loading foundation (P1) and the per-Agent Plugin Tool execution chain (P2).
 
 | Surface | Status |
 |---|---|
@@ -16,7 +16,7 @@ This document describes the manifest-first loading foundation delivered in plugi
 | Dependency, identity, and contribution validation | Implemented |
 | Staged registration and atomic effective-registry publication | Implemented |
 | Tool / Command contribution registration | Implemented |
-| Tool mounting into per-Agent ToolBus | Next phase; registration alone does not expose a Tool to an LLM |
+| Tool mounting, per-Agent allow/deny, execution, and source attribution | Implemented; empty `tools.allow` does not expose a plugin Tool |
 | Command metadata and Host `sessionOps` authorization | Next phase; existing bridge behavior is not a complete authorization model |
 | Hook execution semantics | Existing message/gateway-stop triggers remain; typed composition and remaining triggers are later work |
 | Provider / Channel / ContextEngine registration | Not part of the stable v1 author surface yet |
@@ -148,6 +148,35 @@ blockList → allowList → entries[id].enabled → manifest.enabledByDefault �
 - Duplicate IDs, conflicting legacy aliases, and duplicate declared capabilities are rejected rather than resolved by scan order.
 - `loadPaths`, allow/block, and per-plugin enablement are security-sensitive configuration. Changes require a host restart and trigger configuration-drift protection; business config is not copied in plaintext into the fingerprint's diagnostic fields.
 
+### Allow an Agent to use a Plugin Tool
+
+Loading a plugin and exposing its Tools are separate decisions. A plugin Tool is **denied by default for every Agent**, including when `tools.allow` is empty or omitted. Opt in by exact Tool name or by `*`:
+
+```jsonc
+{
+  "agents": [
+    {
+      "id": "researcher",
+      "model": { "provider": "openai", "model": "gpt-5.5" },
+      "tools": { "allow": ["acme_search"] }
+    },
+    {
+      "id": "writer",
+      "model": { "provider": "openai", "model": "gpt-5.5" },
+      "tools": { "allow": [] }
+    }
+  ]
+}
+```
+
+`researcher` can see and execute `acme_search`; `writer` cannot. `tools.deny` wins over both an exact allow and `allow: ["*"]`. The existing builtin Tool behavior is unchanged: an empty allow list still permits builtin Tools unless denied.
+
+The host mounts contributions into each Agent's ToolBus and filters the LLM tool definitions using the Agent's policy. Direct ToolBus execution and Plugin Tool handlers also check the active policy, so hiding a Tool is not the only authorization check. A Plugin Tool cannot silently shadow a builtin or another registered Tool; a name conflict is an error.
+
+Handlers receive the normal `ToolExecutionContext`, including `runId`, `sessionId`, `agentId`, and `abortSignal`. Cancellation is **cooperative**: handlers should stop at effect boundaries when `abortSignal` fires. `definition.timeoutMs` uses the existing tool watchdog, but cannot forcibly terminate arbitrary in-process code. Tool source is retained in `tool.exec.end` events and persisted ToolResults as `{ kind: "plugin", origin: pluginId, trustLevel: "third-party" }`.
+
+ToolPolicy / EffectPolicy still applies to calls made through the Tool interface. `trustLevel` is diagnostic metadata, not a permission grant or a sandbox. The separate Agent `tools` configuration is restart/rebuild-scoped, not a per-message authorization override.
+
 ### Migrating `plugins.configs`
 
 Legacy configuration:
@@ -178,7 +207,7 @@ Read manifests
 → Mount to consumers in their respective implementation phases
 ```
 
-A failed plugin leaves no effective Tool, Command, or Hook behind. Its dependents are also rejected. An unrelated valid plugin can still load. A host-level registry is not the same as a per-Agent ToolBus: registry publication does not claim that every Agent has already mounted the Tool.
+A failed plugin leaves no effective Tool, Command, or Hook behind. Its dependents are also rejected. An unrelated valid plugin can still load. A host-level registry is not the same as a per-Agent ToolBus: registry publication does not claim that every Agent has already mounted the Tool. Likewise, a mounted Tool is not automatically exposed to the model; the Agent's `tools.allow` policy controls the final LLM tool definitions and execution.
 
 Use `PluginManager.getDiagnostics()` to distinguish `disabled`, `failed`, and `registered`, with a failure stage and reason. The default Gateway logs non-registered diagnostics at startup.
 
@@ -189,4 +218,4 @@ octopi plugin init acme.search --dir ~/.octopi/plugins/acme.search
 # Compile index.ts to index.js, install its dependencies, then configure and restart Octopi.
 ```
 
-The scaffold uses the same v1 manifest, `definePlugin`, and Tool declaration contract shown above. Registration is not Tool exposure: Agent mounting and allow/deny behavior are delivered in the Tool integration phase.
+The scaffold uses the same v1 manifest, `definePlugin`, and Tool declaration contract shown above. Registration is not Tool exposure: after enabling the plugin, also add its Tool name to the intended Agent's `tools.allow` (or explicitly choose `*`), then restart/rebuild the Agent.

@@ -21,6 +21,7 @@ import type {
   ToolCall,
 } from '@octopi-agent/core/types.js';
 import { DefaultToolBus } from '../extension/plugin-ecosystem/tools/tool-bus.js';
+import * as pluginToolAdapter from '../extension/plugin-ecosystem/tools/plugin-tool.js';
 import { expandHomePath } from '../../paths.js';
 import {
   createUnconfiguredFileEffects,
@@ -160,6 +161,7 @@ export interface ToolContextProvider {
     sessionId: string;
     agentId: string;
     runId?: string;
+    agentToolPolicy?: import('@octopi-agent/core/types.js').ToolPolicy;
     messages: import('@octopi-agent/core/types.js').Message[];
     cwd?: string;
     attachmentRoots?: string[];
@@ -260,6 +262,7 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
     name: tool.definition.name,
     description: tool.definition.description,
     executionMode: tool.executionMode,
+    ...(tool.source === undefined ? {} : { source: tool.source }),
     parameters: buildToolLlmParameters(
       tool.definition.parameters,
     ) as import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition['function']['parameters'],
@@ -267,6 +270,10 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
       const startTime = Date.now();
       try {
         const context = contextProvider.get();
+        const { isPluginToolPermitted } = await import('../extension/plugin-ecosystem/tools/plugin-tool.js');
+        if (!isPluginToolPermitted(tool, context.agentToolPolicy)) {
+          throw new Error(`Plugin tool "${tool.definition.name}" is not allowed for this agent`);
+        }
         const rawArgs = (args ?? {}) as Record<string, unknown>;
         // schema 已 required purpose；模型漏填时推导，不中断调用
         const purpose = resolveToolCallPurpose(tool.definition.name, rawArgs);
@@ -298,6 +305,7 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
           name: tool.definition.name,
           content: result,
           purpose,
+          ...(tool.source === undefined ? {} : { source: tool.source }),
           durationMs: Date.now() - startTime,
         };
       } catch (error) {
@@ -309,6 +317,7 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
           purpose: typeof (args as Record<string, unknown> | undefined)?.purpose === 'string'
             ? String((args as Record<string, unknown>).purpose)
             : '',
+          ...(tool.source === undefined ? {} : { source: tool.source }),
           durationMs: Date.now() - startTime,
         };
       }
@@ -649,6 +658,8 @@ export class AgentBuilder {
   private _agentHome?: string;
   /** 逻辑 agentId（观测 / 子系统审计用） */
   private _agentId?: string;
+  /** Deferred until build so .pluginTools() and .agentId() order is immaterial. */
+  private _pluginToolRecords: readonly import('../extension/plugin-ecosystem/plugins/contribution-registry.js').PluginToolRecord[] = [];
 
 
   // ── Core 组件 ──
@@ -684,6 +695,15 @@ export class AgentBuilder {
    */
   toolReplace(tool: RegisteredTool): this {
     this._toolBus.register(tool, { replace: true });
+    return this;
+  }
+
+  /**
+   * Mount host-owned plugin contributions into this Agent's ToolBus projection.
+   * Authorization is applied by ToolBus/RunScope; mounting is not Tool exposure.
+   */
+  pluginTools(records: readonly import('../extension/plugin-ecosystem/plugins/contribution-registry.js').PluginToolRecord[]): this {
+    this._pluginToolRecords = [...this._pluginToolRecords, ...records];
     return this;
   }
 
@@ -1767,6 +1787,9 @@ export class AgentBuilder {
       cwd: this._workspace?.trim() ? this._workspace : undefined,
     });
     const busAgentId = this._agentId ?? 'default';
+    for (const record of this._pluginToolRecords) {
+      this._toolBus.registerForAgent(busAgentId, pluginToolAdapter.pluginToolToRegisteredTool(record));
+    }
     const agentTools: LoopAgentTool[] = this._toolBus.listForAgent(busAgentId).map(t => convertToAgentTool(t, this._contextProvider));
     console.log(
       `[AgentBuilder] agent tools (${agentTools.length}): ${agentTools.map((t) => t.name).join(', ')}`,

@@ -6,7 +6,7 @@ Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过
 
 ## 当前实现状态
 
-本文描述插件 v1 P1 已交付的 manifest-first 加载基础。
+本文描述插件 v1 P1 的 manifest-first 加载基础与 P2 的 per-Agent Plugin Tool 执行链。
 
 | 能力面 | 状态 |
 |---|---|
@@ -16,7 +16,7 @@ Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过
 | 依赖、身份与贡献声明一致性校验 | 已实现 |
 | 暂存注册与有效注册表原子发布 | 已实现 |
 | Tool / Command 贡献注册 | 已实现 |
-| Tool 挂载到 per-Agent ToolBus | 下一阶段；仅注册不代表 Tool 已对 LLM 暴露 |
+| Tool 挂载、per-Agent allow/deny、执行与来源归因 | 已实现；`tools.allow` 为空不会暴露插件 Tool |
 | Command 元数据与 Host `sessionOps` 授权 | 下一阶段；现有桥接行为不是完整授权模型 |
 | Hook 执行语义 | 保留现有 message/gateway-stop 触发点；类型化组合和其余触发点后续实现 |
 | Provider / Channel / ContextEngine 注册 | 尚未进入稳定 v1 作者面 |
@@ -148,6 +148,35 @@ blockList → allowList → entries[id].enabled → manifest.enabledByDefault �
 - 重复 ID、冲突的旧 ID 别名、重复声明的能力会被拒绝，不由扫描顺序决定保留谁。
 - `loadPaths`、allow/block 和逐插件启停属于安全配置，修改需要重启并触发配置漂移保护；业务配置不会以明文复制到指纹诊断字段。
 
+### 允许 Agent 使用插件 Tool
+
+加载插件与向 Agent 暴露 Tool 是两个独立决策。插件 Tool **默认对所有 Agent 拒绝**，包括 `tools.allow` 为空或未配置时。按 Tool 名称显式允许，或显式选择 `*`：
+
+```jsonc
+{
+  "agents": [
+    {
+      "id": "researcher",
+      "model": { "provider": "openai", "model": "gpt-5.5" },
+      "tools": { "allow": ["acme_search"] }
+    },
+    {
+      "id": "writer",
+      "model": { "provider": "openai", "model": "gpt-5.5" },
+      "tools": { "allow": [] }
+    }
+  ]
+}
+```
+
+`researcher` 可以看到并执行 `acme_search`；`writer` 不能。`tools.deny` 同时覆盖精确 allow 和 `allow: ["*"]`。builtin Tool 的既有行为不变：空 allow 仍允许未 deny 的 builtin Tool。
+
+宿主把贡献挂载到每个 Agent 的 ToolBus，并按 Agent 策略过滤发给 LLM 的工具定义。ToolBus 直接执行和插件 handler 执行也会检查当前策略，因此“模型不可见”不是唯一授权检查。插件 Tool 不能静默覆盖 builtin 或已注册的 Tool；同名冲突会报错。
+
+handler 收到标准 `ToolExecutionContext`，包括 `runId`、`sessionId`、`agentId` 和 `abortSignal`。取消是**协作式**的：handler 应在副作用边界检查 `abortSignal` 并停止。`definition.timeoutMs` 使用现有工具看门狗，但不能强制终止任意进程内代码。`tool.exec.end` 事件和持久化 ToolResult 中的来源为 `{ kind: "plugin", origin: pluginId, trustLevel: "third-party" }`。
+
+ToolPolicy / EffectPolicy 仍约束经 Tool 接口发生的调用与效应。`trustLevel` 是诊断元数据，不是授权或沙箱。Agent 的 `tools` 配置在重启/重建时生效，不是每条消息可任意覆盖的授权入口。
+
 ### 迁移 `plugins.configs`
 
 旧配置：
@@ -178,7 +207,7 @@ blockList → allowList → entries[id].enabled → manifest.enabledByDefault �
 → 在各自实现阶段挂载到消费者
 ```
 
-插件失败后不会留下有效 Tool、Command 或 Hook；其下游依赖也会拒绝。无关的有效插件仍可加载。宿主级注册表不等于 per-Agent ToolBus：注册表发布不代表每个 Agent 已挂载该 Tool。
+插件失败后不会留下有效 Tool、Command 或 Hook；其下游依赖也会拒绝。无关的有效插件仍可加载。宿主级注册表不等于 per-Agent ToolBus：注册表发布不代表每个 Agent 已挂载该 Tool。同理，已挂载也不代表已对模型暴露；Agent 的 `tools.allow` 决定最终发给 LLM 的工具定义和是否允许执行。
 
 使用 `PluginManager.getDiagnostics()` 区分 `disabled`、`failed` 和 `registered`，并查看失败阶段与原因。默认 Gateway 启动时会输出未注册状态的诊断。
 
@@ -189,4 +218,4 @@ octopi plugin init acme.search --dir ~/.octopi/plugins/acme.search
 # 将 index.ts 编译为 index.js，安装依赖，然后配置并重启 Octopi。
 ```
 
-脚手架使用与上文一致的 v1 manifest、`definePlugin` 和 Tool 声明契约。**注册不是 Tool 暴露**：Agent 挂载和 allow/deny 行为将在 Tool 集成阶段交付。
+脚手架使用与上文一致的 v1 manifest、`definePlugin` 和 Tool 声明契约。**注册不是 Tool 暴露**：启用插件后，还要把 Tool 名称加入目标 Agent 的 `tools.allow`（或显式选择 `*`），再重启/重建 Agent。

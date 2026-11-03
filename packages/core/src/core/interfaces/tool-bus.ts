@@ -36,7 +36,7 @@ export interface ToolBus {
    *
    * 重复注册同名工具时抛出异常（严格模式，防插件影子覆盖）。
    * 显式热替换传 `{ replace: true }`。
-   * Agent 级注册使用 registerForAgent()，允许覆盖同名全局工具。
+   * Agent 级注册使用 registerForAgent()；同名冲突显式拒绝。
    */
   register(tool: RegisteredTool, options?: { replace?: boolean }): void;
 
@@ -46,8 +46,8 @@ export interface ToolBus {
   /**
    * 按 agentId 注册工具
    *
-   * Agent 级工具覆盖同名全局工具（静默覆盖，不抛异常）。
-   * resolve() 和 listForAgent() 合并时，agent 级优先。
+   * Agent 级工具不得覆盖同名全局或 Agent 工具；冲突必须抛出异常。
+   * resolve() 和 listForAgent() 合并时，agent 级优先仅适用于经过显式替换流程的宿主实现。
    */
   registerForAgent(agentId: string, tool: RegisteredTool): void;
 

@@ -14,6 +14,7 @@
 import type { Message, Turn, SessionStatus } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { ToolContextProvider } from '../agent/builder.js';
+import * as pluginToolPolicyAdapter from '../extension/plugin-ecosystem/tools/plugin-tool.js';
 import { tightenSessionRights } from '../governance/session-acl/rights.js';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionData } from '../session/types.js';
@@ -398,6 +399,7 @@ export function adaptLoopEvent(
           result: event.result.content,
           durationMs: event.result.durationMs,
           purpose: event.result.purpose,
+          ...(event.result.source === undefined ? {} : { source: event.result.source }),
         },
       };
     case 'stream.fallback_to_sync':
@@ -2675,13 +2677,14 @@ export class SessionAwareRunner {
     sessionToolRights?: import('../governance/session-acl/types.js').ToolRights,
     agentToolPolicy?: import('@octopi-agent/core/types.js').ToolPolicy,
   ): import('@octopi-agent/core/loop/types.js').AgentTool[] {
-    if (!agentToolPolicy && !sessionToolRights) return tools;
-    return tools.filter((t) =>
-      isToolPermitted(t.name, resolveToolCapabilities(t.name), [
+    return tools.filter((t) => {
+      if (!pluginToolPolicyAdapter.isPluginToolCallPermitted(t.name, t.source, agentToolPolicy)) return false;
+      if (!agentToolPolicy && !sessionToolRights) return true;
+      return isToolPermitted(t.name, resolveToolCapabilities(t.name), [
         agentToolPolicy,
         sessionToolRights,
-      ]),
-    );
+      ]);
+    });
   }
 
   /**

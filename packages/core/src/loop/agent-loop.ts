@@ -330,6 +330,7 @@ export async function* agentLoop(
           error: String(r.content),
           durationMs: r.durationMs,
           purpose: r.purpose ?? purposeById.get(r.toolCallId),
+          ...(r.source === undefined ? {} : { source: r.source }),
         }));
         currentContext.messages.push({
           role: 'tool',
@@ -538,6 +539,7 @@ export async function* agentLoop(
       error: r.isError ? String(r.content) : undefined,
       durationMs: r.durationMs,
       purpose: r.purpose,
+      ...(r.source === undefined ? {} : { source: r.source }),
       noop: r.noop,
     }));
     currentContext.messages.push({

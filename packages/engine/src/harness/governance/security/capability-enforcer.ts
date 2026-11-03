@@ -174,8 +174,7 @@ export class CapabilityEnforcer {
       case '*':
         return { allowed: true };
       case 'allowed-list':
-        // 可以配置白名单
-        return { allowed: true };
+        return { allowed: false, reason: `Plugin "${pluginId}" network allow-list is not implemented for host "${host}"` };
       case 'none':
         return { allowed: false, reason: `Plugin "${pluginId}" has no network access` };
       default:

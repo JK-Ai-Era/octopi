@@ -27,6 +27,7 @@ import type {
 import type { ToolBus } from '@octopi-agent/core/interfaces/tool-bus.js';
 import type { LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import { buildToolLlmParameters } from '../../../agent/tool-purpose.js';
+import { isPluginToolPermitted } from './plugin-tool.js';
 
 /**
  * DefaultToolBus — 工具总线实现
@@ -70,6 +71,9 @@ export class DefaultToolBus implements ToolBus {
   }
 
   registerForAgent(agentId: string, tool: RegisteredTool): void {
+    if (this.getTool(tool.definition.name, agentId)) {
+      throw new Error(`Agent tool "${tool.definition.name}" already registered for "${agentId}"`);
+    }
     if (!this.agentTools.has(agentId)) {
       this.agentTools.set(agentId, new Map());
     }
@@ -115,7 +119,7 @@ export class DefaultToolBus implements ToolBus {
   // ── 解析 ──
 
   resolve(agentId: string, policy?: ToolPolicy): RegisteredTool[] {
-    let tools = this.listForAgent(agentId);
+    let tools = this.listForAgent(agentId).filter((tool) => isPluginToolPermitted(tool, policy));
 
     if (policy) {
       if (policy.allow && policy.allow.length > 0) {
@@ -189,10 +193,16 @@ export class DefaultToolBus implements ToolBus {
     name: string,
     args: Record<string, unknown>,
     context: import('@octopi-agent/core/types.js').ToolExecutionContext,
+    policy?: ToolPolicy,
   ): Promise<unknown> {
     const tool = this.getTool(name, context.agentId);
     if (!tool) {
       throw new Error(`Tool "${name}" not found`);
+    }
+    const { getRunScope } = await import('../../../run/run-scope.js');
+    const effectivePolicy = getRunScope()?.toolRuntime?.agentToolPolicy ?? policy;
+    if (!isPluginToolPermitted(tool, effectivePolicy)) {
+      throw new Error(`Plugin tool "${name}" is not allowed for agent "${context.agentId}"`);
     }
     this.validateArgs(name, args, tool.definition);
     const { runWithToolLimits, resolveToolTimeoutMs } = await import(

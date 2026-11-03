@@ -8,7 +8,7 @@
  * 4. 工具系统支持并行/串行、参数预处理、流式更新
  */
 
-import type { Message, ToolCall, ToolResult, TokenUsage } from '../core/types.js';
+import type { Message, ToolCall, ToolResult, TokenUsage, ToolSource } from '../core/types.js';
 import type {
   ModelProvider,
   LLMMessage,
@@ -52,6 +52,8 @@ export interface AgentTool {
   /** UI 显示名（可选，默认用 name） */
   label?: string;
   parameters?: LLMToolDefinition['function']['parameters'];
+  /** Host-assigned provenance for policy and observability; not a model argument. */
+  source?: ToolSource;
 
   // ── 参数处理 ──
   /** 参数预处理（在 beforeToolCall 之前执行） */
@@ -92,6 +94,8 @@ export interface LoopToolResult {
    * `agent_end(reason='should_stop')` 干净结束。
    */
   terminate?: boolean;
+  /** Host-assigned tool provenance, retained through events and persistence. */
+  source?: ToolSource;
   /** Summary LLM 调用的 usage（用于 UsageLedger 归因） */
   summaryUsage?: import('../core/types/turn.js').TokenUsage;
 }
