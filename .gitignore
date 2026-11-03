@@ -8,6 +8,7 @@ data/
 arch/
 .DS_Store
 .mimocode/
+.worktrees/
 
 # TypeScript 编译产物（防止 web tsc 污染 src/）
 web/dist/
