@@ -18,6 +18,7 @@ import type {
   TokenEstimator,
 } from './types.js';
 import { HeuristicTokenEstimator } from './token-estimator.js';
+import { hasToolCall, isToolResultMessage } from './capabilities/compact/messages.js';
 
 export class DefaultMessageSelector implements MessageSelector {
   /**
@@ -150,10 +151,10 @@ export class DefaultMessageSelector implements MessageSelector {
       const msgTokens = estimator.estimateMessage(msg);
 
       // 检查是否需要边界对齐
-      if (this.isToolResult(msg) && i > 0) {
+      if (isToolResultMessage(msg) && i > 0) {
         // tool_result 消息必须和前面的 tool_call 消息一起保留
         const prevMsg = messages[i - 1];
-        if (this.hasToolCall(prevMsg)) {
+        if (hasToolCall(prevMsg)) {
           // 确保 tool_call 已被选中
           const prevInSelected = selectedSet.has(prevMsg);
           if (!prevInSelected) {
@@ -194,9 +195,9 @@ export class DefaultMessageSelector implements MessageSelector {
       const msgTokens = estimator.estimateMessage(msg);
 
       // 边界对齐：如果这是 tool_call 消息，检查后面的 tool_result
-      if (this.hasToolCall(msg) && i < messages.length - 1) {
+      if (hasToolCall(msg) && i < messages.length - 1) {
         const nextMsg = messages[i + 1];
-        if (this.isToolResult(nextMsg)) {
+        if (isToolResultMessage(nextMsg)) {
           // 确保 tool_result 已被选中
           const nextInSelected = selectedSet.has(nextMsg);
           if (!nextInSelected) {
@@ -218,17 +219,4 @@ export class DefaultMessageSelector implements MessageSelector {
     return selected;
   }
 
-  /**
-   * 检查消息是否是工具结果
-   */
-  private isToolResult(msg: Message): boolean {
-    return msg.role === 'tool' || (msg.toolResults !== undefined && msg.toolResults.length > 0);
-  }
-
-  /**
-   * 检查消息是否包含工具调用
-   */
-  private hasToolCall(msg: Message): boolean {
-    return msg.role === 'assistant' && msg.toolCalls !== undefined && msg.toolCalls.length > 0;
-  }
 }

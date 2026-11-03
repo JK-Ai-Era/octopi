@@ -19,7 +19,6 @@ import {
   summarySoftTargetTokens,
 } from '@octopi-agent/engine/harness/context/capabilities/compact/engine.js';
 import { renderSessionTasksInjection } from '@octopi-agent/engine/harness/session/tasks/render.js';
-import { LLMSummaryCompressor } from '@octopi-agent/engine/harness/context/llm-summarizer.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
@@ -72,6 +71,7 @@ describe('交接式摘要：指令形态与注入', () => {
     expect(tail).toContain('<session_tasks>');
     expect(tail.indexOf('<session_tasks>')).toBeGreaterThan(tail.indexOf('Evidence pointers'));
     expect(out.summary).toBe(CLEAN_HANDOFF);
+    expect(out.summarizeAttempted).toBe(true);
   });
 
   it('task 快照渲染 includeGuidance=false：只留状态，不带对话引导语', () => {
@@ -84,6 +84,78 @@ describe('交接式摘要：指令形态与注入', () => {
     expect(bare).not.toContain('task_complete');
     const full = renderSessionTasksInjection(tasks as never);
     expect(full).toContain('说明');
+  });
+
+  it('无 summarizeFn 机械路径：summarizeAttempted=false（冷却不得被机械降级推进）', async () => {
+    const engine = createCompactEngine();
+    const messages = Array.from({ length: 8 }, (_, i) => userMsg(`m${i}-content`));
+    const out = await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+    });
+    expect(out.fresh).toBeFalsy();
+    expect(out.summarizeAttempted).toBe(false);
+  });
+
+  it('empty_middle：不发空摘要请求，summarizeAttempted=false', async () => {
+    const summarize = vi.fn(async () => CLEAN_HANDOFF);
+    const engine = createCompactEngine();
+    // 空正文消息文本化为空 → 不允许发空 user / 空 New content（严格网关红线）
+    const messages = Array.from({ length: 8 }, () => userMsg(''));
+    const out = await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: summarize,
+    });
+    expect(summarize).not.toHaveBeenCalled();
+    expect(out.summarizeAttempted).toBe(false);
+  });
+
+  it('window_exhausted：请求构造不出即返回，summarizeAttempted=false', async () => {
+    const summarize = vi.fn(async () => CLEAN_HANDOFF);
+    const engine = createCompactEngine();
+    const messages = Array.from({ length: 8 }, (_, i) => userMsg(`m${i}-content`));
+    const out = await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: summarize,
+      // 窗口装不下文本化请求（input+output 超窗）→ providerMaxTokens<256，走 window_exhausted 守卫
+      contextWindow: 200,
+      maxOutputTokens: 50,
+    });
+    expect(summarize).not.toHaveBeenCalled();
+    expect(out.summarizeAttempted).toBe(false);
+  });
+
+  it('文本化工具结果三形态（error/字符串/对象）走共享 toolResultBody 序列化', async () => {
+    let body = '';
+    const summarize = vi.fn(async (m: LLMMessage[]) => {
+      body = String(m[m.length - 1]!.content);
+      return CLEAN_HANDOFF;
+    });
+    const engine = createCompactEngine();
+    const toolMsg: Message = {
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolResults: [
+        { toolCallId: 't1', name: 'a', result: 'str-body' },
+        { toolCallId: 't2', name: 'b', result: undefined, error: 'boom' },
+        { toolCallId: 't3', name: 'c', result: { k: 1 } },
+      ],
+    };
+    await engine.compactMessages([toolMsg, userMsg('tail-context')], {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: summarize,
+    });
+    expect(body).toContain('str-body');
+    expect(body).toContain('{"error":"boom"}');
+    expect(body).toContain('{"k":1}');
   });
 });
 
@@ -126,6 +198,8 @@ describe('交接式摘要：输出闸门（续写污染防护）', () => {
     // 不静默存坏摘要（原文续写会让折叠掉的中段信息全丢）
     expect(out.summary).toBe('old summary');
     expect(out.summary).not.toContain('<function=');
+    // 失败也算发起过（成功/失败均算）：冷却推进诚实性（F8R-01）
+    expect(out.summarizeAttempted).toBe(true);
     expect(Array.isArray(out.view)).toBe(true);
   });
 
@@ -281,106 +355,42 @@ describe('闸门判据边界与窗口护栏（评审 F2/F3/F4/F5）', () => {
   });
 });
 
-describe('F8 模板统一：跨路同源与降级标志（评审 F1/F5/F13）', () => {
-  it('两路尾部指令同源（F13 防双实现漂移）：compressor 与 compact 引擎同参同字', async () => {
-    const messages = [
-      userMsg('open item'),
-      userMsg('middle one'),
-      userMsg('middle two'),
-      userMsg('middle three'),
-      userMsg('middle four'),
-      userMsg('tail end'),
-    ];
-    const shared = {
-      previousSummary: 'OLD-SUM',
-      foldRange: { replacedCount: 4, total: 6, preservedTail: 1 },
-      taskSnapshot: '<session_tasks>T</session_tasks>',
-    };
-
-    let fromCompressor = '';
-    let compressorMax = 0;
-    await new LLMSummaryCompressor().compress({
-      messages,
-      targetTokens: 50,
-      ...shared,
-      // 同形状对照（都在 llmPrefix 分支比 tailUser）：compressor 无前缀走 textify 布局
-      // （尾部 user 是 New content 拼接），与引擎前缀分支的 tailUser 不同形，不可比
-      llmPrefix: [{ role: 'system', content: 'SYS' }],
-      summarize: async (msgs, opts) => {
-        fromCompressor = String(msgs[msgs.length - 1]!.content);
-        compressorMax = opts?.maxTokens ?? 0;
-        return CLEAN_HANDOFF;
-      },
-      requireSummary: true,
-    });
-
-    let fromEngine = '';
-    let engineMax = 0;
-    const engine = createCompactEngine();
-    await engine.compactMessages(messages, {
+describe('F8 模板统一：降级标志与可观测（评审 F1/F5/F22）', () => {
+  it('空白摘要（纯空白）不冒充 fresh：按失败降级且 summarizeAttempted 如实', async () => {
+    // 旧 trim 守卫随三件套删除后的收口钉：'   ' 若冒充 fresh 会写空前摘要并推进覆盖点
+    const blankMsgs = Array.from({ length: 6 }, (_, i) => userMsg(`${'abcdef'[i]}${'x'.repeat(200)}`));
+    const blankEngine = createCompactEngine();
+    const out = await blankEngine.compactMessages(blankMsgs, {
       mode: 'structure_only',
       protectHead: 0,
       protectTail: 0,
-      ...shared,
-      llmPrefix: [{ role: 'system', content: 'SYS' }],
-      summarizeFn: async (msgs, opts) => {
-        fromEngine = String(msgs[msgs.length - 1]!.content);
-        engineMax = opts?.maxTokens ?? 0;
-        return CLEAN_HANDOFF;
-      },
+      summarizeFn: async () => '   \n\n ',
     });
-
-    expect(fromCompressor.length).toBeGreaterThan(0);
-    // 逐字同源（含预算行）：预算公式两路同传参（F8R-09 修正：原 strip 是 no-op，反而掩盖预算分叉）
-    expect(fromCompressor).toBe(fromEngine);
-    // 预算同源：软目标/硬顶/窗口钳制推导链两侧不许分叉
-    expect(compressorMax).toBe(engineMax);
-
-    // textify 分支同源：system 指令逐字一致（user 正文由两路各自 formatter 渲染，模板块仍单源）
-    let sysFromCompressor = '';
-    await new LLMSummaryCompressor().compress({
-      messages,
-      targetTokens: 50,
-      ...shared,
-      summarize: async (msgs) => {
-        sysFromCompressor = String(msgs[0]!.content);
-        return CLEAN_HANDOFF;
-      },
-      requireSummary: true,
-    });
-    let sysFromEngine = '';
-    await engine.compactMessages(messages, {
-      mode: 'structure_only',
-      protectHead: 0,
-      protectTail: 0,
-      ...shared,
-      summarizeFn: async (msgs) => {
-        sysFromEngine = String(msgs[0]!.content);
-        return CLEAN_HANDOFF;
-      },
-    });
-    expect(sysFromEngine.length).toBeGreaterThan(0);
-    expect(sysFromCompressor).toBe(sysFromEngine);
+    expect(out.fresh).toBeFalsy();
+    expect(out.summarizeAttempted).toBe(true); // 调用发起过 → 冷却推进
+    expect(out.summary).toBeUndefined(); // 空白不得进 summary 字段
   });
 
-  it('机械降级不冒充新摘要（F1）：fresh=false 且 summarizeAttempted 如实', async () => {
-    const compressor = new LLMSummaryCompressor();
-    const messages = [userMsg('a'.repeat(200)), userMsg('b'.repeat(200))];
-    const empty = await compressor.compress({
-      messages,
-      targetTokens: 50,
-      summarize: async () => '',
-      requireSummary: true,
+  it('机械降级不冒充新摘要（F1）：fresh 如实且 summarizeAttempted 如实', async () => {
+    // P2 后 manual/proactive/overflow 唯一执行管道 = compact 引擎（原 F13「双实现漂移」
+    // 对照随 LLMSummaryCompressor 退休——单管道天然同源）
+    const messages = Array.from({ length: 6 }, (_, i) => userMsg(`${'abcdef'[i]}${'x'.repeat(200)}`));
+    const engine = createCompactEngine();
+    const empty = await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: async () => '',
     });
-    expect(empty.fresh).toBe(false); // 空摘要按失败降级：调用方不得据此推进覆盖点
+    expect(empty.fresh).toBeFalsy(); // 空摘要按失败降级：调用方不得据此推进覆盖点
     expect(empty.summarizeAttempted).toBe(true); // 调用确实发起过 → 冷却时间戳应推进
 
-    const noSummarizer = await compressor.compress({
-      messages,
-      targetTokens: 50,
-      requireSummary: true,
+    const noSummarizer = await engine.compactMessages(messages, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
     });
-    expect(noSummarizer.fresh).toBe(false);
+    expect(noSummarizer.fresh).toBeFalsy();
     expect(noSummarizer.summarizeAttempted).toBe(false); // 未发起调用：冷却不推进
   });
 

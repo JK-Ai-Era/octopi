@@ -108,6 +108,73 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.22 (2026-11-03)
+
+### docs(architecture): batch-1 P5 — compaction/summary specs rewritten to as-built; two-family boundary explicit
+
+- **改判否决**：「压缩中间段摘要复用 Summary(Port)」承诺作废（两族方法不同：族 B 抽取式 ≠ 族 A 交接式；v0.98.10 已删 summaryPort 槽位）。内部规格 `arch/summary-compact.md` 对应措辞族全部改写（§1.1 目标、§2.2 依赖注、§4.3 中间段、§6.1/6.3）；公开文档 `docs/context-layer-contracts.md`(.zh) 两族边界显式化：CompactEngine 中间段摘要 = handover（四段式、当前会话模型 + 同形前缀、禁 mini 档、单一 `SummarizeFunction`）；SummaryPort = 工具/旁路抽取（族 B）。两族刻意不合并。
+- **模型档位矛盾清理**：`models.level.summary`（2026-10-30 已撤销）残留清零（规格 §5/§12/§15 与 contracts 双语 `summarize.ts` 表行「summary→mini→standard→primary」）；解析链按 `resolver.ts` 实序落档（policy.model → policy.modelLevel → 显式/`summary.model` → level 缺省 mini → mini → standard → 主模型），`contextEngine.summaryModel`（v0.98.21 已删）从链上移除；压缩摘要（族 A）不走该链。
+- **事件词汇定性（债务 #7）收口：非债务**——`compact.*`（能力内进度回调）与 `context.compact.*`（Agent 事件域，Observer/UI）两域并存是有意设计：能力层不发 Agent 域事件，跨层由调用方择需映射（现仅 `compact.summarize_fallback` 转发）。维持现状，留档规格 §9。
+- **契约文档 as-built**：`SummarizeFunction`（previousSummary 嵌入正文 / 返回完整更新摘要）、`CompactOutcome`（`summarizeAttempted` 必填、`fresh`、`coveredMessageCount`）、`CompactTransportOutcome` 单投影、机械降级阶梯、view-split 对齐（原 open item 关闭）；`arch/compaction-architecture.md` 转正为批一收敛后规格（债务处置表）。
+- 观察项上账（Q4 承诺）：`compactText` 无生产消费方 → `arch/open-problems.md` **OP-COMPACT**。
+
+---
+
+## v0.98.21 (2026-11-03)
+
+### refactor(config)!: 退休 compact.* 配置段与 contextEngine.summaryModel（批一 P4 配置收口）
+
+**问题**：配置面漂移的两块死料。① `compact.*` 段（`defaultProtectHead`/`defaultProtectTail`/`defaultTargetTokens`/`defaultMode`）：声明在 schema 里却**从无消费方**——会话压缩读的是 `contextEngine.protectFirstN/protectLastN/targetTokens`，能力级缺省是引擎内置（`CreateCompactEngineOptions`），配置键纯属悬空面（unwired-keys 一直在告警）；② `contextEngine.summaryModel`：ContextEngine 重构期（v0.44.1 起）的兼容层，缺省 `models.level.mini` 档先命中使其**近乎永不生效**，却让人误以为可以换摘要模型——footgun。
+
+**清理（零兼容，直接退休）**：
+
+- **Q1**：删 `compact.*` 整段（Zod `CompactCapabilityConfigSchema`、config.ts 类型镜像与根字段、根 compose 重导出、unwired-keys 条目）。引擎能力缺省不受影响（`CreateCompactEngineOptions.defaultXxx` 是引擎 API 非配置键）。
+- **Q5**：删 `contextEngine.summaryModel` 全链——daemon `legacySummaryModel` 接线、summary 能力 `legacySummaryModel` 字段/透传、resolver `legacy` 解析分支、`ResolvedSummaryModel.from` 的 `'legacy'` 档。摘要模型解析链收敛为：`summary.model`（显式）→ `summary.modelLevel`/`models.level.mini` 档 → mini → standard → 主模型。
+
+**BREAKING**：配置里若写了 `compact` 段或 `contextEngine.summaryModel`——前者按未知键告警（`octopi doctor --fix` 移入 `_legacy`）；后者静默失效已多年、现从 schema 移除，**需要换摘要模型请用 `summary.model`（显式模型）或 `summary.modelLevel`（档位）**。`ResolvedSummaryModel.from` 移除 `'legacy'` 取值（枚举收窄）。
+
+**验证**：全量回归绿 + lint/typecheck 干净 + `generate:schema` 再生成（`octopi.schema.json` 双键消失）；CFG011 迁移登记（含 `compact` 整段搬移的新形态）——`octopi doctor --fix` 确会把两键移入 `_legacy.removedKeys`，doctor 测试新增 v0.98.21 用例。config-unwired-keys / config-gateway-top-level-mapping 守卫测试同步（block-rule 用例改用 `plugins.configs`）；KNOWN-ISSUES 双语按 models.mode（v0.98.16）先例记「键已删除」条目；context-layer-contracts 解析链措辞不再引用已删键（链序全量梳理归 P5）。
+
+---
+
+## v0.98.20 (2026-11-03)
+
+### refactor(engine): 切片手术迁入 capabilities/compact，修 head/tail 对齐缺口，CompactResult 收敛
+
+**问题**：①「怎么切」（边界对齐、语义过滤）留在 DefaultContextEngine 私有方法里，compact 能力自身反而用裸 `slice` 切 head/tail——**#10 缺口**：切点可能落在 tool_call/tool_result 对中间，head 停在带 toolCalls 的 assistant 上（视图里成悬空调用）、tail 起于 tool 结果（成孤儿结果），两者都会被严格网关 400（手动路径靠调用方先对齐才幸免，自动路的 compactMessages 直调用户暴露）；②结果契约三份并存：`CompactResult`（context/types）、compact 能力 `CompactOutcome`、runner/gateway 各自内联结构——字段漂移无人察觉。
+
+**收敛（P3，DefaultContextEngine 瘦身为触发/状态层）**：
+
+- **切片手术单源**：`alignViewSplit`/`semanticHistory` 迁入 `capabilities/compact/view-split.ts`；消息形状谓词（`isToolResultMessage`/`hasToolCall`）收口 `messages.ts`（机械阶梯/切片/消息选择器三处共用，**全库副本清零**）。引擎 5 处调用点改用能力实现，私有副本删除。
+- **修 #10**：compact 引擎三处消息切片（`head_tail_only` / `summary_only` keep_partial / `structure_only`）全部走 `alignViewSplit`；`protectHead`/`protectTail` 语义明确为「期望条数，对齐后实际条数可能不同（head 缩 / tail 扩）」。顺带补三个护栏：`tailCount=0` 越界读、protect 总和超长的畸形切片（head/tail 重叠）、`head_tail_only` 对齐后无可丢弃时如实报 `too_short`（不再插占位冒充压缩）。
+- **结果契约收敛**：`CompactResult` 删除；`CompactOutcome` 补 `coveredMessageCount`（E4 状态推进锚点）成为**唯一压缩结果契约**；`structuralCompact`/`compactStructural` 返回 `CompactOutcome`；传输投影单源：`CompactTransportOutcome = Omit<CompactOutcome,'view'>` + `toCompactTransport()`（能力层唯一实现，runner/gateway 引用——手抄字段表会静默丢新可选字段）；**view 不过锁面**（大对象且 UI 无需）。manual 对外 reason 词汇有意固定为 `structural`（历史 API 词汇，已注释声明）。
+
+**行为变化（如实）**：手动压缩「过短未压缩」的 `reason` 从 `structural`（借默认值）改为 `too_short`（与 compactMessages 同名的如实语义）；失败/过短返回补 `view`/`fresh`/`summarizeAttempted`（此前缺省）。锁面响应新增 `fresh`/`summarizeAttempted`/`coverage`/`coveredMessageCount` 显式字段为**增量**，不影响既有消费方。
+
+**验证**：全量回归 3999 passed（392 files）+ lint/typecheck-tests 干净 + arch/check-sync 绿。新增 #10 对齐钉（compact-p1：structure_only/summary_only keep_partial/head_tail_only 三形状校验——无悬空调用、无孤儿结果）、`alignViewSplit` 边界单测（tailCount=0/回退不过头/畸形切片夹取）、manual `too_short` reason 钉、传输投影钉（view 不过锁面）；semanticHistory 契约钉改能力单源导入（不再打私有访问补丁）。经 fresh-eyes 评审（1 blocker=版本纪律随落地闭环、1 major=传输投影单源化、4 minor 全修真）。
+
+---
+
+## v0.98.19 (2026-11-03)
+
+### refactor(engine)!: 压缩执行管道合一到 capabilities/compact，压缩器三件套退休
+
+**问题**：压缩执行存在**双管道**——手动 `structuralCompact` 走 `capabilities/compact`（交接式摘要），proactive/overflow/sticky 三路自动压缩走 `HybridCompressor`/`LLMSummaryCompressor`/`TruncateCompressor` 三件套。双管道各自持有一份摘要包装、机械占位文案、截断兜底与污染处置（自动路无闸门重试），已被多轮压缩改造（v0.97 交接式、v0.98.10–v0.98.17 契约收敛）事实掏空：三件套不再有独立存在价值，且持续制造漂移（自动路摘要产出的 `previousSummary` 存带包装消息体、手动路存正文）。
+
+**收敛（批一性质：退休，不做兼容层）**：
+
+- **执行管道合一**：proactive/overflow/sticky 全部改走 `compactMessages` 唯一管道。语义映射：proactive `requireSummary` → `mode:'structure_only'`（不得 within_target 短路——机械达标也必须尝试摘要级）；overflow → `mode:'auto'`（保留既有「预算内不压缩」短路）；sticky 机械增量 → 机械降级阶梯。触发语义（何时压缩、冷却、复用、状态推进）只搬家不改语义；自动路摘要从此统一过污染闸门（一次加严指令重试→二次抛错降级，Q3 补齐）。
+- **删除** `HybridCompressor`/`LLMSummaryCompressor`/`TruncateCompressor` 及 `Compressor`/`CompressParams`/`CompressResult`（三件套连契约）。
+- **机械降级阶梯（Q2 B′）**：工具输出打码降为阶梯第一级（零 LLM、不丢轮次、error 永不打码），「先打码、不够再账本截断」；SmartRouter 删 `truncate_tool_results_only` 路由与 2000/200 两魔数阈值，收敛为 `fits`/`compact`（原 `compact_only`/`compact_then_truncate` 自 v0.83 起即同一处理分支，判据删除后无区分基础，一并退休）。**行为差异（如实）**：工具胖溢出且有 summarize 时，过去 0ms 静默打码、现在一次 LLM 交接摘要（与手动路径同一阶梯）；无 summarize 行为不变（打码→账本截断）。
+- **截断兜底三→一**：`fallbackTruncate`/`TruncateCompressor`/`conservativeTruncate` 收敛为 `ledgerTruncate`（账本单源）。保底口径按调用点保留旧形状（`minKeep` 为**纯保底**，不叠 15%）：LLM 已发起后的失败兜底保 `max(6, 15%)`（旧 fallbackTruncate）；LLM 未发起（无 summarize/空段/窗口不足）的机械降级与「压到目标」的机械压缩保 2 条（旧 TruncateCompressor——保底撑胖会把粘滞增量挤出 overflow、在缓存重建轮补摘要，撞「复用轮零 LLM」红线）。
+- **重复件单源**：摘要包装（`asSummaryMessage`/`wrapSummaryText`；`wrapContextSummary` 与内联包装消亡）、机械占位文案 + `isMechanicalNotice` 识别串（`messages.ts` 单源——生产者与识别串同源）、`buildToolCallLedger` 迁入能力、`formatMessagesForSummary` 随文件消亡。`previousSummary` 存储形状统一为摘要正文（自动路原先存带包装消息体）。
+
+**BREAKING**：`Compressor`/`CompressParams`/`CompressResult`/`HybridCompressor`/`LLMSummaryCompressor`/`TruncateCompressor` 从 `@octopi-agent/engine` 导出面移除（deep import 在编译期即断）；`DefaultContextEngineConfig.compressor` 注入口删除（压缩执行注入口为 `compactEngine`）。`SmartRouter` 契约收窄：`Route = 'fits' | 'compact'`（三值收敛）、`evaluate(messages, messagesBudget)` 去掉 `hasSummarize` 参数（有无 summarize 改在执行管道内决定）、`RoutingDecision` 删 `toolResultReducibleChars`/`truncateOnlyThresholdChars` 字段、`SmartRouterConfig` 删两阈值字段。无平滑迁移——有意退休（拍板：不做兼容层）。
+
+**验证**：全量回归 3988 passed（391 files）+ lint 干净。行为钉随迁移落地：机械阶梯单测（打码/error 永不打码/账本截断对齐/阶梯顺序）、proactive-compact-tool-heavy（复用轮零 LLM、状态诚实、工具配对）、compact-sticky 三红线、context-task-snapshot（taskSnapshot 只随摘要请求走）、summarize-cache-prefix（llmPrefix 字节不变 + 预算语义）、compact-handover 五态锚（旧「双实现对照」用例随双管道消亡退役）。
+
+---
+
 ## v0.98.18 (2026-11-03)
 
 ### feat(session): 大附件默认本地关键词 top-k 召回
@@ -122,6 +189,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 `knowledge.attachments.inject.inventory` 和 `knowledge.attachments.tools.attachmentsRootReadOnly` 从 schema 删除；加载/doctor 通过 CFG012 迁移并保留原值到 `_legacy`，不静默吞配置。
 
 ---
+
+## v0.98.17 (2026-11-03)
+
+### refactor(engine)!: 摘要契约单源化 + `CompactOutcome.summarizeAttempted` 必填
+
+**BREAKING**：`CompactSummarizeFn` 公开导出移除（`@octopi-agent/engine/harness/*` 子路径面可观察）。迁移：改用同形状的 `SummarizeFunction`——单源在 `capabilities/compact/types.ts`，`harness/context/types.js` 与顶层 `@octopi-agent/engine` 继续导出，形状无变化。
+
+- **类型单源**：`SummarizeFunction`（原 context/types）与 `CompactSummarizeFn`（原 compact/types）合一；顺手消灭第三份契约别名（gateway `SummarizeFn` 本地类型、runner `compactSession` 内联签名改用单源类型）
+- **`CompactOutcome.summarizeAttempted: boolean`（必填，与族 B `CompressResult` 姿态一致）**：是否真正发起过摘要 LLM 调用（成功/失败均算）；机械/早退路径（empty/within_target/too_short/head_tail_only）显式 false；`structuralCompact` 写 `lastProactiveLlmAt` 改用该字段判定——内置引擎行为恒等（fresh⇒attempted），补正的是外部 `CompactEngine` 实现的诚实性，与 F8R-01「冷却只随真发起推进」对齐
+- `formatMessagesAsText` 复用 `toolResultBody` 缓存序列化（逐字节等价；摘要投影同吃该缓存，toolResult 不可变性前提已在注释注明）
+- 测试：summarizeAttempted 五态锚（成功/闸门二次污染失败/无 summarizeFn/empty_middle/window_exhausted）+ 工具结果三形态文本化 + 冷却诚实性消费锚（`tests/harness/compact-cooldown-honesty.test.ts`）
+- 定性：本提交 = 批一 P1 **契约子集**；摘要包装/占位文案/账本/截断兜底单源化随 P2 三件套删除一并收口（`arch/compaction-architecture.md` §4 已同步），事件词汇定性随 P5 文档批
 
 ## v0.98.16 (2026-11-03)
 

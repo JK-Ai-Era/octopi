@@ -35,7 +35,6 @@ export function createSummaryPort(options: CreateSummaryPortOptions): SummaryPor
       providers: options.providers,
       levelMap: options.levelMap,
       fallbackProvider: options.fallbackProvider,
-      legacySummaryModel: options.legacySummaryModel,
       explicitModel: options.model,
       modelLevel: options.modelLevel,
       policyModel,

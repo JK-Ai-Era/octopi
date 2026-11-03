@@ -552,8 +552,6 @@ export interface ContextEngineConfig {
   minOutputReserve?: number;
   /** 输出预留最大值（默认 8000） */
   maxOutputReserve?: number;
-  /** 摘要模型（可选，使用主模型） */
-  summaryModel?: string;
 }
 
 /**
@@ -584,16 +582,6 @@ export interface SummaryCapabilityConfig {
     ttlMs?: number;
     maxEntries?: number;
   };
-}
-
-/**
- * 公用能力 compact 缺省配置
- */
-export interface CompactCapabilityConfig {
-  defaultProtectHead?: number;
-  defaultProtectTail?: number;
-  defaultTargetTokens?: number;
-  defaultMode?: 'structure_only' | 'summary_only' | 'head_tail_only' | 'auto';
 }
 
 /**
@@ -895,8 +883,6 @@ export interface HarnessConfig {
   contextEngine?: ContextEngineConfig;
   /** 公用能力 summary（harness/context/capabilities） */
   summary?: SummaryCapabilityConfig;
-  /** 公用能力 compact 缺省 */
-  compact?: CompactCapabilityConfig;
   /** 公用能力 documents（DocumentPort 读抽取） */
   documents?: DocumentsCapabilityConfig;
   /** system prompt 七层装配器 / 全局宪法（唯一声明面：context 域；v0.98.11 起顶层简写已删除） */

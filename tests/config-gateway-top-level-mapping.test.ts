@@ -40,11 +40,6 @@ const CLASSIFICATION: Record<string, Classification> = {
   schedules: { kind: 'mapped', target: 'schedules' },
   contextEngine: { kind: 'mapped', target: 'contextEngine' },
   summary: { kind: 'host-consumed', where: 'daemon SummaryPort wiring (src/cli/daemon.ts)' },
-  compact: {
-    kind: 'ignored',
-    reason:
-      'compact 能力缺省键声明了但无消费方（unwired-keys 启动告警）；见 docs/KNOWN-ISSUES.md',
-  },
   documents: { kind: 'mapped', target: 'documents' },
   knowledge: { kind: 'mapped', target: 'knowledge' },
   context: { kind: 'mapped', target: 'context' },

@@ -9,8 +9,11 @@
 
 import type { Message } from '@octopi-agent/core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { SummarizeFunction } from './capabilities/compact/types.js';
 
 export type { LLMMessage, LLMToolDefinition };
+/** 族 A 摘要执行契约：单源定义在 capabilities/compact/types.ts（此处再导出保持域内引用面稳定）。 */
+export type { SummarizeFunction };
 
 // ── 引擎信息 ──
 
@@ -149,32 +152,6 @@ export interface ContextCompactSnapshot {
   lastProactiveTokens?: number;
 }
 
-/**
- * 摘要调用函数
- *
- * 由 Harness 层注入，ContextEngine 用它调用 LLM 生成摘要。
- * 这样 ContextEngine 不直接依赖 ModelProvider，保持解耦。
- *
- * 契约（迭代式更新）：`options.previousSummary` 已按约定嵌入 `messages` 正文
- * （"Previous summary: …" 段），实现方无需再读 opts 拼 prompt；**返回值即完整
- * 更新后的摘要**，调用方不得再与旧摘要拼接。
- *
- * @param messages - 摘要请求消息（system 指令 + 用户正文；非原始对话序列）
- * @param options - 摘要选项
- * @returns 完整更新后的摘要文本
- */
-export type SummarizeFunction = (
-  messages: LLMMessage[],
-  options?: {
-    /** 上次摘要（已嵌入 messages 正文；仅作元信息回传） */
-    previousSummary?: string;
-    /** 摘要 token 预算 */
-    maxTokens?: number;
-    /** 自定义指令 */
-    instructions?: string;
-  }
-) => Promise<string>;
-
 // ── 组装结果 ──
 
 export interface AssembleResult {
@@ -202,22 +179,6 @@ export interface AssembleResult {
 export interface IngestParams {
   sessionId: string;
   message: Message;
-}
-
-// ── 压缩结果 ──
-
-export interface CompactResult {
-  ok: boolean;
-  compacted: boolean;
-  reason?: string;
-  tokensBefore: number;
-  tokensAfter?: number;
-  summary?: string;
-  /**
-   * 摘要覆盖终点（下标，**不含**）= tailStart。
-   * sticky 重建的增量起点；写 `messages.length` 会把 tail 误算进覆盖 → 滑出后丢消息。
-   */
-  coveredMessageCount?: number;
 }
 
 // ── 轮次后参数 ──
@@ -304,60 +265,6 @@ export interface SelectOptions {
 
 export interface MessageSelector {
   select(messages: Message[], options: SelectOptions, tokenEstimator?: TokenEstimator): SelectResult;
-}
-
-// ── 压缩器 ──
-
-export interface CompressParams {
-  messages: Message[];
-  targetTokens: number;
-  previousSummary?: string;
-  summarize?: SummarizeFunction;
-  tokenEstimator?: TokenEstimator;
-  /**
-   * 要求产出语义摘要：设置后，机械截断（旧工具输出截断/兜底截断）即使已达标
-   * 也不得就此短路返回——必须尝试摘要级。主动摘要路径（applyProactiveCompact）使用：
-   * 否则压缩成功但永不产摘要，状态机的复用分支永远无法启用。
-   *
-   * 实现约定：仅约束「可摘要时不得走机械短路」；无摘要能力（如无 summarize）时
-   * 的机械降级结果是允许的，调用方以「结果中无语义摘要」识别降级
-   * （见 DefaultContextEngine.extractSummaryText）。
-   */
-  requireSummary?: boolean;
-  /**
-   * 缓存前缀：与会话 LLM 请求**同形**的 system+history（buildLlmMessages 产物）。
-   * 摘要请求只许在其**尾部**追加指令；禁止改 system / 历史字节——否则打穿 provider 前缀缓存。
-   */
-  llmPrefix?: LLMMessage[];
-  /** 摘要软目标预算（P1c clamp(2%, 2k, 8k) 的可配置 ratio/min/max） */
-  summaryBudget?: { ratioPct?: number; minTokens?: number; maxTokens?: number };
-  /** 折叠区间（评审 F7）：交接书替换范围与原样保留尾部——计数语义 */
-  foldRange?: { replacedCount: number; total: number; preservedTail: number };
-  /** task 快照（B0：易变块走 content 尾部，不进 system） */
-  taskSnapshot?: string;
-  /** 会话模型窗口/输出上限（评审 F5）：摘要硬顶按窗口钳制 */
-  contextWindow?: number;
-  maxOutputTokens?: number;
-  /** 事件回调（F22：cache-miss 旁路可观测） */
-  emit?: (e: { type: 'compact.summarize_fallback'; reason?: string; cached?: boolean }) => void;
-}
-
-export interface CompressResult {
-  /** 压缩后的消息/摘要 */
-  result: Message[];
-  /** 估算 token 数 */
-  estimatedTokens: number;
-  /** 本次产出**新的**语义摘要（评审 F8-F1）：仅 true 时调用方才可推进覆盖点/previousSummary。
-   *  机械降级（截断/兜底/占位说明）必须显式 false——占位说明不得冒充语义摘要（fail-closed，F8R-01）。 */
-  fresh: boolean;
-  /** LLM 摘要调用是否真正发起过（成功/失败均算）：只在 true 时推进冷却时间戳（F8R-01）。 */
-  summarizeAttempted: boolean;
-  /** 被丢弃的信息摘要 */
-  droppedSummary?: string;
-}
-
-export interface Compressor {
-  compress(params: CompressParams): Promise<CompressResult>;
 }
 
 // ── 预算分配器 ──

@@ -15,7 +15,6 @@ import {
   SchedulesJsonConfigSchema,
 } from './run.js';
 import {
-  CompactCapabilityConfigSchema,
   ConstitutionConfigSchema,
   ContextAssemblerConfigSchema,
   ContextEngineConfigSchema,
@@ -58,8 +57,6 @@ export const engineConfigSchema = z.object({
   contextEngine: ContextEngineConfigSchema.optional(),
   /** 公用能力 summary（capabilities） */
   summary: SummaryConfigSchema.optional(),
-  /** 公用能力 compact 缺省 */
-  compact: CompactCapabilityConfigSchema.optional(),
   /** 公用能力 documents（DocumentPort 读抽取） */
   documents: DocumentsConfigSchema.optional(),
   /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */

@@ -148,19 +148,19 @@ Runner.handle
 
 - Builder `build()` mounts the Assembler by default; assembly failure falls back to the old string concatenation
 - Without an explicit `.summarize()`, the Builder auto-mounts `createProviderSummarize` with the primary model
-- `config-bridge` / capabilities resolution chain: **`models.level.mini`** (overridable via `summary.modelLevel`) → `contextEngine.summaryModel` → mini → standard → primary model
+- `config-bridge` / capabilities resolution chain: `summary.model` (explicit, wins first; legacy `contextEngine.summaryModel` removed v0.98.21) → `models.level.<summary.modelLevel | mini>` → mini → standard → primary model (policy-level model/level overrides take precedence when a policy is attached)
 - Auto-summarize can be disabled with `.disableAutoSummarize()`
 - **Skill**: `skillDirectory` or `home/skills` is discovered at build time (restricted by the `agents[].skills` allowlist when set); every turn injects `<available_skills>`
 - **Memory recall**: `builder.memoryStore`; config-bridge and Gateway build a `SqliteMemoryStore` from `home/agent.db`. **Knowledge**: system only injects the catalog (`builder.knowledgeCatalog`); the catalog is **tagged** `id/name/type/status/scale/location` + `purpose`/`topics`; sources/indexes/exogenous ingest see `docs/knowledge.md`
 - **MemoryStore single instance**: `AgentBuilder.build()` registers `memory_store`/`memory_search` from `builder.memoryStore` before `buildCore`; MemoryLayer recall and `memory.steward.*` writes share the same instance. Gateway **no longer** mounts global memory tools on a process-level `InMemoryMemoryStore`
 - **Compact state persistence (E4)**: authoritative bucket `SessionData.contextCompacts[agentId]`; `contextCompact` is the primary/single-agent compatibility view. Jsonl `*.state.json` persistence. `Agent` in-memory bridge key = `(sessionId, agentId)`. **Different agents do not borrow each other's compact**. Manual compact: `SessionAwareRunner.compactSession` (**same session lock** as handle, queued; do not rely only on `status==='processing'`)
-- **Shared capabilities Summary / Compact** (`harness/context/capabilities/`, cross-cutting; not counted in product-domain counts):
-  - **SummaryPort**: LLM summarization + information extraction; Policy is data-driven; `ContentChannel` ⊥ `ContentKind` (**no** `tool_output` kind)
+- **Shared capabilities Summary / Compact** (`harness/context/capabilities/`, cross-cutting; not counted in product-domain counts). **Two summary families — deliberately not merged** (the old "compaction middle segment reuses Summary(Port)" promise is **rejected**: extraction ≠ handover):
+  - **SummaryPort (family B — content extraction)**: LLM summarization + information extraction for tools/bypass; Policy is data-driven; `ContentChannel` ⊥ `ContentKind` (**no** `tool_output` kind)
   - **Tool L1/L2**: decisions live on the tools side; L1 `maxReturnChars` hard cap always applies; L2 goes through SummaryPort; `summarize=off` still L1; `file_read`+code defaults to no L2
-  - **CompactEngine**: callers may specify head/tail counts / target token / mode; `DefaultContextEngine.structuralCompact` **delegates** to this engine; **E4 state still lives only on the ContextEngine / Session path**
-  - **structured_json**: L0 parse + L1 lightweight contract `fields`/`fieldTypes` (`structuredError`); full Schema is an optional port
-  - Config: `summary` / `compact`; examples in `octopi.example.json`; internal design specs (not public)
-  - **P2 subsystem wrapping deferred**: current consumers are tools L1/L2 and session compact; mount `subsystems/content-summary|compact` when bypass/event-batch needs appear
+  - **CompactEngine (family A — session handover)**: callers may specify head/tail counts / target token / mode; `DefaultContextEngine.structuralCompact` **delegates** to this engine; the middle-segment summary is a **handover summary** (four-section template, current session model + same-shape prefix cache; never the mini tier) through the single `SummarizeFunction` — **not** through SummaryPort; **E4 state still lives only on the ContextEngine / Session path**
+  - **structured_json** (family B): L0 parse + L1 lightweight contract `fields`/`fieldTypes` (`structuredError`); full Schema is an optional port
+  - Config: `summary` / `models.level.mini`; internal design specs (not public)
+  - **P2 subsystem wrapping deferred**: current consumers are tools L1/L2 (SummaryPort) and session compact (CompactEngine); mount `subsystems/content-summary|compact` when bypass/event-batch needs appear
 - **Cross-domain Document extraction** (`harness/capabilities/document`, not Context-specific): shared by session attachments / knowledge ingest / document tools; sole assembly `createDocumentPortFromConfig(documents.*)`. Context layers do not hold DocumentPort directly.
 
 **Proactive summary (prevent long-session amnesia):**
@@ -263,7 +263,7 @@ process-wide sink serves every session that shares a provider.
 | `packages/engine/src/harness/context/assembler.ts` | `DefaultContextAssembler` |
 | `packages/engine/src/harness/context/layers.ts` | Thin adapter layers + `createDefaultLayers` |
 | `packages/engine/src/harness/context/system-prompt-assembler.ts` | Per-turn system assembly port for the Runner |
-| `packages/engine/src/harness/context/summarize.ts` | Summary provider selection (summary→mini→standard→primary) |
+| `packages/engine/src/harness/context/summarize.ts` | `createProviderSummarize` (family-A session-model closure) + `pickSummarizeProvider` (family-B bypass selection: mini→standard→primary) |
 | `packages/engine/src/harness/context/capabilities/**` | Shared capabilities SummaryPort / CompactEngine |
 | `tests/harness/context-layer-contracts.test.ts` | Contract behavior tests |
 | `tests/harness/context-wiring-p0.test.ts` | Wiring regression |

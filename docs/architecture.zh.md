@@ -239,9 +239,6 @@ harness/context/
 ├── default-context-engine.ts   # 消息窗口入口（状态键含 agentId）
 ├── smart-router.ts             # 智能路由决策
 ├── message-selector.ts         # 四区域消息选择
-├── hybrid-compressor.ts        # 混合压缩器
-├── llm-summarizer.ts           # LLM 摘要压缩
-├── truncate-compressor.ts      # 截断兜底
 ├── budget-allocator.ts         # Token 预算分配
 ├── token-estimator.ts          # HeuristicTokenEstimator
 ├── token-estimate-fns.ts
@@ -260,7 +257,7 @@ harness/knowledge/                       # 外生语料域 + Knowledge Service�
 
 领域导出见 `harness/index.ts`。设计说明见 [docs/context-layer-contracts.zh.md](./context-layer-contracts.zh.md)、[docs/observer-domain.zh.md](./observer-domain.zh.md)。
 
-**公用能力（capabilities，横切）**：`harness/context/capabilities/summary|compact` 提供可注入的 LLM 摘要/信息提取与可配置压缩管道。`harness/capabilities/document` 为跨域 Document 抽取 Port（session/knowledge/tools 共用；`createDocumentPortFromConfig` + `documents.*`）。与 `plugin-ecosystem/tools` 边界：tools **只消费** `SummaryPort`，prompt/policy/算法只在 capabilities；会话 compact **E4** 键与 Session 持久化不在 capabilities（仍在 context / session 路径）。配置键：`summary` / `compact` / `models.level.mini` / `documents.*`。
+**公用能力（capabilities，横切）**：`harness/context/capabilities/summary|compact` 提供可注入的 LLM 摘要/信息提取与可配置压缩管道。`harness/capabilities/document` 为跨域 Document 抽取 Port（session/knowledge/tools 共用；`createDocumentPortFromConfig` + `documents.*`）。与 `plugin-ecosystem/tools` 边界：tools **只消费** `SummaryPort`，prompt/policy/算法只在 capabilities；会话 compact **E4** 键与 Session 持久化不在 capabilities（仍在 context / session 路径）。配置键：`summary` / `models.level.mini` / `documents.*`。
 
 ### 3.3 Security — 安全
 

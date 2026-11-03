@@ -237,9 +237,6 @@ harness/context/
 ├── default-context-engine.ts   # message-window entry (state key includes agentId)
 ├── smart-router.ts             # smart-routing decisions
 ├── message-selector.ts         # four-region message selection
-├── hybrid-compressor.ts        # hybrid compressor
-├── llm-summarizer.ts           # LLM summary compaction
-├── truncate-compressor.ts      # truncation fallback
 ├── budget-allocator.ts         # token budget allocation
 ├── token-estimator.ts          # HeuristicTokenEstimator
 ├── token-estimate-fns.ts
@@ -258,7 +255,7 @@ harness/knowledge/                       # exogenous corpus domain + Knowledge S
 
 Domain exports are in `harness/index.ts`. Design notes: [docs/context-layer-contracts.md](./context-layer-contracts.md), [docs/observer-domain.md](./observer-domain.md).
 
-**Shared capabilities (cross-cutting)**: `harness/context/capabilities/summary|compact` provides injectable LLM summarization/information extraction and a configurable compaction pipeline. `harness/capabilities/document` is the cross-domain Document extraction Port (shared by session/knowledge/tools; `createDocumentPortFromConfig` + `documents.*`). Boundary with `plugin-ecosystem/tools`: tools **only consume** `SummaryPort`; prompt/policy/algorithms live only in capabilities; session compact **E4** keys and Session persistence are not in capabilities (they stay on the context / session path). Config keys: `summary` / `compact` / `models.level.mini` / `documents.*`.
+**Shared capabilities (cross-cutting)**: `harness/context/capabilities/summary|compact` provides injectable LLM summarization/information extraction and a configurable compaction pipeline. `harness/capabilities/document` is the cross-domain Document extraction Port (shared by session/knowledge/tools; `createDocumentPortFromConfig` + `documents.*`). Boundary with `plugin-ecosystem/tools`: tools **only consume** `SummaryPort`; prompt/policy/algorithms live only in capabilities; session compact **E4** keys and Session persistence are not in capabilities (they stay on the context / session path). Config keys: `summary` / `models.level.mini` / `documents.*`.
 
 ### 3.3 Security
 

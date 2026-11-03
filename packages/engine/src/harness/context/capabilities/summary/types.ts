@@ -147,8 +147,6 @@ export interface ResolveSummaryModelInput {
   providers: Map<string, ModelProvider>;
   levelMap?: Record<string, { primary: string; fallback?: string[] }>;
   fallbackProvider?: ModelProvider;
-  /** config.contextEngine.summaryModel 兼容键 */
-  legacySummaryModel?: string;
   /** config.summary.model 显式 */
   explicitModel?: string;
   /** config.summary.modelLevel，默认 'mini' */
@@ -161,14 +159,13 @@ export interface ResolveSummaryModelInput {
 export interface ResolvedSummaryModel {
   provider: ModelProvider;
   model?: string;
-  from: 'policy.model' | 'policy.modelLevel' | 'explicit' | 'level' | 'legacy' | 'mini' | 'standard' | 'fallback';
+  from: 'policy.model' | 'policy.modelLevel' | 'explicit' | 'level' | 'mini' | 'standard' | 'fallback';
 }
 
 export interface CreateSummaryPortOptions {
   providers: Map<string, ModelProvider>;
   levelMap?: Record<string, { primary: string; fallback?: string[] }>;
   fallbackProvider: ModelProvider;
-  legacySummaryModel?: string;
   model?: string;
   modelLevel?: string;
   /** 整策略替换（同 id 全量覆盖） */

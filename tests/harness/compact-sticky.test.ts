@@ -238,12 +238,13 @@ describe('审查修复：粘滞增量 / isMidTurn 注入 / 空丢弃', () => {
   });
 });
 
-describe('审查 P2 红线补测', () => {
-  it('error 字段永不打码（HybridCompressor）', async () => {
-    const { HybridCompressor } = await import(
-      '@octopi-agent/engine/harness/context/hybrid-compressor.js'
+describe('审查 P2 红线补测（机械降级阶梯）', () => {
+  it('error 字段永不打码（B′：error 可追溯性优先）', async () => {
+    const { maskFatToolResults, TOOL_RESULT_PLACEHOLDER } = await import(
+      '@octopi-agent/engine/harness/context/capabilities/compact/mechanical.js'
     );
     const err = 'E_FILE_NOT_FOUND: missing /x.ts at line 3 ' + 'e'.repeat(400);
+    // error 结果位于最后 tool_call 之前 → 进入打码判据（旧结果），但 error 永不打码
     const messages: Message[] = [
       userMsg('t'),
       {
@@ -252,56 +253,51 @@ describe('审查 P2 红线补测', () => {
         timestamp: Date.now(),
         toolResults: [{ toolCallId: 'c1', name: 'file_read', result: null, error: err }],
       },
+      userMsg('t2'),
+      {
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        toolCalls: [{ id: 'c2', name: 'probe', arguments: {} }],
+      },
+      {
+        role: 'tool',
+        content: '',
+        timestamp: Date.now(),
+        toolResults: [{ toolCallId: 'c2', name: 'probe', result: 'ok' }],
+      },
     ];
-    const out = await new HybridCompressor().compress({
-      messages,
-      targetTokens: 1,
-      tokenEstimator: new (await import(
-        '@octopi-agent/engine/harness/context/token-estimator.js'
-      )).HeuristicTokenEstimator(),
-      // 不传 summarize：走机械/截断路径
-    });
-    const text = JSON.stringify(out.result);
+    const { result, maskedCount } = maskFatToolResults(messages);
+    const text = JSON.stringify(result);
     expect(text).toContain('E_FILE_NOT_FOUND');
-    expect(text).not.toContain('archived in session log');
+    expect(text).not.toContain(TOOL_RESULT_PLACEHOLDER);
+    expect(maskedCount).toBe(0);
   });
 
-  it('n≤6 时不插假「0 removed」通知', async () => {
-    const { LLMSummaryCompressor } = await import(
-      '@octopi-agent/engine/harness/context/llm-summarizer.js'
-    );
-    const { HeuristicTokenEstimator } = await import(
-      '@octopi-agent/engine/harness/context/token-estimator.js'
+  it('n≤floor 时不插假「0 removed」通知', async () => {
+    const { ledgerTruncate } = await import(
+      '@octopi-agent/engine/harness/context/capabilities/compact/mechanical.js'
     );
     const messages: Message[] = [userMsg('a'), userMsg('b'), userMsg('c')];
-    // 无 summarize → fallbackTruncate
-    const out = await new LLMSummaryCompressor().compress({
-      messages,
-      targetTokens: 1,
-      tokenEstimator: new HeuristicTokenEstimator(),
-    });
-    expect(out.result).toHaveLength(3);
-    expect(out.result.every((m) => !String(m.content).includes('0 earlier messages removed'))).toBe(
+    const { result, droppedCount } = ledgerTruncate(messages, { targetTokens: 1 });
+    expect(droppedCount).toBe(0);
+    expect(result).toHaveLength(3);
+    expect(result.every((m) => !String(m.content).includes('0 earlier messages removed'))).toBe(
       true,
     );
   });
 
-  it('fallbackTruncate 是 middle 替换体：不携带外层 head/tail 形状', async () => {
-    const { LLMSummaryCompressor } = await import(
-      '@octopi-agent/engine/harness/context/llm-summarizer.js'
-    );
-    const { HeuristicTokenEstimator } = await import(
-      '@octopi-agent/engine/harness/context/token-estimator.js'
+  it('账本截断是 middle 替换体：说明 + 近尾，不携带外层 head 形状', async () => {
+    const { ledgerTruncate } = await import(
+      '@octopi-agent/engine/harness/context/capabilities/compact/mechanical.js'
     );
     const messages: Message[] = [];
     for (let i = 0; i < 20; i++) messages.push(userMsg(`m-${i} ` + 'x'.repeat(80)));
-    const out = await new LLMSummaryCompressor().compress({
-      messages,
-      targetTokens: 50,
-      tokenEstimator: new HeuristicTokenEstimator(),
-    });
-    // 形状：一条截断/账本说明 + 近尾；不是把 messages[0] 当外层 head 保留
-    expect(out.result[0]?.metadata?.source).toBe('contextSummary');
-    expect(String(out.result[0]?.content)).toContain('Context truncated');
+    const { result } = ledgerTruncate(messages, { targetTokens: 50 });
+    // 形状：一条账本说明 + 近尾；不是把 messages[0] 当外层 head 保留
+    expect(result[0]?.metadata?.source).toBe('contextSummary');
+    expect(String(result[0]?.content)).toContain('Context truncated');
+    expect(result.some((m) => String(m.content).startsWith('m-19'))).toBe(true);
+    expect(result.some((m) => String(m.content).startsWith('m-0 '))).toBe(false);
   });
 });

@@ -596,7 +596,7 @@ export function applySessionStore(raw: RawObject): boolean {
 // ── CFG011：v0.98.16 删除的无消费方配置键 ──
 
 /**
- * v0.98.16 从 schema 删除的键（决定不做 / 已被取代）
+ * 从 schema 删除的键（决定不做 / 已被取代；v0.98.16 起持续登记，v0.98.21 增补）
  *
  * `session` 改为显式 schema、`gateway` 本就是 `.strict()`——存量配置若仍带这些键，
  * 校验会直接失败（strict 段）或变成 typo 告警（session）。迁移把它们原样收进
@@ -608,7 +608,13 @@ const REMOVED_KEY_PATHS: ReadonlyArray<readonly [string, string]> = [
   ['session', 'maintenance'],
   ['models', 'mode'],
   ['gateway', 'debugRest'],
+  ['contextEngine', 'summaryModel'], // v0.98.21
 ];
+
+/**
+ * v0.98.21 起支持整段删除（段无可枚举子键，整段搬移）：`compact`
+ */
+const REMOVED_SECTIONS: ReadonlyArray<string> = ['compact'];
 
 /**
  * 收集 raw 中仍存在的删除键路径
@@ -623,11 +629,16 @@ function findRemovedKeys(raw: RawObject): string[] {
       hits.push(`${section}.${key}`);
     }
   }
+  for (const section of REMOVED_SECTIONS) {
+    if (section in raw) {
+      hits.push(section);
+    }
+  }
   return hits;
 }
 
 /**
- * 检测 v0.98.16 删除键
+ * 检测已删除配置键（键与整段）
  *
  * @param raw - 配置对象
  * @returns finding 或 null
@@ -638,7 +649,7 @@ export function detectRemovedKeys(raw: RawObject): MigrationFinding | null {
   return {
     id: 'CFG011',
     severity: 'warn',
-    message: `${hits.join(', ')} removed in v0.98.16 (never took effect / superseded)`,
+    message: `${hits.join(', ')} removed (never took effect / superseded; see docs/KNOWN-ISSUES.md)`,
     hint: 'delete them, or run `octopi doctor --fix` to move them into _legacy',
     autoFixable: true,
   };
@@ -658,6 +669,12 @@ export function applyRemovedKeys(raw: RawObject): boolean {
   if (!isPlainObject(legacy.removedKeys)) legacy.removedKeys = {};
   const bucket = legacy.removedKeys as RawObject;
   for (const path of hits) {
+    if (!path.includes('.')) {
+      // 整段删除（REMOVED_SECTIONS）：原段整体入桶
+      if (!(path in bucket)) bucket[path] = raw[path];
+      delete raw[path];
+      continue;
+    }
     const [section, key] = path.split('.') as [string, string];
     const from = raw[section] as RawObject;
     if (!isPlainObject(bucket[path])) bucket[path] = from[key];

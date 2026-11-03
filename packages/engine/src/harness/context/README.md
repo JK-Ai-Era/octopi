@@ -21,10 +21,9 @@
 - `summarize.ts` — 摘要 provider 挑选（`models.level.mini` → standard → 主模型）；Builder/config 自动挂 `createProviderSummarize`
 
 ### 窗口管理
-- DefaultContextEngine — 消息窗口入口（预算 → 选择 → 路由 → 压缩）；内部状态键默认含 **agentId**（E4）；`structuralCompact` **委托** `capabilities/compact`
-- SmartRouter — 路由决策（fits / truncate / compact）
+- DefaultContextEngine — 消息窗口入口（预算 → 选择 → 路由 → 压缩）；内部状态键默认含 **agentId**（E4）；压缩执行（手动/proactive/overflow）**统一委托** `capabilities/compact`
+- SmartRouter — 路由决策（fits / compact；B′ 后「只打码不摘要」路由已删）
 - DefaultMessageSelector — 四区域消息选择
-- HybridCompressor — 混合压缩（工具截断 + LLM 摘要 + 截断兜底）；proactive 路径仍可用
 - HeuristicTokenEstimator — 启发式 Token 估算
 - **compact-key.ts** — `compactStateKey(sessionId, agentId)`（宪法 E4）
 
@@ -52,7 +51,6 @@
 - default-context-engine.ts — 消息窗口引擎（E4 状态；结构压缩委托 capabilities）
 - smart-router.ts — 智能路由
 - message-selector.ts — 四区域选择
-- hybrid-compressor.ts / llm-summarizer.ts / truncate-compressor.ts — 会话路径压缩组件
 - budget-allocator.ts — 消息侧 Token 预算分配
 - token-estimator.ts / token-estimate-fns.ts / token-constants.ts — 估算（跨域经 `context/index.ts` 门面；浏览器可直连 token 模块）
 - knowledge/ — Knowledge Tier 0 catalog 契约（见 `arch/knowledge-layer.md`）

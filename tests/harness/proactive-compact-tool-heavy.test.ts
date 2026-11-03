@@ -6,16 +6,15 @@
  * 摘要永远为空 → 复用分支永远进不去 → 每个 turn 都重裁并发非 cached 通知（UI 刷屏），
  * 且「LLM 摘要缓解长会话失忆」的产品目标静默落空。
  *
- * 本文件走真实连线（真实 DefaultContextEngine + 真实 HybridCompressor + 工具输出密集历史），
- * 只 stub 外部 LLM（summarize）。对照组先证明「机械截断达标时压缩器直接返回、无摘要」
- * （即缺陷触发面），再证明修复后：机械截断达标也产出语义摘要，且后续 assemble 走复用分支。
+ * 本文件走真实连线（真实 DefaultContextEngine + 真实 compact 能力管道 + 工具输出密集历史），
+ * 只 stub 外部 LLM（summarize）。原「对照组」（HybridCompressor 机械短路直接返回、无摘要）
+ * 的缺陷触发面已随压缩器三件套退休（P2）而结构性消失（structure_only 恒到摘要级）；
+ * 保留的连线钉子证明：机械截断达标也产出语义摘要，且后续 assemble 走复用分支。
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import type { Message } from '@octopi-agent/core/types.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
-import { HybridCompressor } from '@octopi-agent/engine/harness/context/hybrid-compressor.js';
-import { HeuristicTokenEstimator } from '@octopi-agent/engine/harness/context/token-estimator.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
@@ -88,21 +87,6 @@ function assertToolPairsAligned(
 }
 
 describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
-  it('对照：旧工具输出截断达标时压缩器直接返回且无摘要消息（缺陷触发面）', async () => {
-    const compressor = new HybridCompressor();
-    const middle = buildToolHeavyHistory(10, 5_000).slice(2, -4);
-    const out = await compressor.compress({
-      messages: middle,
-      targetTokens: 4_200,
-      tokenEstimator: new HeuristicTokenEstimator(),
-    });
-    // 机械截断已达标 → 一级短路：压缩发生了，但结果里没有任何摘要消息
-    expect(out.result.length).toBeGreaterThan(0);
-    expect(out.result.some((m) => m.metadata?.source === 'contextSummary')).toBe(false);
-    // 未传 summarize 时同样不产出摘要：requireSummary 前的旧路径就是这样静默跳过摘要级
-    expect(out.droppedSummary).toBe('Old tool outputs truncated');
-  });
-
   it('机械截断达标也产出语义摘要；后续小增量走复用分支不再重裁（B + A）', async () => {
     const summarize = vi.fn(async (_messages: Array<{ content?: unknown }>, _options?: unknown) => '## Conversation Summary\nproactive-summary');
     const engine = new DefaultContextEngine({

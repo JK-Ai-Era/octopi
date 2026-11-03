@@ -177,11 +177,13 @@ describe('Runner.compactSession lock (D1)', () => {
           tokensBefore: 10,
           tokensAfter: 4,
           summary: 'compacted-sum',
+          summarizeAttempted: true,
+          view: [],
         };
       },
     });
 
-    await Promise.all([handlePromise, compactPromise]);
+    const [, compactResult] = await Promise.all([handlePromise, compactPromise]);
 
     const runEnd = order.indexOf('run:end');
     const compactIdx = order.indexOf('compact');
@@ -190,6 +192,9 @@ describe('Runner.compactSession lock (D1)', () => {
 
     const sess = await store.load('s-lock');
     expect(sess?.contextCompacts?.a1?.summary).toBe('compacted-sum');
+    // 传输投影钉（P3）：view 不过锁面——mock 带 view，锁面结果必须剥离
+    expect('view' in compactResult).toBe(false);
+    expect(compactResult.summary).toBe('compacted-sum');
   });
 
   it('missing session returns structured failure under lock', async () => {
@@ -201,6 +206,8 @@ describe('Runner.compactSession lock (D1)', () => {
         ok: true,
         compacted: true,
         tokensBefore: 0,
+        summarizeAttempted: false,
+        view: [],
       }),
     });
     expect(result.ok).toBe(false);

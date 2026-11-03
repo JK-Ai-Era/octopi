@@ -40,16 +40,12 @@ export type {
   AssembleParams,
   AssembleResult,
   IngestParams,
-  CompactResult,
   AfterTurnParams,
   TokenEstimator,
   SummarizeFunction,
   MessageSelector,
   SelectResult,
   SelectOptions,
-  Compressor,
-  CompressParams,
-  CompressResult,
   BudgetAllocator,
   BudgetAllocateParams,
   BudgetAllocateResult,
@@ -192,9 +188,6 @@ export { DefaultContextEngine } from './harness/context/default-context-engine.j
 export type { DefaultContextEngineConfig } from './harness/context/default-context-engine.js';
 export { HeuristicTokenEstimator, estimateTextTokens } from './harness/context/index.js';
 export { DefaultMessageSelector } from './harness/context/message-selector.js';
-export { TruncateCompressor } from './harness/context/truncate-compressor.js';
-export { LLMSummaryCompressor } from './harness/context/llm-summarizer.js';
-export { HybridCompressor } from './harness/context/hybrid-compressor.js';
 export { DefaultBudgetAllocator } from './harness/context/budget-allocator.js';
 export { SmartRouter } from './harness/context/smart-router.js';
 export type { SmartRouterConfig, Route, RoutingDecision } from './harness/context/smart-router.js';
@@ -266,7 +259,8 @@ export type {
 } from './harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
 export { createSummaryPort, applyToolOutputGate, createCompactEngine } from './harness/context/capabilities/index.js';
 export { createDefaultDocumentPort, createDocumentPortFromConfig, DocumentExtractError } from './harness/capabilities/document/index.js';
-export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine } from './harness/context/capabilities/index.js';
+export type { SummaryPort, SummaryPolicy, ContentUnit, ToolSummarySupport, CompactEngine, CompactOutcome, CompactTransportOutcome } from './harness/context/capabilities/index.js';
+export { toCompactTransport } from './harness/context/capabilities/compact/types.js';
 export type { DocumentPort, ExtractResult, ExtractSource } from './harness/capabilities/document/index.js';
 export type { ToolSet, ToolSetConfig } from './harness/extension/plugin-ecosystem/tools/tool-set.js';
 export { createWebSearchTool } from './harness/extension/plugin-ecosystem/tools/web-search.js';
