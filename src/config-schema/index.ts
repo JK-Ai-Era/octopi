@@ -33,7 +33,6 @@ export {
   RunGuardJsonConfigSchema,
 } from '@octopi-agent/engine/config-schema/run.js';
 export {
-  CompactCapabilityConfigSchema,
   ConstitutionConfigSchema,
   ContextAssemblerConfigSchema,
   ContextEngineConfigSchema,

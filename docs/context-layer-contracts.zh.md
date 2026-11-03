@@ -149,7 +149,7 @@ Runner.handle
 
 - Builder `build()` 默认挂 Assembler；装配失败回退旧字符串拼接  
 - 未显式 `.summarize()` 时，Builder 用主模型自动挂 `createProviderSummarize`  
-- `config-bridge` / capabilities 解析链：**`models.level.mini`**（可用 `summary.modelLevel` 覆盖）→ `contextEngine.summaryModel` → mini → standard → 主模型  
+- `config-bridge` / capabilities 解析链：`summary.model`（显式，先命中；legacy 的 `contextEngine.summaryModel` 已于 v0.98.21 移除）→ `models.level.<summary.modelLevel | mini>` → mini → standard → 主模型（附着 policy 时 policy 级 model/level 覆盖优先）  
 - 可用 `.disableAutoSummarize()` 关闭自动摘要  
 - **Skill**：`skillDirectory` 或 `home/skills` 在 build 时 discover（设置 `agents[].skills` 时按清单过滤），每轮注入 `<available_skills>`  
 - **Memory 召回**：`builder.memoryStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`。**Knowledge**：system 只注入 catalog（`builder.knowledgeCatalog`）；catalog 为**标签化** `id/name/type/status/scale/location` + `purpose`/`topics`；源/索引/外源 ingest 见 `docs/knowledge.md`
@@ -160,7 +160,7 @@ Runner.handle
   - **工具 L1/L2**：决策在 tools 端；L1 `maxReturnChars` 硬顶始终生效；L2 经 SummaryPort；`summarize=off` 仍 L1；`file_read`+code 默认不 L2
   - **CompactEngine**：调用方可指定头尾条数 / 目标 token / 模式；`DefaultContextEngine.structuralCompact` **委托**该引擎；**E4 状态仍只在 ContextEngine / Session 路径**
   - **structured_json**：L0 解析 + L1 `fields`/`fieldTypes` 轻量契约（`structuredError`）；完整 Schema 可选端口
-  - 配置：`summary` / `compact`；示例见 `octopi.example.json`；内部设计规格（不对外）
+  - 配置：`summary` / `models.level.mini`；内部设计规格（不对外）
   - **P2 子系统包装暂缓**：当前消费方为 tools L1/L2 与会话 compact；出现旁路/事件批处理需求时再挂 `subsystems/content-summary|compact`
 - **跨域 Document 抽取**（`harness/capabilities/document`，非 Context 专用）：session 附件 / knowledge ingest / document 工具共用；唯一装配 `createDocumentPortFromConfig(documents.*)`。Context 层不直接持有 DocumentPort。
 

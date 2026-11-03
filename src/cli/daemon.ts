@@ -1106,7 +1106,6 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         providers: providerMap,
         levelMap: config.models?.level,
         fallbackProvider: fallback,
-        legacySummaryModel: config.contextEngine?.summaryModel,
         model: summaryCfg?.model,
         modelLevel: summaryCfg?.modelLevel,
         gate: summaryCfg?.gate,

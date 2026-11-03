@@ -50,7 +50,6 @@ export const ContextEngineConfigSchema = z.object({
   outputRatio: z.number().min(0).max(1).optional(),
   minOutputReserve: z.number().positive().optional(),
   maxOutputReserve: z.number().positive().optional(),
-  summaryModel: z.string().optional(),
 }).refine(
   (data) => {
     if (data.minOutputReserve !== undefined && data.maxOutputReserve !== undefined) {
@@ -126,14 +125,6 @@ export const SummaryConfigSchema = z.object({
       maxEntries: z.number().int().positive().optional(),
     })
     .optional(),
-});
-
-/** 公用能力：compact 缺省（会话路径仍可用 contextEngine 键） */
-export const CompactCapabilityConfigSchema = z.object({
-  defaultProtectHead: z.number().int().nonnegative().optional(),
-  defaultProtectTail: z.number().int().nonnegative().optional(),
-  defaultTargetTokens: z.number().int().positive().optional(),
-  defaultMode: z.enum(['structure_only', 'summary_only', 'head_tail_only', 'auto']).optional(),
 });
 
 /** 公用能力：documents（DocumentPort 读抽取） */

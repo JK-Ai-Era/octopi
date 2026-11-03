@@ -148,7 +148,7 @@ Runner.handle
 
 - Builder `build()` mounts the Assembler by default; assembly failure falls back to the old string concatenation
 - Without an explicit `.summarize()`, the Builder auto-mounts `createProviderSummarize` with the primary model
-- `config-bridge` / capabilities resolution chain: **`models.level.mini`** (overridable via `summary.modelLevel`) → `contextEngine.summaryModel` → mini → standard → primary model
+- `config-bridge` / capabilities resolution chain: `summary.model` (explicit, wins first; legacy `contextEngine.summaryModel` removed v0.98.21) → `models.level.<summary.modelLevel | mini>` → mini → standard → primary model (policy-level model/level overrides take precedence when a policy is attached)
 - Auto-summarize can be disabled with `.disableAutoSummarize()`
 - **Skill**: `skillDirectory` or `home/skills` is discovered at build time (restricted by the `agents[].skills` allowlist when set); every turn injects `<available_skills>`
 - **Memory recall**: `builder.memoryStore`; config-bridge and Gateway build a `SqliteMemoryStore` from `home/agent.db`. **Knowledge**: system only injects the catalog (`builder.knowledgeCatalog`); the catalog is **tagged** `id/name/type/status/scale/location` + `purpose`/`topics`; sources/indexes/exogenous ingest see `docs/knowledge.md`
@@ -159,7 +159,7 @@ Runner.handle
   - **Tool L1/L2**: decisions live on the tools side; L1 `maxReturnChars` hard cap always applies; L2 goes through SummaryPort; `summarize=off` still L1; `file_read`+code defaults to no L2
   - **CompactEngine**: callers may specify head/tail counts / target token / mode; `DefaultContextEngine.structuralCompact` **delegates** to this engine; **E4 state still lives only on the ContextEngine / Session path**
   - **structured_json**: L0 parse + L1 lightweight contract `fields`/`fieldTypes` (`structuredError`); full Schema is an optional port
-  - Config: `summary` / `compact`; examples in `octopi.example.json`; internal design specs (not public)
+  - Config: `summary` / `models.level.mini`; internal design specs (not public)
   - **P2 subsystem wrapping deferred**: current consumers are tools L1/L2 and session compact; mount `subsystems/content-summary|compact` when bypass/event-batch needs appear
 - **Cross-domain Document extraction** (`harness/capabilities/document`, not Context-specific): shared by session attachments / knowledge ingest / document tools; sole assembly `createDocumentPortFromConfig(documents.*)`. Context layers do not hold DocumentPort directly.
 

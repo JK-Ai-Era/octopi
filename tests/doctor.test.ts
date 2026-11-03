@@ -203,6 +203,27 @@ describe('config-migrations', () => {
     expect(detectConfigMigrations(raw).some((f) => f.id === 'CFG011')).toBe(false);
   });
 
+  it('moves v0.98.21 removed compact section and summaryModel into _legacy on apply (CFG011)', () => {
+    const raw: Record<string, unknown> = {
+      compact: { defaultProtectHead: 5, defaultProtectTail: 20 },
+      contextEngine: { summaryModel: 'gpt-4o-mini', protectFirstN: 2 },
+    };
+    const findings = detectConfigMigrations(raw);
+    const cfg011 = findings.find((f) => f.id === 'CFG011');
+    expect(cfg011?.autoFixable).toBe(true);
+    expect(cfg011?.message).toContain('contextEngine.summaryModel');
+    expect(cfg011?.message).toContain('compact');
+
+    applyConfigMigrations(raw);
+    expect(raw.compact).toBeUndefined();
+    expect((raw.contextEngine as Record<string, unknown>).summaryModel).toBeUndefined();
+    expect((raw.contextEngine as Record<string, unknown>).protectFirstN).toBe(2);
+    const bucket = (raw._legacy as any).removedKeys;
+    expect(bucket['compact']).toEqual({ defaultProtectHead: 5, defaultProtectTail: 20 });
+    expect(bucket['contextEngine.summaryModel']).toBe('gpt-4o-mini');
+    expect(detectConfigMigrations(raw).some((f) => f.id === 'CFG011')).toBe(false);
+  });
+
   it('v0.98.16 删除键在 doctor 里只报 CFG011，不再附带 ZOD Unrecognized key', async () => {
     const raw = {
       models: {

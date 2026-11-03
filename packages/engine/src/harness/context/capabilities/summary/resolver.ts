@@ -92,7 +92,7 @@ function parseProviderModel(ref: string): { provider: string; model: string } | 
 }
 
 /**
- * 解析摘要用 ModelProvider（priority: policy.model → policy.modelLevel → explicit → level（缺省 mini） → legacy → mini → standard → fallback）
+ * 解析摘要用 ModelProvider（priority: policy.model → policy.modelLevel → explicit → level（缺省 mini） → mini → standard → fallback）
  *
  * @param input - providers / levelMap / 显式与兼容配置
  * @returns 解析结果
@@ -136,11 +136,6 @@ export function resolveSummaryModel(input: ResolveSummaryModelInput): ResolvedSu
   const levelName = input.modelLevel ?? 'mini';
   const summaryLevel = pickLevel(levelName);
   if (summaryLevel) return { ...summaryLevel, from: 'level' };
-
-  if (input.legacySummaryModel) {
-    const r = tryModelRef(input.legacySummaryModel, 'legacy');
-    if (r) return r;
-  }
 
   const mini = pickLevel('mini');
   if (mini) return { ...mini, from: 'mini' };

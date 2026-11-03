@@ -1213,9 +1213,6 @@
         "maxOutputReserve": {
           "type": "number",
           "exclusiveMinimum": 0
-        },
-        "summaryModel": {
-          "type": "string"
         }
       }
     },
@@ -1367,35 +1364,6 @@
               "maximum": 9007199254740991
             }
           }
-        }
-      }
-    },
-    "compact": {
-      "type": "object",
-      "properties": {
-        "defaultProtectHead": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "defaultProtectTail": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "defaultTargetTokens": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
-        },
-        "defaultMode": {
-          "type": "string",
-          "enum": [
-            "structure_only",
-            "summary_only",
-            "head_tail_only",
-            "auto"
-          ]
         }
       }
     },

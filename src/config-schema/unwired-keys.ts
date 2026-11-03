@@ -17,8 +17,6 @@
 
 /** 路径前缀规则：命中该路径本身或其任意子键即报告一次（按规则路径去重） */
 const UNWIRED_PREFIXES: readonly string[] = [
-  // compact 能力级缺省（会话压缩实际读 contextEngine 键）
-  'compact',
   // 逐插件配置：穿过边界但 PluginLoader 不读
   'plugins.configs',
   // 附件注入/工具旋钮：gateway 只转发 fullTextMaxChars/intent/intentTimeoutMs/emptyMessagePrompt，

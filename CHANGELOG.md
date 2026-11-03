@@ -108,6 +108,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.21 (2026-11-03)
+
+### refactor(config)!: 退休 compact.* 配置段与 contextEngine.summaryModel（批一 P4 配置收口）
+
+**问题**：配置面漂移的两块死料。① `compact.*` 段（`defaultProtectHead`/`defaultProtectTail`/`defaultTargetTokens`/`defaultMode`）：声明在 schema 里却**从无消费方**——会话压缩读的是 `contextEngine.protectFirstN/protectLastN/targetTokens`，能力级缺省是引擎内置（`CreateCompactEngineOptions`），配置键纯属悬空面（unwired-keys 一直在告警）；② `contextEngine.summaryModel`：ContextEngine 重构期（v0.44.1 起）的兼容层，缺省 `models.level.mini` 档先命中使其**近乎永不生效**，却让人误以为可以换摘要模型——footgun。
+
+**清理（零兼容，直接退休）**：
+
+- **Q1**：删 `compact.*` 整段（Zod `CompactCapabilityConfigSchema`、config.ts 类型镜像与根字段、根 compose 重导出、unwired-keys 条目）。引擎能力缺省不受影响（`CreateCompactEngineOptions.defaultXxx` 是引擎 API 非配置键）。
+- **Q5**：删 `contextEngine.summaryModel` 全链——daemon `legacySummaryModel` 接线、summary 能力 `legacySummaryModel` 字段/透传、resolver `legacy` 解析分支、`ResolvedSummaryModel.from` 的 `'legacy'` 档。摘要模型解析链收敛为：`summary.model`（显式）→ `summary.modelLevel`/`models.level.mini` 档 → mini → standard → 主模型。
+
+**BREAKING**：配置里若写了 `compact` 段或 `contextEngine.summaryModel`——前者按未知键告警（`octopi doctor --fix` 移入 `_legacy`）；后者静默失效已多年、现从 schema 移除，**需要换摘要模型请用 `summary.model`（显式模型）或 `summary.modelLevel`（档位）**。`ResolvedSummaryModel.from` 移除 `'legacy'` 取值（枚举收窄）。
+
+**验证**：全量回归绿 + lint/typecheck 干净 + `generate:schema` 再生成（`octopi.schema.json` 双键消失）；CFG011 迁移登记（含 `compact` 整段搬移的新形态）——`octopi doctor --fix` 确会把两键移入 `_legacy.removedKeys`，doctor 测试新增 v0.98.21 用例。config-unwired-keys / config-gateway-top-level-mapping 守卫测试同步（block-rule 用例改用 `plugins.configs`）；KNOWN-ISSUES 双语按 models.mode（v0.98.16）先例记「键已删除」条目；context-layer-contracts 解析链措辞不再引用已删键（链序全量梳理归 P5）。
+
+---
+
 ## v0.98.20 (2026-11-03)
 
 ### refactor(engine): 切片手术迁入 capabilities/compact，修 head/tail 对齐缺口，CompactResult 收敛

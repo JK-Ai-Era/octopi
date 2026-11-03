@@ -12,7 +12,6 @@ import { detectUnwiredConfigKeys } from '../src/config-schema/unwired-keys.js';
 describe('detectUnwiredConfigKeys', () => {
   it('reports documented unwired keys (KNOWN-ISSUES tracking surface)', () => {
     const raw = {
-      compact: { defaultProtectHead: 5, defaultProtectTail: 20, defaultTargetTokens: 4000, defaultMode: 'auto' },
       plugins: { loadPaths: ['./p'], configs: { myplug: { a: 1 } } },
       knowledge: {
         attachments: {
@@ -23,7 +22,6 @@ describe('detectUnwiredConfigKeys', () => {
     };
     const detected = detectUnwiredConfigKeys(raw);
     for (const expected of [
-      'compact',
       'knowledge.attachments.inject.recallTopK',
       'knowledge.attachments.inject.inventory',
       'knowledge.attachments.tools.attachmentsRootReadOnly',
@@ -33,11 +31,13 @@ describe('detectUnwiredConfigKeys', () => {
     }
   });
 
-  it('no longer reports keys removed in v0.98.16', () => {
+  it('no longer reports keys removed in v0.98.16 / v0.98.21', () => {
     const raw = {
       models: { mode: 'replace' },
       gateway: { debugRest: true },
       session: { reset: { daily: true }, maintenance: { prune: true } },
+      compact: { defaultProtectHead: 5 },
+      contextEngine: { summaryModel: 'gpt-4o-mini' },
     };
     expect(detectUnwiredConfigKeys(raw)).toEqual([]);
   });
@@ -66,9 +66,9 @@ describe('detectUnwiredConfigKeys', () => {
 
   it('reports block rules once even with many nested keys', () => {
     const raw = {
-      compact: { defaultProtectHead: 1, defaultProtectTail: 2, defaultTargetTokens: 3 },
+      plugins: { configs: { myplug: { a: 1, b: 2, c: 3 } } },
     };
-    expect(detectUnwiredConfigKeys(raw)).toEqual(['compact']);
+    expect(detectUnwiredConfigKeys(raw)).toEqual(['plugins.configs']);
   });
 
   it('empty / non-object config reports nothing', () => {
