@@ -112,6 +112,10 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ## v0.98.25 (2026-11-04)
 
+### fix(engine): declare semver types for plugin compatibility
+
+The merged P1/P2 build initially exposed an undeclared `@types/semver` dependency for the Engine package's plugin compatibility check. Add the type-only development dependency to `packages/engine`; no runtime behavior or public plugin API changes.
+
 ### feat(plugins): deliver Plugin Tools through authorized Agent mounts
 
 Plugin Tools are now registered into per-Agent ToolBuses and only exposed to a model when that Agent's tool policy explicitly names the Tool or uses `*`. Plugin Tools do not inherit Builtin's empty-allow behavior; `deny` wins at both projection and execution. Same-name registration against Builtin or another Agent Tool fails loudly instead of silently shadowing. Builtin's existing empty-allow behavior is unchanged.
