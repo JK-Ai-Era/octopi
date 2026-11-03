@@ -111,5 +111,8 @@
     "llm",
     "octopi",
     "harness"
-  ]
+  ],
+  "devDependencies": {
+    "@types/semver": "^7.8.0"
+  }
 }
