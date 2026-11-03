@@ -81,7 +81,7 @@ npx vitest run -t "SecurityGuard"
 | 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor、ContextLayer/Assembler、主动摘要 |
 | 公用能力 capabilities | SummaryPort/L1L2/structured/oversized、CompactEngine、tools 接线（`tests/harness/context/capabilities/`） |
 | 会话任务 / 过程监督 | SessionTaskService、task_* 工具、DefaultRunGuard |
-| Plugin 系统 | PluginManager、HookRegistry、CapabilityRegistry |
+| Plugin 系统 | Manifest-first Loader、贡献注册表、PluginManager Hook |
 | Skill 管理 | SkillManager 两阶段加载 |
 | 工具系统 | ToolRegistry、工具版本管理 |
 | 自主子系统 | SubsystemRuntime、SenseEngine、ThinkExecutor、SignalBus |
@@ -162,7 +162,7 @@ Plugin 目录结构：
 ```
 my-plugin/
 ├── octopi.plugin.json   ← manifest
-└── index.ts             ← 入口（definePluginEntry）
+└── index.ts             ← 入口（definePlugin）
 ```
 
 详见 [Plugin 系统文档](plugin-system.zh.md)。

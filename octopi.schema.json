@@ -841,20 +841,42 @@
             "type": "string"
           }
         },
-        "configs": {
+        "allowList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "entries": {
           "type": "object",
           "propertyNames": {
             "type": "string"
           },
           "additionalProperties": {
             "type": "object",
-            "propertyNames": {
-              "type": "string"
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "config": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
             },
-            "additionalProperties": {}
+            "additionalProperties": false
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "budgetPolicy": {
       "type": "object",

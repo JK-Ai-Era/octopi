@@ -522,9 +522,12 @@ export class Gateway {
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
     this.dmScope = config.session?.dmScope ?? 'main';
-    this.pluginManager = new PluginManager(
-      config.plugins?.loadPaths ? { loadPaths: config.plugins.loadPaths } : undefined,
-    );
+    this.pluginManager = new PluginManager({
+      loadPaths: config.plugins?.loadPaths ?? [],
+      ...(config.plugins?.allowList === undefined ? {} : { allowList: config.plugins.allowList }),
+      ...(config.plugins?.blockList === undefined ? {} : { blockList: config.plugins.blockList }),
+      ...(config.plugins?.entries === undefined ? {} : { entries: config.plugins.entries }),
+    });
     this.sessionAcl = new SessionAclService(config.sessionAcl);
     this.sessionLease = new InProcessSessionLock();
     this.issueRegistry = new IssueRegistry();
@@ -865,6 +868,12 @@ export class Gateway {
             ? `[Gateway] plugins loaded: ${loaded.map((p) => p.id).join(', ')}`
             : '[Gateway] plugins loaded: (none)',
         );
+        for (const diagnostic of this.pluginManager.getDiagnostics()) {
+          if (diagnostic.status === 'registered') continue;
+          console.warn(
+            `[Gateway] plugin ${diagnostic.id} ${diagnostic.status} at ${diagnostic.stage}: ${diagnostic.reason}`,
+          );
+        }
       } catch (err) {
         // 吞掉发现期错误（单个插件坏包不阻断网关启动）；保留 warn 与插件名定位，
         // pluginsDiscovered 不置位，下次 start 可重试

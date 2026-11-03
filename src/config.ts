@@ -14,7 +14,7 @@ import type {
 } from '@octopi-agent/engine/config.js';
 import { flattenModels, resolveModelConfig } from '@octopi-agent/engine/config.js';
 import { validateConfigOrThrow } from './config-schema.js';
-import { applyLegacyBudget, applyRemovedAttachmentKeys, applyRemovedKeys, detectConfigMigrations } from './config-migrations.js';
+import { applyLegacyBudget, applyLegacyPluginConfigs, applyRemovedAttachmentKeys, applyRemovedKeys, detectConfigMigrations } from './config-migrations.js';
 import { detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
 import { detectUnwiredConfigKeys } from './config-schema/unwired-keys.js';
 import { expandEnvPlaceholders as expandEnvPlaceholdersShared } from '@octopi-agent/engine/config-admin/env.js';
@@ -58,6 +58,8 @@ export function applyConfigMigrations(raw: Record<string, unknown>): void {
   applyRemovedKeys(raw);
   // v0.98.18 附件配置收口：废弃键原值保留在 _legacy，运行时不落盘。
   applyRemovedAttachmentKeys(raw);
+  // Legacy business config was not wired; preserve explicit disable without inventing enablement.
+  applyLegacyPluginConfigs(raw);
 }
 
 /**

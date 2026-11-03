@@ -195,14 +195,14 @@ export type { SmartRouterConfig, Route, RoutingDecision } from './harness/contex
 export { CapabilityEnforcer, PluginTrustLevel } from './harness/governance/security/capability-enforcer.js';
 
 export { PluginManager } from './harness/extension/plugin-ecosystem/plugins/manager.js';
-export { definePluginEntry, defineChannelPluginEntry } from './harness/extension/plugin-ecosystem/plugins/entry.js';
-export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './harness/extension/plugin-ecosystem/plugins/entry.js';
+export { definePlugin } from './harness/extension/plugin-ecosystem/plugins/entry.js';
+export type { OctopiPluginDefinition } from './harness/extension/plugin-ecosystem/plugins/entry.js';
 export { PluginApi } from './harness/extension/plugin-ecosystem/plugins/api.js';
 export { PluginLoader } from './harness/extension/plugin-ecosystem/plugins/loader.js';
-export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './harness/extension/plugin-ecosystem/plugins/loader.js';
-export { CapabilityRegistry } from './harness/extension/plugin-ecosystem/plugins/capability.js';
-export { validateManifest, parseManifest } from './harness/extension/plugin-ecosystem/plugins/manifest.js';
-export type { PluginManifest, PluginContracts, ActivationConfig } from './harness/extension/plugin-ecosystem/plugins/manifest.js';
+export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig, PluginDiagnostic } from './harness/extension/plugin-ecosystem/plugins/loader.js';
+export { PluginContributionRegistry } from './harness/extension/plugin-ecosystem/plugins/contribution-registry.js';
+export { validateManifest, parseManifest, validatePluginConfig, PLUGIN_API_VERSION } from './harness/extension/plugin-ecosystem/plugins/manifest.js';
+export type { PluginManifest, PluginContributions, PluginHookName, PluginSessionOpName } from './harness/extension/plugin-ecosystem/plugins/manifest.js';
 
 export { DefaultSkillManager, FileSystemSkillSource } from './harness/extension/plugin-ecosystem/skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './harness/extension/plugin-ecosystem/skills/manager.js';

@@ -93,6 +93,18 @@
     }
   },
 
+  "plugins": {
+    "loadPaths": ["~/.octopi/plugins"],
+    "entries": {
+      "acme.search": {
+        "enabled": true,
+        "config": {
+          "region": "cn"
+        }
+      }
+    }
+  },
+
   "documents": {
     "extract": {
       "enabled": true,

@@ -259,8 +259,15 @@ export interface SessionConfig {
 export interface PluginConfig {
   /** Plugin 目录扫描路径 */
   loadPaths?: string[];
-  /** 单个 plugin 的配置（plugin id → config） */
-  configs?: Record<string, Record<string, unknown>>;
+  /** 宿主允许的插件 ID；未配置 = 不限制 */
+  allowList?: string[];
+  /** 宿主明确阻止的插件 ID，优先于其他启用决策 */
+  blockList?: string[];
+  /** 插件启停与业务配置；单纯存在 config 不代表启用 */
+  entries?: Record<string, {
+    enabled?: boolean;
+    config?: Record<string, unknown>;
+  }>;
 }
 
 

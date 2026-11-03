@@ -35,17 +35,9 @@
       "types": "./dist/harness/extension/plugin-ecosystem/plugins/manifest.d.ts",
       "import": "./dist/harness/extension/plugin-ecosystem/plugins/manifest.js"
     },
-    "./plugin-sdk/capability": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/capability.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/capability.js"
-    },
-    "./plugin-sdk/loader": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/loader.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/loader.js"
-    },
-    "./plugin-sdk/manager": {
-      "types": "./dist/harness/extension/plugin-ecosystem/plugins/manager.d.ts",
-      "import": "./dist/harness/extension/plugin-ecosystem/plugins/manager.js"
+    "./plugin-sdk": {
+      "types": "./dist/harness/extension/plugin-ecosystem/plugins/index.d.ts",
+      "import": "./dist/harness/extension/plugin-ecosystem/plugins/index.js"
     },
     "./package.json": "./package.json",
     "./harness/*": {
@@ -85,7 +77,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@octopi-agent/core": "0.98.24",
+    "ajv": "^8.20.0",
     "js-yaml": "^4.3.2",
+    "semver": "^7.8.6",
     "undici": "^8.12.3",
     "web-tree-sitter": "^0.27.1",
     "zod": "^4.4.3"

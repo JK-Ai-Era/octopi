@@ -214,6 +214,21 @@ describe('安全配置指纹与漂移（§8.4）', () => {
     security: { enforce: 'block' as const },
   };
 
+  it('插件加载授权与启停变化进入指纹，业务配置不以明文回显', () => {
+    const original = computeSecurityConfigFingerprint({
+      plugins: { loadPaths: ['/plugins'], allowList: ['a'], entries: { a: { enabled: true, config: { secret: 'not-in-fields' } } } },
+    });
+    const disabled = computeSecurityConfigFingerprint({
+      plugins: { loadPaths: ['/plugins'], allowList: ['a'], entries: { a: { enabled: false, config: { secret: 'not-in-fields' } } } },
+    });
+    const blocked = computeSecurityConfigFingerprint({
+      plugins: { loadPaths: ['/plugins'], allowList: ['a'], blockList: ['a'], entries: { a: { enabled: true } } },
+    });
+    expect(original.fingerprint).not.toBe(disabled.fingerprint);
+    expect(original.fingerprint).not.toBe(blocked.fingerprint);
+    expect(JSON.stringify(original.fields)).not.toContain('not-in-fields');
+  });
+
   it('指纹与键序无关；安全字段变化 → changed 精确到字段名', () => {
     const a = computeSecurityConfigFingerprint(baseSlice);
     const b = computeSecurityConfigFingerprint({

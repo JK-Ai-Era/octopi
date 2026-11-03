@@ -115,10 +115,26 @@ export function computeSecurityConfigFingerprint(config: {
     ...pickFields(config.effectPolicy ?? {}, EFFECT_POLICY_SECURITY_KEYS, 'effectPolicy.'),
     ...pickFields(config.security ?? {}, SECURITY_CONFIG_SECURITY_KEYS, 'security.'),
   };
-  // per-agent 覆盖与工具面/插件加载路径都是安全面（§8.4 补洞）
+  // per-agent 覆盖与工具面/插件加载授权都是安全面。
   if (config.agents !== undefined) fields['agents'] = config.agents;
   if (config.plugins !== undefined && Object.keys(config.plugins).length > 0) {
-    fields['plugins'] = pickFields(config.plugins, ['loadPaths'], 'plugins.');
+    const pluginFields = pickFields(config.plugins, ['loadPaths', 'allowList', 'blockList'], 'plugins.');
+    const entries = config.plugins.entries;
+    if (typeof entries === 'object' && entries !== null && !Array.isArray(entries)) {
+      const enabled: Record<string, unknown> = {};
+      for (const [id, entry] of Object.entries(entries)) {
+        if (typeof entry === 'object' && entry !== null && !Array.isArray(entry)) {
+          const value = (entry as Record<string, unknown>).enabled;
+          if (value !== undefined) enabled[id] = value;
+        }
+      }
+      pluginFields['plugins.entries.enabled'] = enabled;
+    }
+    // Business config is hashed, never copied into the diagnostic field projection.
+    if (config.plugins.configs !== undefined) {
+      pluginFields['plugins.legacyConfigsHash'] = createHash('sha256').update(stableStringify(config.plugins.configs)).digest('hex');
+    }
+    fields['plugins'] = pluginFields;
   }
   return {
     fingerprint: createHash('sha256').update(stableStringify(fields)).digest('hex'),

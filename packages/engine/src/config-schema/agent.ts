@@ -118,10 +118,24 @@ export const AgentConfigSchema = z.object({
     .optional(),
 });
 
-export const PluginConfigSchema = z.object({
-  loadPaths: z.array(z.string()).optional(),
-  configs: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
-});
+export const PluginConfigSchema = z
+  .object({
+    loadPaths: z.array(z.string()).optional(),
+    allowList: z.array(z.string()).optional(),
+    blockList: z.array(z.string()).optional(),
+    entries: z
+      .record(
+        z.string(),
+        z
+          .object({
+            enabled: z.boolean().optional(),
+            config: z.record(z.string(), z.unknown()).optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict();
 
 export const ChannelConfigSchema = z.object({
   type: z.string({ error: 'Channel must have a type' }).min(1),

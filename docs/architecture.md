@@ -378,9 +378,11 @@ The Loop layer only has the pure `agentLoop` function; do not hand-wire `runAgen
 
 Dual to tools/ (Agent function-call call surface); Command is **not** a top-level capability domain, and is **not** Human-in-the-Loop (HITL only does risk approval).
 
+Trusted in-process plugins are validated from their manifest before import. Staged Tool/Command/Hook contributions publish to a host-level registry only after registration and dependency checks succeed. That registry is distinct from per-Agent ToolBus mounting: contribution registration does not itself grant Agent visibility or execution authorization. See [Plugin System](./plugin-system.md) for the current P1 support boundary.
+
 ```
 harness/extension/plugin-ecosystem/
-├── plugins/              # PluginManager, HookRegistry, Loader
+├── plugins/              # Manifest-first Loader, ContributionRegistry, PluginManager
 ├── tools/                # ToolBus, BuiltinTools, web_search (Agent call surface)
 ├── skills/               # SkillManager (two-phase load; frontmatter.command → /name)
 ├── mcp/                  # McpManager, Bridge, Discovery

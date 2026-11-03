@@ -39,6 +39,7 @@ export {
 } from './turn.js';
 
 // ── 工具系统 ──
+export { TOOL_CAPABILITIES } from './tools.js';
 export type {
   ToolParameter,
   ToolDefinition,

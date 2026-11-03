@@ -81,7 +81,7 @@ npx vitest run -t "SecurityGuard"
 | Context management | ContextEngine, SmartRouter, MessageSelector, Compressor, ContextLayer/Assembler, proactive summary |
 | Shared capabilities | SummaryPort/L1L2/structured/oversized, CompactEngine, tools wiring (`tests/harness/context/capabilities/`) |
 | Session tasks / process supervision | SessionTaskService, task_* tools, DefaultRunGuard |
-| Plugin system | PluginManager, HookRegistry, CapabilityRegistry |
+| Plugin system | Manifest-first loader, contribution registry, PluginManager hooks |
 | Skill management | SkillManager two-phase loading |
 | Tool system | ToolRegistry, tool versioning |
 | Autonomous subsystem | SubsystemRuntime, SenseEngine, ThinkExecutor, SignalBus |
@@ -162,7 +162,7 @@ Plugin directory layout:
 ```
 my-plugin/
 ├── octopi.plugin.json   ← manifest
-└── index.ts             ← entry (definePluginEntry)
+└── index.ts             ← entry (definePlugin)
 ```
 
 See the [Plugin system docs](plugin-system.md).

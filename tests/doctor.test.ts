@@ -245,6 +245,21 @@ describe('config-migrations', () => {
     expect(detectConfigMigrations(raw).some((f) => f.id === 'CFG011')).toBe(false);
   });
 
+  it('moves legacy plugin business config without inventing enablement (CFG013)', () => {
+    const raw: Record<string, unknown> = {
+      plugins: { configs: { 'acme.search': { region: 'cn' } } },
+    };
+    expect(detectConfigMigrations(raw).some((finding) => finding.id === 'CFG013')).toBe(true);
+    applyConfigMigrations(raw);
+    expect(raw.plugins).toEqual({ entries: { 'acme.search': { config: { region: 'cn' } } } });
+    expect(detectConfigMigrations(raw).some((finding) => finding.id === 'CFG013')).toBe(false);
+
+    const conflict: Record<string, unknown> = {
+      plugins: { configs: { 'acme.search': {} }, entries: { 'acme.search': { enabled: true } } },
+    };
+    expect(() => applyConfigMigrations(conflict)).toThrow('CFG013');
+  });
+
   it('v0.98.16 删除键在 doctor 里只报 CFG011，不再附带 ZOD Unrecognized key', async () => {
     const raw = {
       models: {

@@ -210,6 +210,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 **BREAKING**：`Compressor`/`CompressParams`/`CompressResult`/`HybridCompressor`/`LLMSummaryCompressor`/`TruncateCompressor` 从 `@octopi-agent/engine` 导出面移除（deep import 在编译期即断）；`DefaultContextEngineConfig.compressor` 注入口删除（压缩执行注入口为 `compactEngine`）。`SmartRouter` 契约收窄：`Route = 'fits' | 'compact'`（三值收敛）、`evaluate(messages, messagesBudget)` 去掉 `hasSummarize` 参数（有无 summarize 改在执行管道内决定）、`RoutingDecision` 删 `toolResultReducibleChars`/`truncateOnlyThresholdChars` 字段、`SmartRouterConfig` 删两阈值字段。无平滑迁移——有意退休（拍板：不做兼容层）。
 
 **验证**：全量回归 3988 passed（391 files）+ lint 干净。行为钉随迁移落地：机械阶梯单测（打码/error 永不打码/账本截断对齐/阶梯顺序）、proactive-compact-tool-heavy（复用轮零 LLM、状态诚实、工具配对）、compact-sticky 三红线、context-task-snapshot（taskSnapshot 只随摘要请求走）、summarize-cache-prefix（llmPrefix 字节不变 + 预算语义）、compact-handover 五态锚（旧「双实现对照」用例随双管道消亡退役）。
+---
+
+## v0.98.23 (2026-11-03)
+
+### feat(plugins)!: establish the manifest-first v1 loading contract
+
+- **Manifest before code**: plugins require `apiVersion: "1"`, an explicit entry, an Octopi semver range, a restricted JSON Schema config, and declared Tool/Command/Hook contributions. Enablement, allow/block, entry realpath, config, engine compatibility, dependency failures, and declared conflicts settle before any plugin import. Legacy IDs resolve consistently for configuration, loading policy, and dependencies.
+- **Atomic effective contributions**: registration is private to the host loader, validated against the manifest, and published into a host-level contribution registry only after each plugin and its dependencies succeed. A failed plugin contributes no Tool, Command, or Hook; conflicting identities/capabilities never resolve by scan order. Per-Agent mounting and Command authorization remain separate later phases.
+- **Real configuration and migration**: `plugins.entries[id].enabled` is the sole per-plugin enable setting; config alone does not enable a plugin. `CFG013` migrates legacy `plugins.configs` to `entries.config` without inventing enablement, and load/doctor conflicts fail loudly. Gateway forwards the complete configuration; loadPaths, allow/block, and enabled state join the restart-sensitive security fingerprint without exposing business config.
+- **Smaller author surface**: `@octopi-agent/engine/plugin-sdk` exports `definePlugin`, Tool/Command/typed-Hook registration, validated config, logging, and ESM path resolution only. Host Loader/Manager/registry stay under harness exports. The scaffold now produces a compilable `src` → `dist` plugin; English/Chinese documentation distinguishes contribution registration from actual Tool/Command mounting.
+- **Verification**: manifest-first, dependency, alias, conflict, snapshot, and private-staging tests; full build/lint/Vitest; a real scaffold → TypeScript compile → author SDK → dist loader smoke test. Independent focused review found and led to fixes for pre-import dependency leakage and SDK/staging exposure.
+
+### refactor(plugins)!: retire undeclared and disconnected plugin surfaces
+
+**BREAKING**: `definePluginEntry`, `defineChannelPluginEntry`, `PluginApi` Provider/Channel/ContextEngine/media/service registration, `CapabilityRegistry`, and the non-operative seven-state `PluginLifecycleManager` are removed rather than maintained as false capability contracts. The `plugin-sdk/capability`, `plugin-sdk/loader`, and `plugin-sdk/manager` public subpaths are retired; host internals remain under harness paths. Existing 22 Hook names are retained for their later typed trigger work. Legacy `plugins.configs` uses CFG013; `enabledByDefault` defaults to true unless explicitly overridden.
+
+**BREAKING**: the old unversioned manifest/entry contract is rejected before import. Plugin authors must supply manifest v1 and use `definePlugin`; Tool contributions must use valid Core `ToolCapability` tags. No OpenClaw compatibility layer or in-process sandbox is introduced.
 
 ---
 

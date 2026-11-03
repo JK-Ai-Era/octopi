@@ -10,21 +10,13 @@ import { describe, it, expect } from 'vitest';
 import { detectUnwiredConfigKeys } from '../src/config-schema/unwired-keys.js';
 
 describe('detectUnwiredConfigKeys', () => {
-  it('reports documented unwired keys (KNOWN-ISSUES tracking surface)', () => {
+  it('reports no resolved compact or plugin config keys (v0.98.21 / v0.98.23)', () => {
     const raw = {
       plugins: { loadPaths: ['./p'], configs: { myplug: { a: 1 } } },
-      knowledge: {
-        attachments: {
-          inject: { recallTopK: 5 },
-        },
-      },
+      compact: { defaultProtectHead: 5, defaultProtectTail: 20 },
+      knowledge: { attachments: { inject: { recallTopK: 5 } } },
     };
-    const detected = detectUnwiredConfigKeys(raw);
-    for (const expected of [
-      'plugins.configs',
-    ]) {
-      expect(detected, `missing unwired report: ${expected}`).toContain(expected);
-    }
+    expect(detectUnwiredConfigKeys(raw)).toEqual([]);
   });
 
   it('no longer reports keys removed in v0.98.16 / v0.98.21', () => {
@@ -60,11 +52,9 @@ describe('detectUnwiredConfigKeys', () => {
     expect(detectUnwiredConfigKeys(raw)).toEqual([]);
   });
 
-  it('reports block rules once even with many nested keys', () => {
-    const raw = {
-      plugins: { configs: { myplug: { a: 1, b: 2, c: 3 } } },
-    };
-    expect(detectUnwiredConfigKeys(raw)).toEqual(['plugins.configs']);
+  it('does not report legacy plugin config as unwired after entries migration', () => {
+    const raw = { plugins: { configs: { myplug: { a: 1, b: 2, c: 3 } } } };
+    expect(detectUnwiredConfigKeys(raw)).toEqual([]);
   });
 
   it('empty / non-object config reports nothing', () => {

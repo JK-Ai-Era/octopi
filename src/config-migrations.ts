@@ -779,6 +779,46 @@ export function detectScalarCoercion(raw: RawObject): MigrationFinding | null {
   };
 }
 
+// ── Plugin entries（CFG013）──
+
+/**
+ * Move legacy plugins.configs to entries. Legacy entries were not wired to the
+ * default Gateway, so merely having business config must not become enablement.
+ *
+ * @param raw - Mutable raw config
+ * @returns Whether a legacy section was migrated
+ */
+export function applyLegacyPluginConfigs(raw: RawObject): boolean {
+  const plugins = raw.plugins;
+  if (!isPlainObject(plugins) || !('configs' in plugins)) return false;
+  const legacy = plugins.configs;
+  if (!isPlainObject(legacy)) throw new Error('CFG013: plugins.configs must be an object');
+  const entries: RawObject = isPlainObject(plugins.entries) ? plugins.entries : {};
+  if ('entries' in plugins && !isPlainObject(plugins.entries)) {
+    throw new Error('CFG013: plugins.entries must be an object when configs is present');
+  }
+  for (const [id, config] of Object.entries(legacy)) {
+    if (!isPlainObject(config)) throw new Error(`CFG013: plugins.configs.${id} must be an object`);
+    if (entries[id] !== undefined) throw new Error(`CFG013: plugins.entries.${id} conflicts with legacy configs`);
+    entries[id] = { config: cloneRaw(config) };
+  }
+  plugins.entries = entries;
+  delete plugins.configs;
+  return true;
+}
+
+/** Detect legacy plugin configs and fail-loud id conflicts. */
+export function detectLegacyPluginConfigs(raw: RawObject): MigrationFinding | null {
+  if (!isPlainObject(raw.plugins) || !('configs' in raw.plugins)) return null;
+  return {
+    id: 'CFG013',
+    severity: 'warn',
+    message: 'plugins.configs is replaced by plugins.entries; business config does not implicitly enable a plugin',
+    hint: 'octopi doctor --fix moves each value to entries[id].config; set entries[id].enabled explicitly',
+    autoFixable: true,
+  };
+}
+
 // ── 组合 API ──
 
 /** 全量迁移规则（detect + apply） */
@@ -799,6 +839,7 @@ export const CONFIG_MIGRATION_RULES: ConfigMigrationRule[] = [
   { id: 'CFG010', detect: detectSessionStore, apply: applySessionStore },
   { id: 'CFG011', detect: detectRemovedKeys, apply: applyRemovedKeys },
   { id: 'CFG012', detect: detectRemovedAttachmentKeys, apply: applyRemovedAttachmentKeys },
+  { id: 'CFG013', detect: detectLegacyPluginConfigs, apply: applyLegacyPluginConfigs },
 ];
 
 /**

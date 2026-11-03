@@ -10,6 +10,7 @@ import { initOctopi, getOctopiHome, isInitialized, formatInitReport } from '../i
 import { readPidFile, writePidFile, removePidFile, isProcessAlive } from './daemon.js';
 import { resolveListenConfig } from './listen-config.js';
 import { createProviderFromConfig } from '@octopi-agent/engine/config.js';
+import enginePackage from '@octopi-agent/engine/package.json' with { type: 'json' };
 import { resolveGatewayUrl, resolveGatewayApiKey, selectChatAgent } from './helpers.js';
 
 export function showHelp(): void {
@@ -231,40 +232,46 @@ export async function pluginCommand(args: CliArgs): Promise<void> {
 
   const manifest = {
     id: pluginName,
+    apiVersion: '1',
     name: `${pluginName} plugin`,
     version: '0.1.0',
     description: 'A plugin for Octopi',
-    main: 'index.js',
+    entry: './dist/index.js',
     enabledByDefault: true,
+    engine: { octopi: `>=${enginePackage.version} <1` },
+    configSchema: { type: 'object', additionalProperties: false },
+    contributes: { tools: ['hello'] },
   };
   fs.writeFileSync(path.join(targetDir, 'octopi.plugin.json'), JSON.stringify(manifest, null, 2) + '\n');
 
-  const entryCode = `/**
- * ${pluginName} plugin
- */
+  const entryCode = `import { definePlugin } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
 
-import { definePluginEntry } from '@octopi-agent/engine/plugin-sdk/plugin-entry';
-
-export default definePluginEntry({
+export default definePlugin({
   id: '${pluginName}',
-  name: '${pluginName}',
-  description: 'A plugin for Octopi',
-
   register(api) {
-    console.log('[${pluginName}] Registered');
+    api.registerTool(
+      { name: 'hello', description: 'Return a greeting', parameters: {}, capabilities: ['egress'] },
+      async () => 'Hello from ${pluginName}',
+    );
   },
 });
 `;
-  fs.writeFileSync(path.join(targetDir, 'index.ts'), entryCode);
+  fs.mkdirSync(path.join(targetDir, 'src'));
+  fs.writeFileSync(path.join(targetDir, 'src', 'index.ts'), entryCode);
 
   const pkg = {
     name: `@octopi-agent/plugin-${pluginName}`,
     version: '0.1.0',
     type: 'module',
-    main: 'index.js',
-    types: 'index.d.ts',
+    main: 'dist/index.js',
+    types: 'dist/index.d.ts',
+    scripts: { build: 'tsc -p tsconfig.json' },
     peerDependencies: {
-      octopi: '>=0.4.0',
+      '@octopi-agent/engine': `>=${enginePackage.version} <1`,
+    },
+    devDependencies: {
+      '@types/node': '^24',
+      typescript: '^6',
     },
   };
   fs.writeFileSync(path.join(targetDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
@@ -275,24 +282,25 @@ export default definePluginEntry({
       module: 'ESNext',
       moduleResolution: 'bundler',
       declaration: true,
-      outDir: '.',
-      rootDir: '.',
+      outDir: 'dist',
+      rootDir: 'src',
       strict: true,
       esModuleInterop: true,
       skipLibCheck: true,
     },
-    include: ['*.ts'],
+    include: ['src/**/*.ts'],
   };
   fs.writeFileSync(path.join(targetDir, 'tsconfig.json'), JSON.stringify(tsconfig, null, 2) + '\n');
 
   console.log(`\n🐙 Plugin "${pluginName}" created at ${targetDir}\n`);
   console.log('Files:');
   console.log(`  ${targetDir}/octopi.plugin.json  ← Plugin manifest`);
-  console.log(`  ${targetDir}/index.ts             ← Entry point`);
+  console.log(`  ${targetDir}/src/index.ts         ← Entry point`);
   console.log(`  ${targetDir}/package.json         ← Package config`);
   console.log(`  ${targetDir}/tsconfig.json         ← TypeScript config`);
   console.log('\nNext steps:');
   console.log(`  cd ${targetDir}`);
   console.log('  # Edit index.ts to add your plugin logic');
-  console.log('  # Add plugins.loadPaths to your octopi.json config');
+  console.log('  npm install && npm run build');
+  console.log('  # Set plugins.loadPaths and plugins.entries.<id>.enabled, then restart Octopi');
 }

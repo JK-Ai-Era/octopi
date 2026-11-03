@@ -75,20 +75,23 @@ export interface ToolParameter {
  * Capability tags on a tool. Security policy (reduced tool surface) keys off
  * these, never off display names (D5-a).
  */
-export type ToolCapability =
-  | 'exec'
-  | 'egress'
-  | 'send'
-  | 'dynamic-code'
-  | 'fs-read'
-  | 'fs-write'
+export const TOOL_CAPABILITIES = [
+  'exec',
+  'egress',
+  'send',
+  'dynamic-code',
+  'fs-read',
+  'fs-write',
   /** Local host introspection beyond the workspace (process table, …) */
-  | 'host-read'
-  | 'memory'
+  'host-read',
+  'memory',
   /** Local VCS porcelain (fixed argv allowlist; no arbitrary shell) */
-  | 'vcs'
+  'vcs',
   /** Project script runner (npm/pnpm/yarn run — executes workspace code) */
-  | 'runner';
+  'runner',
+] as const;
+
+export type ToolCapability = (typeof TOOL_CAPABILITIES)[number];
 
 export interface ToolDefinition {
   name: string;

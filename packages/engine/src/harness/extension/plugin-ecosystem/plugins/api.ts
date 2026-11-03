@@ -1,88 +1,119 @@
-/**
- * Plugin API
- *
- * 这是 plugin register() 回调中接收的 api 对象。
- * Plugin 通过它注册各种能力（provider、channel、tool、hook 等）。
- */
+/** Public author API. Runtime ownership lives in PluginContributionRegistry. */
 
-import type { PluginManifest } from './manifest.js';
-import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { WebSearchProvider } from '../tools/web-search-types.js';
+import { resolve } from 'node:path';
+import { TOOL_CAPABILITIES, type ToolDefinition, type ToolHandler } from '@octopi-agent/core/types.js';
+import type { PluginHookName, PluginSessionOpName } from './manifest.js';
+import { createStaging, readStaging } from './staging.js';
 import type {
-  RegisteredTool,
-  ToolDefinition,
-  ToolHandler,
-} from '@octopi-agent/core/types.js';
-import type { ContextEngine } from '../../../context/types.js';
-import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../channel-types.js';
+  AgentFinalizeResult,
+  AgentReplyResult,
+  AgentRunResult,
+  AgentTurnPrepareEvent,
+  AfterIterationEvent,
+  AfterToolCallEvent,
+  BeforeAgentFinalizeEvent,
+  BeforeAgentReplyEvent,
+  BeforeAgentRunEvent,
+  BeforeInstallEvent,
+  BeforeIterationEvent,
+  BeforeIterationResult,
+  BeforeModelResolveEvent,
+  BeforePromptBuildEvent,
+  BeforeToolCallEvent,
+  CompactionEvent,
+  GatewayLifecycleEvent,
+  InstallResult,
+  LoopEndEvent,
+  MessageReceivedEvent,
+  MessageSendingEvent,
+  MessageSendingResult,
+  MessageSentEvent,
+  ModelResolveResult,
+  PromptBuildResult,
+  SessionLifecycleEvent,
+  ToolCallResult,
+} from './manager.js';
+import type { ArgSpec, CommandInvoker, CommandKind, CommandResult, CommandRisk } from '../commands/types.js';
 
-/**
- * Hook 注册选项
- */
-export interface HookRegistrationOptions {
-  /** 优先级（数字越大越先执行，默认 0） */
-  priority?: number;
-
-  /** 单个 handler 超时毫秒数 */
-  timeoutMs?: number;
+export interface PluginCommandContext {
+  sessionId: string;
+  agentId: string;
+  args: string[];
+  raw: string;
+  principal: { actorId?: string; actorType?: string; tenantId?: string };
 }
 
-/**
- * Tool 注册选项
- */
-export interface ToolRegistrationOptions {
-  /** 是否为可选工具（需要用户显式启用） */
-  optional?: boolean;
+export interface PluginCommandRegistration {
+  name: string;
+  description?: string;
+  kind?: CommandKind;
+  risk?: CommandRisk;
+  invocableBy?: CommandInvoker[];
+  args?: ArgSpec[];
+  preempt?: boolean;
+  sessionOps?: PluginSessionOpName[];
+  handler: (context: PluginCommandContext) => Promise<CommandResult | string | void | unknown>;
 }
 
-/**
- * Provider 注册定义
- */
-export interface ProviderRegistration {
-  /** Provider ID */
-  id: string;
-
-  /** Provider 实例 */
-  provider: ModelProvider;
+export interface PluginHookMap {
+  before_model_resolve: [BeforeModelResolveEvent, ModelResolveResult | void];
+  agent_turn_prepare: [AgentTurnPrepareEvent, string | void];
+  before_prompt_build: [BeforePromptBuildEvent, PromptBuildResult | void];
+  before_agent_run: [BeforeAgentRunEvent, AgentRunResult | void];
+  before_agent_reply: [BeforeAgentReplyEvent, AgentReplyResult | void];
+  before_agent_finalize: [BeforeAgentFinalizeEvent, AgentFinalizeResult | void];
+  agent_end: [import('./manager.js').AgentEndEvent, void];
+  before_tool_call: [BeforeToolCallEvent, ToolCallResult | void];
+  after_tool_call: [AfterToolCallEvent, void];
+  message_received: [MessageReceivedEvent, void];
+  message_sending: [MessageSendingEvent, MessageSendingResult | void];
+  message_sent: [MessageSentEvent, void];
+  session_start: [SessionLifecycleEvent, void];
+  session_end: [SessionLifecycleEvent, void];
+  before_compaction: [CompactionEvent, void];
+  after_compaction: [CompactionEvent, void];
+  gateway_start: [GatewayLifecycleEvent, void];
+  gateway_stop: [GatewayLifecycleEvent, void];
+  before_install: [BeforeInstallEvent, InstallResult | void];
+  before_iteration: [BeforeIterationEvent, BeforeIterationResult | void];
+  after_iteration: [AfterIterationEvent, void];
+  loop_end: [LoopEndEvent, void];
 }
 
-/**
- * Channel 注册定义
- */
-export interface ChannelRegistration {
-  /** Channel ID */
-  id: string;
+export type HookHandler<K extends PluginHookName = PluginHookName> = (
+  event: PluginHookMap[K][0],
+) => Promise<PluginHookMap[K][1]>;
 
-  /** Channel Adapter 实例 */
-  adapter: ChannelAdapter;
-}
+type AnyHookHandler = {
+  [K in PluginHookName]: (event: PluginHookMap[K][0]) => Promise<PluginHookMap[K][1]>;
+}[PluginHookName];
 
-/**
- * Hook handler 类型
- */
-export type HookHandler<TEvent = unknown, TResult = void> = (
-  event: TEvent,
-) => Promise<TResult | undefined | void>;
-
-/**
- * 有序 hook entry
- */
-export interface OrderedHookEntry {
-  /** Plugin ID */
+export interface OrderedHookEntry<K extends PluginHookName = PluginHookName> {
   pluginId: string;
-  /** Hook 名称 */
-  hookName: string;
-  /** Handler 函数 */
-  handler: HookHandler;
-  /** 优先级 */
+  hookName: K;
+  handler: AnyHookHandler;
   priority: number;
-  /** 超时 */
   timeoutMs?: number;
 }
 
-/**
- * Plugin Logger
- */
+export interface PluginToolContribution {
+  definition: ToolDefinition;
+  handler: ToolHandler;
+  optional: boolean;
+  executionMode?: 'parallel' | 'sequential';
+}
+
+export interface ToolRegistrationOptions {
+  /** Visibility is separately controlled by the Agent's tools allow/deny policy. */
+  optional?: boolean;
+  executionMode?: 'parallel' | 'sequential';
+}
+
+export interface HookRegistrationOptions {
+  priority?: number;
+  timeoutMs?: number;
+}
+
 export interface PluginLogger {
   debug(message: string, ...args: unknown[]): void;
   info(message: string, ...args: unknown[]): void;
@@ -90,67 +121,25 @@ export interface PluginLogger {
   error(message: string, ...args: unknown[]): void;
 }
 
-/**
- * Plugin API
- *
- * Plugin 在 register() 回调中使用此对象注册能力。
- */
 export class PluginApi {
-  /** Plugin ID */
   readonly id: string;
-
-  /** Plugin 显示名称 */
   readonly name: string;
-
-  /** Plugin 版本 */
-  readonly version?: string;
-
-  /** Plugin 描述 */
+  readonly version: string;
   readonly description?: string;
-
-  /** Plugin 源路径 */
   readonly source: string;
-
-  /** Plugin root 目录 */
-  readonly rootDir?: string;
-
-  /** Plugin 配置 */
+  readonly rootDir: string;
   readonly pluginConfig: Record<string, unknown>;
-
-  /** Plugin Logger */
   readonly logger: PluginLogger;
 
-  // ── 内部存储（PluginManager 读取） ──
-
-  /** 已注册的 providers */
-  readonly _providers: ProviderRegistration[] = [];
-
-  /** 已注册的 channels */
-  readonly _channels: ChannelRegistration[] = [];
-
-  /** 已注册的 tools */
-  readonly _tools: Array<{ definition: ToolDefinition; handler: HookHandler; optional: boolean }> = [];
-
-  /** 已注册的 context engines */
-  readonly _contextEngines: Array<{ id: string; engine: ContextEngine }> = [];
-
-  /** 已注册的 hooks */
-  readonly _hooks: Map<string, OrderedHookEntry[]> = new Map();
-
-  /** 已注册的 commands */
-  readonly _commands: Array<{ name: string; handler: HookHandler; description?: string }> = [];
-
-  /** 已注册的服务 */
-  readonly _services: Array<{ id: string; start: () => Promise<void>; stop: () => Promise<void> }> = [];
 
   constructor(opts: {
     id: string;
     name: string;
-    version?: string;
+    version: string;
     description?: string;
     source: string;
-    rootDir?: string;
-    pluginConfig?: Record<string, unknown>;
+    rootDir: string;
+    pluginConfig: Record<string, unknown>;
   }) {
     this.id = opts.id;
     this.name = opts.name;
@@ -158,264 +147,88 @@ export class PluginApi {
     this.description = opts.description;
     this.source = opts.source;
     this.rootDir = opts.rootDir;
-    this.pluginConfig = opts.pluginConfig ?? {};
-
+    this.pluginConfig = opts.pluginConfig;
+    createStaging(this);
     const prefix = `[plugin:${opts.id}]`;
     this.logger = {
-      debug: (msg, ...args) => console.debug(`${prefix} ${msg}`, ...args),
-      info: (msg, ...args) => console.info(`${prefix} ${msg}`, ...args),
-      warn: (msg, ...args) => console.warn(`${prefix} ${msg}`, ...args),
-      error: (msg, ...args) => console.error(`${prefix} ${msg}`, ...args),
+      debug: (message, ...args) => console.debug(`${prefix} ${message}`, ...args),
+      info: (message, ...args) => console.info(`${prefix} ${message}`, ...args),
+      warn: (message, ...args) => console.warn(`${prefix} ${message}`, ...args),
+      error: (message, ...args) => console.error(`${prefix} ${message}`, ...args),
     };
   }
 
-  // ================================================================
-  // Capability Registration
-  // ================================================================
-
   /**
-   * 注册 LLM Provider
+   * Stage a Tool contribution. It is not mounted or exposed by this call.
    *
-   * @param registration - Provider 注册定义
+   * @param tool - Core ToolDefinition
+   * @param handler - Core ToolHandler
+   * @param opts - Execution and optional contribution metadata
    */
-  registerProvider(registration: ProviderRegistration): void {
-    this._providers.push(registration);
-    this.logger.info(`Registered provider: ${registration.id}`);
-  }
-
-  /**
-   * 注册 Channel Adapter
-   *
-   * @param registration - Channel 注册定义
-   */
-  registerChannel(registration: ChannelRegistration): void {
-    this._channels.push(registration);
-    this.logger.info(`Registered channel: ${registration.id}`);
-  }
-
-  /**
-   * 注册 Agent Tool
-   *
-   * Tool 名称不能与核心 tool 冲突。
-   *
-   * @param tool - Tool 定义（包含 name、description、parameters）
-   * @param handler - Tool 处理函数
-   * @param opts - 注册选项
-   */
-  registerTool(
-    tool: ToolDefinition,
-    handler: ToolHandler,
-    opts?: ToolRegistrationOptions,
-  ): void {
-    this._tools.push({
+  registerTool(tool: ToolDefinition, handler: ToolHandler, opts?: ToolRegistrationOptions): void {
+    if (!tool.capabilities || tool.capabilities.length === 0) {
+      throw new Error(`Plugin tool "${tool.name}" must declare non-empty capabilities`);
+    }
+    if (new Set(tool.capabilities).size !== tool.capabilities.length ||
+      tool.capabilities.some((capability) => !TOOL_CAPABILITIES.includes(capability))) {
+      throw new Error(`Plugin tool "${tool.name}" has unknown or duplicate capabilities`);
+    }
+    if (readStaging(this).tools.some((entry) => entry.definition.name === tool.name)) {
+      throw new Error(`Plugin "${this.id}" registered duplicate tool "${tool.name}"`);
+    }
+    const executionMode = opts?.executionMode ??
+      (tool.capabilities.includes('fs-write') ? 'sequential' : undefined);
+    readStaging(this).tools.push({
       definition: tool,
-      handler: handler as HookHandler,
+      handler,
       optional: opts?.optional ?? false,
+      ...(executionMode === undefined ? {} : { executionMode }),
     });
-    this.logger.info(`Registered tool: ${tool.name}${opts?.optional ? ' (optional)' : ''}`);
   }
 
   /**
-   * 注册 Context Engine
+   * Stage a typed hook contribution using one of the 22 existing event names.
    *
-   * Context Engine 是 exclusive slot —— 同一时刻只有一个 active。
-   *
-   * @param id - Engine ID
-   * @param engine - Context Engine 实例
+   * @param hookName - Existing hook name
+   * @param handler - Event-specific handler
+   * @param opts - Ordering and cooperative timeout options
    */
-  registerContextEngine(id: string, engine: ContextEngine): void {
-    this._contextEngines.push({ id, engine });
-    this.logger.info(`Registered context engine: ${id}`);
-  }
-
-  /**
-   * 注册 Hook
-   *
-   * Hook handler 按 priority 降序执行，同 priority 按注册顺序。
-   *
-   * @param hookName - Hook 名称
-   * @param handler - Hook handler
-   * @param opts - 选项（priority、timeoutMs）
-   */
-  on<TEvent = unknown, TResult = void>(
-    hookName: string,
-    handler: (event: TEvent) => Promise<TResult | undefined | void>,
+  on<K extends PluginHookName>(
+    hookName: K,
+    handler: HookHandler<K>,
     opts?: HookRegistrationOptions,
   ): void {
-    if (!this._hooks.has(hookName)) {
-      this._hooks.set(hookName, []);
-    }
-
-    const entries = this._hooks.get(hookName)!;
-    entries.push({
+    const entry = {
       pluginId: this.id,
       hookName,
-      handler: handler as HookHandler,
+      handler: handler as AnyHookHandler,
       priority: opts?.priority ?? 0,
-      timeoutMs: opts?.timeoutMs,
-    });
-
-    // 保持按 priority 降序排列
+      ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
+    } as OrderedHookEntry;
+    const entries = [...(readStaging(this).hooks.get(hookName) ?? []), entry];
     entries.sort((a, b) => b.priority - a.priority);
+    readStaging(this).hooks.set(hookName, entries);
   }
 
   /**
-   * 注册 Command
+   * Stage a Command contribution. Host authorization is enforced when mounted.
    *
-   * Command 绕过 LLM，直接执行。
-   *
-   * @param def - Command 定义
+   * @param definition - Command metadata and handler
    */
-  registerCommand(def: {
-    name: string;
-    handler: HookHandler;
-    description?: string;
-  }): void {
-    this._commands.push(def);
-    this.logger.info(`Registered command: ${def.name}`);
-  }
-
-  /**
-   * 注册后台服务
-   *
-   * 服务在 Gateway 启动时 start，关闭时 stop。
-   *
-   * @param service - 服务定义
-   */
-  registerService(service: {
-    id: string;
-    start: () => Promise<void>;
-    stop: () => Promise<void>;
-  }): void {
-    this._services.push(service);
-    this.logger.info(`Registered service: ${service.id}`);
-  }
-
-  // ================================================================
-  // Extended Registration
-  // ================================================================
-
-  /** 已注册的 web search providers */
-  readonly _webSearchProviders: Array<{ id: string; provider: WebSearchProvider }> = [];
-
-  /** 已注册的 media understanding providers */
-  readonly _mediaUnderstandingProviders: Array<{ id: string; provider: unknown }> = [];
-
-  /** 已注册的 image generation providers */
-  readonly _imageGenerationProviders: Array<{ id: string; provider: unknown }> = [];
-
-  /** 已注册的 music generation providers */
-  readonly _musicGenerationProviders: Array<{ id: string; provider: unknown }> = [];
-
-  /** 已注册的 video generation providers */
-  readonly _videoGenerationProviders: Array<{ id: string; provider: unknown }> = [];
-
-  /** 已注册的 speech providers */
-  readonly _speechProviders: Array<{ id: string; provider: unknown }> = [];
-
-  /** 已注册的 model catalog providers */
-  readonly _modelCatalogProviders: Array<{ provider: string; kinds: string[]; liveCatalog: unknown }> = [];
-
-  /** 已注册的 memory embedding providers */
-  readonly _memoryEmbeddingProviders: Array<{ id: string; provider: unknown }> = [];
-
-  /**
-   * 注册 Web Search Provider
-   *
-   * @param provider - 实现 WebSearchProvider 契约的实例
-   */
-  registerWebSearchProvider(provider: WebSearchProvider): void {
-    const id = provider.id || this.getProviderId(provider);
-    this._webSearchProviders.push({ id, provider });
-    this.logger.info(`Registered web search provider: ${id}`);
-  }
-
-  /**
-   * 注册 Media Understanding Provider
-   */
-  registerMediaUnderstandingProvider(provider: unknown): void {
-    const id = this.getProviderId(provider);
-    this._mediaUnderstandingProviders.push({ id, provider });
-    this.logger.info(`Registered media understanding provider: ${id}`);
-  }
-
-  /**
-   * 注册 Image Generation Provider
-   */
-  registerImageGenerationProvider(provider: unknown): void {
-    const id = this.getProviderId(provider);
-    this._imageGenerationProviders.push({ id, provider });
-    this.logger.info(`Registered image generation provider: ${id}`);
-  }
-
-  /**
-   * 注册 Music Generation Provider
-   */
-  registerMusicGenerationProvider(provider: unknown): void {
-    const id = this.getProviderId(provider);
-    this._musicGenerationProviders.push({ id, provider });
-    this.logger.info(`Registered music generation provider: ${id}`);
-  }
-
-  /**
-   * 注册 Video Generation Provider
-   */
-  registerVideoGenerationProvider(provider: unknown): void {
-    const id = this.getProviderId(provider);
-    this._videoGenerationProviders.push({ id, provider });
-    this.logger.info(`Registered video generation provider: ${id}`);
-  }
-
-  /**
-   * 注册 Speech Provider
-   */
-  registerSpeechProvider(provider: unknown): void {
-    const id = this.getProviderId(provider);
-    this._speechProviders.push({ id, provider });
-    this.logger.info(`Registered speech provider: ${id}`);
-  }
-
-  /**
-   * 注册 Model Catalog Provider
-   */
-  registerModelCatalogProvider(catalog: { provider: string; kinds: string[]; liveCatalog: unknown }): void {
-    this._modelCatalogProviders.push(catalog);
-    this.logger.info(`Registered model catalog: ${catalog.provider} (${catalog.kinds.join(', ')})`);
-  }
-
-  /**
-   * 注册 Memory Embedding Provider
-   */
-  registerMemoryEmbeddingProvider(provider: unknown): void {
-    const id = this.getProviderId(provider);
-    this._memoryEmbeddingProviders.push({ id, provider });
-    this.logger.info(`Registered memory embedding provider: ${id}`);
-  }
-
-  // ================================================================
-  // Utility
-  // ================================================================
-
-  /**
-   * 从 provider 对象提取 id（兼容多种命名）
-   */
-  private getProviderId(provider: unknown): string {
-    if (provider && typeof provider === 'object') {
-      const p = provider as Record<string, unknown>;
-      return (p.id ?? p.name ?? 'unknown') as string;
+  registerCommand(definition: PluginCommandRegistration): void {
+    if (readStaging(this).commands.some((entry) => entry.name === definition.name)) {
+      throw new Error(`Plugin "${this.id}" registered duplicate command "${definition.name}"`);
     }
-    return 'unknown';
+    readStaging(this).commands.push(definition);
   }
 
   /**
-   * 解析相对于 plugin root 的路径
+   * Resolve a path relative to the plugin root in ESM.
    *
-   * @param input - 相对路径
-   * @returns 绝对路径
+   * @param input - Relative or absolute path
+   * @returns Absolute path; not a filesystem security boundary
    */
   resolvePath(input: string): string {
-    if (!this.rootDir) return input;
-    const path = require('node:path');
-    return path.resolve(this.rootDir, input);
+    return resolve(this.rootDir, input);
   }
 }

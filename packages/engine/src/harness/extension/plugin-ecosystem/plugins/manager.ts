@@ -18,13 +18,12 @@ import type {
   ToolResult,
   ThinkingLevel,
 } from '@octopi-agent/core/types.js';
-import type { ChannelAdapter, ChannelMessage, ChannelReply } from '../channel-types.js';
+import type { ChannelMessage, ChannelReply } from '../channel-types.js';
 import type { HookContext } from '../../../shared/types/hook-context.js';
-import type { ContextEngine } from '../../../context/types.js';
-import type { PluginApi } from './api.js';
-import type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './loader.js';
+import type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig, PluginDiagnostic } from './loader.js';
 import { PluginLoader } from './loader.js';
-import { CapabilityRegistry } from './capability.js';
+import type { PluginHookName } from './manifest.js';
+import type { PluginCommandRecord, PluginToolRecord } from './contribution-registry.js';
 
 // ================================================================
 // Hook Event Types
@@ -413,15 +412,13 @@ export class PluginManager {
   /** Plugin Loader */
   private loader: PluginLoader;
 
-  /** Capability Registry（从 loader 共享） */
-  readonly capabilities: CapabilityRegistry;
-
-  /** Gateway 启动时间 */
-  private startTime?: number;
-
   constructor(config?: PluginLoaderConfig) {
     this.loader = new PluginLoader(config ?? { loadPaths: [] });
-    this.capabilities = this.loader.capabilities;
+  }
+
+  /** Structured discovery states, separate from the effective registered set. */
+  getDiagnostics(): PluginDiagnostic[] {
+    return this.loader.getDiagnostics();
   }
 
   // ================================================================
@@ -574,19 +571,14 @@ export class PluginManager {
       timeoutMs?: number;
     }> = [];
 
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      const hookEntries = plugin.api._hooks.get(hookName);
-      if (hookEntries) {
-        for (const entry of hookEntries) {
-          entries.push({
-            pluginId: entry.pluginId,
-            handler: entry.handler,
-            priority: entry.priority,
-            timeoutMs: entry.timeoutMs,
-          });
-        }
-      }
+    for (const entry of this.loader.contributions.getHooks()) {
+      if (entry.hookName !== hookName) continue;
+      entries.push({
+        pluginId: entry.pluginId,
+        handler: entry.handler as (event: unknown) => Promise<unknown>,
+        priority: entry.priority,
+        timeoutMs: entry.timeoutMs,
+      });
     }
 
     entries.sort((a, b) => b.priority - a.priority);
@@ -618,223 +610,24 @@ export class PluginManager {
     });
   }
 
-  // ================================================================
-  // 便捷方法 — 常用 hooks 的快捷调用
-  // ================================================================
-
-  /**
-   * 获取所有已注册的 providers
-   */
-  getProviders(): Array<{ pluginId: string; id: string; provider: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider }> {
-    const result: Array<{ pluginId: string; id: string; provider: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider }> = [];
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const reg of plugin.api._providers) {
-        result.push({ pluginId: plugin.id, id: reg.id, provider: reg.provider });
-      }
-    }
-    return result;
+  /** Effective Tool contributions; mounting and Agent visibility belong to P2. */
+  getTools(includeOptional = false): PluginToolRecord[] {
+    return this.loader.contributions.getTools().filter((tool) => includeOptional || !tool.optional);
   }
 
-  /**
-   * 获取所有已注册的 channels
-   */
-  getChannels(): Array<{ pluginId: string; id: string; adapter: ChannelAdapter }> {
-    const result: Array<{ pluginId: string; id: string; adapter: ChannelAdapter }> = [];
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const reg of plugin.api._channels) {
-        result.push({ pluginId: plugin.id, id: reg.id, adapter: reg.adapter });
-      }
-    }
-    return result;
+  /** Effective Command contributions; complete Host authorization belongs to P3. */
+  getCommands(): PluginCommandRecord[] {
+    return this.loader.contributions.getCommands();
   }
 
-  /**
-   * 获取所有已注册的 tools（过滤 optional）
-   */
-  getTools(includeOptional = false): Array<{
-    pluginId: string;
-    definition: import('@octopi-agent/core/types.js').ToolDefinition;
-    handler: import('@octopi-agent/core/types.js').ToolHandler;
-  }> {
-    const result: Array<{
-      pluginId: string;
-      definition: import('@octopi-agent/core/types.js').ToolDefinition;
-      handler: import('@octopi-agent/core/types.js').ToolHandler;
-    }> = [];
-
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const reg of plugin.api._tools) {
-        if (!includeOptional && reg.optional) continue;
-        result.push({
-          pluginId: plugin.id,
-          definition: reg.definition,
-          handler: reg.handler as unknown as import('@octopi-agent/core/types.js').ToolHandler,
-        });
-      }
-    }
-    return result;
-  }
-
-  /**
-   * 获取所有已注册的 context engines
-   */
-  getContextEngines(): Array<{ id: string; engine: ContextEngine }> {
-    const result: Array<{ id: string; engine: ContextEngine }> = [];
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const reg of plugin.api._contextEngines) {
-        result.push(reg);
-      }
-    }
-    return result;
-  }
-
-  /**
-   * 获取所有已注册的 commands
-   */
-  getCommands(): Array<{
-    pluginId: string;
-    name: string;
-    handler: (event: unknown) => Promise<unknown>;
-    description?: string;
-  }> {
-    const result: Array<{
-      pluginId: string;
-      name: string;
-      handler: (event: unknown) => Promise<unknown>;
-      description?: string;
-    }> = [];
-
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const cmd of plugin.api._commands) {
-        result.push({ pluginId: plugin.id, ...cmd });
-      }
-    }
-    return result;
-  }
-
-  /**
-   * 获取所有已注册的 services
-   */
-  getServices(): Array<{
-    pluginId: string;
-    id: string;
-    start: () => Promise<void>;
-    stop: () => Promise<void>;
-  }> {
-    const result: Array<{
-      pluginId: string;
-      id: string;
-      start: () => Promise<void>;
-      stop: () => Promise<void>;
-    }> = [];
-
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const svc of plugin.api._services) {
-        result.push({ pluginId: plugin.id, ...svc });
-      }
-    }
-    return result;
-  }
-
-  /**
-   * 获取所有已注册的 web search providers
-   */
-  getWebSearchProviders(): Array<{ pluginId: string; provider: import('../tools/web-search-types.js').WebSearchProvider }> {
-    const result: Array<{ pluginId: string; provider: import('../tools/web-search-types.js').WebSearchProvider }> = [];
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const reg of plugin.api._webSearchProviders) {
-        result.push({ pluginId: plugin.id, provider: reg.provider });
-      }
-    }
-    return result;
-  }
-
-  /**
-   * 获取所有已注册的 media understanding providers
-   */
-  getMediaUnderstandingProviders(): Array<{ pluginId: string; provider: unknown }> {
-    const result: Array<{ pluginId: string; provider: unknown }> = [];
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const reg of plugin.api._mediaUnderstandingProviders) {
-        result.push({ pluginId: plugin.id, provider: reg.provider });
-      }
-    }
-    return result;
-  }
-
-  /**
-   * 获取所有已注册的 image generation providers
-   */
-  getImageGenerationProviders(): Array<{ pluginId: string; provider: unknown }> {
-    const result: Array<{ pluginId: string; provider: unknown }> = [];
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const reg of plugin.api._imageGenerationProviders) {
-        result.push({ pluginId: plugin.id, provider: reg.provider });
-      }
-    }
-    return result;
-  }
-
-  /**
-   * 获取所有已注册的 model catalog providers
-   */
-  getModelCatalogProviders(): Array<{ pluginId: string; provider: string; kinds: string[]; liveCatalog: unknown }> {
-    const result: Array<{ pluginId: string; provider: string; kinds: string[]; liveCatalog: unknown }> = [];
-    for (const plugin of this.loader.getAllPlugins()) {
-      if (!plugin.registered) continue;
-      for (const reg of plugin.api._modelCatalogProviders) {
-        result.push({ pluginId: plugin.id, ...reg });
-      }
-    }
-    return result;
-  }
-
-  // ================================================================
-  // Gateway Lifecycle
-  // ================================================================
-
-  /**
-   * 触发 gateway_start hook 并启动所有 plugin 服务
-   */
+  /** Fire the declared start hook. Background service support is deferred to P4. */
   async onGatewayStart(config?: Record<string, unknown>, workspaceDir?: string): Promise<void> {
-    this.startTime = Date.now();
-
     const event: GatewayLifecycleEvent = { config, workspaceDir };
-    await this.runHook('gateway_start', event, undefined);
-
-    for (const service of this.getServices()) {
-      try {
-        await service.start();
-        console.info(`[PluginManager] Service "${service.id}" started`);
-      } catch (err) {
-        console.error(`[PluginManager] Service "${service.id}" failed to start:`, err);
-      }
-    }
+    await this.runAllHooks('gateway_start', event);
   }
 
-  /**
-   * 触发 gateway_stop hook 并停止所有 plugin 服务
-   */
+  /** Fire the declared stop hook, preserving the existing production trigger. */
   async onGatewayStop(): Promise<void> {
-    const event: GatewayLifecycleEvent = {};
-    await this.runHook('gateway_stop', event, undefined);
-
-    for (const service of this.getServices()) {
-      try {
-        await service.stop();
-        console.info(`[PluginManager] Service "${service.id}" stopped`);
-      } catch (err) {
-        console.error(`[PluginManager] Service "${service.id}" failed to stop:`, err);
-      }
-    }
+    await this.runAllHooks('gateway_stop', {});
   }
 }

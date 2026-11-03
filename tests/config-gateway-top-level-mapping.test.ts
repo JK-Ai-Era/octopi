@@ -87,7 +87,12 @@ function fullyPopulatedConfig(): NormalizedHarnessConfig {
     },
     flatModels: [],
     agents: [agentConfig()],
-    plugins: { loadPaths: ['/tmp/plugins'] },
+    plugins: {
+      loadPaths: ['/tmp/plugins'],
+      allowList: ['acme.search'],
+      blockList: ['blocked.plugin'],
+      entries: { 'acme.search': { enabled: true, config: { region: 'cn' } } },
+    },
     budgetPolicy: { maxIterations: 5 },
     runGuard: { enabled: true },
     modelCall: { idleTimeoutMs: 1000 },
@@ -143,6 +148,11 @@ describe('toGatewayConfig top-level mapping guard (no silent drop)', () => {
       }
     }
     expect(dropped, `toGatewayConfig 静默丢弃这些顶层键：${dropped.join(', ')}`).toEqual([]);
+  });
+
+  it('preserves complete plugin loading and entry configuration', () => {
+    const gw = toGatewayConfig(fullyPopulatedConfig());
+    expect(gw.plugins).toEqual(fullyPopulatedConfig().plugins);
   });
 
   it('subsystems / cognition / wisdom survive verbatim (the original bugs)', () => {

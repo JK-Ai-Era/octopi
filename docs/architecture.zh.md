@@ -380,9 +380,11 @@ Loop 层只有 `agentLoop` 纯函数；不要在业务路径手拼 `runAgentWith
 
 与 tools/（Agent function-call 调用面）对偶；Command **不是**顶层能力域，也 **不是** Human-in-the-Loop（HITL 只做 risk approval）。
 
+受信任的进程内插件在 import 前先校验 manifest；注册与依赖检查成功后，暂存的 Tool/Command/Hook 才发布到宿主级贡献注册表。该注册表与 per-Agent ToolBus 挂载不同：贡献注册本身不授予 Agent 可见性或执行授权。当前 P1 支持边界见[插件系统](./plugin-system.zh.md)。
+
 ```
 harness/extension/plugin-ecosystem/
-├── plugins/              # PluginManager, HookRegistry, Loader
+├── plugins/              # Manifest-first Loader、ContributionRegistry、PluginManager
 ├── tools/                # ToolBus, BuiltinTools, web_search（Agent 调用面）
 ├── skills/               # SkillManager（两阶段加载；frontmatter.command → /name）
 ├── mcp/                  # McpManager, Bridge, Discovery

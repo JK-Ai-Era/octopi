@@ -173,14 +173,14 @@ export { detectSummaryContamination } from './context/capabilities/compact/engin
 
 // ── Plugin Ecosystem ──
 export { PluginManager } from './extension/plugin-ecosystem/plugins/manager.js';
-export { definePluginEntry, defineChannelPluginEntry } from './extension/plugin-ecosystem/plugins/entry.js';
-export type { OctopiPluginDefinition, OctopiChannelPluginDefinition } from './extension/plugin-ecosystem/plugins/entry.js';
+export { definePlugin } from './extension/plugin-ecosystem/plugins/entry.js';
+export type { OctopiPluginDefinition } from './extension/plugin-ecosystem/plugins/entry.js';
 export { PluginApi } from './extension/plugin-ecosystem/plugins/api.js';
 export { PluginLoader } from './extension/plugin-ecosystem/plugins/loader.js';
-export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig } from './extension/plugin-ecosystem/plugins/loader.js';
-export { CapabilityRegistry } from './extension/plugin-ecosystem/plugins/capability.js';
-export { validateManifest, parseManifest } from './extension/plugin-ecosystem/plugins/manifest.js';
-export type { PluginManifest, PluginContracts, ActivationConfig } from './extension/plugin-ecosystem/plugins/manifest.js';
+export type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig, PluginDiagnostic } from './extension/plugin-ecosystem/plugins/loader.js';
+export { PluginContributionRegistry } from './extension/plugin-ecosystem/plugins/contribution-registry.js';
+export { validateManifest, parseManifest, validatePluginConfig, PLUGIN_API_VERSION } from './extension/plugin-ecosystem/plugins/manifest.js';
+export type { PluginManifest, PluginContributions, PluginHookName, PluginSessionOpName } from './extension/plugin-ecosystem/plugins/manifest.js';
 export { DefaultToolBus } from './extension/plugin-ecosystem/tools/tool-bus.js';
 export { getBuiltinTools, createShellTool, createFileReadTool, createFileWriteTool, createFileDeleteTool, createFileListTool } from './extension/plugin-ecosystem/tools/builtin.js';
 export { readGitStatusSnapshot, parsePorcelainV2 } from './extension/plugin-ecosystem/tools/git-status-snapshot.js';

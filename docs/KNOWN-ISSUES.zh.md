@@ -77,7 +77,6 @@
 
 顶层映射守卫只查段级键；以下**子键** schema 接受但暂无消费方（配置了不生效）：
 
-- **`plugins.configs`**（按插件配置）：schema 接受并已透传过边界，但尚无任何代码把它翻译成 `PluginLoaderConfig.pluginEntries`——`PluginLoader` 本身是**读** `pluginEntries` 的（`enabled` + `config` → `api.pluginConfig`），缺的是 gateway 那一段接线。
 - **`models.mode` — 键已删除（v0.98.16）**：provider/模型合并行为固定；该键不再被接受（按未知键告警，`octopi doctor --fix` 会把它搬进 `_legacy`）。
 - **`compact`（顶层段）/ `contextEngine.summaryModel` — 键已删除（v0.98.21，BREAKING）**：`compact`（`defaultProtectHead` / `defaultProtectTail` / `defaultTargetTokens` / `defaultMode`）从未有消费方——会话压缩读 `contextEngine` 键（`protectFirstN` / `protectLastN` / `targetTokens`），compact 能力自带引擎缺省；`contextEngine.summaryModel` 是 v0.44.1 期兼容键、缺省 `models.level.mini` 档先命中使其几乎从不生效——换摘要模型请用 `summary.model`（显式）或 `summary.modelLevel`（档位）。两键均按未知键告警，`octopi doctor --fix` 移入 `_legacy`（CFG011）。
 - **`session.reset` / `session.maintenance` — 键已删除（v0.98.16）**：从无消费方（v0.86.37 已从 `GatewayConfig` 作为死面移除），且日重置/存储清理功能已决定不做。`SessionConfigSchema` 不再是 `.passthrough()`——`session` 只接受 `dmScope` / `idleExpiryMs`，其他子键现按未知键报告。

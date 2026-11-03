@@ -9,7 +9,7 @@ Plugin 系统、Skill 管理、工具注册、MCP 集成、对话斜杠命令。
 
 ## 职责
 
-- PluginManager — 顶层管理器 + HookRegistry
+- PluginLoader / PluginContributionRegistry — manifest-first 加载、暂存与有效贡献发布；PluginManager 消费 Hook
 - ToolRegistry — 工具注册中心（Agent 调用面）
 - SkillManager — 两阶段加载（启动时元数据 + LLM 按需加载）；`command` 字段可桥接 `/name`
 - McpManager — MCP Client 管理
@@ -31,7 +31,7 @@ Plugin 系统、Skill 管理、工具注册、MCP 集成、对话斜杠命令。
 
 ## 文件说明
 
-- plugins/ — Plugin 系统（manager, hooks, loader, api, entry, capability, lifecycle, manifest）
+- plugins/ — Plugin 系统（loader, contribution-registry, manager, api, entry, manifest）
 - tools/ — 工具系统（registry, builtin, streaming, versioning）
 - skills/ — Skill 系统（manager；frontmatter `command`）
 - mcp/ — MCP 集成（manager, bridge, discovery）
