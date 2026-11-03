@@ -169,12 +169,14 @@ Runner.handle
 - 路径 A 触发线**两条都保留**并取 `min`（刻意不用 legacy 命名，防被当成死代码清掉）：
   - **目标线** `targetTokens × compactFallbackRatio`（默认 `200000` / `3`）——与窗口解耦，防长会话失忆（只挂窗口比例时 1M 窗口永不触发）
   - **窗口比例线** `messagesBudget × proactiveCompactRatio`（默认 `0.6`）——防小窗口/已知窗口（如 256k）在硬溢出前仍未触发
+- **预算不变量**（唯一硬约束）：`input_tokens + max_tokens ≤ contextWindow`。分配器先扣 `maxOutputTokens`，再扣固定开销（system + tools + 请求信封），剩余为 `messagesLimit`（历史硬上限）；`messagesBudget` 是软策略提示。强制点（消息选择、溢出压缩目标）一律用 `messagesLimit`，不得使用软值
 - `targetTokens: 0` 只挂窗口比例线。触发判据量**老化请求体量**（实际发送内容的保守上界），B2 稳态不会误触发（防双机制打架，单测锁死）。再压缩还要求自上次压缩以来 token 实质增长（偶发兜底，不是周期性重压）
+- **装配层永不降级消息**。粘滞重建只做重组（`head + 摘要 + 覆盖点之后增量原文 + tail`），降级动作单源归 compact 能力。重建边界每次请求都滑动，在那里降级等于每请求改写一次历史、摧毁前缀缓存（实测命中率 98% → 29%，1.5 小时 31.3M 未命中输入 token）
 - `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是窗口比例线系数。**`0` 禁止发起新的路径 A 压缩（不只禁 LLM），不丢弃已有粘滞压缩视图**（`previousSummary` / `lastProactiveMessageCount` 仍重建 `head + 摘要 + 覆盖点之后增量 + tail`）。turn 内（最近真实 user 之后已有工具活动）也不新打 LLM 摘要（方案 E），只走机械分级（B2 老化 / 账本截断），避免吃掉活动工作记录
 - 视图超兜底线时，在硬溢出前压缩中间段（LLM 仅限 turn 边界；turn 内机械）
 - 增量很小（或 `proactiveCompactRatio=0`）时用 `previousSummary` + **`lastProactiveMessageCount` 之后的消息** + head/tail 重建，不重复打 LLM，也**绝不打回全量历史**
-- `fallbackTruncate` / 溢出降级是 **middle 替换体**：归档说明 + 工具调用账本（name+args）+ 近尾——禁止「只留 4 条」
-- LLM 摘要吃**原文**工具输出（F-b：机械打码只作用于丢弃体）；`error` 字段永不打码
+- `fallbackTruncate` / 溢出降级是 **middle 替换体**：归档说明 + 工具调用账本（**每次调用只留 `name + purpose`**，error 附在对应调用行下逐字保留、永不省略）+ 近尾——禁止「只留 4 条」。账本是**单级**形态：已是最小（约 16x 压缩），仍超预算时如实上报 `overBudget`，**不得丢条目**（丢条目 = 静默失忆）
+- LLM 摘要吃**原文**工具输出（F-b：机械降级只作用于丢弃体）；`error` 字段永不省略
 - 配置：`octopi.json` → `contextEngine.targetTokens` / `contextEngine.compactFallbackRatio` / `contextEngine.proactiveCompactRatio`
 
 **主动 LLM 摘要冷却（`proactiveCooldownMs`，默认 30s，`0` 关闭）：**

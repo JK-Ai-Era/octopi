@@ -76,7 +76,7 @@ export function asSummaryMessage(summary: string, coveredEnd?: number): Message 
 
 // ── 机械占位（非摘要，永不进 previousSummary） ──
 
-/** 账本截断占位（生产者：mechanical.ts ledgerTruncate） */
+/** 账本降级占位（生产者：mechanical.ts ledgerTruncate / mechanicalDegrade） */
 export const MECHANICAL_NOTICE_TRUNCATED = '[Context truncated:';
 /** 头切截断占位（生产者已随 TruncateCompressor 退休；识别保留兜旧持久化状态） */
 export const MECHANICAL_NOTICE_COMPRESSED = '[Context compressed:';

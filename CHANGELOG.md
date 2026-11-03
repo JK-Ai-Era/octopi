@@ -108,6 +108,44 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.24 (2026-11-04)
+
+### fix(engine)!: 停止装配层每请求改写历史；机械降级改 purpose 账本；预算转为不变量驱动
+
+**症状**：生产会话 `default-web-1793642585897`（mimo-v2.6-pro，1M 窗口）1.5 小时内烧掉 **31.3M 未命中缓存输入**（该区间 prompt 47.4M / 未命中 66%，同会话其余时段仅 5.8%），未命中率与缓存命中率的差异全部集中在 `t10–t16`。
+
+**根因（三条机制错位，非阈值调参）**：
+
+1. `rebuildStickyView` 超线时对 `middle` 调 `mechanicalDegrade`（打码），而 `middle` 边界随 `messages.length` **每请求滑动** → 每轮改写 1 条历史 → 前缀缓存整段报废（实测命中率 98% → 29%，被改写的正是 aging `rawWindow` 明确保留的那条）。
+2. 该预算判断量的是**未老化的原始 messages**，动作却作用在**老化后的视图**上 → 老化越有效误判越大（原文 middle 797k vs 视图 76k）→ 永远判超线 → 每请求都打码。
+3. 打码只改 `toolResults`、不碰 `toolCalls.arguments` → 丢信息却没收到主要收益（67 条打码结果的参数仍占 25.8k 字符）。
+
+**修复**：
+
+- **装配层不执行降级**：`rebuildStickyView` 退化为纯重组（`head + 摘要 + 增量原文 + tail`）；两处 `mechanicalDegrade` 调用与 `targetMiddleTokens`/`headTailTokens` 死参一并删除。安全网移交压缩层（overflow 路径），同一保险装在正确电路上。
+- **机械降级 = 单级 purpose 账本**：打码整条退休（`maskFatToolResults`/`TOOL_RESULT_PLACEHOLDER`/`TOOL_RESULT_MASK_THRESHOLD` 全删）。账本只留 `name + purpose`（error 附在对应调用行下永不省略），实测 16.1x（475k→29k 字符），远优于打码的 3.7x 地板。仍超预算 → `overBudget` 如实上报（`reason: …:mechanical_over_budget`），**不静默丢条目**。账本 `metadata.source='contextLedger'`（此前误用 `contextSummary`，会被持久化/回放当交接摘要）。
+- **overflow 收敛**：与 proactive 同守增长门 + 冷却；新增「压缩无用」判据（`head + tail ≥ messagesLimit` 时中部怎么压都回不了预算 → 直接账本、零 LLM）；`fresh` 时推进 `lastProactiveCoverEnd`（按**对象恒等**映射回原始下标）。**不推进** `lastProactiveMessageCount`——那是 proactive 增长门基准，推进它会让 `newSinceLast` 恒为 0、真摘要被饿死（实测踩过）。
+- **预算不变量驱动（breaking）**：唯一硬不变量 `input_tokens + max_tokens ≤ contextWindow`。`outputReserve = maxOutputTokens`（仅物理窗口存在时；仅有策略目标时按比例回退）。`BudgetAllocateResult` 新增 `inputLimit`/`messagesLimit`（硬）与 `infeasible`；`messagesBudget` 降为软提示；强制点（MessageSelector、overflow 目标）一律用 `messagesLimit`。修复前 mimo 场景（窗口 1,048,576 / maxTokens 131,072）允许输入 1,040,076，加上输出共 1,171,148，**超窗 122,572 且无环节察觉**。顺带清除消息结构开销双重计数（`systemOverhead` → `requestEnvelopeTokens`）与 `max(1000, …)` 静默越界。
+- **选择器双口径**：`SelectOptions += measureMessages`（等长同序，只用于估算）。切分按原文（溢出段必须吃原文做摘要），估算按老化视图——否则原文超预算时每请求都判溢出、每请求触发一次溢出摘要。
+
+**验证**：全量 393 通过 / lint 通过 / `arch/check-sync.sh` 通过。新增回归测试 `tests/harness/message-selector-measure.test.ts`（原文判溢出、老化视图判放得下；切分仍返回原文对象；省略参数退化为旧行为）。`arch/compaction-architecture.md` 新增 §8 记录根因、D1–D6 拍板与三项剩余项；`docs/context-layer-contracts.md`(.zh) 双语同步。
+
+**语义变更提示**：① 没配 summarize 的部署删除装配层降级后，视图可长期停在软线之上、直到硬窗口才由 overflow 兜底（软线是政策线，不是硬约束）；② 生产压缩触发点提前（mimo `messagesLimit` 1,017,609 → 894,537，降 12%）。
+
+---
+
+### fix(gateway): schedule notify 落库改持 session lease（修静默丢消息）
+
+**缺陷**：`setNotify` 无锁 `load → push → save`，而 Run 在整个运行期持 session lease 并持续 `syncMessages`；`JsonlSessionStore.syncMessages` 以调用方序列为权威——检测到磁盘被旁路改写即**整文件重写**（`jsonl.ts` 注释把旁路写者视为「常态、对齐即自愈」）。于是通知写盘后 UI 已广播，下一次同步判「漂移」将其抹掉：**用户看见了，历史里没有，且零错误可观测**。
+
+**修复**：notify 与 Runner 共 `sessionLease`，语义为「不打断当前 Run，延迟到 Run 结束落库」。`setNotify` 调用方是 `void Promise.resolve(...)`，不堵 tick；多个待写通知按 FIFO 排队。
+
+**已知限制**：Run 可被 `followUp` 无限续命（`agent-loop.ts` 在 `followUps.length > 0` 时 `continue` 而非结束），所以活跃对话中 notify 可能长期得不到执行机会。彻底解法需 Runner 暴露 flush 钩子（turn 级落库），未做。
+
+**验证**：新增 `tests/gateway/notify-session-lease.test.ts` 三例——① 无锁写入**确实被抹掉**（缺陷复现，防退化回旧写法）；② 持锁写入不被抹掉；③ 通知延迟但下一次 Run load 可见。全量 394 通过。
+
+---
+
 ## v0.98.22 (2026-11-03)
 
 ### docs(architecture): batch-1 P5 — compaction/summary specs rewritten to as-built; two-family boundary explicit

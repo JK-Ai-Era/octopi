@@ -45,6 +45,9 @@ describe('压缩视图粘滞 / proactiveCompactRatio=0', () => {
     for (let i = 30; i < 40; i++) {
       messages.push(...toolTurn(i, bigBody(i)));
     }
+    // turn 边界（最后一条是 user、其后无工具活动）：才允许新 LLM 摘要。
+    // midTurn 时装配层不再做机械降级（改为等 turn 边界），故建立压缩态须靠边界。
+    messages.push(userMsg('now summarize'));
 
     const summarize = async () =>
       '## Conversation Summary\n### Done\n- built modules\n### Next\n- continue';
@@ -95,6 +98,8 @@ describe('压缩视图粘滞 / proactiveCompactRatio=0', () => {
       loadCompactState: async () => ({
         summary: restoredSummary,
         lastProactiveMessageCount: messages.length,
+        // 覆盖终点是粘滞增量的起点：缺失等于把 headEnd..tailStart 全当增量（视图回涨）
+        lastProactiveCoverEnd: messages.length - 20,
         lastProactiveTokens: 100,
       }),
     });
@@ -238,40 +243,30 @@ describe('审查修复：粘滞增量 / isMidTurn 注入 / 空丢弃', () => {
   });
 });
 
-describe('审查 P2 红线补测（机械降级阶梯）', () => {
-  it('error 字段永不打码（B′：error 可追溯性优先）', async () => {
-    const { maskFatToolResults, TOOL_RESULT_PLACEHOLDER } = await import(
+describe('审查 P2 红线补测（机械降级 = purpose 账本）', () => {
+  it('error 永不计略（错误可追溯性优先）：账本保留失败信息', async () => {
+    const { buildToolCallLedger } = await import(
       '@octopi-agent/engine/harness/context/capabilities/compact/mechanical.js'
     );
-    const err = 'E_FILE_NOT_FOUND: missing /x.ts at line 3 ' + 'e'.repeat(400);
-    // error 结果位于最后 tool_call 之前 → 进入打码判据（旧结果），但 error 永不打码
+    const err = 'E_FILE_NOT_FOUND: missing /x.ts at line 3 ' + 'e'.repeat(100);
     const messages: Message[] = [
       userMsg('t'),
+      {
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        toolCalls: [{ id: 'c1', name: 'file_read', arguments: { purpose: 'Read /x.ts' } }],
+      },
       {
         role: 'tool',
         content: '',
         timestamp: Date.now(),
         toolResults: [{ toolCallId: 'c1', name: 'file_read', result: null, error: err }],
       },
-      userMsg('t2'),
-      {
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        toolCalls: [{ id: 'c2', name: 'probe', arguments: {} }],
-      },
-      {
-        role: 'tool',
-        content: '',
-        timestamp: Date.now(),
-        toolResults: [{ toolCallId: 'c2', name: 'probe', result: 'ok' }],
-      },
     ];
-    const { result, maskedCount } = maskFatToolResults(messages);
-    const text = JSON.stringify(result);
-    expect(text).toContain('E_FILE_NOT_FOUND');
-    expect(text).not.toContain(TOOL_RESULT_PLACEHOLDER);
-    expect(maskedCount).toBe(0);
+    const ledger = buildToolCallLedger(messages);
+    expect(ledger).toContain('file_read: Read /x.ts');
+    expect(ledger).toContain('E_FILE_NOT_FOUND');
   });
 
   it('n≤floor 时不插假「0 removed」通知', async () => {
@@ -295,7 +290,7 @@ describe('审查 P2 红线补测（机械降级阶梯）', () => {
     for (let i = 0; i < 20; i++) messages.push(userMsg(`m-${i} ` + 'x'.repeat(80)));
     const { result } = ledgerTruncate(messages, { targetTokens: 50 });
     // 形状：一条账本说明 + 近尾；不是把 messages[0] 当外层 head 保留
-    expect(result[0]?.metadata?.source).toBe('contextSummary');
+    expect(result[0]?.metadata?.source).toBe('contextLedger');
     expect(String(result[0]?.content)).toContain('Context truncated');
     expect(result.some((m) => String(m.content).startsWith('m-19'))).toBe(true);
     expect(result.some((m) => String(m.content).startsWith('m-0 '))).toBe(false);

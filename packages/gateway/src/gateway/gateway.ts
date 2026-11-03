@@ -907,24 +907,38 @@ export class Gateway {
         });
       });
       this.sessionSchedules.setNotify(async ({ schedule, content }) => {
-        // notify：只落会话消息，不 dispatch Run
-        const session = await this.store.load(schedule.sessionId);
-        if (!session) return;
-        session.messages.push({
-          role: 'user',
-          content,
-          timestamp: Date.now(),
-          agentId: schedule.agentId,
-          metadata: {
-            source: 'runtime',
-            origin: 'session_schedule',
-            scheduleId: schedule.id,
-            delivery: 'notify',
-            triggerType: 'schedule',
-          },
-        });
-        session.meta.updatedAt = Date.now();
-        await this.store.save(schedule.sessionId, session);
+        // notify：只落会话消息，不 dispatch Run。
+        //
+        // 必须与 Runner.handle 共 sessionLease：Runner 整个 Run 期间持锁，且
+        // `syncMessages` 以自身内存序列为权威（检测到旁路写入即整文件重写）。
+        // 无锁写入的通知会被下一次增量同步判为「漂移」而整包抹掉——UI 已广播
+        // 但历史里没有这条消息，且无任何错误可观测（2026-11-04 定位）。
+        //
+        // 语义：通知不打断当前 Run，延迟到 Run 结束才落库（大哥 2026-11-04 确认）。
+        // setNotify 调用方是 `void Promise.resolve(...)`，不会堵 tick；多个待写
+        // 通知按 FIFO 排队，各自独立完成。
+        const release = await this.sessionLease.acquire(schedule.sessionId);
+        try {
+          const session = await this.store.load(schedule.sessionId);
+          if (!session) return;
+          session.messages.push({
+            role: 'user',
+            content,
+            timestamp: Date.now(),
+            agentId: schedule.agentId,
+            metadata: {
+              source: 'runtime',
+              origin: 'session_schedule',
+              scheduleId: schedule.id,
+              delivery: 'notify',
+              triggerType: 'schedule',
+            },
+          });
+          session.meta.updatedAt = Date.now();
+          await this.store.save(schedule.sessionId, session);
+        } finally {
+          release();
+        }
       });
       console.log('[Gateway] SessionScheduleService ready (schedules.db)');
     }

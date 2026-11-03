@@ -56,7 +56,6 @@ import {
   asSummaryMessage,
   isMechanicalNotice,
   ledgerTruncate,
-  mechanicalDegrade,
   semanticHistory,
 } from './capabilities/compact/index.js';
 
@@ -301,13 +300,23 @@ export class DefaultContextEngine implements ContextEngine {
     }
 
     // 1. 计算可用预算（有窗口或 compactTargetTokens 时）
+    //    不变量：inputLimit + outputReserve ≤ effectiveLimit；强制点一律用 messagesLimit。
     const tokenBudgetForAlloc = budgetCap;
+    const systemPromptTokensForAlloc = estimator.estimateText(systemPrompt);
+    const toolTokensForAlloc = estimator.estimateTools(tools);
     const budget = this.config.budgetAllocator.allocate({
       tokenBudget: tokenBudgetForAlloc,
       contextWindow,
-      systemPromptTokens: estimator.estimateText(systemPrompt),
-      toolTokens: estimator.estimateTools(tools),
+      maxOutputTokens: params.maxOutputTokens,
+      systemPromptTokens: systemPromptTokensForAlloc,
+      toolTokens: toolTokensForAlloc,
     });
+
+    // 不变量不可满足（窗口连 system + tools + 输出预留都放不下）：
+    // 这是配置问题，不在这里 fail-loud——8k 窗口 + 大 persona 是真实存在的部署，
+    // 直接抛错会让每次 turn 都崩。改为用最小可运行预算继续，并由 `infeasible`
+    // 如实标记（自定义 allocator / 上层可据此告警）；真实越界仍由 provider 拒绝暴露。
+    const effectiveMessagesLimit = budget.infeasible ? 1000 : budget.messagesLimit;
 
     // 1b. 主动摘要：仅在有预算时启用（基于窗口/显式 target 的自动压缩）
     const proactive = await this.applyProactiveCompact({
@@ -329,12 +338,24 @@ export class DefaultContextEngine implements ContextEngine {
     const proactiveDroppedSummary = proactive.droppedSummary;
 
     // 2. 四区域消息选择（MessageSelector）
+    //    强制点用 messagesLimit（硬）：叠加输出预留后的真实输入上限，
+    //    不是压缩策略的软目标 messagesBudget。
+    //    尺子与作用域同源：切分按原文（overflow 必须吃原文摘要，F-b），
+    //    但**度量按老化视图**——实际请求发的是老化后的体量；量原文会让老化
+    //    越有效越容易误判溢出，进而每请求触发一次溢出摘要（前缀缓存杀手）。
+    const measureMessages = applyAgingToMessages(
+      workingMessages,
+      agingPlan,
+      this.config.historyAging,
+    );
     const selection = this.config.messageSelector.select(
       workingMessages,
       {
-        maxTokens: budget.messagesBudget,
+        maxTokens: effectiveMessagesLimit,
         protectFirstN: this.config.protectFirstN,
         protectLastN: this.config.protectLastN,
+        measureMessages:
+          measureMessages === workingMessages ? undefined : measureMessages,
       },
       estimator,
     );
@@ -375,12 +396,38 @@ export class DefaultContextEngine implements ContextEngine {
     let droppedSummary: string | undefined;
     let overflowFresh = false;
     let overflowSummary: string | undefined;
+    // 是否真正发起过摘要 LLM 调用（成功/失败均算）——只有发起过才推进冷却时间戳
+    let overflowSummarizeAttempted = false;
 
     // 计算溢出部分的压缩目标：head + selectedMiddle + tail 已占的 token
     // selection.estimatedTokens = head + selectedMiddle + tail 的 token 数
     // 压缩后 overflow 应使总 token 在预算内
     const keptTokens = selection.estimatedTokens;
-    const overflowTargetTokens = Math.max(500, budget.messagesBudget - keptTokens);
+    const overflowTargetTokens = Math.max(500, effectiveMessagesLimit - keptTokens);
+    // 压缩无用判据：受保护的头尾本身就超预算时，中间段怎么压都无法让视图回到预算内
+    // （MessageSelector 已在 kept 里按预算截断尾部）。此时再花一次 LLM 摘要不会改善
+    // 任何东西，只会让这种「结构性超预算」配置每轮打一次 LLM（实测形态）。
+    // 走机械账本降级并保持零 LLM。
+    const protectedHeadTokens = estimator.estimateMessages(
+      workingMessages.slice(0, Math.min(this.config.protectFirstN, workingMessages.length)),
+    );
+    const compactionCannotHelp =
+      protectedHeadTokens + selection.tailTokens >= effectiveMessagesLimit;
+    // overflow 也必须守 proactive 的同一套纪律（增长门 + 冷却）：它是安全网，
+    // 不是「每轮增量摘要器」。缺了这两道门时，任何「受保护尾部接近预算」的会话
+    // 都会每轮打一次 LLM 摘要（实测形态：冷却期内仍重打、视图永不收敛）。
+    // 命中时改为机械账本降级——体积足够小，请求仍能通过；摘要留给下一个 turn 边界。
+    const overflowLastCount = state?.lastProactiveMessageCount;
+    const overflowNewSinceLast =
+      overflowLastCount === undefined ? messages.length : messages.length - overflowLastCount;
+    const overflowMinNew = Math.max(3, Math.floor(this.config.protectLastN * 0.25));
+    const overflowCooldownMs = this.config.proactiveCooldownMs;
+    const overflowInCooldown =
+      overflowCooldownMs > 0 &&
+      state?.lastProactiveLlmAt != null &&
+      Date.now() - state.lastProactiveLlmAt < overflowCooldownMs;
+    const skipLlmCompaction =
+      compactionCannotHelp || overflowInCooldown || overflowNewSinceLast < overflowMinNew;
     const overflowStart = Date.now();
     const overflowTokensBefore = overflowTokens;
     emit?.({
@@ -398,7 +445,7 @@ export class DefaultContextEngine implements ContextEngine {
         tools,
         agingPlan,
       );
-      switch (routing.route) {
+      switch (skipLlmCompaction ? 'cannot_help' : routing.route) {
         // B′（2026-11-03 拍板）：溢出统一走真摘要（打码降为机械降级阶梯第一级，
         // 「只打码不摘要」路由已删——工具胖溢出也必须出交接摘要）
         case 'compact': {
@@ -442,6 +489,7 @@ export class DefaultContextEngine implements ContextEngine {
             outcome.fresh === true &&
             Boolean(outcome.summary) &&
             !isMechanicalNotice(outcome.summary!);
+          overflowSummarizeAttempted = outcome.summarizeAttempted === true;
           overflowSummary = outcome.summary;
           compressedOverflow = Array.isArray(outcome.view) ? outcome.view : selection.overflow;
           droppedSummary = outcome.droppedSummary;
@@ -471,6 +519,8 @@ export class DefaultContextEngine implements ContextEngine {
         estimator,
       }).result;
       droppedSummary = 'Context compact failed; fell back to truncation';
+      // 已尝试调用（无论失败在哪一步，冷却都应生效，防止每轮重试打爆）
+      overflowSummarizeAttempted = Boolean(summarize);
     }
 
     // 6. 重组（严格时间序）：protectHead → 压缩旧 middle → 未压新 middle → tail
@@ -500,13 +550,35 @@ export class DefaultContextEngine implements ContextEngine {
       cached: false,
     });
     const overflowState = this.states.get(stateKey);
-    // fresh 门控（评审 F8-F1）：机械降级/失败产出不得冒充新摘要推进 previousSummary
+    // 覆盖终点：overflow 里的消息本身是 `messages` 中的**同一批对象**（视图只做切片/引用），
+    // 因此按对象恒等映射回原始下标即可——不能拿视图下标直接当原始下标（视图已含合成的
+    // 摘要消息，且尾部保护窗与视图长度不同，下标空间不一致）。合成摘要消息映射不到原始
+    // 下标（-1），自然不推进：它不代表任何原始区间。
+    const rawIndexByMessage = new Map<Message, number>();
+    for (let i = 0; i < messages.length; i++) rawIndexByMessage.set(messages[i], i);
+    let overflowCoverEnd = overflowState?.lastProactiveCoverEnd ?? 0;
+    for (const m of selection.overflow) {
+      const idx = rawIndexByMessage.get(m);
+      if (idx !== undefined && idx + 1 > overflowCoverEnd) overflowCoverEnd = idx + 1;
+    }
+    // fresh 门控（评审 F8-F1）：机械降级/失败产出不得冒充新摘要推进 previousSummary；
+    // 覆盖终点同理只在 fresh 时推进，且单调不减（不得回退到更早的覆盖点）。
+    //
+    // **不推进** lastProactiveMessageCount / lastProactiveFullTokens：这两个字段是
+    // proactive 增长门的基准。overflow 每轮都会发生，若随之推进，`newSinceLast` 恒为 0、
+    // 全量口径也不增长 → 真摘要再也不触发（实测：复用轮把 30 推成 31，增长门被饿死）。
+    // overflow 的重复调用由冷却与增量门单独兜住，与增长门正交。
     this.states.set(stateKey, {
       ...overflowState,
       // 存摘要正文（而非 dropped 描述），供下次迭代更新
       previousSummary: overflowFresh
         ? overflowSummary ?? overflowState?.previousSummary
         : overflowState?.previousSummary,
+      ...(overflowFresh ? { lastProactiveCoverEnd: overflowCoverEnd } : {}),
+      // 只在真正发起过摘要调用时推进冷却（成功/失败均算发起）
+      lastProactiveLlmAt: overflowSummarizeAttempted
+        ? Date.now()
+        : overflowState?.lastProactiveLlmAt,
     });
 
     // 8. 构建 LLM 消息（校准基 = 老化后 LLM 视图估算——尺子必须量实际请求，
@@ -614,7 +686,15 @@ export class DefaultContextEngine implements ContextEngine {
     const tail = messages.slice(tailStart);
     const middle = semanticHistory(messages.slice(headEnd, tailStart));
 
-    const headTailTokens = estimator.estimateMessages(head) + estimator.estimateMessages(tail);
+    // F1-B3（尺子与作用域同源）：预算度量必须量**老化视图**（实际请求的保守上界）。
+    // 尺子量原文的老化前体量，会把 aging 的稳态误判超线（双机制打架）。
+    // 注意：本引擎只度量、不执行降级——降级动作归 compact 能力。
+    const agingView = applyAgingToMessages(messages, agingPlan, this.config.historyAging);
+    const agingHead = agingView.slice(0, headEnd);
+    const agingTail = agingView.slice(tailStart);
+
+    const headTailTokens =
+      estimator.estimateMessages(agingHead) + estimator.estimateMessages(agingTail);
 
     /**
      * 零 LLM 粘滞重建。
@@ -623,12 +703,9 @@ export class DefaultContextEngine implements ContextEngine {
      * 增量（`lastProactiveCoverEnd` 之后、已滑出 tail 的消息）不得被旧摘要顶掉——
      * 否则长 tool turn 会丢当前 run 前半段工作记录。
      *
-     * @param targetMiddleTokens - 增量段机械压缩预算
      * @returns 重建视图；无法重建时返回 null
      */
-    const rebuildStickyView = async (
-      targetMiddleTokens: number,
-    ): Promise<{ messages: Message[] } | null> => {
+    const rebuildStickyView = async (): Promise<{ messages: Message[] } | null> => {
       if (messages.length <= protectFirstN + protectLastN) {
         return null;
       }
@@ -637,57 +714,29 @@ export class DefaultContextEngine implements ContextEngine {
           state.previousSummary,
           state.lastProactiveCoverEnd,
         );
-        // 摘要覆盖到 lastProactiveCoverEnd（tailStart）；之后的消息是增量，必须保留
+        // 摘要覆盖到 lastProactiveCoverEnd（摘要/压缩实际覆盖的原始下标终点）；
+        // 其后的消息是增量，必须保留
         const coverUpTo = state.lastProactiveCoverEnd ?? 0;
         const sinceIdx = Math.max(coverUpTo, headEnd);
         const sinceCompact = semanticHistory(messages.slice(sinceIdx, tailStart));
-        let extra: Message[] = sinceCompact;
-        if (sinceCompact.length > 0) {
-          const extraTokens = estimator.estimateMessages(sinceCompact);
-          if (extraTokens > targetMiddleTokens) {
-            try {
-              // 机械增量压缩（B′ 阶梯：打码→账本截断；零 LLM）。
-              // minKeep=2 保持旧 TruncateCompressor 的增量形状：保底撑胖会在复用轮
-              // 挤出 overflow、意外补打摘要（复用轮零 LLM 是产品红线）
-              extra = mechanicalDegrade(sinceCompact, {
-                targetTokens: targetMiddleTokens,
-                estimator,
-                minKeep: 2,
-              }).result;
-            } catch {
-              // 机械压缩失败：保留增量原文（宁可胖，不可丢）
-              extra = sinceCompact;
-            }
-          }
-        }
-        return { messages: [...head, summaryMsg, ...extra, ...tail] };
+        // 增量原样保留（宁可胖，不可丢）：重建轮零 LLM 是产品红线，而机械降级
+        // 在此处会把「每请求滑动 1 条」的边界写成 history 改写 → 前缀缓存整段报废。
+        // 增量撑胖的后果由真正的守门人处理：MessageSelector 溢出 → overflow 摘要/
+        // 账本兜底。装配层不越界执行压缩。
+        return { messages: [...head, summaryMsg, ...sinceCompact, ...tail] };
       }
       if (middle.length === 0) {
         return null;
       }
-      // 与增量分支对称：已达标不改写（旧 Hybrid 在预算内原样返回、不打码——
-      // 无谓的打码会让复用重建轮的视图字节漂移一次）
-      if (estimator.estimateMessages(middle) <= targetMiddleTokens) {
-        return { messages: [...head, ...middle, ...tail] };
-      }
-      try {
-        // 机械降级（B′ 阶梯：打码→账本截断；零 LLM；minKeep=2 同增量压缩的形状约定）
-        const degraded = mechanicalDegrade(middle, {
-          targetTokens: targetMiddleTokens,
-          estimator,
-          minKeep: 2,
-        });
-        return { messages: [...head, ...degraded.result, ...tail] };
-      } catch {
-        return null;
-      }
+      // 无摘要的粘滞重建：head + middle + tail 原样返回（不再做机械降级）。
+      // 与增量分支同戒律——装配层的职责是「按压缩态重组视图」，不是执行压缩。
+      // 早退条件（middle 已达标）也随之消失：既然不动 middle，就无需度量。
+      return { messages: [...head, ...middle, ...tail] };
     };
 
     // F1-B3：尺子量**老化视图**（实际请求的保守上界）——raw 估算会把 B2 稳态误判超线（双机制打架）。
     // 压缩输入仍用原 messages（摘要质量需要原文）。
-    const currentTokens = estimator.estimateMessages(
-      applyAgingToMessages(messages, agingPlan, this.config.historyAging),
-    );
+    const currentTokens = estimator.estimateMessages(agingView);
 
     // 两条触发线（都保留；刻意不用 legacy 命名，防被当成死代码清掉）：
     // - 目标线 targetLine = targetTokens × compactFallbackRatio：与窗口解耦（F1-B3），
@@ -704,13 +753,7 @@ export class DefaultContextEngine implements ContextEngine {
       if (!hasCompactView) {
         return { messages };
       }
-      // 粘滞增量预算挂工作目标（不挂被禁用的比例线）
-      const stickyBase = this.config.targetTokens > 0 ? this.config.targetTokens : 20_000;
-      const stickyMiddleTokens = Math.max(
-        200,
-        Math.floor(stickyBase * 0.55) - headTailTokens,
-      );
-      const sticky = await rebuildStickyView(stickyMiddleTokens);
+      const sticky = await rebuildStickyView();
       if (!sticky) {
         return { messages };
       }
@@ -746,7 +789,7 @@ export class DefaultContextEngine implements ContextEngine {
       if (!hasCompactView) {
         return { messages };
       }
-      const sticky = await rebuildStickyView(targetMiddleTokens);
+      const sticky = await rebuildStickyView();
       if (!sticky) {
         return { messages };
       }
@@ -793,7 +836,7 @@ export class DefaultContextEngine implements ContextEngine {
       hasCompactView &&
       (!allowNewLlmCompact || !needNewCompaction || inCooldown)
     ) {
-      const sticky = await rebuildStickyView(targetMiddleTokens);
+      const sticky = await rebuildStickyView();
       if (sticky) {
         const reducedTokens = estimator.estimateMessages(sticky.messages);
         // 只更新视图 token，**不要**改 lastProactiveMessageCount：
@@ -827,7 +870,7 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 禁新路径 A（无 summarize / turn 内）且无粘滞视图：超线也只走机械（不打摘要 LLM）
     if (!allowNewLlmCompact) {
-      const sticky = await rebuildStickyView(targetMiddleTokens);
+      const sticky = await rebuildStickyView();
       return sticky ? { messages: sticky.messages } : { messages };
     }
 
@@ -899,7 +942,7 @@ export class DefaultContextEngine implements ContextEngine {
         durationMs: Date.now() - proactiveStart,
       });
       // 主动摘要失败：优先粘滞重建，其次不改视图
-      const sticky = await rebuildStickyView(targetMiddleTokens);
+      const sticky = await rebuildStickyView();
       return sticky ? { messages: sticky.messages } : { messages };
     }
 

@@ -35,11 +35,11 @@ import {
 } from '@octopi-agent/engine/harness/context/token-constants.js';
 import { DefaultMessageSelector } from '@octopi-agent/engine/harness/context/message-selector.js';
 import {
-  maskFatToolResults,
+  buildToolCallLedger,
   ledgerTruncate,
   mechanicalDegrade,
-  TOOL_RESULT_PLACEHOLDER,
 } from '@octopi-agent/engine/harness/context/capabilities/compact/mechanical.js';
+import { MECHANICAL_NOTICE_TRUNCATED } from '@octopi-agent/engine/harness/context/capabilities/compact/messages.js';
 import { alignViewSplit } from '@octopi-agent/engine/harness/context/capabilities/compact/view-split.js';
 import { DefaultBudgetAllocator } from '@octopi-agent/engine/harness/context/budget-allocator.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
@@ -472,63 +472,91 @@ describe('DefaultMessageSelector', () => {
   });
 });
 
-// ── 机械降级阶梯（B′）测试 ──
+// ── 机械降级（purpose 账本，单级）测试 ──
 
-describe('maskFatToolResults', () => {
-  it('旧工具输出超阈值打码、最近工作现场保留（不丢轮次）', () => {
-    // 使用超过阈值（200字符）的工具结果
-    const oldToolResult = createToolResultMessage('call_1', 'read_file', 'A'.repeat(500));
-    const recentToolResult = createToolResultMessage('call_2', 'read_file', 'B'.repeat(500));
-
+describe('buildToolCallLedger', () => {
+  it('只保留 name + purpose，丢弃参数载荷与结果正文', () => {
     const messages = [
-      createMessage('user', 'Read files'),
-      createToolCallMessage('read_file', { path: '/old.txt' }),
-      oldToolResult,
-      createMessage('assistant', 'Old file read'),
-      createToolCallMessage('read_file', { path: '/new.txt' }),
-      recentToolResult,
-      createMessage('assistant', 'New file read'),
+      createToolCallMessage('file_edit', {
+        purpose: 'Add disposition row to P5',
+        old_text: 'x'.repeat(4000),
+        new_text: 'y'.repeat(4000),
+      }),
+      createToolResultMessage('call_0', 'file_edit', 'z'.repeat(4000)),
     ];
-
-    const { result, maskedCount } = maskFatToolResults(messages);
-
-    // 旧工具结果被打码（超阈值）
-    const processedOldResult = result.find(m =>
-      m.role === 'tool' && m.toolResults?.[0]?.toolCallId === 'call_1'
-    );
-    expect(processedOldResult?.toolResults?.[0]?.result).toBe(TOOL_RESULT_PLACEHOLDER);
-
-    // 最近工具结果保留
-    const processedRecentResult = result.find(m =>
-      m.role === 'tool' && m.toolResults?.[0]?.toolCallId === 'call_2'
-    );
-    expect(processedRecentResult?.toolResults?.[0]?.result).toBe('B'.repeat(500));
-    expect(maskedCount).toBe(1);
-    // 不丢轮次：消息条数不变
-    expect(result).toHaveLength(messages.length);
+    const ledger = buildToolCallLedger(messages);
+    expect(ledger).toContain('file_edit: Add disposition row to P5');
+    expect(ledger).not.toContain('x'.repeat(200));
+    expect(ledger).not.toContain('z'.repeat(200));
   });
 
-  it('error 结果永不打码（错误可追溯性优先）', () => {
+  it('error 结果永不计略：附在对应调用行下（错误可追溯性优先）', () => {
+    const call = createToolCallMessage('project_run', { purpose: 'Run regression' });
     const messages = [
-      createMessage('user', 'go'),
-      createToolCallMessage('read_file', { path: '/x' }),
+      call,
       createMessage('tool', '', {
         toolResults: [
-          { toolCallId: 'c_err', name: 'read_file', result: null, error: 'E: ' + 'e'.repeat(400) },
+          { toolCallId: call.toolCalls![0]!.id, name: 'project_run', result: null, error: 'exit 1' },
         ],
       }),
-      createToolCallMessage('probe'),
-      createToolResultMessage('c_ok', 'probe', 'ok'),
     ];
-    const { result, maskedCount } = maskFatToolResults(messages);
-    const err = result.find(m => m.role === 'tool' && m.toolResults?.[0]?.toolCallId === 'c_err');
-    expect(err?.toolResults?.[0]?.error).toContain('E:');
-    expect(err?.toolResults?.[0]?.result).toBeNull();
-    expect(maskedCount).toBe(0);
+    const ledger = buildToolCallLedger(messages);
+    expect(ledger).toContain('- project_run: Run regression');
+    expect(ledger).toContain('! project_run: exit 1');
+    // error 行紧跟其调用行
+    const lines = ledger.split('\n');
+    expect(lines[1]?.trim().startsWith('!')).toBe(true);
+  });
+
+  it('purpose 缺失时诚实标注（不伪造、不整条丢弃）', () => {
+    const messages = [createToolCallMessage('probe', {})];
+    const ledger = buildToolCallLedger(messages);
+    expect(ledger).toContain('- probe: (purpose not recorded)');
   });
 });
 
-describe('ledgerTruncate', () => {
+describe('mechanicalDegrade（单级账本）', () => {
+  let estimator: HeuristicTokenEstimator;
+
+  beforeEach(() => {
+    estimator = new HeuristicTokenEstimator();
+  });
+
+  it('整段替换为一条账本消息，账本比原文小得多', () => {
+    const messages: Message[] = [];
+    for (let i = 0; i < 20; i++) {
+      const call = createToolCallMessage('file_read', { purpose: `Read file ${i}`, path: `/f${i}` });
+      messages.push(call);
+      messages.push(createToolResultMessage(call.toolCalls![0]!.id, 'file_read', 'A'.repeat(2000)));
+    }
+    const before = estimator.estimateMessages(messages);
+    const { result, tokensAfter, droppedSummary } = mechanicalDegrade(messages, { estimator });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.role).toBe('user');
+    expect(result[0]!.metadata?.source).toBe('contextLedger');
+    expect(String(result[0]!.content)).toContain('Context truncated');
+    expect(String(result[0]!.content)).toContain('file_read: Read file 0');
+    expect(tokensAfter).toBeLessThan(before / 4);
+    expect(droppedSummary).toContain('purpose ledger');
+  });
+
+  it('账本仍超预算时如实上报 overBudget（不丢条目）', () => {
+    const messages = Array.from({ length: 30 }, (_, i) => {
+      const call = createToolCallMessage('shell', { purpose: `Step ${i} of long plan` });
+      return [call, createToolResultMessage(call.toolCalls![0]!.id, 'shell', 'r'.repeat(500))];
+    }).flat();
+    const { result, overBudget } = mechanicalDegrade(messages, {
+      targetTokens: 1,
+      estimator,
+    });
+    expect(overBudget).toBe(true);
+    // 30 条调用全部保留在账本里——丢条目等于静默失忆
+    expect(String(result[0]!.content).match(/- shell: Step/g)).toHaveLength(30);
+  });
+});
+
+describe('ledgerTruncate（物理溢出兜底）', () => {
   let estimator: HeuristicTokenEstimator;
 
   beforeEach(() => {
@@ -549,7 +577,7 @@ describe('ledgerTruncate', () => {
     );
   });
 
-  it('超预算时从头丢弃到保底，插账本说明（user + contextSummary）', () => {
+  it('超预算时从头丢弃到保底，插账本说明（user + contextLedger）', () => {
     const messages = Array.from({ length: 20 }, (_, i) =>
       createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i} with some content`)
     );
@@ -560,7 +588,7 @@ describe('ledgerTruncate', () => {
     expect(result.length).toBeLessThan(messages.length + 1);
     // 首条应为 user 角色账本说明（避免中段 system）
     expect(result[0].role).toBe('user');
-    expect(result[0].metadata?.source).toBe('contextSummary');
+    expect(result[0].metadata?.source).toBe('contextLedger');
     expect(String(result[0].content)).toContain('Context truncated');
   });
 
@@ -610,6 +638,21 @@ describe('ledgerTruncate', () => {
     expect(String(result[1]?.content)).toContain('m48');
     expect(String(result[2]?.content)).toContain('m49');
   });
+
+  it('丢弃段的账本只留 name + purpose（占位常量单源）', () => {
+    const messages: Message[] = [];
+    for (let i = 0; i < 12; i++) {
+      const call = createToolCallMessage('shell', { purpose: `Cmd ${i}` });
+      messages.push(call);
+      messages.push(createToolResultMessage(call.toolCalls![0]!.id, 'shell', 'x'.repeat(300)));
+    }
+    const { result, ledgerKept } = ledgerTruncate(messages, { targetTokens: 20, estimator });
+    expect(ledgerKept).toBe(true);
+    expect(String(result[0]!.content).startsWith(MECHANICAL_NOTICE_TRUNCATED)).toBe(true);
+    expect(String(result[0]!.content)).toContain('shell: Cmd 0');
+    // 结果正文不进账本
+    expect(String(result[0]!.content)).not.toContain('x'.repeat(100));
+  });
 });
 
 describe('alignViewSplit（P3 切片手术单源）', () => {
@@ -637,48 +680,7 @@ describe('alignViewSplit（P3 切片手术单源）', () => {
   });
 });
 
-describe('mechanicalDegrade', () => {
-  let estimator: HeuristicTokenEstimator;
-
-  beforeEach(() => {
-    estimator = new HeuristicTokenEstimator();
-  });
-
-  it('打码后达标即止（第一级），不再账本截断', () => {
-    const messages = [
-      createMessage('user', 'Read files'),
-      createToolCallMessage('read_file', { path: '/a' }),
-      createToolResultMessage('call_1', 'read_file', 'A'.repeat(2000)),
-      createToolCallMessage('read_file', { path: '/b' }),
-      createToolResultMessage('call_2', 'read_file', 'B'.repeat(2000)),
-      createMessage('assistant', 'done'),
-    ];
-    const targetTokens = estimator.estimateMessages(messages);
-    const { result, droppedSummary } = mechanicalDegrade(messages, {
-      targetTokens,
-      estimator,
-    });
-    // 打码把旧胖结果降为占位符后达标：不丢任何轮次、不插截断说明
-    expect(droppedSummary).toBe('Old tool outputs masked');
-    expect(result).toHaveLength(messages.length);
-    expect(result.every((m) => !String(m.content).startsWith('[Context truncated:'))).toBe(true);
-  });
-
-  it('打码不够再账本截断（第二级）', () => {
-    const messages = Array.from({ length: 20 }, (_, i) =>
-      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i} ` + 'x'.repeat(80))
-    );
-    const { result, droppedSummary } = mechanicalDegrade(messages, {
-      targetTokens: 20,
-      estimator,
-    });
-    expect(droppedSummary).toContain('truncated');
-    expect(String(result[0].content)).toContain('Context truncated');
-    expect(result.length).toBeLessThan(messages.length + 1);
-  });
-});
-
-// ── BudgetAllocator 测试 ──
+// ── BudgetAllocator 测试（不变量驱动） ──
 
 describe('DefaultBudgetAllocator', () => {
   let allocator: DefaultBudgetAllocator;
@@ -687,63 +689,89 @@ describe('DefaultBudgetAllocator', () => {
     allocator = new DefaultBudgetAllocator();
   });
 
-  it('should allocate budget correctly', () => {
-    const result = allocator.allocate({
-      tokenBudget: 100000,
-      contextWindow: 128000,
-      systemPromptTokens: 1000,
-      toolTokens: 2000,
-    });
+  /** 不变量：输入上限 + 输出预留 ≤ 生效窗口，且消息限额不超过输入上限扣除固定开销 */
+  const assertInvariant = (
+    r: { inputLimit: number; messagesLimit: number; outputReserve: number },
+    limit: number,
+    fixed: number,
+  ): void => {
+    expect(r.inputLimit + r.outputReserve).toBeLessThanOrEqual(limit);
+    expect(r.messagesLimit + fixed).toBeLessThanOrEqual(r.inputLimit);
+  };
 
-    expect(result.messagesBudget).toBeGreaterThan(0);
-    expect(result.outputReserve).toBeGreaterThan(0);
-    expect(result.messagesBudget + result.outputReserve + 1000 + 2000 + 500).toBeLessThanOrEqual(100000);
+  it('窗口已知：输出预留取模型 maxOutputTokens（硬预留，不打折）', () => {
+    const result = allocator.allocate({
+      tokenBudget: 1_048_576,
+      contextWindow: 1_048_576,
+      maxOutputTokens: 131_072,
+      systemPromptTokens: 10_467,
+      toolTokens: 12_000,
+    });
+    expect(result.outputReserve).toBe(131_072);
+    expect(result.inputLimit).toBe(1_048_576 - 131_072);
+    assertInvariant(result, 1_048_576, 10_467 + 12_000 + 500);
   });
 
-  it('should use contextWindow as limit', () => {
+  it('maxOutputTokens 未知时按窗口比例回退（保持历史行为）', () => {
     const result = allocator.allocate({
-      tokenBudget: 200000,
-      contextWindow: 128000,
-      systemPromptTokens: 1000,
-      toolTokens: 2000,
+      tokenBudget: 128_000,
+      contextWindow: 128_000,
+      systemPromptTokens: 6_000,
+      toolTokens: 8_000,
     });
-
-    // Should be limited by contextWindow
-    expect(result.messagesBudget + result.outputReserve + 1000 + 2000 + 500).toBeLessThanOrEqual(128000);
+    // 128k × 20% = 25,600 → 夹到上限 8000
+    expect(result.outputReserve).toBe(8_000);
+    assertInvariant(result, 128_000, 6_000 + 8_000 + 500);
   });
 
-  it('should respect minimum output reserve', () => {
-    const allocator = new DefaultBudgetAllocator({ minOutputReserve: 3000 });
-
+  it('tokenBudget 与 contextWindow 取较小值', () => {
     const result = allocator.allocate({
-      tokenBudget: 10000,
-      systemPromptTokens: 1000,
-      toolTokens: 1000,
+      tokenBudget: 200_000,
+      contextWindow: 128_000,
+      systemPromptTokens: 1_000,
+      toolTokens: 2_000,
     });
-
-    expect(result.outputReserve).toBeGreaterThanOrEqual(3000);
+    assertInvariant(result, 128_000, 1_000 + 2_000 + 500);
   });
 
-  it('should respect maximum output reserve', () => {
-    const allocator = new DefaultBudgetAllocator({ maxOutputReserve: 5000 });
-
-    const result = allocator.allocate({
-      tokenBudget: 1000000,
-      systemPromptTokens: 1000,
-      toolTokens: 1000,
+  it('回退路径尊重 min/max 输出预留', () => {
+    const min = new DefaultBudgetAllocator({ minOutputReserve: 3_000 }).allocate({
+      tokenBudget: 10_000,
+      contextWindow: 10_000,
+      systemPromptTokens: 1_000,
+      toolTokens: 1_000,
     });
+    expect(min.outputReserve).toBe(3_000);
 
-    expect(result.outputReserve).toBeLessThanOrEqual(5000);
+    const max = new DefaultBudgetAllocator({ maxOutputReserve: 5_000 }).allocate({
+      tokenBudget: 1_000_000,
+      contextWindow: 1_000_000,
+      systemPromptTokens: 1_000,
+      toolTokens: 1_000,
+    });
+    expect(max.outputReserve).toBe(5_000);
   });
 
-  it('should ensure minimum messages budget', () => {
+  it('物理窗口放不下固定开销+输出预留 → infeasible（不静默保底）', () => {
     const result = allocator.allocate({
-      tokenBudget: 100, // Very small budget
+      tokenBudget: 100,
+      contextWindow: 100,
+      maxOutputTokens: 90,
       systemPromptTokens: 50,
       toolTokens: 50,
     });
+    expect(result.infeasible).toBe(true);
+    expect(result.messagesLimit).toBe(0);
+  });
 
-    expect(result.messagesBudget).toBeGreaterThanOrEqual(1000);
+  it('仅有策略目标（无物理窗口）时保底继续，不报不可行', () => {
+    const result = allocator.allocate({
+      tokenBudget: 100,
+      systemPromptTokens: 50,
+      toolTokens: 50,
+    });
+    expect(result.infeasible).toBeUndefined();
+    expect(result.messagesLimit).toBeGreaterThanOrEqual(1000);
   });
 });
 
@@ -1041,8 +1069,8 @@ describe('Q2 B′ 连线', () => {
     expect(summarize).toHaveBeenCalled();
     const text = JSON.stringify(result.messages);
     expect(text).toContain('SUMMARIZED-HANDOFF');
-    // 打码只是降级阶梯第一级：本例有 summarize，不得以打码占位冒充压缩结果
-    expect(text).not.toContain(TOOL_RESULT_PLACEHOLDER);
+    // 有 summarize 时不得以机械账本冒充压缩结果
+    expect(text).not.toContain(MECHANICAL_NOTICE_TRUNCATED);
   });
 });
 

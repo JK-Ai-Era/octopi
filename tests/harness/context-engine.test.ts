@@ -221,6 +221,8 @@ describe('DefaultContextEngine', () => {
   describe('BudgetAllocator integration', () => {
     it('should use BudgetAllocator to calculate messages budget', async () => {
       const allocateSpy = vi.fn().mockReturnValue({
+        inputLimit: 90000,
+        messagesLimit: 50000,
         messagesBudget: 50000,
         outputReserve: 4000,
       });

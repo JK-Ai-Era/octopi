@@ -21,11 +21,9 @@ export {
 } from './messages.js';
 export {
   buildToolCallLedger,
-  maskFatToolResults,
+  asLedgerMessage,
   ledgerTruncate,
   mechanicalDegrade,
-  TOOL_RESULT_PLACEHOLDER,
-  TOOL_RESULT_MASK_THRESHOLD,
 } from './mechanical.js';
 export {
   HANDOVER_SUMMARY_TASK,

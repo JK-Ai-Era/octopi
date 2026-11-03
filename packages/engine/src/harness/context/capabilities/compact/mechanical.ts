@@ -1,63 +1,85 @@
 /**
- * 机械降级阶梯 — 零 LLM 的压缩执行（打码 → 账本截断）
+ * 机械降级 — 零 LLM 的压缩执行（purpose 账本，单级）
  *
- * B′（2026-11-03 拍板）：工具输出打码**降为机械降级阶梯第一级**——零 LLM、
- * 不丢轮次、error 永不打码；「先打码、不够再账本截断」。语义收敛为
- * 「有 summarize 就出真摘要；无 summarize / 摘要失败才走机械」。
+ * 定位（2026-11-04 拍板）：**应急通道**，只在摘要无法产出时接手——
+ * provider 报错/超时、输出闸门二次判污染、摘要请求放不进窗口。它不是常态压缩
+ * （常态走交接式摘要），因此不需要渐进、不需要分级，一次做到最大化压缩。
  *
- * 截断兜底三→一（债务 #5）：原 `LLMSummaryCompressor.fallbackTruncate` /
- * `TruncateCompressor` / `DefaultContextEngine.conservativeTruncate` 三套收敛为
- * `ledgerTruncate` 一份（账本单源；占位文案单源见 ./messages.ts）。
+ * 形态：整段 middle/messages 替换为 **一条 purpose 账本消息**——保留「调用过什么、
+ * 为什么调用、哪条失败」，丢弃结果正文与参数载荷。依据：
+ * - purpose 是工具调用的必填契约（`≤120 字符`，动词+宾语+目标），本身就是
+ *   「任务执行情况」的最小可读摘要，实测 510/510 调用齐备；
+ * - 生产实测压缩比 ~16x（475k → 29k 字符），远优于结果打码的 ~3.7x 地板
+ *   （aging 指针约 557 字符/调用，账本约 58 字符/调用）；
+ * - 省下的正是最不值钱的部分（长结果正文），留下的正是最值钱的（意图与失败）。
+ *
+ * **超预算不静默丢条目**：账本已是最小形态，若仍超预算说明该会话不宜继续——
+ * 如实上报 `overBudget`，由上层决定告知用户开新会话。丢条目等于静默失忆。
+ *
+ * 单源：占位文案与判别见 ./messages.ts；错别话术禁止在本模块手写第二份。
  *
  * @module harness/context/capabilities/compact/mechanical
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
-import { toolResultBody } from '../../tool-result-body.js';
 import { HeuristicTokenEstimator } from '../../token-estimator.js';
-import {
-  MECHANICAL_NOTICE_TRUNCATED,
-  hasToolCall,
-  isToolResultMessage,
-} from './messages.js';
+import { MECHANICAL_NOTICE_TRUNCATED, hasToolCall, isToolResultMessage } from './messages.js';
 
 /**
- * 打码占位（中性归档措辞——禁止诱导重跑）。
- * 成功结果被降级时替换正文；error 载荷永不打码（错误可追溯性优先，与 B2 同红线）。
+ * 账本单条 purpose 的防御上限（字符）。
+ * purpose 契约本身 ≤120；超长只可能来自历史数据或非本契约客户端，截断防单条撑爆账本。
  */
-export const TOOL_RESULT_PLACEHOLDER =
-  '[Tool output archived in session log — do NOT re-run unless the output is needed again.]';
+const LEDGER_PURPOSE_MAX = 160;
+
+/** 账本单条 error 上限（字符）：错误文案优先保真，仅在异常长时截断 */
+const LEDGER_ERROR_MAX = 200;
+
+/** purpose 缺失时的诚实占位（正常不出现：purpose 是必填参数，缺失会在调用期直接报错） */
+const MISSING_PURPOSE = '(purpose not recorded)';
 
 /**
- * 打码阈值（字符）：旧工具输出正文超过此长度才降级。
- * 拍板常量（B′ 自 HybridCompressor 继承），**不是**可调参数——Q2 已删的 2000/200
- * 两魔数是 SmartRouter 路由阈值，与此处无关；如需调整须走拍板，不走配置。
- */
-export const TOOL_RESULT_MASK_THRESHOLD = 200;
-
-/**
- * 工具调用账本（name+args 紧凑清单）——降级时的「做过什么」无损索引。
+ * 工具调用账本（`name + purpose` 逐行）——降级时的「做过什么」无损索引。
+ *
+ * 输出形态：
+ * ```
+ * - file_edit: Add event-vocabulary disposition to P5 row
+ * - shell: Stage explicit paths, commit, and tag v0.98.17
+ *   ! project_run: test failed (exit 1)
+ * ```
+ * error 结果附在对应调用行下方（错误可追溯性优先，永不省略）。
  *
  * @param messages - 被降级丢弃的消息
  * @returns 账本文本（可为空串）
  */
 export function buildToolCallLedger(messages: Message[]): string {
   const lines: string[] = [];
+  // 调用行只从 toolCalls 产出（时间序）；错误行从 toolResults 追加到最近一次产出之后，
+  // 保证「哪条调用失败」可定位——跨消息配对时以 toolCallId 归位。
+  const lineIndexByCallId = new Map<string, number>();
   for (const msg of messages) {
     for (const tc of msg.toolCalls ?? []) {
-      let args: string;
-      try {
-        args = JSON.stringify(tc.arguments ?? {});
-      } catch {
-        args = '[unserializable]';
-      }
-      if (args.length > 160) args = `${args.slice(0, 160)}…`;
-      lines.push(`- ${tc.name}(${args})`);
+      const raw = (tc.arguments as Record<string, unknown> | undefined)?.purpose;
+      const purpose =
+        typeof raw === 'string' && raw.trim()
+          ? raw.trim().slice(0, LEDGER_PURPOSE_MAX)
+          : MISSING_PURPOSE;
+      lines.push(`- ${tc.name}: ${purpose}`);
+      lineIndexByCallId.set(tc.id, lines.length - 1);
     }
     for (const tr of msg.toolResults ?? []) {
-      if (tr.error !== undefined) {
-        const err = tr.error.length > 120 ? `${tr.error.slice(0, 120)}…` : tr.error;
-        lines.push(`  ! ${tr.name ?? tr.toolCallId}: ${err}`);
+      if (tr.error === undefined) continue;
+      const err = tr.error.length > LEDGER_ERROR_MAX ? `${tr.error.slice(0, LEDGER_ERROR_MAX)}…` : tr.error;
+      const errorLine = `  ! ${tr.name ?? tr.toolCallId}: ${err}`;
+      const at = lineIndexByCallId.get(tr.toolCallId);
+      if (at === undefined) {
+        // 调用方消息已被丢弃（跨切片降级）：错误仍须保留，独立成行——宁可错位，不可丢失
+        lines.push(errorLine);
+        continue;
+      }
+      // 紧贴其调用行插入（倒序插入时下标不失效：同一条目只插一次）
+      lines.splice(at + 1, 0, errorLine);
+      for (const [id, idx] of lineIndexByCallId) {
+        if (idx > at) lineIndexByCallId.set(id, idx + 1);
       }
     }
   }
@@ -65,55 +87,33 @@ export function buildToolCallLedger(messages: Message[]): string {
 }
 
 /**
- * 机械降级第一级：旧工具输出打码（B′）——零 LLM、**不丢轮次**、error 永不打码。
+ * 账本消息构造（user 角色——中段 system 会被部分网关拒绝）。
  *
- * 语义（自 HybridCompressor.preprocessToolResults 迁入，行为保持）：
- * - 最后一个 tool_call 之后的工具结果是「最近工作现场」，不打码；
- * - 更旧的成功结果正文 > `maxChars` → 占位符；error 结果原样保留。
- *
- * @param messages - 待降级消息（视图级处理，不写回持久层）
- * @param opts - maxChars 阈值（缺省 200）
- * @returns 打码结果（result + maskedCount 被打码的结果数）
+ * @param ledger - 账本文本（可为空）
+ * @param removedCount - 被替换的消息条数
+ * @returns 账本视图消息
  */
-export function maskFatToolResults(
-  messages: Message[],
-  opts?: { maxChars?: number },
-): { result: Message[]; maskedCount: number } {
-  const maxChars = opts?.maxChars ?? TOOL_RESULT_MASK_THRESHOLD;
-  const result: Message[] = [];
-  let maskedCount = 0;
-  let lastToolCallIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (hasToolCall(messages[i]!)) {
-      lastToolCallIndex = i;
-      break;
-    }
-  }
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]!;
-    if (isToolResultMessage(msg) && msg.toolResults?.length) {
-      if (i > lastToolCallIndex) {
-        result.push(msg);
-        continue;
-      }
-      let touched = false;
-      const masked = msg.toolResults.map((tr) => {
-        if (tr.error !== undefined) return tr;
-        if (toolResultBody(tr).length <= maxChars) return tr;
-        touched = true;
-        return { ...tr, result: TOOL_RESULT_PLACEHOLDER };
-      });
-      if (touched) maskedCount += 1;
-      result.push(touched ? { ...msg, toolResults: masked } : msg);
-      continue;
-    }
-    result.push(msg);
-  }
-  return { result, maskedCount };
+export function asLedgerMessage(ledger: string, removedCount: number): Message {
+  const head = `${MECHANICAL_NOTICE_TRUNCATED} ${removedCount} earlier messages replaced by a tool-call ledger to fit context window]`;
+  const body = ledger
+    ? `[Tool call ledger — do NOT redo these unless explicitly asked]\n${ledger}\n[Tool results and arguments were dropped; re-read files/sources if you need their content. Check session task list via task_* before continuing]`
+    : '[No tool calls in the dropped range. Check session task list via task_* before continuing]';
+  return {
+    role: 'user',
+    content: `${head}\n${body}`,
+    timestamp: Date.now(),
+    // 语义诚实：账本是机械降级产物，**不是**摘要——不得复用 contextSummary 标记，
+    // 否则下游（持久化/回放/审计）会把它当交接摘要处理。
+    metadata: { source: 'contextLedger' as const },
+  };
 }
 
 /**
- * 机械降级第二级：账本截断（唯一截断兜底，三→一）。
+ * 账本截断（保留近尾 + 头部替换为账本）——**物理溢出兜底专用**。
+ *
+ * 与 `mechanicalDegrade` 的分工：本函数服务「消息必须放回窗口否则请求 400」的场景
+ * （overflow 路径），所以在丢头部的同时**保住近尾原文**（最近的现场最值钱）；
+ * `mechanicalDegrade` 服务「摘要失败」的场景，一次全量转账本。
  *
  * 形态（middle 替换体，外层 head/tail 由调用方拼接）：`[账本说明 + 近尾]`。
  * - 保留近尾：预算驱动从头丢弃，但**保底**不破（禁止只留 4 条）；
@@ -170,49 +170,48 @@ export function ledgerTruncate(
   }
 
   const ledger = buildToolCallLedger(dropped);
-  const notice: Message = {
-    role: 'user',
-    content: ledger
-      ? `${MECHANICAL_NOTICE_TRUNCATED} ${dropped.length} earlier messages removed to fit context window]\n[Tool call ledger — do NOT redo these unless explicitly asked]\n${ledger}\n[Check session task list via task_* before continuing]`
-      : `${MECHANICAL_NOTICE_TRUNCATED} ${dropped.length} earlier messages removed to fit context window]\n[Check session task list via task_* before continuing]`,
-    timestamp: Date.now(),
-    metadata: { source: 'contextSummary' as const },
-  };
+  const notice = asLedgerMessage(ledger, dropped.length);
   return { result: [notice, ...kept], droppedCount: dropped.length, ledgerKept: ledger.length > 0 };
 }
 
 /**
- * 机械降级阶梯：先打码（不丢轮次），不够再账本截断（B′）。
+ * 机械降级：整段替换为 purpose 账本（零 LLM，单级，无可再降）。
  *
  * @param messages - 待降级消息
- * @param opts - targetTokens（打码后达标即止；缺省直接进账本截断）与估算器
- * @returns 降级结果（result + droppedSummary 描述；完全无操作时不带 droppedSummary）
+ * @param opts - targetTokens（用于判定是否仍需上报超预算）与估算器
+ * @returns 降级结果
+ *  - `result`：单条账本消息（入参为空时为空数组）
+ *  - `tokensAfter`：账本 token 估算
+ *  - `overBudget`：账本仍超 targetTokens —— 已无可降空间，调用方须如实上报，
+ *    不得再丢条目（丢条目 = 静默失忆）
+ *  - `droppedSummary`：产物描述
  */
 export function mechanicalDegrade(
   messages: Message[],
   opts?: {
     targetTokens?: number;
     estimator?: { estimateMessages(ms: Message[]): number };
-    minKeep?: number;
   },
-): { result: Message[]; droppedSummary?: string } {
-  const { result: masked, maskedCount } = maskFatToolResults(messages);
+): {
+  result: Message[];
+  tokensAfter: number;
+  overBudget: boolean;
+  droppedSummary?: string;
+} {
+  if (messages.length === 0) {
+    return { result: [], tokensAfter: 0, overBudget: false };
+  }
   const estimator = opts?.estimator ?? new HeuristicTokenEstimator();
-  const maskedTokens = estimator.estimateMessages(masked);
-  const withinTarget = opts?.targetTokens != null && maskedTokens <= opts.targetTokens;
-  if (withinTarget && maskedCount > 0) {
-    return { result: masked, droppedSummary: 'Old tool outputs masked' };
-  }
-  const {
-    result: truncated,
-    droppedCount,
-    ledgerKept,
-  } = ledgerTruncate(masked, { ...opts, estimator });
-  // 诚实上报：打码与截断都发生时两级都要报；账本为空不得写 "ledger kept"
-  const parts: string[] = [];
-  if (maskedCount > 0) parts.push(`${maskedCount} tool results masked`);
-  if (droppedCount > 0) {
-    parts.push(`${droppedCount} messages truncated${ledgerKept ? ' (tool call ledger kept)' : ''}`);
-  }
-  return { result: truncated, droppedSummary: parts.length > 0 ? parts.join('; ') : undefined };
+  const ledger = buildToolCallLedger(messages);
+  const ledgerMsg = asLedgerMessage(ledger, messages.length);
+  const result = [ledgerMsg];
+  const tokensAfter = estimator.estimateMessages(result);
+  const overBudget = opts?.targetTokens != null && tokensAfter > opts.targetTokens;
+  const callCount = messages.reduce((n, m) => n + (m.toolCalls?.length ?? 0), 0);
+  return {
+    result,
+    tokensAfter,
+    overBudget,
+    droppedSummary: `Replaced ${messages.length} messages (${callCount} tool calls) with a purpose ledger`,
+  };
 }

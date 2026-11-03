@@ -413,21 +413,18 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           return { ok: true, compacted: true, reason: 'partial', tokensBefore, tokensAfter: estimator.estimateMessages(view), summary: opts.previousSummary, fresh: false, summarizeAttempted: summarized.summarizeAttempted, view };
         }
         if (isMessages) {
-          // 机械降级阶梯（B′）：打码（不丢轮次）→ 账本截断；旧摘要留 summary 字段
+          // 机械降级（单级 purpose 账本）：旧摘要留 summary 字段
           // （视图由 sticky 重建注入，覆盖点不推进——宁可胖不丢）。
-          // 兜底口径：LLM 已发起（失败/空白）→ 旧 fallbackTruncate 保底 max(6,15%)；
-          // 未发起（无 summarize/空段/窗口不足）→ 旧机械口径保 2（TruncateCompressor）
-          const degraded = mechanicalDegrade(messages, {
-            targetTokens,
-            estimator,
-            minKeep: summarized.summarizeAttempted ? undefined : 2,
-          });
+          // 账本已是最小形态：仍超预算时报 mechanical_over_budget，不再丢条目。
+          const degraded = mechanicalDegrade(messages, { targetTokens, estimator });
           return {
             ok: true,
             compacted: true,
-            reason: `summarize_failed:${summarized.error ?? 'no_output'}`,
+            reason: degraded.overBudget
+              ? `summarize_failed:${summarized.error ?? 'no_output'}:mechanical_over_budget`
+              : `summarize_failed:${summarized.error ?? 'no_output'}`,
             tokensBefore,
-            tokensAfter: estimator.estimateMessages(degraded.result),
+            tokensAfter: degraded.tokensAfter,
             // 摘要失败时旧摘要仍有效：summary 字段保留之（机械占位永不冒充摘要）
             summary: opts.previousSummary,
             fresh: false,
@@ -557,16 +554,14 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           view,
         };
       }
-      const degraded = mechanicalDegrade(middle, {
-        targetTokens,
-        estimator,
-        minKeep: summarized.summarizeAttempted ? undefined : 2,
-      });
+      const degraded = mechanicalDegrade(middle, { targetTokens, estimator });
       const view = [...head, ...degraded.result, ...tail];
       return {
         ok: true,
         compacted: true,
-        reason: `summarize_failed:${summarized.error ?? 'no_output'}`,
+        reason: degraded.overBudget
+          ? `summarize_failed:${summarized.error ?? 'no_output'}:mechanical_over_budget`
+          : `summarize_failed:${summarized.error ?? 'no_output'}`,
         tokensBefore,
         tokensAfter: estimator.estimateMessages(view),
         // 摘要失败时旧摘要仍有效：summary 字段保留之（机械占位永不冒充摘要）

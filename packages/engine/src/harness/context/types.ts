@@ -261,6 +261,15 @@ export interface SelectOptions {
   maxTokens: number;
   protectFirstN: number;
   protectLastN: number;
+  /**
+   * 度量视图（可选）：与 `messages` **等长同序**，只用于 token 估算。
+   *
+   * 存在的理由（尺子与作用域同源）：实际请求发的是**老化视图**，而压缩必须吃
+   * **原文**（F-b）。若用原文估算，老化越有效误判越大——原文 middle 797k /
+   * 视图 76k 时会每请求判溢出、每请求触发一次摘要，把前缀缓存整段烧掉。
+   * 切分仍按 `messages`（原文），仅估算看这里。
+   */
+  measureMessages?: Message[];
 }
 
 export interface MessageSelector {
@@ -273,15 +282,38 @@ export interface BudgetAllocateParams {
   /** 可用 token 预算；未知窗口时可省略（见 budget-allocator） */
   tokenBudget?: number;
   contextWindow?: number;
+  /**
+   * 模型单次输出上限（= 请求实际携带的 max_tokens 上界）。
+   * 提供且物理窗口已知时，按硬预留计入 `outputReserve`——这是
+   * `input + max_tokens ≤ contextWindow` 不变量的唯一保证。
+   * 窗口未知（仅有 compactTargetTokens 等策略目标）时忽略：目标不是物理边界。
+   */
+  maxOutputTokens?: number;
   systemPromptTokens: number;
   toolTokens: number;
 }
 
 export interface BudgetAllocateResult {
-  /** 消息可用的 token 预算 */
+  /**
+   * 输入侧硬上限（不变量）：`system + tools + messages ≤ inputLimit`。
+   * 恒有 `inputLimit + outputReserve ≤ effectiveLimit`。
+   */
+  inputLimit: number;
+  /**
+   * 消息侧硬上限 = `inputLimit − system − tools − 请求信封`。
+   * `MessageSelector` / overflow 目标等**强制点**必须用这个值。
+   */
+  messagesLimit: number;
+  /**
+   * 消息侧软目标（压缩策略提示值，≤ messagesLimit）。
+   * 触发压缩的阈值挂这里；它允许小于 messagesLimit（提前压缩），
+   * 但任何强制点不得用它当作边界。
+   */
   messagesBudget: number;
-  /** 预留给模型输出的 token */
+  /** 预留给模型输出的 token（有 maxOutputTokens 时即其值） */
   outputReserve: number;
+  /** 预算不可行：固定开销 + 输出预留已吃掉窗口（messagesLimit ≤ 0） */
+  infeasible?: boolean;
 }
 
 export interface BudgetAllocator {

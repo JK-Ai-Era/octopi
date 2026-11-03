@@ -37,6 +37,21 @@ export class DefaultMessageSelector implements MessageSelector {
     const estimator = tokenEstimator ?? new HeuristicTokenEstimator();
     const { maxTokens, protectFirstN, protectLastN } = options;
 
+    // 度量视图（可选）：与 messages 等长同序，仅用于估算；切分仍按原文。
+    // 不传时退化为原行为（量原文）。
+    const measure = options.measureMessages ?? messages;
+
+    /**
+     * 估算字节区间 [start, end) 的 token 数（按度量视图的同下标取值）
+     */
+    const estimateRange = (start: number, end: number): number => {
+      let tokens = 0;
+      for (let i = start; i < end; i++) {
+        tokens += estimator.estimateMessage(measure[i] ?? messages[i]!);
+      }
+      return tokens;
+    };
+
     // 空消息列表
     if (messages.length === 0) {
       return {
@@ -62,10 +77,11 @@ export class DefaultMessageSelector implements MessageSelector {
     // 3. 中间区域（可压缩/丢弃）
     const middleMessages = tailCount > 0 ? remainingAfterHead.slice(0, -tailCount) : remainingAfterHead;
 
-    // 4. 计算各区域 token 数
-    const headTokens = estimator.estimateMessages(headMessages);
-    const tailTokens = estimator.estimateMessages(tailMessages);
-    const middleTokens = estimator.estimateMessages(middleMessages);
+    // 4. 计算各区域 token 数（按度量视图；区域下标以原文为准）
+    const headTokens = estimateRange(0, headCount);
+    const tailStartIdx = messages.length - tailMessages.length;
+    const tailTokens = estimateRange(tailStartIdx, messages.length);
+    const middleTokens = estimateRange(headCount, tailStartIdx);
 
     // 5. 计算可用预算
     const fixedTokens = headTokens + tailTokens;
@@ -87,7 +103,12 @@ export class DefaultMessageSelector implements MessageSelector {
 
       // 保留头部 + 部分尾部
       const availableForTail = maxTokens - headTokens;
-      const selectedTail = this.selectByTokenBudget(tailMessages, availableForTail, estimator);
+      const selectedTail = this.selectByTokenBudget(
+        tailMessages,
+        availableForTail,
+        estimator,
+        measure.slice(tailStartIdx),
+      );
 
       return {
         kept: [...headMessages, ...selectedTail],
@@ -116,8 +137,22 @@ export class DefaultMessageSelector implements MessageSelector {
     }
 
     // 7. 中间区域需要压缩：从尾部开始保留（越新的越重要）
-    const selectedMiddle = this.selectByTokenBudgetFromEnd(middleMessages, middleBudget, estimator);
-    const selectedMiddleTokens = estimator.estimateMessages(selectedMiddle);
+    const selectedMiddle = this.selectByTokenBudgetFromEnd(
+      middleMessages,
+      middleBudget,
+      estimator,
+      measure.slice(headCount, tailStartIdx),
+    );
+    // 选中段可能因配对对齐而不连续（跳过孤立 tool_call/result），
+    // 所以按成员精确累加，不能用「长度差」推算起点。
+    const selectedMiddleSet = new Set(selectedMiddle);
+    let selectedMiddleTokens = 0;
+    for (let i = headCount; i < tailStartIdx; i++) {
+      const m = messages[i];
+      if (selectedMiddleSet.has(m)) {
+        selectedMiddleTokens += estimator.estimateMessage(measure[i] ?? m);
+      }
+    }
 
     const kept = [...headMessages, ...selectedMiddle, ...tailMessages];
     const overflow = middleMessages.slice(0, middleMessages.length - selectedMiddle.length);
@@ -136,11 +171,17 @@ export class DefaultMessageSelector implements MessageSelector {
    * 从头部开始选择消息，直到达到 token 预算
    *
    * 边界对齐：不拆分 tool_call/tool_result 对。
+   *
+   * @param messages - 候选消息（原文）
+   * @param budget - token 预算
+   * @param estimator - 估算器
+   * @param measure - 与 messages 等长同序的度量视图（省略时量原文）
    */
   private selectByTokenBudget(
     messages: Message[],
     budget: number,
     estimator: TokenEstimator,
+    measure?: Message[],
   ): Message[] {
     const selected: Message[] = [];
     const selectedSet = new Set<Message>();
@@ -148,7 +189,7 @@ export class DefaultMessageSelector implements MessageSelector {
 
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
-      const msgTokens = estimator.estimateMessage(msg);
+      const msgTokens = estimator.estimateMessage(measure?.[i] ?? msg);
 
       // 检查是否需要边界对齐
       if (isToolResultMessage(msg) && i > 0) {
@@ -180,11 +221,17 @@ export class DefaultMessageSelector implements MessageSelector {
    * 从尾部开始选择消息，直到达到 token 预算
    *
    * 边界对齐：不拆分 tool_call/tool_result 对。
+   *
+   * @param messages - 候选消息（原文）
+   * @param budget - token 预算
+   * @param estimator - 估算器
+   * @param measure - 与 messages 等长同序的度量视图（省略时量原文）
    */
   private selectByTokenBudgetFromEnd(
     messages: Message[],
     budget: number,
     estimator: TokenEstimator,
+    measure?: Message[],
   ): Message[] {
     const selected: Message[] = [];
     const selectedSet = new Set<Message>();
@@ -192,7 +239,7 @@ export class DefaultMessageSelector implements MessageSelector {
 
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
-      const msgTokens = estimator.estimateMessage(msg);
+      const msgTokens = estimator.estimateMessage(measure?.[i] ?? msg);
 
       // 边界对齐：如果这是 tool_call 消息，检查后面的 tool_result
       if (hasToolCall(msg) && i < messages.length - 1) {

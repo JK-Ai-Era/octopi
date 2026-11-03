@@ -55,10 +55,25 @@ function atTurnBoundary(msgs: Message[]): Message[] {
 interface CollectedEvent {
   type: string;
   cached?: boolean;
+  reason?: string;
 }
 
 function nonCachedCompacts(events: CollectedEvent[]): CollectedEvent[] {
   return events.filter((e) => e.type === 'context.compact.end' && !e.cached);
+}
+
+/**
+ * 花费了 LLM 的压缩轮次（非缓存 ⇒ 真摘要）。
+ *
+ * A′（2026-11-04）：overflow 机械降级是**如实可见**的真实动作（视图确实超预算且被降级），
+ * 它不再是静默行为，因此 `nonCachedCompacts` 会包含它。本测试要钉的是
+ * 「复用轮不得花钱重打 LLM」，故按 reason 区分：只要没有非缓存的 proactive 轮即可。
+ *
+ * @param events - 采集到的事件
+ * @returns 非缓存的 proactive 压缩结束事件
+ */
+function llmCompacts(events: CollectedEvent[]): CollectedEvent[] {
+  return nonCachedCompacts(events).filter((e) => e.reason !== 'overflow');
 }
 
 /** LLM 视图形状校验：不拆 tool_call/tool_result 对（悬空 tool_calls / 孤儿 tool 结果会被网关 400） */
@@ -104,7 +119,8 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
       tools: [],
       tokenBudget: 20_000,
       summarize,
-      emit: (e: { type: string; cached?: boolean }) => events.push({ type: e.type, cached: e.cached }),
+      emit: (e: { type: string; cached?: boolean; reason?: string }) =>
+        events.push({ type: e.type, cached: e.cached, reason: e.reason }),
     };
 
     const r1 = await engine.assemble({ ...params, messages: atTurnBoundary(base) });
@@ -162,7 +178,8 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
       tools: [],
       tokenBudget: 4_000,
       summarize,
-      emit: (e: { type: string; cached?: boolean }) => events.push({ type: e.type, cached: e.cached }),
+      emit: (e: { type: string; cached?: boolean; reason?: string }) =>
+        events.push({ type: e.type, cached: e.cached, reason: e.reason }),
     };
 
     const firstMessages = atTurnBoundary(base);
@@ -177,10 +194,10 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     expect(nonCachedCompacts(events)).toHaveLength(1);
 
     events.length = 0;
-    // +1 条 → 复用机械重建：不打 LLM、不发非 cached 事件
+    // +1 条 → 复用机械重建：不打 LLM；视图确实超预算时允许发机械降级事件（A′）
     await engine.assemble({ ...params, messages: atTurnBoundary([...base, userMsg('tiny')]) });
     expect(summarize).toHaveBeenCalledTimes(1);
-    expect(nonCachedCompacts(events)).toHaveLength(0);
+    expect(llmCompacts(events)).toHaveLength(0);
 
     events.length = 0;
     // 攒够增量 → 重试 LLM 摘要（turn 边界）
@@ -211,13 +228,14 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
         lastProactiveMessageCount: base.length,
         lastProactiveTokens: 224_104,
       }),
-      emit: (e: { type: string; cached?: boolean }) => events.push({ type: e.type, cached: e.cached }),
+      emit: (e: { type: string; cached?: boolean; reason?: string }) =>
+        events.push({ type: e.type, cached: e.cached, reason: e.reason }),
     };
 
-    // +1 条：复用机械重建——不打 LLM、不发非 cached 事件（修复前：每 turn 重裁+发通知）
+    // +1 条：复用机械重建——不打 LLM；允许如实的机械降级事件（A′）
     await engine.assemble({ ...params, messages: [...base, userMsg('tiny')] });
     expect(summarize).not.toHaveBeenCalled();
-    expect(nonCachedCompacts(events)).toHaveLength(0);
+    expect(llmCompacts(events)).toHaveLength(0);
     expect(events.some((e) => e.type === 'context.compact.end' && e.cached)).toBe(true);
 
     events.length = 0;
@@ -247,7 +265,8 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
       tools: [],
       tokenBudget: 4_000,
       summarize,
-      emit: (e: { type: string; cached?: boolean }) => events.push({ type: e.type, cached: e.cached }),
+      emit: (e: { type: string; cached?: boolean; reason?: string }) =>
+        events.push({ type: e.type, cached: e.cached, reason: e.reason }),
     };
 
     const r1 = await engine.assemble({ ...params, messages: atTurnBoundary(base) });
