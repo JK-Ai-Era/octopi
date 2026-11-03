@@ -108,6 +108,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.98.22 (2026-11-03)
+
+### docs(architecture): batch-1 P5 — compaction/summary specs rewritten to as-built; two-family boundary explicit
+
+- **改判否决**：「压缩中间段摘要复用 Summary(Port)」承诺作废（两族方法不同：族 B 抽取式 ≠ 族 A 交接式；v0.98.10 已删 summaryPort 槽位）。内部规格 `arch/summary-compact.md` 对应措辞族全部改写（§1.1 目标、§2.2 依赖注、§4.3 中间段、§6.1/6.3）；公开文档 `docs/context-layer-contracts.md`(.zh) 两族边界显式化：CompactEngine 中间段摘要 = handover（四段式、当前会话模型 + 同形前缀、禁 mini 档、单一 `SummarizeFunction`）；SummaryPort = 工具/旁路抽取（族 B）。两族刻意不合并。
+- **模型档位矛盾清理**：`models.level.summary`（2026-10-30 已撤销）残留清零（规格 §5/§12/§15 与 contracts 双语 `summarize.ts` 表行「summary→mini→standard→primary」）；解析链按 `resolver.ts` 实序落档（policy.model → policy.modelLevel → 显式/`summary.model` → level 缺省 mini → mini → standard → 主模型），`contextEngine.summaryModel`（v0.98.21 已删）从链上移除；压缩摘要（族 A）不走该链。
+- **事件词汇定性（债务 #7）收口：非债务**——`compact.*`（能力内进度回调）与 `context.compact.*`（Agent 事件域，Observer/UI）两域并存是有意设计：能力层不发 Agent 域事件，跨层由调用方择需映射（现仅 `compact.summarize_fallback` 转发）。维持现状，留档规格 §9。
+- **契约文档 as-built**：`SummarizeFunction`（previousSummary 嵌入正文 / 返回完整更新摘要）、`CompactOutcome`（`summarizeAttempted` 必填、`fresh`、`coveredMessageCount`）、`CompactTransportOutcome` 单投影、机械降级阶梯、view-split 对齐（原 open item 关闭）；`arch/compaction-architecture.md` 转正为批一收敛后规格（债务处置表）。
+- 观察项上账（Q4 承诺）：`compactText` 无生产消费方 → `arch/open-problems.md` **OP-COMPACT**。
+
+---
+
 ## v0.98.21 (2026-11-03)
 
 ### refactor(config)!: 退休 compact.* 配置段与 contextEngine.summaryModel（批一 P4 配置收口）

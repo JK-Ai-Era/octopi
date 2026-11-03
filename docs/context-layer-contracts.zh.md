@@ -155,13 +155,13 @@ Runner.handle
 - **Memory 召回**：`builder.memoryStore`；config-bridge 与 Gateway 从 `home/agent.db` 建 `SqliteMemoryStore`。**Knowledge**：system 只注入 catalog（`builder.knowledgeCatalog`）；catalog 为**标签化** `id/name/type/status/scale/location` + `purpose`/`topics`；源/索引/外源 ingest 见 `docs/knowledge.md`
 - **MemoryStore 单实例**：`AgentBuilder.build()` 在 `buildCore` 前用 `builder.memoryStore` 注册 `memory_store`/`memory_search`；MemoryLayer 召回与 `memory.steward.*` 入库同一实例。Gateway **不再**用进程级 `InMemoryMemoryStore` 挂全局 memory 工具
 - **压缩状态落盘（E4）**：权威桶 `SessionData.contextCompacts[agentId]`；`contextCompact` 为 primary/单 agent 兼容视图。Jsonl `*.state.json` 持久化。`Agent` 内存桥键 = `(sessionId, agentId)`。**不同 agent 不互相借用 compact**。手动压缩：`SessionAwareRunner.compactSession`（与 handle **共 session 锁**，排队；勿仅依赖 `status==='processing'`）
-- **公用能力 Summary / Compact**（`harness/context/capabilities/`，横切，不计入业务领域计数）：
-  - **SummaryPort**：LLM 摘要 + 信息提取；Policy 数据化；`ContentChannel` ⊥ `ContentKind`（**无** `tool_output` kind）
+- **公用能力 Summary / Compact**（`harness/context/capabilities/`，横切，不计入业务领域计数）。**两族摘要——刻意不合并**（旧承诺「压缩中间段摘要复用 Summary(Port)」**改判否决**：抽取式 ≠ 交接式）：
+  - **SummaryPort（族 B｜内容抽取）**：面向工具/旁路的 LLM 摘要 + 信息提取；Policy 数据化；`ContentChannel` ⊥ `ContentKind`（**无** `tool_output` kind）
   - **工具 L1/L2**：决策在 tools 端；L1 `maxReturnChars` 硬顶始终生效；L2 经 SummaryPort；`summarize=off` 仍 L1；`file_read`+code 默认不 L2
-  - **CompactEngine**：调用方可指定头尾条数 / 目标 token / 模式；`DefaultContextEngine.structuralCompact` **委托**该引擎；**E4 状态仍只在 ContextEngine / Session 路径**
-  - **structured_json**：L0 解析 + L1 `fields`/`fieldTypes` 轻量契约（`structuredError`）；完整 Schema 可选端口
+  - **CompactEngine（族 A｜会话交接）**：调用方可指定头尾条数 / 目标 token / 模式；`DefaultContextEngine.structuralCompact` **委托**该引擎；中间段摘要是**交接式摘要**（四段式模板、当前会话模型 + 同形前缀缓存、禁 mini 档），经单一 `SummarizeFunction` 执行——**不经 SummaryPort**；**E4 状态仍只在 ContextEngine / Session 路径**
+  - **structured_json（族 B）**：L0 解析 + L1 `fields`/`fieldTypes` 轻量契约（`structuredError`）；完整 Schema 可选端口
   - 配置：`summary` / `models.level.mini`；内部设计规格（不对外）
-  - **P2 子系统包装暂缓**：当前消费方为 tools L1/L2 与会话 compact；出现旁路/事件批处理需求时再挂 `subsystems/content-summary|compact`
+  - **P2 子系统包装暂缓**：当前消费方为 tools L1/L2（SummaryPort）与会话 compact（CompactEngine）；出现旁路/事件批处理需求时再挂 `subsystems/content-summary|compact`
 - **跨域 Document 抽取**（`harness/capabilities/document`，非 Context 专用）：session 附件 / knowledge ingest / document 工具共用；唯一装配 `createDocumentPortFromConfig(documents.*)`。Context 层不直接持有 DocumentPort。
 
 **主动摘要（防长会话失忆）：**
@@ -259,7 +259,7 @@ dump **默认关闭**（写盘量 ≈ 请求字节 × 每轮调用次数）；`m
 | `packages/engine/src/harness/context/assembler.ts` | `DefaultContextAssembler` |
 | `packages/engine/src/harness/context/layers.ts` | 薄适配层 + `createDefaultLayers` |
 | `packages/engine/src/harness/context/system-prompt-assembler.ts` | Runner 每轮 system 装配端口 |
-| `packages/engine/src/harness/context/summarize.ts` | 摘要 provider 挑选（summary→mini→standard→primary） |
+| `packages/engine/src/harness/context/summarize.ts` | `createProviderSummarize`（族 A 会话模型执行闭包）+ `pickSummarizeProvider`（族 B 旁路挑选：mini→standard→primary） |
 | `packages/engine/src/harness/context/capabilities/**` | SummaryPort / CompactEngine 公用能力 |
 | `tests/harness/context-layer-contracts.test.ts` | 契约行为测试 |
 | `tests/harness/context-wiring-p0.test.ts` | 接线回归 |
