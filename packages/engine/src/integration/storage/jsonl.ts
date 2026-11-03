@@ -5,7 +5,7 @@
  *   <sessionsDir>/
  *     sessions.json          ← 所有 session 的元数据索引（键 = sessionId；含 lifecycle 投影）
  *     <sessionId>.jsonl      ← 对话记录（JSONL；save 整聚合快照写回，非磁盘 append-only）
- *     <sessionId>.state.json ← 附带状态（tasks / turns / metadata / 模型 2 字段）
+ *     <sessionId>.state.json ← 附带状态（tasks / steps / metadata / 模型 2 字段）
  *
  * 主键 = sessionId；文件名一律 `toSessionFileName`（跨平台安全）。
  * 可选 `index`：可重建检索投影（失败不阻断权威写）。禁止把 index 当权威。
@@ -59,18 +59,18 @@ function isRefPrefix(synced: readonly unknown[], incoming: readonly unknown[]): 
 }
 
 /**
- * 历史 state.json 的 turns[].input（全量历史快照）已废弃：读取即剥，
+ * 历史 state.json 的 turns[].input（全量历史快照；turns 为账本旧字段名）已废弃：读取即剥，turns 整键读入 steps，
  * 下次 save 自然瘦身。输入正文的唯一权威是 messages JSONL（Discourse）。
  *
  * 读取端宽松、写入端严格：legacy 账本可能缺 inputCount（旧格式无此字段），
  * rest spread 保全其余键，仅类型层面放宽；新写入的账本必含 inputCount。
  */
-function slimTurns(turns: unknown): SessionData['turns'] {
-  if (!Array.isArray(turns)) return [];
-  return turns.flatMap((t) => {
+function slimSteps(steps: unknown): SessionData['steps'] {
+  if (!Array.isArray(steps)) return [];
+  return steps.flatMap((t) => {
     if (!t || typeof t !== 'object') return [];
     const { input: _dropped, ...rest } = t as Record<string, unknown>;
-    return [rest as unknown as SessionData['turns'][number]];
+    return [rest as unknown as SessionData['steps'][number]];
   });
 }
 
@@ -130,14 +130,14 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     contextCompacts?: SessionData['contextCompacts'];
     lifecycle?: SessionData['lifecycle'];
     tasks?: SessionData['tasks'];
-    turns?: SessionData['turns'];
+    steps?: SessionData['steps'];
     metadata?: SessionData['metadata'];
   } | null> {
     const statePath = this.sessionStateFile(sessionId);
     if (!(await fileExists(statePath))) return null;
     try {
       const parsed = JSON.parse(await readFile(statePath, 'utf-8'));
-      return { ...parsed, turns: slimTurns(parsed?.turns) };
+      return { ...parsed, steps: slimSteps(parsed?.steps ?? parsed?.turns) };
     } catch {
       return null;
     }
@@ -225,13 +225,13 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       contextCompacts?: SessionData['contextCompacts'];
       lifecycle?: SessionData['lifecycle'];
       tasks?: SessionData['tasks'];
-      turns?: SessionData['turns'];
+      steps?: SessionData['steps'];
       metadata?: SessionData['metadata'];
     } = {};
     if (resolved.state) {
       try {
         const parsed = JSON.parse(await readFile(resolved.state, 'utf-8'));
-        state = { ...parsed, turns: slimTurns(parsed?.turns) };
+        state = { ...parsed, steps: slimSteps(parsed?.steps ?? parsed?.turns) };
       } catch { /* corrupt state, ignore */ }
     }
 
@@ -268,7 +268,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         updatedAt: Date.now(),
       },
       messages,
-      turns: state.turns ?? [],
+      steps: state.steps ?? [],
       metadata: state.metadata ?? {},
       tasks: state.tasks ?? [],
     };
@@ -360,7 +360,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         contextCompacts: data.contextCompacts,
         lifecycle: data.lifecycle,
         tasks: data.tasks ?? [],
-        turns: data.turns ?? [],
+        steps: data.steps ?? [],
         metadata,
       }, null, 2));
 
@@ -419,7 +419,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         contextCompacts: prev?.contextCompacts,
         lifecycle: prev?.lifecycle,
         tasks: prev?.tasks ?? [],
-        turns: prev?.turns ?? [],
+        steps: prev?.steps ?? [],
         metadata,
       }, null, 2));
 

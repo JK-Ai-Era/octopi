@@ -21,7 +21,7 @@ import type {
   CheckpointContext,
   CheckpointVerdict,
   CheckpointMetrics,
-  TurnSummary,
+  StepSummary,
   RecoveryAction,
   RunFailureKind,
 } from '@octopi-agent/core/interfaces/run-guard.js';
@@ -128,12 +128,12 @@ export class DefaultRunGuard implements RunGuard {
     let verdict: CheckpointVerdict;
 
     // ── 可选资源兜底（默认关闭；总闸归 ResourceBudget） ──
-    if (this.config.hardLimit !== undefined && context.iteration >= this.config.hardLimit) {
+    if (this.config.hardLimit !== undefined && context.steps >= this.config.hardLimit) {
       verdict = {
         action: 'stop',
         failureKind: 'burn',
-        reason: `硬上限触发：已运行 ${context.iteration} 轮（上限 ${this.config.hardLimit}）`,
-        userMessage: `任务已运行 ${context.iteration} 轮，达到安全上限。如需继续，请优化任务后重新开始。`,
+        reason: `硬上限触发：已运行 ${context.steps} 轮（上限 ${this.config.hardLimit}）`,
+        userMessage: `任务已运行 ${context.steps} 轮，达到安全上限。如需继续，请优化任务后重新开始。`,
       };
     } else if (
       this.config.hardWallClockMs !== undefined &&
@@ -187,7 +187,7 @@ export class DefaultRunGuard implements RunGuard {
                 ? this.config.minCheckpointInterval
                 : Math.max(
                     this.config.minCheckpointInterval,
-                    Math.floor(context.iteration * 0.5) || this.config.minCheckpointInterval,
+                    Math.floor(context.steps * 0.5) || this.config.minCheckpointInterval,
                   ),
           };
         }
@@ -225,7 +225,7 @@ export class DefaultRunGuard implements RunGuard {
   private normalVerdict(context: CheckpointContext): CheckpointVerdict {
     const next = Math.min(
       this.config.maxCheckpointInterval,
-      Math.max(this.config.minCheckpointInterval, Math.floor(context.iteration * 1.2) || this.config.checkpointInterval),
+      Math.max(this.config.minCheckpointInterval, Math.floor(context.steps * 1.2) || this.config.checkpointInterval),
     );
     return {
       action: 'continue',
@@ -405,7 +405,7 @@ export class DefaultRunGuard implements RunGuard {
     //
     // - 旧规则 5 的两个分支都不生效：`low` 没有任何消费方（裁决只取 high/medium）；
     //   `medium` 要求 `noopStreak >= 3`，而 run-agent 在 `consecutiveNoops >= noopThreshold`
-    //   时已设置 `_noopLoopStop` 并发出可见停止事件，`shouldStopAfterTurn` 直接结束 turn，
+    //   时已设置 `_noopLoopStop` 并发出可见停止事件，`shouldStopAfterStep` 直接结束 turn，
     //   本规则只是重复判定，还会多注入一条 hint、污染 recoveryHistory。
     //
     // 结论：真正需要 Guard 的异常只有三类——同参同结果（无进展循环）、同参同错误（没换方法）、
@@ -443,7 +443,7 @@ export class DefaultRunGuard implements RunGuard {
             .slice(-5)
             .map(
               (h, i) =>
-                `  ${i + 1}. [iter ${h.iteration}] ${h.actionType}${h.failureKind ? ` (${h.failureKind})` : ''}: ${h.reason}`,
+                `  ${i + 1}. [iter ${h.steps}] ${h.actionType}${h.failureKind ? ` (${h.failureKind})` : ''}: ${h.reason}`,
             )
             .join('\n')}`
         : '';
@@ -461,7 +461,7 @@ export class DefaultRunGuard implements RunGuard {
 ${summaryText}${taskLine}${recoveryLine}${signalsLine}
 
 当前指标：
-- 迭代次数: ${ctx.iteration}
+- 迭代次数: ${ctx.steps}
 - 连续错误: ${ctx.metrics.consecutiveErrors}
 - 连续同一错误: ${ctx.metrics.consecutiveIdenticalFailures ?? '(未提供)'}
 - 工具失败率: ${(ctx.metrics.toolFailureRate * 100).toFixed(0)}%（窗口 ${ctx.metrics.toolCallsInWindow ?? '?'} 次）

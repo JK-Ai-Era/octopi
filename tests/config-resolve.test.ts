@@ -209,7 +209,7 @@ describe('InMemorySessionStore sessionId first-class', () => {
     return {
       id, agentId,
       meta: { id, agentId, channelId: 'test', peerId: 'test', status: 'idle', createdAt: 0, sessionStartedAt: 0, lastInteractionAt: 0, updatedAt: 0 },
-      messages: [], turns: [], metadata: {},
+      messages: [], steps: [], metadata: {},
     };
   }
 

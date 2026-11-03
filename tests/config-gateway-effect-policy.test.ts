@@ -94,7 +94,7 @@ describe('toGatewayConfig agent field preservation (no silent drop)', () => {
         canDelegate: true,
         maxDepth: 2,
         rightsCeiling: { canRun: true, readScope: 'summary_tail' },
-        budget: { maxTurns: 3, maxTokens: 1000, timeoutMs: 5000 },
+        budget: { maxSteps: 3, maxTokens: 1000, timeoutMs: 5000 },
       },
     };
   }

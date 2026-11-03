@@ -270,7 +270,7 @@ describe('安全配置指纹与漂移（§8.4）', () => {
     const path = join(tmp, 'octopi.json');
     writeFileSync(
       path,
-      JSON.stringify({ effectPolicy: { mode: 'host', jail: 'require' }, budgetPolicy: { maxIterations: 5 } }),
+      JSON.stringify({ effectPolicy: { mode: 'host', jail: 'require' }, budgetPolicy: { maxSteps: 5 } }),
     );
     const anchor = computeSecurityConfigFingerprint(extractSecurityConfigSlice(readFileSync(path, 'utf8')));
     const recheck = createFileSecurityIntegrity({ configPath: path, anchor });
@@ -279,13 +279,13 @@ describe('安全配置指纹与漂移（§8.4）', () => {
     // 非安全字段（budgetPolicy）改动不应触发
     writeFileSync(
       path,
-      JSON.stringify({ effectPolicy: { mode: 'host', jail: 'require' }, budgetPolicy: { maxIterations: 9 } }),
+      JSON.stringify({ effectPolicy: { mode: 'host', jail: 'require' }, budgetPolicy: { maxSteps: 9 } }),
     );
     expect(recheck().ok).toBe(true);
 
     writeFileSync(
       path,
-      JSON.stringify({ effectPolicy: { mode: 'host', jail: 'none', privilegedAck: 'x' }, budgetPolicy: { maxIterations: 9 } }),
+      JSON.stringify({ effectPolicy: { mode: 'host', jail: 'none', privilegedAck: 'x' }, budgetPolicy: { maxSteps: 9 } }),
     );
     const drift = recheck();
     expect(drift.ok).toBe(false);

@@ -40,7 +40,7 @@ function session(id = 's1', agentId = 'owner-agent'): SessionData {
       { role: 'assistant', content: 'old-reply', timestamp: Date.now() - 9_000, agentId },
       { role: 'user', content: 'new', timestamp: Date.now() },
     ],
-    turns: [],
+    steps: [],
     metadata: {},
   };
 }

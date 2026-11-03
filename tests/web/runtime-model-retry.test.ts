@@ -58,7 +58,7 @@ describe('modelRetry 状态机', () => {
     const client = mockClient();
     const store = new OctopiRuntimeStore(client);
 
-    client.__emit({ type: 'iteration.start', timestamp: Date.now(), sessionId: 's1', data: {} } as AgentEventEnvelope);
+    client.__emit({ type: 'step.start', timestamp: Date.now(), sessionId: 's1', data: {} } as AgentEventEnvelope);
     client.__emit(retryEvent(1));
 
     expect(store.getState().chat.runStatus).toBe('waiting');

@@ -45,7 +45,7 @@ function emptySession(id: string, agentId = 'a1'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };
@@ -74,8 +74,8 @@ function scriptedAgent(steps: AgentStep[]): Agent {
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-    setOnAfterTurn: () => {},
-    notifyAfterTurn: async () => {},
+    setOnAfterStep: () => {},
+    notifyAfterStep: async () => {},
     run: async function* (
       _s?: AbortSignal,
       _h?: unknown,
@@ -142,12 +142,12 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
     const agent = scriptedAgent([
       {
         pushes: [{ role: 'assistant', content: 'answer-1', timestamp: Date.now() }],
-        event: { type: 'turn_end', timestamp: Date.now(), usage: undefined },
+        event: { type: 'step_end', timestamp: Date.now(), usage: undefined },
       },
       {
         seam: true,
         pushes: [{ role: 'assistant', content: 'answer-2', timestamp: Date.now() }],
-        event: { type: 'turn_end', timestamp: Date.now(), usage: undefined },
+        event: { type: 'step_end', timestamp: Date.now(), usage: undefined },
       },
     ]);
     const runner = new SessionAwareRunner(agent, {} as never, store);
@@ -206,9 +206,9 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
   it('委派结果消费/初始同步触发 deliveryAck（surfaced 因果锚点）', async () => {
     const { store } = await setup();
     const agent = scriptedAgent([
-      // 原始 Loop 事件用 turn_start（adapt 映射为 iteration.start），确保先于 seam 挂起
-      { event: { type: 'turn_start', timestamp: Date.now() } },
-      { seam: true, event: { type: 'turn_end', timestamp: Date.now(), usage: undefined } },
+      // 原始 Loop 事件用 turn_start（adapt 映射为 step.start），确保先于 seam 挂起
+      { event: { type: 'step_start', timestamp: Date.now() } },
+      { seam: true, event: { type: 'step_end', timestamp: Date.now(), usage: undefined } },
     ]);
     const runner = new SessionAwareRunner(agent, {} as never, store);
     const acked: string[] = [];
@@ -264,7 +264,7 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
     const agent = scriptedAgent([
       {
         pushes: [{ role: 'assistant', content: 'answer-1', timestamp: Date.now() }],
-        event: { type: 'turn_end', timestamp: Date.now(), usage: undefined },
+        event: { type: 'step_end', timestamp: Date.now(), usage: undefined },
       },
     ]);
     const runner = new SessionAwareRunner(agent, {} as never, store);
@@ -317,8 +317,8 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
   it('转录同步失败且收尾 save 失败：已消费条目按原 Trigger 重投（评审 F6/F8）', async () => {
     const { store } = await setup();
     const agent = scriptedAgent([
-      { event: { type: 'turn_start', timestamp: Date.now() } },
-      { seam: true, event: { type: 'turn_end', timestamp: Date.now(), usage: undefined } },
+      { event: { type: 'step_start', timestamp: Date.now() } },
+      { seam: true, event: { type: 'step_end', timestamp: Date.now(), usage: undefined } },
     ]);
     // 同步恒失败 + 收尾权威写也失败 → ack 永不成立 → close 必须重投
     const failingStore = {
@@ -378,7 +378,7 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
   it('inbox.open 抛错不得跳过锁释放（评审 F7）', async () => {
     const { store } = await setup();
     const agent = scriptedAgent([
-      { event: { type: 'turn_end', timestamp: Date.now(), usage: undefined } },
+      { event: { type: 'step_end', timestamp: Date.now(), usage: undefined } },
     ]);
     const runner = new SessionAwareRunner(agent, {} as never, store);
     const blockedInbox = new SessionInbox(async () => {});

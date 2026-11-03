@@ -4,8 +4,8 @@ import type {
   RunTimelineEventDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import type { InspectorState } from '@octopi-agent/gateway/web/runtime/store';
-import type { TokenUsage } from '@octopi-agent/core/types/turn';
-import { nominalTotalTokens, reportedPromptTokens } from '@octopi-agent/core/types/turn';
+import type { TokenUsage } from '@octopi-agent/core/types/step';
+import { nominalTotalTokens, reportedPromptTokens } from '@octopi-agent/core/types/step';
 import { extractUserMessageText } from '@octopi-agent/engine/harness/context/turn-envelope.js';
 
 /** TokenUsage 是 cache-aware 七字段；展示统一走 core 汇总函数，禁止读旧 prompt/completion/total 字段 */
@@ -127,8 +127,8 @@ export function RunObservatoryPanel({
   const lifecycle = obs?.lifecycle;
   const scope = obs?.scope;
   const guard = obs?.guardMetrics;
-  // lifecycle 缺 turns/tools 时用 Guard 快照展示
-  const turnsDisplay = lifecycle?.turns ?? guard?.iteration;
+  // lifecycle 缺 steps/tools 时用 Guard 快照展示
+  const stepsDisplay = lifecycle?.steps ?? guard?.steps;
   const toolsDisplay = lifecycle?.toolCalls ?? guard?.totalToolCalls;
   const durationDisplay = lifecycle?.durationMs ?? guard?.elapsedMs;
   const endDisplay = lifecycle?.endReason ?? (runStatus === 'idle' && obs ? '—' : '');
@@ -141,8 +141,8 @@ export function RunObservatoryPanel({
         ? 'tool'
         : ev.type.startsWith('model.') || ev.type.startsWith('llm')
           ? 'llm'
-          : ev.type.startsWith('turn.')
-            ? 'turn'
+          : ev.type.startsWith('step.')
+            ? 'step'
             : 'engine';
       const b = buckets[cls] ?? (buckets[cls] = { count: 0, totalMs: 0 });
       b.count += 1;
@@ -151,7 +151,7 @@ export function RunObservatoryPanel({
     return buckets;
   }, [timeline]);
 
-  // F3 正式计时口径：run.timing（wait/build/run 分段）+ turn.end.llmTiming（ttft/chars）
+  // F3 正式计时口径：run.timing（wait/build/run 分段）+ step.end.llmTiming（ttft/chars）
   const f3 = useMemo(() => {
     let waitMs: number | undefined;
     let buildMs: number | undefined;
@@ -164,7 +164,7 @@ export function RunObservatoryPanel({
         if (t.stage === 'run_start') waitMs = t.waitMs;
         else if (t.stage === 'context_ready') buildMs = t.buildMs;
         else if (t.stage === 'run_end') runDurMs = t.durMs;
-      } else if (ev.type === 'turn.end') {
+      } else if (ev.type === 'step.end') {
         llm.push({ ttftMs: t.ttftMs, durationMs: t.durationMs, reqChars: t.reqChars, outChars: t.outChars });
       }
     }
@@ -346,12 +346,12 @@ export function RunObservatoryPanel({
 
             <div className="ctx-section-title">生命周期与 Timeline</div>
             <div className="small muted" style={{ marginBottom: 4 }}>
-              turns/tools 来自 Run 事件计数（缺省回退 Guard metrics）。Timeline 为引擎适配后的 EventBus 事件。
+              steps/tools 来自 Run 事件计数（缺省回退 Guard metrics）。Timeline 为引擎适配后的 EventBus 事件。
             </div>
             <div className="ctx-metrics">
               <div className="ctx-metric">
-                <div className="k">turns</div>
-                <div className="v">{turnsDisplay ?? '—'}</div>
+                <div className="k">steps</div>
+                <div className="v">{stepsDisplay ?? '—'}</div>
               </div>
               <div className="ctx-metric">
                 <div className="k">tools</div>
@@ -373,7 +373,7 @@ export function RunObservatoryPanel({
             <div className="ctx-section-title">耗时 · run 分段与 LLM 计时</div>
             <div className="small muted" style={{ marginBottom: 4 }}>
               wait/build/run 分段来自 <span className="mono">run.timing</span>；ttft / chars 来自{' '}
-              <span className="mono">turn.end.llmTiming</span>（F3 探针转正后的正式观测口径；
+              <span className="mono">step.end.llmTiming</span>（F3 探针转正后的正式观测口径；
               空响应无 ttft，字段缺省即未采集）。run total 取 lifecycle（不含 wait；
               trace 的 <span className="mono">run_end.durMs</span> 含 wait）。下排为事件前缀聚合。
             </div>
@@ -428,9 +428,9 @@ export function RunObservatoryPanel({
                 </div>
               </div>
               <div className="ctx-metric">
-                <div className="k">turn Σ</div>
+                <div className="k">step Σ</div>
                 <div className="v">
-                  {timing.turn ? `${formatMs(timing.turn.totalMs)} (${timing.turn.count})` : '—'}
+                  {timing.step ? `${formatMs(timing.step.totalMs)} (${timing.step.count})` : '—'}
                 </div>
               </div>
             </div>
@@ -443,8 +443,8 @@ export function RunObservatoryPanel({
                 </div>
                 <div className="ctx-metrics">
                   <div className="ctx-metric">
-                    <div className="k">iter (turns)</div>
-                    <div className="v">{obs.guardMetrics?.iteration ?? lifecycle?.turns ?? '—'}</div>
+                    <div className="k">iter (steps)</div>
+                    <div className="v">{obs.guardMetrics?.steps ?? lifecycle?.steps ?? '—'}</div>
                   </div>
                   <div className="ctx-metric">
                     <div className="k">in uncached</div>
@@ -503,7 +503,7 @@ export function RunObservatoryPanel({
                     <span className={`v ${obs.guardMetrics.budgetExceededReason ? 'status-warn' : obs.guardMetrics.wrapUpActive ? 'status-info' : ''}`}>
                       {obs.guardMetrics.budgetExceededReason
                         || (obs.guardMetrics.wrapUpActive
-                          ? `wrap-up (${obs.guardMetrics.wrapUpReason ?? '?'}, ${obs.guardMetrics.wrapUpTurnsRemaining ?? 0} turns left)`
+                          ? `wrap-up (${obs.guardMetrics.wrapUpReason ?? '?'}, ${obs.guardMetrics.wrapUpStepsRemaining ?? 0} steps left)`
                           : '—')}
                     </span>
                     <span className="k">guard</span>

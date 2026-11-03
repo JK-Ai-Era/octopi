@@ -11,7 +11,7 @@
  * Agent 是 Harness 运行时门面；不要再手拼 runAgentWithReliability。
  */
 
-import type { Message, Turn, SessionStatus } from '@octopi-agent/core/types.js';
+import type { Message, Step, SessionStatus } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { ToolContextProvider } from '../agent/builder.js';
 import * as pluginToolPolicyAdapter from '../extension/plugin-ecosystem/tools/plugin-tool.js';
@@ -213,7 +213,7 @@ export interface SessionAwareRunnerConfig {
 }
 
 /**
- * 失败凭证消息中附带残句的截断上限（显示用途；完整残句在带 error 标记的 turn 账本）
+ * 失败凭证消息中附带残句的截断上限（显示用途；完整残句在带 error 标记的 step 账本）
  *
  * 展示型截断，与 wire-dump 的消息截断同性质——不是部署可变参数，故不进配置。
  */
@@ -277,9 +277,9 @@ export function adaptLoopEvent(
      * 失败轮的正文只能来自这里——不得回落到上一次调用的完整回复冒充本次输出。
      */
     callStreamedContent?: string;
-    /** 最近一次 turn_end 的正文快照与错误标记，供 runner 落 turn 账本 */
-    lastTurnContent?: string;
-    lastTurnError?: boolean;
+    /** 最近一次 turn_end 的正文快照与错误标记，供 runner 落 step 账本 */
+    lastStepContent?: string;
+    lastStepError?: boolean;
     /** `agent_end.reason='error'` 时的错误文本，收口落失败凭证 */
     errorMessage?: string;
     lastUserContent?: string;
@@ -344,25 +344,25 @@ export function adaptLoopEvent(
         return { type: 'engine.error', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { error: errorText } };
       }
       return { type: 'engine.end', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: { reason: event.reason } };
-    case 'turn_start':
+    case 'step_start':
       // 必须带 session 元数据：gatewayBus.onAll 以 event.sessionId 为 WS 广播前提
-      return { type: 'iteration.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
+      return { type: 'step.start', timestamp: event.timestamp, agentId: meta.agentId, sessionId: meta.sessionId, data: {} };
     case 'assistant_message':
       state.assistantContent = typeof event.message.content === 'string' ? event.message.content : '';
       // 完整消息已定稿，本次调用的部分流出功成身退（不得与正文叠加）
       state.callStreamedContent = '';
       return null;
-    case 'turn_end': {
+    case 'step_end': {
       // phase 透传给 UI：pre_tools ≠ 本轮 run 结束（见 architecture.md）
       // 正文口径：优先完整消息；失败轮（error=true）只有本次调用的部分流出，
       // 不得回落到上一次调用的回复冒充本次输出
       const turnContent = state.assistantContent || state.callStreamedContent || '';
-      state.lastTurnContent = turnContent;
-      state.lastTurnError = Boolean(event.error);
+      state.lastStepContent = turnContent;
+      state.lastStepError = Boolean(event.error);
       state.assistantContent = '';
       state.callStreamedContent = '';
       return {
-        type: 'turn.end',
+        type: 'step.end',
         timestamp: Date.now(),
         agentId: meta.agentId,
         sessionId: meta.sessionId,
@@ -418,7 +418,7 @@ export function adaptLoopEvent(
       state.stopMessage =
         budgetReason === 'wall_clock'
           ? '本轮运行时间达到预算上限，已停止。'
-          : budgetReason === 'iteration'
+          : budgetReason === 'steps'
             ? '本轮迭代次数达到预算上限，已停止。'
             : '本轮工具调用次数达到预算上限，已停止。';
       // 对齐 EventBus BUDGET_EXCEEDED；用户可见停止原因
@@ -1052,8 +1052,8 @@ export class SessionAwareRunner {
     const adaptState: {
       assistantContent: string;
       callStreamedContent?: string;
-      lastTurnContent?: string;
-      lastTurnError?: boolean;
+      lastStepContent?: string;
+      lastStepError?: boolean;
       errorMessage?: string;
       lastUserContent: string;
       stopReason?: string;
@@ -1062,7 +1062,7 @@ export class SessionAwareRunner {
       loopEndReason?: string;
     } = { assistantContent: '', lastUserContent: '' };
     let observerErrorMsg: string | undefined;
-    let hasTurnEnd = false;
+    let hasStepEnd = false;
     /** 正常完成时需在持久化后真删 metadata.lastStop（save 浅合并删不掉） */
     let clearLastStop = false;
     /** 本 user turn 内第 N 次 LLM 调用（0-based；cache 观测） */
@@ -1234,7 +1234,7 @@ export class SessionAwareRunner {
             extractionStatus: 'pending',
           });
           // 注入指标
-          this._subsystemRuntime.metrics.update('turn.count', session.messages.filter(m => m.role === 'assistant').length);
+          this._subsystemRuntime.metrics.update('step.count', session.messages.filter(m => m.role === 'assistant').length);
         }
         this._subsystemRuntime.applyPendingInjections(session.messages);
 
@@ -1970,13 +1970,13 @@ export class SessionAwareRunner {
 
       // 10. 运行 Agent（Agent.run = reliability 包装；context/runScope 为本 Run 私有）
       let streamedContent = '';
-      let lastUsage: import('@octopi-agent/core/types/turn.js').TokenUsage | undefined = undefined;
-      /** 最近一次 turn.end 的上下文用量（供收尾持久化；compact 视图值不进此账） */
+      let lastUsage: import('@octopi-agent/core/types/step.js').TokenUsage | undefined = undefined;
+      /** 最近一次 step.end 的上下文用量（供收尾持久化；compact 视图值不进此账） */
       let lastContextTokens: number | undefined = undefined;
       let lastContextWindow: number | undefined = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
-      /** 本轮起始消息下标（afterTurn 只传增量） */
-      let turnStartIndex = runContext.messages.length;
+      /** 本轮起始消息下标（afterStep 只传增量） */
+      let stepStartIndex = runContext.messages.length;
       /** 用户中止（编辑重发标记用） */
       let runAborted = false;
 
@@ -2073,7 +2073,7 @@ export class SessionAwareRunner {
             // 转录同步成功 = 注入消息已入父上下文且可恢复 → 确认送达
             flushInboxAcks();
           }
-        } else if (loopEvent.type === 'turn_end') {
+        } else if (loopEvent.type === 'step_end') {
           // 漂移兜底：turn 边界无条件对齐一次（旁路写者整包回退后即使暂无
           // 新消息也能自愈；无漂移时幂等零写）
           if (
@@ -2088,11 +2088,11 @@ export class SessionAwareRunner {
         // 适配事件格式（向后兼容）
         const adapted = adaptLoopEvent(loopEvent, meta, adaptState);
         if (adapted) {
-          // 捕获 usage 数据，并在 turn.end 事件中附加上下文信息（必须在 yield 之前，
+          // 捕获 usage 数据，并在 step.end 事件中附加上下文信息（必须在 yield 之前，
           // 否则 gateway 收到事件后立即广播，data 里还没有 context 字段）
-          if (adapted.type === 'turn.end') {
+          if (adapted.type === 'step.end') {
             const rawUsage = adapted.data?.usage as
-              | import('@octopi-agent/core/types/turn.js').TokenUsage
+              | import('@octopi-agent/core/types/step.js').TokenUsage
               | undefined;
             if (rawUsage) {
               lastUsage = rawUsage;
@@ -2156,28 +2156,28 @@ export class SessionAwareRunner {
 
         // assistantContent 由 adaptLoopEvent 在 assistant_message 事件上单一写入
 
-        // turn_start：重置本轮增量游标（afterTurn 只传本轮消息）
-        if (loopEvent.type === 'turn_start') {
-          turnStartIndex = runContext.messages.length;
+        // turn_start：重置本轮增量游标（afterStep 只传本轮消息）
+        if (loopEvent.type === 'step_start') {
+          stepStartIndex = runContext.messages.length;
         }
 
-        // turn.end → 记录 turn
-        if (loopEvent.type === 'turn_end') {
-          hasTurnEnd = true;
+        // step.end → 记录 step
+        if (loopEvent.type === 'step_end') {
+          hasStepEnd = true;
           if (loopEvent.usage) {
             lastUsage = loopEvent.usage;
           }
           llmCallIndexInUserTurn += 1;
-          const turnMessages = runContext.messages.slice(turnStartIndex);
-          await this.agent.notifyAfterTurn(lastUsage, turnMessages);
-          turnStartIndex = runContext.messages.length;
+          const stepMessages = runContext.messages.slice(stepStartIndex);
+          await this.agent.notifyAfterStep(lastUsage, stepMessages);
+          stepStartIndex = runContext.messages.length;
           // 账本正文 = adaptLoopEvent 按调用算好的快照（失败轮只有本次调用的部分流出）；
           // 失败轮必须带 error 标记，空正文也留账（审计价值），不得拿历史内容凑数
-          const content = adaptState.lastTurnContent ?? '';
-          const turnFailed = Boolean(adaptState.lastTurnError);
+          const content = adaptState.lastStepContent ?? '';
+          const turnFailed = Boolean(adaptState.lastStepError);
           if (content || turnFailed) {
-            session.turns.push({
-              id: `turn_${Date.now()}`,
+            session.steps.push({
+              id: `step_${Date.now()}`,
               inputCount: Math.max(0, session.messages.length - 1),
               output: { role: 'assistant', content, timestamp: Date.now(), agentId: _agentId },
               // 失败轮没有 usage（loop 的 error turn_end 不带）；不得写上一次调用的用量
@@ -2225,16 +2225,16 @@ export class SessionAwareRunner {
         // 否则重载会话后这次失败无影无踪（只剩一段被当成正常回复的部分文本）。
         const body = adaptState.errorMessage ?? '未知错误';
         // 残句并入凭证消息（显示用途，截断）：live 视图里用户看到过的部分输出
-        // 重载后不再消失；完整残句仍以带 error 标记的 turn 账本为准。
-        // 最后一次尝试若以 turn_end(error) 收尾，partial 在 lastTurnContent；
+        // 重载后不再消失；完整残句仍以带 error 标记的 step 账本为准。
+        // 最后一次尝试若以 turn_end(error) 收尾，partial 在 lastStepContent；
         // 若直接 abort（无 turn_end），partial 还挂在 callStreamedContent 上。
         const danglingPartial = adaptState.callStreamedContent ?? '';
         // 回退只在「最后一个 turn 是失败轮」时启用：最终 abort 不产 turn_end 时
-        // lastTurnContent 会停留在上一轮**成功**的正文上，直接用会把完整回复
+        // lastStepContent 会停留在上一轮**成功**的正文上，直接用会把完整回复
         // 冒充成「中断前的部分输出」
-        const finalPartial = danglingPartial || (adaptState.lastTurnError ? (adaptState.lastTurnContent ?? '') : '');
+        const finalPartial = danglingPartial || (adaptState.lastStepError ? (adaptState.lastStepContent ?? '') : '');
         const partialNote = finalPartial
-          ? `\n\n---\n中断前的部分输出（非完整回复）：\n${finalPartial.slice(0, LLM_ERROR_PARTIAL_MAX_CHARS)}${finalPartial.length > LLM_ERROR_PARTIAL_MAX_CHARS ? '\n…（已截断，完整残句见 turn 账本）' : ''}`
+          ? `\n\n---\n中断前的部分输出（非完整回复）：\n${finalPartial.slice(0, LLM_ERROR_PARTIAL_MAX_CHARS)}${finalPartial.length > LLM_ERROR_PARTIAL_MAX_CHARS ? '\n…（已截断，完整残句见 step 账本）' : ''}`
           : '';
         session.messages.push({
           role: 'user',
@@ -2258,9 +2258,9 @@ export class SessionAwareRunner {
         // 最后一次失败尝试的 partial 也留账：abort 路径不再产 turn_end，
         // 此处不记的话最后尝试的输出只剩前端 live 视图（重载即失）。
         // 只补「无 turn_end」的缺口；turn_end(error) 路径已在账本里，不得重复记。
-        if (hasTurnEnd && danglingPartial) {
-          session.turns.push({
-            id: `turn_${Date.now()}`,
+        if (hasStepEnd && danglingPartial) {
+          session.steps.push({
+            id: `step_${Date.now()}`,
             inputCount: Math.max(0, session.messages.length - 1),
             output: { role: 'assistant', content: danglingPartial, timestamp: Date.now(), agentId: _agentId },
             durationMs: 0,
@@ -2321,13 +2321,13 @@ export class SessionAwareRunner {
       }
 
       // 11. 引擎异常退出时的 session 一致性修复（须在 Observer final 采样之前）
-      if (!hasTurnEnd) {
+      if (!hasStepEnd) {
         const fallbackContent = streamedContent || '';
         const failedRun = adaptState.loopEndReason === 'error';
         // 失败 run 空正文也留账（与 error turn_end 口径一致）；正常/崩溃路径仍按有内容才记
         if (fallbackContent || failedRun) {
           // 失败 run 的部分流出不得冒充 assistant 回复入历史——失败凭证已由
-          // runStopped 消息承担；只落一条带 error 标记的 turn 账本保留审计。
+          // runStopped 消息承担；只落一条带 error 标记的 step 账本保留审计。
           if (!failedRun) {
             session.messages.push({
               role: 'assistant',
@@ -2336,8 +2336,8 @@ export class SessionAwareRunner {
               agentId: _agentId,
             });
           }
-          session.turns.push({
-            id: `turn_${Date.now()}`,
+          session.steps.push({
+            id: `step_${Date.now()}`,
             inputCount: Math.max(0, session.messages.length - 1),
             output: { role: 'assistant', content: fallbackContent, timestamp: Date.now(), agentId: _agentId },
             usage: lastUsage,
@@ -2352,7 +2352,7 @@ export class SessionAwareRunner {
       // Observer：记录最终 messages 与 endReason（真正 close 在 finally，保证异常也闭合）
       observerFinalMessages = session.messages;
       // P5: 使用 stopReason 区分终态（context_stopped / behavior_stopped / policy_stopped / security_stopped / completed）
-      // LLM 错误路径只设 loopEndReason='error'、不设 stopReason；若在此回落到 hasTurnEnd，
+      // LLM 错误路径只设 loopEndReason='error'、不设 stopReason；若在此回落到 hasStepEnd，
       // 一次彻底失败会被记成 completed（run.timing / Observer / 指标全部失真）。
       observerEndReason =
         adaptState.stopReason ??
@@ -2360,14 +2360,14 @@ export class SessionAwareRunner {
           ? 'error'
           : adaptState.loopEndReason === 'aborted'
             ? 'aborted'
-            : hasTurnEnd
+            : hasStepEnd
               ? 'completed'
               : 'no_turn_end');
 
-      // 中止标记：仅在本轮**未完成**被掐断时打标（hasTurnEnd = 正常收尾）。
+      // 中止标记：仅在本轮**未完成**被掐断时打标（hasStepEnd = 正常收尾）。
       // 迟到 abort / signal 竞态不得给已完成轮贴编辑重发。
       let clearAbortedTurn = false;
-      const abortedMidTurn = runAborted || (Boolean(signal?.aborted) && !hasTurnEnd);
+      const abortedMidTurn = runAborted || (Boolean(signal?.aborted) && !hasStepEnd);
       // L3：中止保留 undo（供编辑重发 discard）；其余出口 commit（继续对话=隐式提交）
       if (turnFileUndo) {
         // Observer tool.effect：效应账本摘要（§5.6）
@@ -2412,7 +2412,7 @@ export class SessionAwareRunner {
       const compactSnap = this.agent.getSessionCompactState(sessionId, _agentId);
       writeSessionCompact(session, _agentId, compactSnap);
       // 上下文用量随会话持久化：重开会话恢复显示（不靠 UI 用末页消息猜）。
-      // 只记 turn.end 口径（实际 prompt / 全量估算）；compact 视图值不写入。
+      // 只记 step.end 口径（实际 prompt / 全量估算）；compact 视图值不写入。
       if (lastContextTokens !== undefined || lastContextWindow !== undefined) {
         session.metadata = {
           ...session.metadata,
@@ -2710,7 +2710,7 @@ export class SessionAwareRunner {
         updatedAt: Date.now(),
       },
       messages: [],
-      turns: [],
+      steps: [],
       metadata: {},
       tasks: [],
     };

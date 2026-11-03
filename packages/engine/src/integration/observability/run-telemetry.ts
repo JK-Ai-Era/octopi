@@ -17,7 +17,7 @@ import type {
 } from '@octopi-agent/engine/harness/observability/run-telemetry.js';
 import type { LoopObserver } from '@octopi-agent/core/loop/types.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 import { TraceCollector } from './trace-collector.js';
 import { MetricsAggregator, type MetricsAggregatorConfig } from './metrics.js';
 

@@ -105,8 +105,8 @@ const TIMELINE_TYPES = new Set([
   'engine.error',
   // 模型重试：排查「为什么等了这么久」时，时间线必须能看出重试发生与次数
   'engine.model_retry',
-  'iteration.start',
-  'turn.end',
+  'step.start',
+  'step.end',
   'tool.exec.start',
   'tool.exec.end',
   'budget.exceeded',
@@ -265,7 +265,7 @@ export class ObserverHub {
             ? endedAt - record.lifecycle.startedAt
             : undefined,
         // timeline 事件缺失时从 Guard / messages 摘要回填，避免面板全空
-        turns: record.lifecycle.turns ?? g?.iteration,
+        steps: record.lifecycle.steps ?? g?.steps,
         toolCalls: record.lifecycle.toolCalls ?? g?.totalToolCalls,
       };
       if (input.messages && this.config.channels['run.messages']) {
@@ -284,8 +284,8 @@ export class ObserverHub {
         if (built.cloned) {
           record.messageClones = { ...record.messageClones, final: built.cloned };
         }
-        if (record.lifecycle.turns == null && record.guardMetrics?.iteration != null) {
-          record.lifecycle.turns = record.guardMetrics.iteration;
+        if (record.lifecycle.steps == null && record.guardMetrics?.steps != null) {
+          record.lifecycle.steps = record.guardMetrics.steps;
         }
         if (record.lifecycle.toolCalls == null && record.guardMetrics?.totalToolCalls != null) {
           record.lifecycle.toolCalls = record.guardMetrics.totalToolCalls;
@@ -606,8 +606,8 @@ export class ObserverHub {
       }
 
       const life = record.lifecycle;
-      if (event.type === 'turn.end') {
-        life.turns = (life.turns ?? 0) + 1;
+      if (event.type === 'step.end') {
+        life.steps = (life.steps ?? 0) + 1;
       } else if (event.type === 'tool.exec.end') {
         life.toolCalls = (life.toolCalls ?? 0) + 1;
       } else if (event.type === 'engine.end') {
@@ -762,7 +762,7 @@ export class ObserverHub {
         };
       } else if (d?.usageLedger) {
         record.guardMetrics = {
-          iteration: 0,
+          steps: 0,
           totalToolCalls: 0,
           nominalTotalTokens: 0,
           elapsedMs: 0,
@@ -780,9 +780,9 @@ export class ObserverHub {
     }
     // P2 wrap-up 事件
     if (event.type === 'budget.wrap_up') {
-      const d = event.data as { reason?: string; turnsRemaining?: number };
+      const d = event.data as { reason?: string; stepsRemaining?: number };
       record.guardMetrics = {
-        iteration: record.guardMetrics?.iteration ?? 0,
+        steps: record.guardMetrics?.steps ?? 0,
         totalToolCalls: record.guardMetrics?.totalToolCalls ?? 0,
         nominalTotalTokens: record.guardMetrics?.nominalTotalTokens ?? 0,
         elapsedMs: record.guardMetrics?.elapsedMs ?? 0,
@@ -797,13 +797,13 @@ export class ObserverHub {
         ...record.guardMetrics,
         wrapUpActive: true,
         wrapUpReason: d.reason as 'context' | 'policy' | undefined,
-        wrapUpTurnsRemaining: d.turnsRemaining,
+        wrapUpStepsRemaining: d.stepsRemaining,
       };
     }
     if (event.type === 'budget.exceeded') {
       const reason = (event.data as { reason?: string } | undefined)?.reason;
       record.guardMetrics = {
-        iteration: 0,
+        steps: 0,
         totalToolCalls: record.lifecycle.toolCalls ?? 0,
         nominalTotalTokens: 0,
         elapsedMs: record.lifecycle.durationMs ?? 0,
@@ -821,7 +821,7 @@ export class ObserverHub {
     } else if (event.type === 'run_guard.stopped') {
       const reason = (event.data as { reason?: string } | undefined)?.reason;
       record.guardMetrics = {
-        iteration: record.guardMetrics?.iteration ?? 0,
+        steps: record.guardMetrics?.steps ?? 0,
         totalToolCalls: record.guardMetrics?.totalToolCalls ?? 0,
         nominalTotalTokens: record.guardMetrics?.nominalTotalTokens ?? 0,
         elapsedMs: record.guardMetrics?.elapsedMs ?? 0,
@@ -839,7 +839,7 @@ export class ObserverHub {
     } else if (event.type === 'run_guard.recovered') {
       const d = event.data as { reason?: string; actions?: string[] };
       record.guardMetrics = {
-        iteration: record.guardMetrics?.iteration ?? 0,
+        steps: record.guardMetrics?.steps ?? 0,
         totalToolCalls: record.guardMetrics?.totalToolCalls ?? 0,
         nominalTotalTokens: record.guardMetrics?.nominalTotalTokens ?? 0,
         elapsedMs: record.guardMetrics?.elapsedMs ?? 0,
@@ -954,7 +954,7 @@ export class ObserverHub {
     const g = record.guardMetrics;
     const lifecycle: RunLifecycleView = {
       ...record.lifecycle,
-      turns: record.lifecycle.turns ?? g?.iteration,
+      steps: record.lifecycle.steps ?? g?.steps,
       toolCalls: record.lifecycle.toolCalls ?? g?.totalToolCalls,
       durationMs: record.lifecycle.durationMs ?? g?.elapsedMs,
     };
@@ -1096,7 +1096,7 @@ function stripLayerPayload(
 
 function toTimelineNode(event: AgentEvent): RunTimelineEventView | null {
   const data = (event.data ?? {}) as Record<string, unknown>;
-  // F3 计时段：turn.end 带 llmTiming（LLM 调用计时）；run.timing 带 wait/build/run_end 分段
+  // F3 计时段：step.end 带 llmTiming（LLM 调用计时）；run.timing 带 wait/build/run_end 分段
   const timing: RunTimelineEventView['timing'] =
     (data.llmTiming as RunTimelineEventView['timing'] | undefined) ??
     (event.type === 'run.timing'

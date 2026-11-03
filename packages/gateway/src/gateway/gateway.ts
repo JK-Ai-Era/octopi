@@ -2130,9 +2130,9 @@ export class Gateway {
   }
 
   /**
-   * control 命令终态：合成 turn.end，让 Web/TUI 清 streaming 并展示 display 文案。
-   * 命令不进 Loop，不会由 Runner 产出 turn.end。
-   * **不带 error:true**——Loop 的 turn.end+error 表示重试/waiting，会把命令结果打回运行态。
+   * control 命令终态：合成 step.end，让 Web/TUI 清 streaming 并展示 display 文案。
+   * 命令不进 Loop，不会由 Runner 产出 step.end。
+   * **不带 error:true**——Loop 的 step.end+error 表示重试/waiting，会把命令结果打回运行态。
    * 纯文本（type=text）转 Markdown 硬换行；markdown 原样。
    */
   private broadcastCommandTurnEnd(
@@ -2144,7 +2144,7 @@ export class Gateway {
     const raw = content ?? '';
     const text = displayType === 'text' ? raw.split('\n').join('  \n') : raw;
     const event = {
-      type: 'turn.end',
+      type: 'step.end',
       sessionId,
       timestamp: Date.now(),
       ...(agentId ? { agentId } : {}),
@@ -2776,7 +2776,7 @@ export class Gateway {
         updatedAt: Date.now(),
       },
       messages: [],
-      turns: [],
+      steps: [],
       metadata: options.metadata ?? {},
       tasks: [],
     };
@@ -2805,7 +2805,7 @@ export class Gateway {
   async getSessionView(sessionId: string, _agentId?: string): Promise<{
     meta: SessionMeta;
     messageCount: number;
-    turnCount: number;
+    stepCount: number;
     taskCount?: number;
     abortedTurn?: { userMessageIndex: number; at?: number };
     /** 最近一次 LLM 调用的上下文用量（runner 持久化；UI 重开会话恢复显示） */
@@ -2845,7 +2845,7 @@ export class Gateway {
     return {
       meta: session.meta,
       messageCount: session.messages.length,
-      turnCount: session.turns.length,
+      stepCount: session.steps.length,
       taskCount: session.tasks?.length ?? 0,
       abortedTurn,
       contextTokens: typeof metaContextTokens === 'number' ? metaContextTokens : undefined,
@@ -3102,7 +3102,7 @@ export class Gateway {
         updatedAt: now,
       },
       messages: prefix,
-      turns: [],
+      steps: [],
       // 不复制 tasks / clientToolCalls / fileReleases / 附件体；只留溯源
       metadata: {
         parentSessionId: sessionId,
@@ -4928,7 +4928,7 @@ export class Gateway {
           inboundContent = joined;
         } else {
           // control / client / 错误：不进 Loop。
-          // 合成 turn.end 作终态；**禁止**带 error:true（Loop 语义会把 UI 打回 waiting）
+          // 合成 step.end 作终态；**禁止**带 error:true（Loop 语义会把 UI 打回 waiting）
           this.broadcastCommandTurnEnd(
             sessionKey,
             result.display.text,
@@ -5004,12 +5004,12 @@ export class Gateway {
       resolveSessionId: () => sessionKey,
       onEvent: (event) => {
         // WS 已由 runtime.run.event 统一广播；这里只采集频道最终回复。
-        if (event.type === 'turn.end' && event.data?.content) {
+        if (event.type === 'step.end' && event.data?.content) {
           const isError = (event.data as { error?: boolean } | undefined)?.error === true;
           // 失败尝试的 partial 不是回答：不得当最终回复外发（10-27 事故形态）
           if (!isError) {
             finalContent = event.data.content as string;
-            // steered 消息的回答晚于 dispatch 返回：首个终态 turn 恰好发一次（评审 F3）
+            // steered 消息的回答晚于 dispatch 返回：首个终态 step 恰好发一次（评审 F3）
             const phase = (event.data as { phase?: string } | undefined)?.phase;
             if (steeredDelivery && !steeredReplySent && phase !== 'pre_tools' && finalContent) {
               steeredReplySent = true;
@@ -5727,7 +5727,7 @@ export class Gateway {
 
   private static isTerminalWsEvent(type: string): boolean {
     return (
-      type === 'turn.end' ||
+      type === 'step.end' ||
       type === 'engine.end' ||
       type === 'engine.error' ||
       type === 'aborted' ||

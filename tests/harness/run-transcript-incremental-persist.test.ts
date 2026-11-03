@@ -34,7 +34,7 @@ function emptySession(id: string, agentId = 'a1'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };
@@ -63,8 +63,8 @@ function scriptedAgent(steps: AgentStep[]): Agent {
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-    setOnAfterTurn: () => {},
-    notifyAfterTurn: async () => {},
+    setOnAfterStep: () => {},
+    notifyAfterStep: async () => {},
     run: async function* (
       _s?: AbortSignal,
       _h?: unknown,
@@ -101,7 +101,7 @@ describe('runner 转录增量落盘（A 面）', () => {
     const agent = scriptedAgent([
       {
         pushes: [{ role: 'assistant', content: 'first-answer', timestamp: Date.now() }],
-        event: { type: 'turn_end', timestamp: Date.now(), usage: undefined },
+        event: { type: 'step_end', timestamp: Date.now(), usage: undefined },
       },
     ]);
     const runner = new SessionAwareRunner(agent, {} as never, store);
@@ -134,7 +134,7 @@ describe('runner 转录增量落盘（A 面）', () => {
           { role: 'system', content: 'live-status', timestamp: Date.now(), ephemeral: true },
           { role: 'assistant', content: 'durable-answer', timestamp: Date.now() },
         ],
-        event: { type: 'turn_end', timestamp: Date.now(), usage: undefined },
+        event: { type: 'step_end', timestamp: Date.now(), usage: undefined },
       },
     ]);
     const runner = new SessionAwareRunner(agent, {} as never, store);
@@ -167,11 +167,11 @@ describe('runner 转录增量落盘（A 面）', () => {
     const agent = scriptedAgent([
       {
         pushes: [{ role: 'assistant', content: 'answer-1', timestamp: Date.now() }],
-        event: { type: 'turn_end', timestamp: Date.now(), usage: undefined },
+        event: { type: 'step_end', timestamp: Date.now(), usage: undefined },
       },
       {
         pushes: [{ role: 'assistant', content: 'answer-2', timestamp: Date.now() }],
-        event: { type: 'turn_end', timestamp: Date.now(), usage: undefined },
+        event: { type: 'step_end', timestamp: Date.now(), usage: undefined },
       },
     ]);
     const runner = new SessionAwareRunner(agent, {} as never, store);

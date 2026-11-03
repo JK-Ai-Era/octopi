@@ -193,7 +193,7 @@ export class ThinkExecutor {
           if (event.type === 'assistant_message') {
             lastContent = typeof event.message.content === 'string' ? event.message.content : '';
           }
-          if (event.type === 'turn_end' && event.usage) {
+          if (event.type === 'step_end' && event.usage) {
             const u = event.usage;
             tokenUsage = {
               prompt:

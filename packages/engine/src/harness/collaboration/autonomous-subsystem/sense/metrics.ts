@@ -10,7 +10,7 @@
 /**
  * MetricsStore — 线程安全的指标存储
  *
- * 存储主循环注入的运行时指标（如 turn.count、token.used 等），
+ * 存储主循环注入的运行时指标（如 step.count、token.used 等），
  * 供 SenseEngine 的 condition 表达式评估使用。
  */
 export class MetricsStore {
@@ -19,7 +19,7 @@ export class MetricsStore {
   /**
    * 更新指标值
    *
-   * @param key - 指标名（如 'turn.count'）
+   * @param key - 指标名（如 'step.count'）
    * @param value - 指标值
    */
   update(key: string, value: number): void {

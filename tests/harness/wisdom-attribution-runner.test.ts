@@ -34,7 +34,7 @@ function emptySession(id: string, agentId = 'a1'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };
@@ -54,8 +54,8 @@ function scriptedAgent(kind: 'completed' | 'error', texts: string[]): Agent {
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-    setOnAfterTurn: () => {},
-    notifyAfterTurn: async () => {},
+    setOnAfterStep: () => {},
+    notifyAfterStep: async () => {},
     run: async function* (
       _s?: AbortSignal,
       _h?: unknown,
@@ -65,7 +65,7 @@ function scriptedAgent(kind: 'completed' | 'error', texts: string[]): Agent {
         opts?.context?.messages.push({ role: 'assistant', content: t, timestamp: Date.now() });
       }
       yield {
-        type: 'turn_end',
+        type: 'step_end',
         timestamp: Date.now(),
         hasToolCalls: false,
         phase: 'final',

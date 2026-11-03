@@ -41,7 +41,7 @@ export type {
   CheckpointVerdict,
   CheckpointAction,
   CheckpointMetrics,
-  TurnSummary,
+  StepSummary,
   RecoveryAction,
   RecoveryAttemptRecord,
   RunFailureKind,

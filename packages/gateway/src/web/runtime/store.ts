@@ -1385,7 +1385,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.currentSession = {
       meta: session,
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     };
     this.chat = {
       sessionId: session.id,
@@ -1778,7 +1778,7 @@ export class OctopiRuntimeStore extends EventTarget {
     // engineActive：激活/终态与 nextRunStatus 对齐
     if (
       event.type === 'engine.start' ||
-      event.type === 'iteration.start' ||
+      event.type === 'step.start' ||
       event.type === 'llm_stream_delta' ||
       event.type === 'llm_thinking_delta'
     ) {
@@ -1798,7 +1798,7 @@ export class OctopiRuntimeStore extends EventTarget {
     if (
       event.type === 'engine.end' ||
       event.type === 'interrupted' ||
-      (event.type === 'turn.end' &&
+      (event.type === 'step.end' &&
         (event.data as { phase?: string; error?: boolean } | undefined)?.phase !== 'pre_tools' &&
         !(event.data as { error?: boolean } | undefined)?.error)
     ) {
@@ -2067,7 +2067,7 @@ export class OctopiRuntimeStore extends EventTarget {
         inspectorChanged = true;
         break;
       }
-      case 'turn.end': {
+      case 'step.end': {
         const data = (event.data ?? {}) as Record<string, unknown>;
         const contextTokens = typeof data.contextTokens === 'number' ? data.contextTokens : undefined;
         const hasWindowKey = 'contextWindow' in data;
@@ -2092,7 +2092,7 @@ export class OctopiRuntimeStore extends EventTarget {
       const retryClearing =
         event.type === 'llm_stream_delta' ||
         event.type === 'tool.exec.start' ||
-        event.type === 'turn.end' ||
+        event.type === 'step.end' ||
         event.type === 'engine.end' ||
         event.type === 'engine.error' ||
         event.type === 'model.call.error' ||
@@ -2171,7 +2171,7 @@ export class OctopiRuntimeStore extends EventTarget {
     } else if (
       event.type === 'llm_stream_delta' ||
       event.type === 'tool.exec.start' ||
-      event.type === 'turn.end' ||
+      event.type === 'step.end' ||
       event.type === 'engine.end' ||
       event.type === 'engine.error' ||
       event.type === 'model.call.error' ||
@@ -2204,13 +2204,13 @@ export class OctopiRuntimeStore extends EventTarget {
   /**
    * runStatus 状态机（与 Loop 事件契约对齐）——供 live 与后台缓存共用。
    *
-   * waiting:   已发出、等待模型（iteration.start / stream fallback）
+   * waiting:   已发出、等待模型（step.start / stream fallback）
    * streaming: 正在收 token
    * tools:     工具执行中
    * idle:      本轮 run 真正结束
    */
   private static nextRunStatus(event: AgentEventEnvelope, current: RunStatus): RunStatus {
-    if (event.type === 'engine.start' || event.type === 'iteration.start') {
+    if (event.type === 'engine.start' || event.type === 'step.start') {
       return 'waiting';
     }
     if (event.type === 'llm_stream_delta' || event.type === 'llm_thinking_delta') {
@@ -2225,13 +2225,13 @@ export class OctopiRuntimeStore extends EventTarget {
     if (event.type === 'model.call.error' || event.type === 'engine.error') {
       return 'error';
     }
-    if (event.type === 'turn.end') {
+    if (event.type === 'step.end') {
       const data = event.data as { phase?: string; error?: boolean; fromCommand?: boolean } | undefined;
       // 命令合成终态：恒 idle（error 文案已由 command.result / content 承载）
       if (data?.fromCommand) return 'idle';
       if (data?.phase === 'pre_tools') return 'tools';
       if (data?.error) return 'waiting';
-      // turn 末可能紧接工具/插话；具体活跃态由后续 iteration.start 修正。
+      // turn 末可能紧接工具/插话；具体活跃态由后续 step.start 修正。
       return 'waiting';
     }
     if (event.type === 'command.result') {

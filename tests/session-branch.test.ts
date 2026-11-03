@@ -61,7 +61,7 @@ describe('session branch (copy-prefix)', () => {
         assistantMsg('a1', t + 3),
         userMsg('u2', t + 4),
       ],
-      turns: [],
+      steps: [],
       metadata: {},
       tasks: [],
       contextCompact: {
@@ -98,7 +98,7 @@ describe('session branch (copy-prefix)', () => {
       primaryAgentId: 'a1',
       meta: baseMeta('src-2', t),
       messages: [userMsg('only', t)],
-      turns: [],
+      steps: [],
       metadata: {},
       tasks: [],
     });
@@ -121,7 +121,7 @@ describe('session branch (copy-prefix)', () => {
       primaryAgentId: 'a1',
       meta: baseMeta('src-3', t),
       messages: [userMsg('m0', t), assistantMsg('m1', t + 1), userMsg('m2', t + 2)],
-      turns: [],
+      steps: [],
       metadata: {},
       tasks: [],
     });

@@ -67,7 +67,7 @@ function sessionWith(messages: Message[], meta: Partial<SessionData['meta']> = {
       ...meta,
     },
     messages,
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };

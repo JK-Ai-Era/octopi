@@ -139,7 +139,7 @@ describe('全回放必须进入 LLM 窗口（视图替换回归）', () => {
         msg('user', 'OLD-GROUND-TEXT', { metadata: { source: 'knowledgeGrounding' } }),
         msg('user', 'q1'),
       ],
-      turns: [],
+      steps: [],
       metadata: {},
     });
 

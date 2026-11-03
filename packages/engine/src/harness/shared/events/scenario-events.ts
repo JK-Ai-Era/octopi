@@ -13,7 +13,7 @@ export type { ErrorReason, ClassifiedError };
 
 export type LoopEndReason =
   | 'completed'
-  | 'max_turns'
+  | 'max_steps'
   | 'budget_exhausted'
   | 'plugin_stop'
   | 'interrupted'
@@ -22,10 +22,10 @@ export type LoopEndReason =
 export type AgentEventDetail =
   | { type: 'loop_start'; sessionId: string }
   | { type: 'loop_end'; reason: LoopEndReason; response?: string }
-  | { type: 'turn_start'; turnId: string; turnIndex: number }
+  | { type: 'step_start'; stepId: string; stepIndex: number }
   | {
-      type: 'turn_end';
-      turnId: string;
+      type: 'step_end';
+      stepId: string;
       shouldContinue: boolean;
       phase?: 'pre_tools' | 'final';
     }

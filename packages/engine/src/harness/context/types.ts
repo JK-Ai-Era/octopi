@@ -183,14 +183,14 @@ export interface IngestParams {
 
 // ── 轮次后参数 ──
 
-export interface AfterTurnParams {
+export interface AfterStepParams {
   sessionId: string;
   /** E4: compact key component; engine state key falls back to sessionId when omitted */
   agentId?: string;
   /** 本轮消息 */
-  turn: Message[];
+  step: Message[];
   /** 本轮 token 使用（cache-aware） */
-  usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
+  usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
 }
 
 // ── 引擎接口 ──
@@ -205,7 +205,7 @@ export interface AfterTurnParams {
  *
  * 可选方法：
  * - ingest(): 存储消息
- * - afterTurn(): 更新状态（turn 为**本轮增量**消息）
+ * - afterStep(): 更新状态（step 为**本轮增量**消息）
  *
  * 本域契约（@layer harness/context）；Harness 提供 DefaultContextEngine。
  */
@@ -235,7 +235,7 @@ export interface ContextEngine {
    *
    * 用于更新内部统计、触发异步压缩等。
    */
-  afterTurn?(params: AfterTurnParams): Promise<void>;
+  afterStep?(params: AfterStepParams): Promise<void>;
 }
 
 // ── 组件接口（Harness 层可替换） ──

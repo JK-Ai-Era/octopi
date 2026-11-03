@@ -132,9 +132,9 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
           description:
             "Context mode. 'clean' (default) starts the child with no parent history; 'fork' passes your message history for background.",
         },
-        max_turns: {
+        max_steps: {
           type: 'number',
-          description: 'Turn budget for the child run (intersected with the target ceiling)',
+          description: 'Step budget for the child run (model rounds; intersected with the target ceiling)',
         },
         max_tokens: {
           type: 'number',
@@ -158,7 +158,7 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
 
       const contextMode = args.context === 'fork' ? 'fork' : 'clean';
       const timeoutMs = args.timeout_ms != null ? Number(args.timeout_ms) : undefined;
-      const maxTurns = args.max_turns != null ? Number(args.max_turns) : undefined;
+      const maxSteps = args.max_steps != null ? Number(args.max_steps) : undefined;
       const maxTokens = args.max_tokens != null ? Number(args.max_tokens) : undefined;
 
       try {
@@ -177,8 +177,8 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
           // D1：传快照而非活数组引用——父 run 在子起跑后仍会 append
           parentMessages: contextMode === 'fork' ? context.messages.map((m) => ({ ...m })) : undefined,
           budget:
-            maxTurns != null || maxTokens != null || timeoutMs != null
-              ? { maxTurns, maxTokens, timeoutMs }
+            maxSteps != null || maxTokens != null || timeoutMs != null
+              ? { maxSteps, maxTokens, timeoutMs }
               : undefined,
           timeoutMs,
         });

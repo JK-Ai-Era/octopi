@@ -80,7 +80,7 @@ describe('TraceLogger', () => {
     const logger = new TraceLogger({ level: TraceLevel.TRACE, consoleLevel: null, outputDir: tempDir });
 
     // INFO 级别事件
-    logger.logEngineEvent({ type: 'turn.start', timestamp: Date.now(), data: {} });
+    logger.logEngineEvent({ type: 'step.start', timestamp: Date.now(), data: {} });
 
     // ERROR 级别事件
     logger.logEngineEvent({ type: 'model.call.error', timestamp: Date.now(), data: {} });
@@ -116,7 +116,7 @@ describe('TraceCollector', () => {
       yield { type: 'model.call.start', timestamp: Date.now(), data: { model: 'test' } };
       yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: 'hello' } };
       yield { type: 'llm_stream_delta', timestamp: Date.now(), data: { delta: ' world' } };
-      yield { type: 'turn.end', timestamp: Date.now(), data: { content: 'hello world' } };
+      yield { type: 'step.end', timestamp: Date.now(), data: { content: 'hello world' } };
     }
 
     const events: string[] = [];
@@ -124,7 +124,7 @@ describe('TraceCollector', () => {
       events.push(event.type);
     }
 
-    expect(events).toEqual(['model.call.start', 'llm_stream_delta', 'llm_stream_delta', 'turn.end']);
+    expect(events).toEqual(['model.call.start', 'llm_stream_delta', 'llm_stream_delta', 'step.end']);
 
     collector.finalize();
     expect(collector.getEventCount()).toBeGreaterThan(0);

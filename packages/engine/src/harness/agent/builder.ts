@@ -9,7 +9,7 @@
  *   .model('gpt-5.5')
  *   .persona('./personas/my-agent')
  *   .tool(myTool)
- *   .budget({ maxIterations: 15 })
+ *   .budget({ maxSteps: 15 })
  *   .build();
  * ```
  */
@@ -1930,14 +1930,14 @@ export class AgentBuilder {
       // 本轮直接不投递；压缩语义由消息侧 contextSummary 承载。
       return result.messages;
     });
-    agent.setOnAfterTurn(async (usage, turn) => {
+    agent.setOnAfterStep(async (usage, step) => {
       const scope = getRunScope();
       const sessionId = scope?.sessionId ?? agent.contextSessionId;
       const agentId = scope?.agentId ?? 'default';
-      await contextEngine.afterTurn?.({
+      await contextEngine.afterStep?.({
         sessionId,
         agentId,
-        turn: turn ?? [],
+        step: step ?? [],
         usage: usage,
       });
     });

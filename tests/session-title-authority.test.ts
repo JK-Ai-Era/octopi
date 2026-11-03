@@ -29,7 +29,7 @@ function sessionWith(metadata: Record<string, unknown>): SessionData {
       updatedAt: 1,
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: { ...metadata },
     tasks: [],
   };

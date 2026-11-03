@@ -128,12 +128,12 @@ sense:
   source: eventBus
   filter:
     events: [iteration.end]
-    condition: "turn.count % 10 === 0"
+    condition: "step.count % 10 === 0"
 ```
 
 - 变量来源随 sense 模式而不同：
   - **event 模式**：SenseContext 顶层字段（`sessionLifecycle` / `idleMs` / `lastInteractionAt` / `extractionStatus` / `agentId` / `sessionId`）由事件负载映射，可直接引用（如 `sessionLifecycle === 'recent'`）；`eventData.x` 读事件负载；其余标识符回落到 `ctx.metrics['id']`。
-  - **schedule 模式**：上下文**只有** metrics——请用指标键：`turn.count`（主循环逐轮注入）与 `session.idle.ms` / `session.lifecycle.*` / `session.extraction.*`（由 SessionLifecycleBridge 维护，已接入 `SubsystemRuntime`）。
+  - **schedule 模式**：上下文**只有** metrics——请用指标键：`step.count`（主循环逐轮注入）与 `session.idle.ms` / `session.lifecycle.*` / `session.extraction.*`（由 SessionLifecycleBridge 维护，已接入 `SubsystemRuntime`）。
 - 支持多变量、点号分隔的 key。
 - 与 `conditionRef` **互斥**。
 
@@ -160,7 +160,7 @@ sense:
   interval: 60000          # 毫秒，必须 >= 1000
   isolation: structured
   filter:
-    condition: "turn.count > 0"   # 可选
+    condition: "step.count > 0"   # 可选
 ```
 
 - `interval` 必填且 ≥ 1000ms，否则注册失败。

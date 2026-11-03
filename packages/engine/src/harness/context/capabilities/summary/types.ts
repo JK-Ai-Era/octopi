@@ -115,7 +115,7 @@ export interface SummaryResult {
   tokensIn: number;
   tokensOut: number;
   /** Provider 上报的完整 usage（含 cache 分项），用于 UsageLedger 归因 */
-  usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
+  usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
   truncatedInput?: boolean;
   chunks?: { total: number; processed: number };
   policyId: string;
@@ -181,5 +181,5 @@ export interface CreateSummaryPortOptions {
   toolBindings?: Record<string, Partial<ToolSummaryBinding>>;
   maxReturnCharsDefault?: number;
   /** Summary LLM 调用的 usage 回调（用于 UsageLedger 归因） */
-  onUsage?: (usage: import('@octopi-agent/core/types/turn.js').TokenUsage) => void;
+  onUsage?: (usage: import('@octopi-agent/core/types/step.js').TokenUsage) => void;
 }

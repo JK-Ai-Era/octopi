@@ -8,7 +8,7 @@
  * - types/messages.ts    — 消息系统（Message, ContentBlock, ToolCall, ToolResult）
  * - types/agent-definition.ts — ModelInfo / ToolPolicy（Kernel；AgentDefinition 在 harness）
  * - types/session.ts     — Session（SessionStatus, SessionMeta）
- * - types/turn.ts        — Turn（TokenUsage, Turn）
+ * - types/step.ts        — Step（TokenUsage, Step）
  * - types/tools.ts       — 工具系统（ToolDefinition, RegisteredTool, ToolHandler）
  * - types/queue-mode.ts  — QueueMode
  * - types/thinking-level.ts — ThinkingLevel

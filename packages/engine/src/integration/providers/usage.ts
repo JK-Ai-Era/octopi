@@ -4,7 +4,7 @@
  * @module integration/providers/usage
  */
 
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 
 const empty = (): TokenUsage => ({
   outputTokens: 0,

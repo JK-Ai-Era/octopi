@@ -94,7 +94,7 @@ describe('P0-1 JsonlSessionStore persists spawnBy (D7)', () => {
       spawnBy,
       meta: { id: 'cs-1', createdAt: 1, updatedAt: 1, status: 'idle' } as SessionData['meta'],
       messages: [],
-      turns: [],
+      steps: [],
       metadata: { delegationId: 'del-abc' },
     });
 
@@ -120,7 +120,7 @@ describe('P0-1 JsonlSessionStore persists spawnBy (D7)', () => {
       spawnBy,
       meta: { id: 'cs-2', createdAt: 1, updatedAt: 1, status: 'idle' } as SessionData['meta'],
       messages: [],
-      turns: [],
+      steps: [],
       metadata: {},
     });
 
@@ -206,7 +206,7 @@ describe('P0-2 nested delegation is gated by maxDepth', () => {
         setDelegationDeliveryAck() { /* noop */ },
         async *_handle() {
           yield {
-            type: 'turn.end',
+            type: 'step.end',
             timestamp: Date.now(),
             agentId,
             sessionId: 's',
@@ -541,7 +541,7 @@ describe('regression guard: child ids are never undefined', () => {
     const fakeRunner = {
       async *handle() {
         yield {
-          type: 'turn.end',
+          type: 'step.end',
           timestamp: Date.now(),
           agentId: 'w',
           sessionId: 's',

@@ -90,7 +90,7 @@ describe('edit-resend file effects (L3)', () => {
         updatedAt: t,
       },
       messages: [{ role: 'user', content: 'go', timestamp: t }],
-      turns: [],
+      steps: [],
       metadata: {},
       tasks: [],
     });
@@ -130,7 +130,7 @@ describe('edit-resend file effects (L3)', () => {
         turnUser('go', t),
         { role: 'assistant', content: 'partial', timestamp: t + 1, agentId: 'a1' },
       ],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t + 2 } },
       tasks: [],
     });
@@ -175,7 +175,7 @@ describe('edit-resend file effects (L3)', () => {
         turnUser('go', t),
         { role: 'assistant', content: 'x', timestamp: t + 1, agentId: 'a1' },
       ],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t + 2 } },
       tasks: [],
     });
@@ -231,7 +231,7 @@ describe('edit-resend file effects (L3)', () => {
         turnUser('go', t),
         { role: 'assistant', content: 'x', timestamp: t + 1, agentId: 'a1' },
       ],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t + 2 } },
       tasks: [],
     });

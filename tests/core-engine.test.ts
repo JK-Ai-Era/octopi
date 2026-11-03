@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
@@ -161,15 +161,15 @@ describe('SecurityGuard', () => {
 describe('BudgetPolicyEngine', () => {
   it('应该跟踪资源消耗（token 不触发 hard）', () => {
     const budget = new BudgetPolicyEngine( {
-      maxIterations: 5,
+      maxSteps: 5,
       maxToolCalls: 10,
       maxWallClockMs: 60000,
     });
 
     expect(budget.check()).toBe('ok');
 
-    budget.recordIteration();
-    budget.recordIteration();
+    budget.recordStep();
+    budget.recordStep();
     expect(budget.check()).toBe('ok');
 
     budget.recordToolCall();
@@ -178,15 +178,15 @@ describe('BudgetPolicyEngine', () => {
   });
 
   it('应该在迭代超限时报告', () => {
-    const budget = new BudgetPolicyEngine( { maxIterations: 2, maxToolCalls: 10, maxWallClockMs: 60000 });
+    const budget = new BudgetPolicyEngine( { maxSteps: 2, maxToolCalls: 10, maxWallClockMs: 60000 });
 
-    budget.recordIteration();
-    budget.recordIteration();
-    expect(budget.check()).toBe('iteration_limit');
+    budget.recordStep();
+    budget.recordStep();
+    expect(budget.check()).toBe('step_limit');
   });
 
   it('应该在工具调用超限时报告', () => {
-    const budget = new BudgetPolicyEngine( { maxIterations: 10, maxToolCalls: 2, maxWallClockMs: 60000 });
+    const budget = new BudgetPolicyEngine( { maxSteps: 10, maxToolCalls: 2, maxWallClockMs: 60000 });
 
     budget.recordToolCall();
     expect(budget.check()).toBe('ok');
@@ -195,7 +195,7 @@ describe('BudgetPolicyEngine', () => {
   });
 
   it('nominal token 只累计不 hard（P0）', () => {
-    const budget = new BudgetPolicyEngine( { maxIterations: 10, maxToolCalls: 10, maxWallClockMs: 60000 });
+    const budget = new BudgetPolicyEngine( { maxSteps: 10, maxToolCalls: 10, maxWallClockMs: 60000 });
 
     budget.consumeTokens(50);
     expect(budget.check()).toBe('ok');
@@ -205,17 +205,17 @@ describe('BudgetPolicyEngine', () => {
   });
 
   it('应该生成消耗报告', () => {
-    const budget = new BudgetPolicyEngine( { maxIterations: 5, maxToolCalls: 10, maxWallClockMs: 60000 });
+    const budget = new BudgetPolicyEngine( { maxSteps: 5, maxToolCalls: 10, maxWallClockMs: 60000 });
 
-    budget.recordIteration();
+    budget.recordStep();
     budget.recordToolCall();
     budget.consumeTokens(100);
 
     const report = budget.report();
-    expect(report.iterations).toBe(1);
+    expect(report.steps).toBe(1);
     expect(report.toolCalls).toBe(1);
     expect(report.nominalTokens).toBe(100);
-    expect(report.remaining.iterations).toBe(4);
+    expect(report.remaining.steps).toBe(4);
     expect(report.remaining.toolCalls).toBe(9);
   });
 });

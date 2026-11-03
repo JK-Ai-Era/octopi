@@ -299,6 +299,22 @@ export function isEngineCarrierSource(source: unknown): boolean {
 }
 
 /**
+ * schedule notify 便签判定（turn 锚点与 LLM 视图打标共用单源）。
+ *
+ * producer 见 gateway `setNotify`：借 user 通道落库的机器留言，不开轮、
+ * 不跑模型；LLM 视图必须以 `<schedule_notice>` 信封包裹（convertMessage），
+ * 不得冒充人话（宪法 Confusables「Machine content vs human speech」）。
+ *
+ * @param msg - 消息（结构化入参）
+ * @returns true = schedule notify 便签
+ */
+export function isScheduleNotice(msg: {
+  metadata?: { delivery?: unknown };
+}): boolean {
+  return msg.metadata?.delivery === 'notify';
+}
+
+/**
  * 轮次锚点判定（turn 边界类消费方：isMidTurn / compact / tool-result-aging）。
  *
  * 能开轮的输入 = 真实用户发言 + `source:'runtime'` 的 activation 唤醒输入
@@ -316,7 +332,7 @@ export function isTurnAnchor(msg: {
   if (msg.role !== 'user') return false;
   if (isEngineCarrierSource(msg.metadata?.source)) return false;
   // schedule notify 是机器便签（producer 见 gateway setNotify），不是用户输入
-  if (msg.metadata?.delivery === 'notify') return false;
+  if (isScheduleNotice(msg)) return false;
   return true;
 }
 

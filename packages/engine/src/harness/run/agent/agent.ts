@@ -54,9 +54,9 @@ export interface AgentOptions {
   toolExecution?: 'parallel' | 'sequential';
 
   // ── 轮次控制回调 ──
-  shouldStopAfterTurn?: AgentLoopConfig['shouldStopAfterTurn'];
-  onTurnComplete?: AgentLoopConfig['onTurnComplete'];
-  prepareNextTurn?: AgentLoopConfig['prepareNextTurn'];
+  shouldStopAfterStep?: AgentLoopConfig['shouldStopAfterStep'];
+  onStepComplete?: AgentLoopConfig['onStepComplete'];
+  prepareNextStep?: AgentLoopConfig['prepareNextStep'];
   onToolUpdate?: AgentLoopConfig['onToolUpdate'];
   onError?: AgentLoopConfig['onError'];
 
@@ -90,7 +90,7 @@ export class Agent {
     lastProactiveCoverEnd?: number;
     lastProactiveTokens?: number;
   }>();
-  private _onAfterTurn?: (usage?: import('@octopi-agent/core/types/turn.js').TokenUsage, turn?: Message[]) => Promise<void>;
+  private _onAfterStep?: (usage?: import('@octopi-agent/core/types/step.js').TokenUsage, step?: Message[]) => Promise<void>;
   /** Client Tool 会话可见性；undefined = 全部可见 */
   private _toolVisibilityFilter?: (sessionId: string, toolName: string) => boolean;
 
@@ -108,9 +108,9 @@ export class Agent {
       beforeToolCall: options.beforeToolCall,
       afterToolCall: options.afterToolCall,
       onToolUpdate: options.onToolUpdate,
-      shouldStopAfterTurn: options.shouldStopAfterTurn,
-      onTurnComplete: options.onTurnComplete,
-      prepareNextTurn: options.prepareNextTurn,
+      shouldStopAfterStep: options.shouldStopAfterStep,
+      onStepComplete: options.onStepComplete,
+      prepareNextStep: options.prepareNextStep,
       onError: options.onError,
       observer: options.observer,
       getSteeringMessages: options.getSteeringMessages,
@@ -247,15 +247,15 @@ export class Agent {
     return this._sessionCompactStates.get(compactStateKey(sessionId, agentId));
   }
 
-  /** 每轮结束后通知 ContextEngine（afterTurn 校准等）；turn 为本轮增量消息 */
-  setOnAfterTurn(fn?: (usage?: import('@octopi-agent/core/types/turn.js').TokenUsage, turn?: Message[]) => Promise<void>): void {
-    this._onAfterTurn = fn;
+  /** 每轮结束后通知 ContextEngine（afterStep 校准等）；step 为本轮增量消息 */
+  setOnAfterStep(fn?: (usage?: import('@octopi-agent/core/types/step.js').TokenUsage, step?: Message[]) => Promise<void>): void {
+    this._onAfterStep = fn;
   }
 
-  /** 由 Runner 在 turn 结束后调用 */
-  async notifyAfterTurn(usage?: import('@octopi-agent/core/types/turn.js').TokenUsage, turn?: Message[]): Promise<void> {
-    if (this._onAfterTurn) {
-      await this._onAfterTurn(usage, turn);
+  /** 由 Runner 在 step 结束后调用 */
+  async notifyAfterStep(usage?: import('@octopi-agent/core/types/step.js').TokenUsage, step?: Message[]): Promise<void> {
+    if (this._onAfterStep) {
+      await this._onAfterStep(usage, step);
     }
   }
 
@@ -265,7 +265,7 @@ export class Agent {
   }
 
   /**
-   * 动态替换 getSteeringMessages（当前 turn 结束后注入的提示）
+   * 动态替换 getSteeringMessages（当前 step 结束后注入的提示）
    *
    * 晚绑定入口：一个 Agent 实例服务多 session，回调必须经
    * `getRunScope()` / `getRunSessionId()` 取**本 Run** 的身份，

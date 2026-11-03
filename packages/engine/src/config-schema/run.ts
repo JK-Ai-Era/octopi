@@ -9,10 +9,10 @@ import { z } from 'zod';
 
 export const BudgetPolicyJsonConfigSchema = z.object({
   maxWallClockMs: z.number().positive().optional(),
-  maxIterations: z.number().positive().optional(),
+  maxSteps: z.number().positive().optional(),
   maxToolCalls: z.number().positive().optional(),
   onPolicyHit: z.enum(['stop', 'wrap_up_then_stop']).optional(),
-  wrapUpTurns: z.number().positive().optional(),
+  wrapUpSteps: z.number().positive().optional(),
   contextWrapUpRatio: z.number().min(0).max(1).optional(),
   units: z.object({
     maxCost: z.number().positive().optional(),

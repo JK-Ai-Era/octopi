@@ -30,7 +30,7 @@ function makeSession(id: string, agentId: string): SessionData {
       updatedAt: 2,
     },
     messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };

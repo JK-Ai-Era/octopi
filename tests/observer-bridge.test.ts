@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { ObserverBridge } from '@octopi-agent/engine/integration/observability/observer-bridge.js';
 import { TraceCollector } from '@octopi-agent/engine/integration/observability/trace-collector.js';
 import { MetricsAggregator } from '@octopi-agent/engine/integration/observability/metrics.js';

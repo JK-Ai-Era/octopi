@@ -1,7 +1,7 @@
 /**
  * 上下文用量持久化回归（修复：重开会话后"上下文: 21.6k / 1.0m"显示错误）
  *
- * 语义：runner 收尾把最近一次 turn.end 的 contextTokens / contextWindow
+ * 语义：runner 收尾把最近一次 step.end 的 contextTokens / contextWindow
  * （口径 = usage 报告值 ?? usage 分项和 ?? 全量估算）写入 session.metadata，
  * 重开会话经 getSessionView 恢复显示，不再用「末页 100 条消息」估算充数。
  *
@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
 import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { LLMRequest, LLMResponse } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { Message } from '@octopi-agent/core/types.js';
@@ -107,8 +107,8 @@ describe('context usage persistence (reopen shows last real usage)', () => {
 
     const events = await runOnce(runner as never, 's-usage', 'hi');
 
-    // turn.end 事件值 = usage 报告值（既有口径）
-    const turnEnd = events.find((e) => e.type === 'turn.end');
+    // step.end 事件值 = usage 报告值（既有口径）
+    const turnEnd = events.find((e) => e.type === 'step.end');
     expect(turnEnd?.data?.contextTokens).toBe(54321);
 
     // 换新实例重读：metadata 持久化保全
@@ -137,7 +137,7 @@ describe('context usage persistence (reopen shows last real usage)', () => {
     expect(reread!.metadata.contextTokens as number).toBeGreaterThan(0);
   });
 
-  it('does not overwrite with compact-view values (only turn.end ledger writes)', async () => {
+  it('does not overwrite with compact-view values (only step.end ledger writes)', async () => {
     const store = new JsonlSessionStore({ sessionsDir: dir });
     const { runner } = await new AgentBuilder()
       .model(mockProvider({
@@ -149,7 +149,7 @@ describe('context usage persistence (reopen shows last real usage)', () => {
     await runOnce(runner as never, 's-compact', 'hi');
     const fresh = new JsonlSessionStore({ sessionsDir: dir });
     const reread = await fresh.load('s-compact');
-    // 口径守护：持久值 = turn.end 的实际 prompt，不是压缩后视图 tokens
+    // 口径守护：持久值 = step.end 的实际 prompt，不是压缩后视图 tokens
     expect(reread!.metadata.contextTokens).toBe(42000);
   });
 });

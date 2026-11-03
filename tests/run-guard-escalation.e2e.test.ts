@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { DefaultRunGuard } from '@octopi-agent/engine/harness/run/run-guard/default-run-guard.js';
 import type { CheckpointContext } from '@octopi-agent/core/interfaces/run-guard.js';
 import { RunMetricsCollector } from '@octopi-agent/engine/harness/run/reliability/run-metrics-collector.js';
@@ -46,7 +46,7 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
           : [{ type: 'inject_hint' as const, hint: v.reason }];
       for (const a of actions) {
         history.push({
-          iteration: i + 1,
+          steps: i + 1,
           actionType: a.type,
           reason: v.reason,
           failureKind: v.failureKind,
@@ -70,7 +70,7 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
     const guard = new DefaultRunGuard({ enableLLMReview: false, checkpointInterval: 5 });
     const collector = new RunMetricsCollector();
     for (let i = 0; i < 3; i++) {
-      collector.recordTurn({
+      collector.recordStep({
         role: 'assistant',
         contentPreview: '',
         tokenDelta: 0,
@@ -186,7 +186,7 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
     const ctx = collector.buildContext({});
     ctx.recoveryHistory = [
       {
-        iteration: 10,
+        steps: 10,
         actionType: 'inject_hint',
         reason: 'loop hint',
         failureKind: 'loop',

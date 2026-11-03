@@ -37,7 +37,7 @@ function session(id: string, agentId: string, messages: SessionData['messages'])
       participantAgentIds: [agentId],
     },
     messages,
-    turns: [],
+    steps: [],
     metadata: {},
   };
 }

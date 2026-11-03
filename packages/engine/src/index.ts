@@ -22,8 +22,8 @@ export {
   makeTokenUsage,
   nominalTotalTokens,
   reportedPromptTokens,
-} from '@octopi-agent/core/types/turn.js';
-export type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+} from '@octopi-agent/core/types/step.js';
+export type { TokenUsage } from '@octopi-agent/core/types/step.js';
 
 export type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 /** 领域富模型（注册/权限/参数校验）；LLM 传输格式见 LLMToolDefinition */
@@ -40,7 +40,7 @@ export type {
   AssembleParams,
   AssembleResult,
   IngestParams,
-  AfterTurnParams,
+  AfterStepParams,
   TokenEstimator,
   SummarizeFunction,
   MessageSelector,

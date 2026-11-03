@@ -159,7 +159,7 @@ export function parseConfigJson(text: string): JsonParseAttempt {
 const NUMBER_PATHS: Array<{ path: string[]; min?: number }> = [
   { path: ['channels', 'port'] },
   { path: ['budgetPolicy', 'maxWallClockMs'] },
-  { path: ['budgetPolicy', 'maxIterations'] },
+  { path: ['budgetPolicy', 'maxSteps'] },
   { path: ['budgetPolicy', 'maxToolCalls'] },
   { path: ['runGuard', 'checkpointInterval'] },
   { path: ['runGuard', 'hardLimit'] },
@@ -415,7 +415,7 @@ export function detectLegacyBudget(raw: RawObject): MigrationFinding | null {
     id: 'CFG003',
     severity: 'warn',
     message: 'legacy top-level budget (maxTokens/soft/…) is removed; use budgetPolicy',
-    hint: 'keep only maxWallClockMs/maxIterations/maxToolCalls under budgetPolicy',
+    hint: 'keep only maxWallClockMs/maxSteps/maxToolCalls under budgetPolicy',
     autoFixable: true,
   };
 }
@@ -432,7 +432,9 @@ export function applyLegacyBudget(raw: RawObject): boolean {
   const keep: RawObject = {};
   if (typeof old.maxWallClockMs === 'number') keep.maxWallClockMs = old.maxWallClockMs;
   else if (typeof old.maxTimeMs === 'number') keep.maxWallClockMs = old.maxTimeMs;
-  if (typeof old.maxIterations === 'number') keep.maxIterations = old.maxIterations;
+  // 旧字段名是 maxIterations（历史 budget 形状）；兼容旧拼写后再迁
+  const legacyMaxIter = typeof old.maxIterations === 'number' ? old.maxIterations : old.maxSteps;
+  if (typeof legacyMaxIter === 'number') keep.maxSteps = legacyMaxIter;
   if (typeof old.maxToolCalls === 'number') keep.maxToolCalls = old.maxToolCalls;
 
   delete raw.budget;
@@ -441,8 +443,8 @@ export function applyLegacyBudget(raw: RawObject): boolean {
   if (keep.maxWallClockMs !== undefined && next.maxWallClockMs === undefined) {
     next.maxWallClockMs = keep.maxWallClockMs;
   }
-  if (keep.maxIterations !== undefined && next.maxIterations === undefined) {
-    next.maxIterations = keep.maxIterations;
+  if (keep.maxSteps !== undefined && next.maxSteps === undefined) {
+    next.maxSteps = keep.maxSteps;
   }
   if (keep.maxToolCalls !== undefined && next.maxToolCalls === undefined) {
     next.maxToolCalls = keep.maxToolCalls;

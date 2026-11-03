@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { OpenAIProvider } from '@octopi-agent/engine/integration/providers/openai.js';
 import { AnthropicProvider } from '@octopi-agent/engine/integration/providers/anthropic.js';
 import { loadConfig } from '../src/config.js';

@@ -303,10 +303,10 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       case 'tool.exec.end':
         // 工具执行 ≠ 流式输出；UI 应显示 tools 而非 streaming
         return { type: 'state', sessionId: sessionKey, state: 'tools' };
-      case 'turn.end': {
+      case 'step.end': {
         // phase=pre_tools 表示工具即将执行，不能标 idle / streaming
         const phase = (event.data as { phase?: string } | undefined)?.phase;
-        // turn 收尾窗口（插话/followUp 可续接）不是空闲：idle 只由 engine.end 派生（评审 F4）
+        // step 收尾窗口（插话/followUp 可续接）不是空闲：idle 只由 engine.end 派生（评审 F4）
         return phase === 'pre_tools' ? { type: 'state', sessionId: sessionKey, state: 'tools' } : null;
       }
       case 'aborted':

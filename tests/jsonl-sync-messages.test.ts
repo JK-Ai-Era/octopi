@@ -35,7 +35,7 @@ function makeSession(id: string, messages: Message[]): SessionData {
       updatedAt: 2,
     },
     messages,
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };

@@ -167,7 +167,7 @@ describe('F2：runtime.run.event 载荷必须带路由键', () => {
             data: { delta: 'x' },
           } as AgentEvent;
           yield {
-            type: 'turn.end',
+            type: 'step.end',
             timestamp: Date.now(),
             agentId: 'a1',
             sessionId: 's1',
@@ -202,7 +202,7 @@ describe('F2：runtime.run.event 载荷必须带路由键', () => {
       expect(e.agentId).toBe('a1');
     }
     expect(inner).toContain('llm_stream_delta');
-    expect(inner).toContain('turn.end');
+    expect(inner).toContain('step.end');
     expect(inner).toContain('engine.end');
   });
 });

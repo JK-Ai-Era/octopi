@@ -337,8 +337,8 @@ describe('turn_end.phase 显式时序', () => {
     };
 
     const events = await collect(context, baseConfig(provider));
-    const turns = events.filter(e => e.type === 'turn_end') as Array<
-      Extract<AgentLoopEvent, { type: 'turn_end' }>
+    const turns = events.filter(e => e.type === 'step_end') as Array<
+      Extract<AgentLoopEvent, { type: 'step_end' }>
     >;
     expect(turns.length).toBe(2);
     expect(turns[0].phase).toBe('pre_tools');
@@ -538,7 +538,7 @@ describe('非法 tool arguments', () => {
   });
 });
 
-describe('prepareNextTurn 不替换 context 引用', () => {
+describe('prepareNextStep 不替换 context 引用', () => {
   it('传入新 context 对象时字段合并回原引用', async () => {
     const tool: AgentTool = {
       name: 't',
@@ -563,7 +563,7 @@ describe('prepareNextTurn 不替换 context 引用', () => {
     const originalRef = context;
 
     await collect(context, baseConfig(provider, {
-      prepareNextTurn: async (ctx) => ({
+      prepareNextStep: async (ctx) => ({
         context: {
           systemPrompt: 'updated',
           messages: ctx.context.messages,

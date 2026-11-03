@@ -24,7 +24,7 @@ function makeSession(agentId: string, sessionId: string, tasks: SessionData['tas
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks,
   };

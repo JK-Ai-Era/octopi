@@ -84,9 +84,9 @@ export async function* agentLoop(
     beforeToolCall,
     afterToolCall,
     onToolUpdate,
-    shouldStopAfterTurn,
-    onTurnComplete,
-    prepareNextTurn,
+    shouldStopAfterStep,
+    onStepComplete,
+    prepareNextStep,
     onError,
     observer,
     getSteeringMessages,
@@ -166,7 +166,7 @@ export async function* agentLoop(
       return;
     }
 
-    yield { type: 'turn_start', timestamp: Date.now() };
+    yield { type: 'step_start', timestamp: Date.now() };
 
     // ── 1. 上下文变换（可选） ──
     if (transformContext) {
@@ -197,7 +197,7 @@ export async function* agentLoop(
     let response: LLMResponse;
     /** 首个输出 token 延迟（TTFT）；无输出 token 时缺省（F3 指标口径） */
     let ttftMs: number | undefined;
-    /** 本轮 LLM 调用计时摘要（turn_end 透传到观测通道，F3-d） */
+    /** 本轮 LLM 调用计时摘要（step_end 透传到观测通道，F3-d） */
     let llmTiming: LoopLLMTiming = { callId: llmCallId, reqChars, toolChars };
     try {
       const callResult = callModel(
@@ -251,7 +251,7 @@ export async function* agentLoop(
         const action = await onError(classified);
         if (action === 'retry') {
           // 失败调用没有 usage：不得把上一次成功调用的用量冒充本次（无假数据）
-          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', error: true, usage: undefined, llmTiming };
+          yield { type: 'step_end', hasToolCalls: false, phase: 'final', error: true, usage: undefined, llmTiming };
           continue; // 重试当前迭代
         }
         // action === 'abort'
@@ -339,22 +339,22 @@ export async function* agentLoop(
           timestamp: Date.now(),
         });
 
-        // 通知 onTurnComplete（副作用）
-        if (onTurnComplete) {
-          await onTurnComplete({ message: assistantMessage, toolResults: errorResults, context: currentContext });
+        // 通知 onStepComplete（副作用）
+        if (onStepComplete) {
+          await onStepComplete({ message: assistantMessage, toolResults: errorResults, context: currentContext });
         }
 
         // 检查用户停止条件
-        if (shouldStopAfterTurn) {
-          const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults: errorResults, context: currentContext });
+        if (shouldStopAfterStep) {
+          const stop = await shouldStopAfterStep({ message: assistantMessage, toolResults: errorResults, context: currentContext });
           if (stop) {
-            yield { type: 'turn_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage, llmTiming };
+            yield { type: 'step_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage, llmTiming };
             yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
             return;
           }
         }
 
-        yield { type: 'turn_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage, llmTiming };
+        yield { type: 'step_end', hasToolCalls: true, phase: 'final', truncated: true, usage: lastResponseUsage, llmTiming };
         continue;
       }
     }
@@ -364,16 +364,16 @@ export async function* agentLoop(
 
     if (toolCalls.length === 0) {
       // 纯文本回复 → 检查 followUp 消息队列
-      // 通知 onTurnComplete
-      if (onTurnComplete) {
-        await onTurnComplete({ message: assistantMessage, toolResults: [], context: currentContext });
+      // 通知 onStepComplete
+      if (onStepComplete) {
+        await onStepComplete({ message: assistantMessage, toolResults: [], context: currentContext });
       }
 
       // 检查用户停止条件
-      if (shouldStopAfterTurn) {
-        const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults: [], context: currentContext });
+      if (shouldStopAfterStep) {
+        const stop = await shouldStopAfterStep({ message: assistantMessage, toolResults: [], context: currentContext });
         if (stop) {
-          yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
+          yield { type: 'step_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
           yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
           return;
         }
@@ -383,20 +383,20 @@ export async function* agentLoop(
       const followUps = getFollowUpMessages ? await getFollowUpMessages() : [];
       if (followUps.length > 0) {
         currentContext.messages.push(...followUps);
-        yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
+        yield { type: 'step_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
         continue;
       }
 
       // 无工具调用 + 无 followUp → 自然结束
-      yield { type: 'turn_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
+      yield { type: 'step_end', hasToolCalls: false, phase: 'final', usage: lastResponseUsage, llmTiming };
       yield { type: 'agent_end', reason: 'completed', timestamp: Date.now() };
       return;
     }
 
     // ── 7. 执行工具 ──
     // pre_tools：本轮 LLM 结束且 tool_calls 已入历史；工具即将执行。
-    // 消费方勿把 pre_tools 当成「turn 已完整结束」。
-    yield { type: 'turn_end', hasToolCalls: true, phase: 'pre_tools', usage: lastResponseUsage, llmTiming };
+    // 消费方勿把 pre_tools 当成「step 已完整结束」。
+    yield { type: 'step_end', hasToolCalls: true, phase: 'pre_tools', usage: lastResponseUsage, llmTiming };
 
     // 7a. 为每个工具调用发出 tool_start 事件
     for (const tc of toolCalls) {
@@ -551,9 +551,9 @@ export async function* agentLoop(
 
     // ── 8. 轮次后处理 ──
 
-    // onTurnComplete（Harness 内部副作用）
-    if (onTurnComplete) {
-      await onTurnComplete({ message: assistantMessage, toolResults, context: currentContext });
+    // onStepComplete（Harness 内部副作用）
+    if (onStepComplete) {
+      await onStepComplete({ message: assistantMessage, toolResults, context: currentContext });
     }
 
     // terminate：批次内所有结果要求停止 → 干净结束
@@ -563,19 +563,19 @@ export async function* agentLoop(
       return;
     }
 
-    // shouldStopAfterTurn（用户停止条件）
-    if (shouldStopAfterTurn) {
-      const stop = await shouldStopAfterTurn({ message: assistantMessage, toolResults, context: currentContext });
+    // shouldStopAfterStep（用户停止条件）
+    if (shouldStopAfterStep) {
+      const stop = await shouldStopAfterStep({ message: assistantMessage, toolResults, context: currentContext });
       if (stop) {
         yield { type: 'agent_end', reason: 'should_stop', timestamp: Date.now() };
         return;
       }
     }
 
-    // prepareNextTurn（动态配置切换）
+    // prepareNextStep（动态配置切换）
     // 不变量：不得替换 Agent 持有的 context 对象引用；只允许改字段 / 换 model。
-    if (prepareNextTurn) {
-      const update = await prepareNextTurn({ message: assistantMessage, toolResults, context: currentContext });
+    if (prepareNextStep) {
+      const update = await prepareNextStep({ message: assistantMessage, toolResults, context: currentContext });
       if (update) {
         if (update.model) currentModel = update.model;
         if (update.context && update.context !== currentContext) {

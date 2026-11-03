@@ -45,8 +45,8 @@ function makeAgentStub(provider: ModelProvider) {
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-    setOnAfterTurn: () => {},
-    notifyAfterTurn: async () => {},
+    setOnAfterStep: () => {},
+    notifyAfterStep: async () => {},
     harness: {},
     run: async function* (
       _s?: AbortSignal,
@@ -85,7 +85,7 @@ describe('SessionAwareRunner model resolve order', () => {
         lastInteractionAt: Date.now(), updatedAt: Date.now(),
       },
       messages: [],
-      turns: [],
+      steps: [],
       metadata: { model: { provider: 'ollama', model: 'qwen3.5:2b' } },
     };
     await store.save('s1', session);
@@ -146,7 +146,7 @@ describe('SessionAwareRunner model resolve order', () => {
         lastInteractionAt: Date.now(), updatedAt: Date.now(),
       },
       messages: [],
-      turns: [],
+      steps: [],
       metadata: { model: 'ollama/qwen3.5:2b' },
     });
 

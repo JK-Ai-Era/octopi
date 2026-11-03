@@ -108,7 +108,7 @@ export const AgentConfigSchema = z.object({
       /** 委派预算上限（请求预算与此取交集） */
       budget: z
         .object({
-          maxTurns: z.number().positive().optional(),
+          maxSteps: z.number().positive().optional(),
           maxTokens: z.number().positive().optional(),
           timeoutMs: z.number().positive().optional(),
         })

@@ -21,7 +21,7 @@ function makeResult(overrides: Partial<TurnResult> = {}): TurnResult {
   return {
     content: 'default content',
     toolCalls: [],
-    events: ['turn.end'],
+    events: ['step.end'],
     isEmpty: false,
     durationMs: 100,
     ...overrides,

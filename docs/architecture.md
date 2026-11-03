@@ -83,12 +83,12 @@ Security is not “add a security module”; every layer carries a security resp
 - All items in a tool batch with `terminate=true` → `agent_end(should_stop)`
 - `tool_results` and `tool_calls` correspond one-to-one (including abort placeholders)
 - Streaming prefers the provider passthrough `finishReason` (`done` chunk)
-- `turn_end.phase`: `pre_tools` (tools about to run) / `final` (this turn ends on a no-tool path)
+- `step_end.phase`: `pre_tools` (tools about to run) / `final` (this step ends on a no-tool path)
 - Event vocabulary is Loop-protocol only; budget/run_guard events live in `HarnessLoopEvent`
 - Messages entering `ModelProvider` are normalized (toolResults expanded, tool_calls stringified)
 - The engine only manages systems with `metadata.source === 'systemPrompt'`; systems without metadata are always kept
 
-#### `turn_end.phase` — UI / upper-layer consumption contract
+#### `step_end.phase` — UI / upper-layer consumption contract
 
 | phase | Meaning | What the UI should do |
 |-------|---------|------------------------|
@@ -96,9 +96,9 @@ Security is not “add a security module”; every layer carries a security resp
 | `final` | This turn ends on a no-tool path (plain text / followUp / truncation re-feed / error retry) | May finalize the assistant message; may set idle |
 | `error: true` (with `final`) | This LLM attempt failed; emitted **only** mid-retry (the final failure goes straight to `agent_end reason='error'`) | `content` is this call’s **partial output, not an answer** — never send it as a reply / finalize it as a normal message; mark the bubble as error; keep the run in progress (a retry follows) |
 
-**Do not** treat every `turn_end` as “this run ended”. On the tool path there are `tool_*` events after `pre_tools`; on termination it may go straight to `agent_end` — **no** final `turn_end` is added afterwards.
+**Do not** treat every `step_end` as “this run ended”. On the tool path there are `tool_*` events after `pre_tools`; on termination it may go straight to `agent_end` — **no** final `step_end` is added afterwards.
 
-When the Runner maps this to EventBus `turn.end`, it carries `data.phase` and `data.error`. Web `runStatus`: `pre_tools → 'tools'`, `final → 'idle'`, `error → 'waiting'`. TUI stays in processing on `pre_tools` and on `error`.
+When the Runner maps this to EventBus `step.end`, it carries `data.phase` and `data.error`. Web `runStatus`: `pre_tools → 'tools'`, `final → 'idle'`, `error → 'waiting'`. TUI stays in processing on `pre_tools` and on `error`.
 
 ```
 packages/core/src/loop/

@@ -22,7 +22,7 @@ import {
 } from '@octopi-agent/engine/harness/context/turn-envelope.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { RunScope } from '@octopi-agent/engine/harness/run/run-scope.js';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { testFileEffects, testMemoryEffects } from '../helpers/tool-context.js';
 
 function msg(partial: Partial<Message> & Pick<Message, 'role'>): Message {
@@ -413,7 +413,7 @@ describe('ObserverHub', () => {
     expect(obs?.lifecycle?.endReason).toBe('completed');
   });
 
-  it('run.timing 与 turn.end.llmTiming 进 timeline（F3 计时口径）', () => {
+  it('run.timing 与 step.end.llmTiming 进 timeline（F3 计时口径）', () => {
     const hub = new ObserverHub({ level: 'full' });
     const runId = hub.recordRunStart({ scope, messages: [] });
     hub.ingestEvent({
@@ -423,7 +423,7 @@ describe('ObserverHub', () => {
       data: { stage: 'run_start', waitMs: 5 },
     });
     hub.ingestEvent({
-      type: 'turn.end',
+      type: 'step.end',
       timestamp: Date.now(),
       sessionId: 's1',
       data: {
@@ -444,7 +444,7 @@ describe('ObserverHub', () => {
     const runTiming = obs?.timeline?.find((t) => t.type === 'run.timing');
     expect(runTiming?.timing?.stage).toBe('run_start');
     expect(runTiming?.timing?.waitMs).toBe(5);
-    const turnRow = obs?.timeline?.find((t) => t.type === 'turn.end');
+    const turnRow = obs?.timeline?.find((t) => t.type === 'step.end');
     expect(turnRow?.timing?.ttftMs).toBe(12);
     expect(turnRow?.timing?.reqChars).toBe(100);
     expect(turnRow?.timing?.outChars).toBe(7);
@@ -565,7 +565,7 @@ describe('ObserverHub', () => {
     expect(obs?.scope.systemPromptFull).toBe(body);
   });
 
-  it('recordRunEnd backfills lifecycle turns/toolCalls from guard metrics', () => {
+  it('recordRunEnd backfills lifecycle steps/toolCalls from guard metrics', () => {
     const hub = new ObserverHub({ level: 'full' });
     const runId = hub.recordRunStart({
       scope: { ...scope, runId: 'run_backfill' },
@@ -576,7 +576,7 @@ describe('ObserverHub', () => {
       timestamp: Date.now(),
       sessionId: 's1',
       data: {
-        iteration: 2,
+        steps: 2,
         totalToolCalls: 3,
         nominalTotalTokens: 175600,
         elapsedMs: 1200,
@@ -596,7 +596,7 @@ describe('ObserverHub', () => {
       endReason: 'completed',
     });
     const obs = hub.getRunById(runId);
-    expect(obs?.lifecycle?.turns).toBe(2);
+    expect(obs?.lifecycle?.steps).toBe(2);
     expect(obs?.lifecycle?.toolCalls).toBe(3);
     expect(obs?.lifecycle?.endReason).toBe('completed');
   });
@@ -606,8 +606,8 @@ describe('ObserverHub', () => {
     const runId = hub.recordRunStart({ scope, messages: [] });
     for (const event of [
       { type: 'engine.start', data: {} },
-      { type: 'iteration.start', data: {} },
-      { type: 'turn.end', data: { usage: makeTokenUsage({ promptTokens: 100 }) } },
+      { type: 'step.start', data: {} },
+      { type: 'step.end', data: { usage: makeTokenUsage({ promptTokens: 100 }) } },
       { type: 'tool.exec.end', data: { toolName: 'web_search', hasError: false } },
       { type: 'engine.end', data: { reason: 'completed' } },
     ] as const) {
@@ -620,7 +620,7 @@ describe('ObserverHub', () => {
     }
     const obs = hub.getRunById(runId);
     expect(obs?.timeline?.length).toBeGreaterThanOrEqual(4);
-    expect(obs?.lifecycle?.turns).toBe(1);
+    expect(obs?.lifecycle?.steps).toBe(1);
     expect(obs?.lifecycle?.toolCalls).toBe(1);
     expect(obs?.lifecycle?.endReason).toBe('completed');
   });
@@ -781,7 +781,7 @@ describe('ObserverHub', () => {
       timestamp: Date.now(),
       sessionId: 's1',
       data: {
-        iteration: 2,
+        steps: 2,
         totalToolCalls: 3,
         nominalTotalTokens: 100,
         elapsedMs: 50,

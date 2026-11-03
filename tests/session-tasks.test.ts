@@ -29,7 +29,7 @@ function createSession(id = 's1', agentId = 'a1'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };

@@ -36,6 +36,8 @@ The ontology of an embeddable Agent engine is not “a chat loop”. It is the f
 | **RoleBinding** | Participation record: an Agent appearing on a Session under a role (rights preset + overridable) | Control |
 | **Run** | One episode: `(sessionId, agentId, …)` | Execution |
 | **RunScope** | All **mutable context** of that episode (messages workspace, systemPrompt identity, tool runtime, compact seeding, resolvedModel…) | **Run only** / Execution |
+| **Turn** | One discourse exchange: a **turn-anchor** user-role stimulus (human speech or a synthesized envelope; carrier slots and `notify` notes open no Turn) + its complete response; bounded by `<turn_start id>`…`<turn_end id/>`. **Session-level**; attributes to an Agent via its Run | Continuity |
+| **Step** | One model round: a single LLM call + its output (tool_calls or final text) | Execution |
 | **Tool** | Callable capability (definition + executor); mounted on Agent, invoked via Run | Extension |
 | **Effect** | A tool’s effect on the world (cwd / side effects / concurrency / idempotence); constrained by I5 | Extension definition + Execution enforcement |
 
@@ -50,6 +52,8 @@ Host ──(conversationId ↔ sessionId)── Session aggregate
 
 **Write-back relation (not an entity)**: when a Run ends → Discourse is appended + Projection updated + Audit persisted. The former “Episode artifacts” are **not** an ontology entity.
 
+**Run ↔ Turn ↔ Step mapping**: 1 Run = 1..N Turn (signals continued at a message boundary extend the same Run); 1 Turn = 1..N Step; 1 Step = 0..N ToolCall. Run is the execution/accountability axis (who acts, under which role/budget); Turn is the discourse axis (message boundary). The two coincide 1:1 only in the simple case (one stimulus → one Run).
+
 **Confusables (enforced vocabulary)**:
 
 | Question | Concept |
@@ -57,7 +61,10 @@ Host ──(conversationId ↔ sessionId)── Session aggregate
 | What have I learned? | **Substrate / Memory** |
 | What does the world write down? | **Knowledge** (source-anchored; index is not authority) |
 | What happened? | **Discourse** (append authority) |
-| This turn’s temporary stage? | **RunScope** (Run only) |
+| This run’s temporary stage? | **RunScope** (Run only) |
+| One user exchange? | **Turn** (Session-level discourse boundary; attributed to an Agent via its Run) |
+| One model round? | **Step** (never “turn”) |
+| Machine content vs human speech? | Synthesized user-role content must be machine-identifiable in the LLM view (view-level envelope, e.g. `<schedule_notice>` / `<delegation_result>`); never disguised as human speech |
 | Who is it / how is it configured at birth? | **Agent** (template; excludes learning products) |
 | The hand vs what the hand touched? | **Tool** vs **Effect**; live system state → Tool, documents → Knowledge |
 
@@ -340,6 +347,7 @@ Implementation phases and internal topics live in the development-repo handoff m
 
 | Date | Content |
 |------|---------|
+| 2026-11-04 | **Vocabulary: Turn / Step split (double-booking fix)** — `turn` used to name both a user exchange and a model round. Enforced: **Turn** = one discourse exchange (`<turn_start id>`…`<turn_end id/>`; Session-level; attributes to an Agent via its Run); **Step** = one model round (one LLM call + its output). Mapping: 1 Run = 1..N Turn, 1 Turn = 1..N Step, 1 Step = 0..N ToolCall. Code renamed **without aliases** (loop events `turn_start`/`turn_end` → `step_start`/`step_end`, `Turn` → `Step`). Schedule `notify` notes: they open no Turn and run no Run, and the LLM view wraps them in a machine envelope (`<schedule_notice>`) so machine content is never disguised as human speech. I1–I6 / E1–E8 unchanged. |
 | 2026-10-20 | **E8 extended — turn envelope + full replay** (`<turn_start id>` / `<turn_end id/>`, slots inside turn-scoped `<turn_context>`; history append-only). Last-only slot replay and mid-history slot stripping removed (they bust the prefix every user turn). Stale retrieval picks are contained by ephemeral turn scoping + latest-wins, not by deletion. Also: compact notices must not be injected into the system prompt (dynamic text at the request head burns the whole cache). |
 | 2026-10-18 | **E8 added — cache-stable assembly placement** (volatile blocks move from the system prompt to the message tail). Eight-layer type axis unchanged (I4); this adds an *assembly placement* rule, not a new layer. Motivation: prefix-cache hits govern both TTFT and cost (measured: cache-busted requests 34–134s vs 3–5s warm; uncached input tokens billed at full price). |
 | 2026-09-27 | **English edition becomes the working authority**; Chinese moved to `docs/north-star.zh.md`. Public docs are English-authoritative with `*.zh.md` translations (bilingual sync required). I1–I6 / E1–E7 unchanged. |

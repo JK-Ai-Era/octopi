@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
@@ -153,7 +153,7 @@ describe('流式 tool call 多工具并行', () => {
     // 应该有 tool 相关事件（通过 observer）
     // 在新架构中，工具事件通过 observer 回调，不在 loop 事件中
     // 但应该有 turn_end(hasToolCalls: true)
-    const turnEndsWithTools = events.filter(e => e.type === 'turn_end' && (e as any).hasToolCalls);
+    const turnEndsWithTools = events.filter(e => e.type === 'step_end' && (e as any).hasToolCalls);
     expect(turnEndsWithTools.length).toBeGreaterThanOrEqual(1);
 
     // 最终应该有正常回复
@@ -194,7 +194,7 @@ describe('流式 tool call 多工具并行', () => {
     const events = await collectEvents(agent);
 
     // 应该有工具执行（参数被正确合并）
-    const turnEndsWithTools = events.filter(e => e.type === 'turn_end' && (e as any).hasToolCalls);
+    const turnEndsWithTools = events.filter(e => e.type === 'step_end' && (e as any).hasToolCalls);
     expect(turnEndsWithTools.length).toBe(1);
   });
 });

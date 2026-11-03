@@ -13,7 +13,7 @@
  * 不得出现 `AbortSignal` / `Agent` 实例 / 函数 / class 实例等非序列化值。
  */
 
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 import type { SessionRights } from '../../governance/session-acl/types.js';
 
 // ── 消息 schema 版本 ──
@@ -91,7 +91,7 @@ export interface DelegationTarget {
  */
 export interface DelegationBudget {
   /** 子 Run 最大轮次 */
-  maxTurns?: number;
+  maxSteps?: number;
   /** 子 Run 最大 token */
   maxTokens?: number;
   /** 委派超时（毫秒）；换算为 deadlineAt */

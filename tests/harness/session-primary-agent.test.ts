@@ -36,7 +36,7 @@ function emptySession(id: string, agentId = 'a1'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
   };
 }
@@ -57,8 +57,8 @@ function makeMockAgent(replyContent: string): Agent {
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-    setOnAfterTurn: () => {},
-    notifyAfterTurn: async () => {},
+    setOnAfterStep: () => {},
+    notifyAfterStep: async () => {},
     run: async function* (
       _signal?: AbortSignal,
       _h?: unknown,
@@ -75,7 +75,7 @@ function makeMockAgent(replyContent: string): Agent {
           timestamp: Date.now(),
         });
       }
-      yield { type: 'turn_end', timestamp: Date.now(), usage: undefined, hasToolCalls: false } as never;
+      yield { type: 'step_end', timestamp: Date.now(), usage: undefined, hasToolCalls: false } as never;
       yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
     },
   };
@@ -149,7 +149,7 @@ describe('Phase C SessionData.primaryAgentId', () => {
     const user = (sess!.messages ?? []).find((m) => m.role === 'user');
     expect(user?.agentId).toBeUndefined();
 
-    const turnOut = sess!.turns?.[0]?.output;
+    const turnOut = sess!.steps?.[0]?.output;
     if (turnOut && turnOut.role === 'assistant') {
       expect(turnOut.agentId).toBe('a1');
     }

@@ -5,7 +5,7 @@
  * Core 层的 SessionStore 接口是泛型的，不引用此文件。
  */
 
-import type { Message, Turn, SessionMeta } from '@octopi-agent/core/types.js';
+import type { Message, Step, SessionMeta } from '@octopi-agent/core/types.js';
 import type { SessionTask } from './tasks/types.js';
 import type { ContextCompactSnapshot } from '../context/types.js';
 import type { SessionParticipant } from '../governance/session-acl/types.js';
@@ -97,7 +97,7 @@ export interface SessionData {
   spawnBy?: SessionSpawnLink;
   meta: SessionMeta;
   messages: Message[];
-  turns: Turn[];
+  steps: Step[];
   metadata: Record<string, unknown>;
   lifecycle?: SessionLifecycleMeta;
   /**

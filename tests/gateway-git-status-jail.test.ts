@@ -52,7 +52,7 @@ function makeSession(agentId: string, sessionId: string): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -245,14 +245,14 @@ describe('MetricsAggregator', () => {
   it('should track turns and empty responses', () => {
     const metrics = new MetricsAggregator();
 
-    metrics.processEvent({ ts: Date.now(), level: 3, type: 'turn.start' });
-    metrics.processEvent({ ts: Date.now(), level: 3, type: 'turn.end', data: { content: 'hello' } });
+    metrics.processEvent({ ts: Date.now(), level: 3, type: 'step.start' });
+    metrics.processEvent({ ts: Date.now(), level: 3, type: 'step.end', data: { content: 'hello' } });
 
-    metrics.processEvent({ ts: Date.now(), level: 3, type: 'turn.start' });
-    metrics.processEvent({ ts: Date.now(), level: 3, type: 'turn.end', data: { content: '' } });
+    metrics.processEvent({ ts: Date.now(), level: 3, type: 'step.start' });
+    metrics.processEvent({ ts: Date.now(), level: 3, type: 'step.end', data: { content: '' } });
 
     const snap = metrics.snapshot();
-    expect(snap.turnsTotal).toBe(2);
+    expect(snap.stepsTotal).toBe(2);
     expect(snap.emptyResponses).toBe(1);
   });
 
@@ -296,13 +296,13 @@ describe('MetricsAggregator', () => {
     const metrics = new MetricsAggregator();
 
     metrics.processEvent({ ts: Date.now(), level: 3, type: 'model.call.start' });
-    metrics.processEvent({ ts: Date.now(), level: 3, type: 'turn.start' });
+    metrics.processEvent({ ts: Date.now(), level: 3, type: 'step.start' });
 
     metrics.reset();
 
     const snap = metrics.snapshot();
     expect(snap.llmCalls).toBe(0);
-    expect(snap.turnsTotal).toBe(0);
+    expect(snap.stepsTotal).toBe(0);
   });
 
   it('should format snapshot', () => {

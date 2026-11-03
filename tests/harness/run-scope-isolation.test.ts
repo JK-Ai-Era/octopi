@@ -35,7 +35,7 @@ function emptySession(id: string, agentId = 'a1'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
   };
 }
@@ -91,8 +91,8 @@ describe('SessionAwareRunner concurrent sessions (I1)', () => {
       setSessionCompactState: () => {},
       getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-      setOnAfterTurn: () => {},
-      notifyAfterTurn: async () => {},
+      setOnAfterStep: () => {},
+      notifyAfterStep: async () => {},
       run: async function* (
         _signal?: AbortSignal,
         _h?: unknown,
@@ -138,7 +138,7 @@ describe('SessionAwareRunner concurrent sessions (I1)', () => {
           content: reply,
           timestamp: Date.now(),
         });
-        yield { type: 'turn_end', timestamp: Date.now(), usage: undefined } as never;
+        yield { type: 'step_end', timestamp: Date.now(), usage: undefined } as never;
         yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
       },
     };

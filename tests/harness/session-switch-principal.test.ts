@@ -31,7 +31,7 @@ function session(id = 's1', agentId = 'owner-agent'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
   };
 }

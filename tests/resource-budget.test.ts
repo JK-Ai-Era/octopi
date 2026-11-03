@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
 import { BudgetPolicyEngine, DEFAULT_BUDGET } from '@octopi-agent/engine/harness/run/budget/budget.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
@@ -37,10 +37,10 @@ function mockModel(tokensPerCall = 100): ModelProvider {
 }
 
 describe('RunBudget（P0 安全阀）', () => {
-  it('默认 wall-clock 安全阀为 6h，且不因 iteration/token hard', () => {
+  it('默认 wall-clock 安全阀为 6h，且不因 steps/token hard', () => {
     expect(DEFAULT_BUDGET.maxWallClockMs).toBe(6 * 3_600_000);
     const budget = new BudgetPolicyEngine();
-    for (let i = 0; i < 5000; i++) budget.recordIteration();
+    for (let i = 0; i < 5000; i++) budget.recordStep();
     budget.consumeTokens(5_000_000);
     expect(budget.check()).toBe('ok');
     expect(budget.checkHardOnly().status).toBe('ok');
@@ -53,12 +53,12 @@ describe('RunBudget（P0 安全阀）', () => {
     expect(budget.report().nominalTokens).toBe(10_000_000);
   });
 
-  it('显式 maxIterations 时硬停', () => {
-    const budget = new BudgetPolicyEngine( { maxIterations: 3 });
-    budget.recordIteration();
-    budget.recordIteration();
-    budget.recordIteration();
-    expect(budget.check()).toBe('iteration_limit');
+  it('显式 maxSteps 时硬停', () => {
+    const budget = new BudgetPolicyEngine( { maxSteps: 3 });
+    budget.recordStep();
+    budget.recordStep();
+    budget.recordStep();
+    expect(budget.check()).toBe('step_limit');
     expect(budget.evaluate().status).toBe('hard');
   });
 
@@ -212,9 +212,9 @@ describe('wall-clock 口径：人类输入等待不计入（方案A）', () => {
 });
 
 describe('RunMetricsCollector', () => {
-  it('记录 iteration / tokens / hasProgress', () => {
+  it('记录 steps / tokens / hasProgress', () => {
     const c = new RunMetricsCollector();
-    c.recordTurn({
+    c.recordStep({
       role: 'assistant',
       contentPreview: 'x'.repeat(100),
       tokenDelta: 0,
@@ -222,12 +222,12 @@ describe('RunMetricsCollector', () => {
     });
     c.recordTokens(50);
     c.recordToolResult('file_read', true);
-    expect(c.iteration).toBe(1);
+    expect(c.steps).toBe(1);
     expect(c.tokens).toBe(50);
     expect(c.hasProgress()).toBe(true);
 
     const ctx = c.buildContext({});
-    expect(ctx.iteration).toBe(1);
+    expect(ctx.steps).toBe(1);
     expect(ctx.nominalTotalTokens).toBe(50);
   });
 });
@@ -263,11 +263,11 @@ describe('reliability：默认不因 token 总和停止', () => {
     expect(events).toContain('agent_end');
   });
 
-  it('显式 maxIterations hard 时 yield budget_exceeded', async () => {
+  it('显式 maxSteps hard 时 yield budget_exceeded', async () => {
     const model = mockModel(50);
     const agent = new Agent({ model, systemPrompt: 't' });
     agent.context.messages.push({ role: 'user', content: 'go', timestamp: Date.now() });
-    const budget = new BudgetPolicyEngine( { maxIterations: 1 });
+    const budget = new BudgetPolicyEngine( { maxSteps: 1 });
     const harness: ReliabilityHarness = { config: {}, budget, sessionId: 's', agentId: 'a' };
 
     const events: string[] = [];
@@ -281,7 +281,7 @@ describe('reliability：默认不因 token 总和停止', () => {
 
   it('per-run 克隆：同一 harness 连跑两次，计数不跨 run 累加', async () => {
     const model = mockModel(300);
-    const template = new BudgetPolicyEngine( { maxIterations: 2 });
+    const template = new BudgetPolicyEngine( { maxSteps: 2 });
     const harness: ReliabilityHarness = { config: {}, budget: template };
 
     const runOnce = async () => {
@@ -297,14 +297,14 @@ describe('reliability：默认不因 token 总和停止', () => {
 
     const first = await runOnce();
     const second = await runOnce();
-    // 模板 maxIterations=2 时，单次 run 可能触发；关键是第二次不因「共享累计」额外误杀
+    // 模板 maxSteps=2 时，单次 run 可能触发；关键是第二次不因「共享累计」额外误杀
     // 此处断言两次都能跑完或各自独立触发，而不是第二次必失败
     expect(first.length).toBeGreaterThan(0);
     expect(second.length).toBeGreaterThan(0);
   });
 });
 
-describe('beforeToolCall hard 闸（iteration）', () => {
+describe('beforeToolCall hard 闸（steps）', () => {
   it('hard 后不再执行工具', async () => {
     let executed = 0;
     const tools = [
@@ -343,10 +343,10 @@ describe('beforeToolCall hard 闸（iteration）', () => {
     const agent = new Agent({ model, systemPrompt: 't', tools });
     agent.context.messages.push({ role: 'user', content: 'go', timestamp: Date.now() });
 
-    const budget = new BudgetPolicyEngine( { maxIterations: 0 });
-    // maxIterations 0 视为未启用（配置约定 >0）；改用极小 wall-clock 无法稳定
-    // 使用 maxToolCalls: 0 同样无效。改为 maxIterations: 1 — 首轮 turn_end 后 hard
-    const budget2 = new BudgetPolicyEngine( { maxIterations: 1 });
+    const budget = new BudgetPolicyEngine( { maxSteps: 0 });
+    // maxSteps 0 视为未启用（配置约定 >0）；改用极小 wall-clock 无法稳定
+    // 使用 maxToolCalls: 0 同样无效。改为 maxSteps: 1 — 首轮 turn_end 后 hard
+    const budget2 = new BudgetPolicyEngine( { maxSteps: 1 });
     const harness: ReliabilityHarness = { config: {}, budget: budget2, sessionId: 's', agentId: 'a' };
 
     const events: string[] = [];
@@ -356,7 +356,7 @@ describe('beforeToolCall hard 闸（iteration）', () => {
     }
 
     expect(events).toContain('budget_exceeded');
-    // maxIterations=1：可能在首工具前后触发；不要求 executed===0
+    // maxSteps=1：可能在首工具前后触发；不要求 executed===0
     expect(typeof executed).toBe('number');
   });
 });

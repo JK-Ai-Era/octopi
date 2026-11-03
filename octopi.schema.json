@@ -574,7 +574,7 @@
               "budget": {
                 "type": "object",
                 "properties": {
-                  "maxTurns": {
+                  "maxSteps": {
                     "type": "number",
                     "exclusiveMinimum": 0
                   },
@@ -885,7 +885,7 @@
           "type": "number",
           "exclusiveMinimum": 0
         },
-        "maxIterations": {
+        "maxSteps": {
           "type": "number",
           "exclusiveMinimum": 0
         },
@@ -900,7 +900,7 @@
             "wrap_up_then_stop"
           ]
         },
-        "wrapUpTurns": {
+        "wrapUpSteps": {
           "type": "number",
           "exclusiveMinimum": 0
         },

@@ -5,7 +5,7 @@
  *   Level 0: FATAL  — 系统崩溃
  *   Level 1: ERROR  — 功能异常（空回复、工具失败）
  *   Level 2: WARN   — 可降级问题（重试、fallback）
- *   Level 3: INFO   — 关键节点（turn 开始/结束、tool 调用）
+ *   Level 3: INFO   — 关键节点（step 开始/结束、tool 调用）
  *   Level 4: DEBUG  — 完整数据（消息内容、token 统计）
  *   Level 5: TRACE  — 底层细节（原始 API 请求/响应、流式 chunk）
  */
@@ -53,8 +53,8 @@ export const TRACE_EVENTS = {
   // Level 3: INFO — 关键节点
   ENGINE_START: 'engine.start',
   ENGINE_END: 'engine.end',
-  TURN_START: 'turn.start',
-  TURN_END: 'turn.end',
+  STEP_START: 'step.start',
+  STEP_END: 'step.end',
   MODEL_CALL_START: 'model.call.start',
   MODEL_CALL_END: 'model.call.end',
   TOOL_EXEC_START: 'tool.exec.start',

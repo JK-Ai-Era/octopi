@@ -2,7 +2,7 @@
  * L1 资源限制 — 工具执行看门狗（ToolEffectPolicy / OP-17）
  *
  * 统一强制 `definition.timeoutMs`；与 abortSignal 联动。
- * run 级硬停（token/iteration）仍归 Budget/Run，不在此域。
+ * run 级硬停（token/step）仍归 Budget/Run，不在此域。
  */
 
 export class ToolTimeoutError extends Error {

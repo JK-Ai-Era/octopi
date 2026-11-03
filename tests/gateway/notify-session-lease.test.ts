@@ -49,7 +49,7 @@ function makeSession(messages: Message[]): SessionData {
       participantAgentIds: ['agent-a'],
     },
     messages,
-    turns: [],
+    steps: [],
     metadata: {},
   } as SessionData;
 }

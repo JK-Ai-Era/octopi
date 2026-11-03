@@ -21,7 +21,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 import type { LLMRequest, ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import { getOctopiHome } from '../../paths.js';
 import {

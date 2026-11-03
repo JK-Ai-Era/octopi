@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -435,7 +435,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
           metadata: { source: 'external' },
         },
       ],
-      turns: [],
+      steps: [],
       metadata: {},
     });
 
@@ -493,7 +493,7 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
           metadata: { source: 'external' },
         },
       ],
-      turns: [],
+      steps: [],
       metadata: {},
     });
 

@@ -23,7 +23,7 @@ import type {
   AssembleParams,
   AssembleResult,
   IngestParams,
-  AfterTurnParams,
+  AfterStepParams,
   TokenEstimator,
   SummarizeFunction,
   MessageSelector,
@@ -48,7 +48,7 @@ import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
-import { isTurnAnchor } from './layer-types.js';
+import { isTurnAnchor, isScheduleNotice } from './layer-types.js';
 import { createCompactEngine } from './capabilities/compact/index.js';
 import type { CompactEngine, CompactOutcome } from './capabilities/compact/index.js';
 import {
@@ -1318,8 +1318,8 @@ export class DefaultContextEngine implements ContextEngine {
    * 2. 记录当前消息数量快照（用于增量估算）
    * 3. 计算校准比率 = actual / estimated
    */
-  async afterTurn(params: AfterTurnParams): Promise<void> {
-    const { sessionId, agentId, usage, turn } = params;
+  async afterStep(params: AfterStepParams): Promise<void> {
+    const { sessionId, agentId, usage, step } = params;
 
     if (!usage) return;
 
@@ -1332,8 +1332,8 @@ export class DefaultContextEngine implements ContextEngine {
       usage.inputUncachedTokens + usage.inputCachedTokens + usage.inputCacheWriteTokens;
     state.lastActualTokens = promptActual;
 
-    // 记录消息数量快照（turn 包含本轮消息，估算时用 messages.length - turn.length 得到之前的消息数）
-    state.lastUsageMessageCount = turn?.length ?? 0;
+    // 记录消息数量快照（step 包含本步消息，估算时用 messages.length - step.length 得到之前的消息数）
+    state.lastUsageMessageCount = step?.length ?? 0;
 
     // 计算校准比率：如果上次有估算值，用 actual/estimated 修正后续估算
     if (state.lastEstimatedTokens && state.lastEstimatedTokens > 0 && promptActual > 0) {
@@ -1527,6 +1527,29 @@ export class DefaultContextEngine implements ContextEngine {
         role: msg.role,
         content: msg.content,
       });
+    }
+
+    // schedule notify 便签：借 user 通道落库的机器留言，不得在 LLM 视图冒充
+    // 人话——视图级包 <schedule_notice> 信封（宪法 Confusables；持久层/UI 保
+    // 原文。信封是消息的纯函数，回放逐字节稳定，不破 E8 前缀缓存）。
+    if (isScheduleNotice(msg)) {
+      for (const lm of result) {
+        // 转义闭标签防伪造突破信封；空便签不包（不把空消息变成非空）
+        const wrapText = (text: string): string =>
+          text.trim()
+            ? `<schedule_notice>${text.replaceAll('</schedule_notice', '&lt;/schedule_notice')}</schedule_notice>`
+            : text;
+        if (typeof lm.content === 'string') {
+          lm.content = wrapText(lm.content);
+        } else if (Array.isArray(lm.content)) {
+          const blocks = lm.content as Array<{ type?: string; text?: string }>;
+          lm.content = blocks.map((block) =>
+            block.type === 'text' && typeof block.text === 'string'
+              ? { ...block, text: wrapText(block.text) }
+              : block,
+          ) as Array<{ type: string; [key: string]: unknown }>;
+        }
+      }
     }
 
     return result;

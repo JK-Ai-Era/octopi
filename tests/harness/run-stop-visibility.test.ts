@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { DefaultRunGuard } from '@octopi-agent/engine/harness/run/run-guard/default-run-guard.js';
 import { RunMetricsCollector } from '@octopi-agent/engine/harness/run/reliability/run-metrics-collector.js';
 import { adaptLoopEvent } from '@octopi-agent/engine/harness/run/runner.js';
@@ -280,12 +280,12 @@ describe('② 停止必须可见：桥接捕获原因', () => {
   it('budget_exceeded（旧形状）→ policy_stopped + 可读原因', () => {
     const state = newState();
     adaptLoopEvent(
-      { type: 'budget_exceeded', timestamp: 1, data: { reason: 'iteration' } },
+      { type: 'budget_exceeded', timestamp: 1, data: { reason: 'steps' } },
       meta,
       state,
     );
     expect(state.stopReason).toBe('policy_stopped');
-    expect(state.stopDetail).toBe('iteration');
+    expect(state.stopDetail).toBe('steps');
     expect(state.stopMessage).toContain('迭代次数');
   });
 

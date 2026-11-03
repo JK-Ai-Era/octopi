@@ -187,7 +187,7 @@ export class RecordingProvider implements ModelProvider {
     let content = '';
     const toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
     const toolCallBuffers = new Map<number, { id: string; name: string; argsBuffer: string }>();
-    let usage: import('@octopi-agent/core/types/turn.js').TokenUsage | undefined;
+    let usage: import('@octopi-agent/core/types/step.js').TokenUsage | undefined;
 
     for (const chunk of chunks) {
       if (chunk.type === 'content' && chunk.content) {

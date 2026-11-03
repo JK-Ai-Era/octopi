@@ -45,7 +45,7 @@ function staleSession(id: string): SessionData {
       updatedAt: now,
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
   };
 }

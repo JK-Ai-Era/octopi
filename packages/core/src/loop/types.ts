@@ -97,7 +97,7 @@ export interface LoopToolResult {
   /** Host-assigned tool provenance, retained through events and persistence. */
   source?: ToolSource;
   /** Summary LLM 调用的 usage（用于 UsageLedger 归因） */
-  summaryUsage?: import('../core/types/turn.js').TokenUsage;
+  summaryUsage?: import('../core/types/step.js').TokenUsage;
 }
 
 // ============================================================
@@ -155,20 +155,20 @@ export type AfterToolCallFn = (
 ) => Promise<AfterToolCallResult | undefined>;
 
 /** 轮次上下文 */
-export interface TurnContext {
+export interface StepContext {
   message: Message;
   toolResults: LoopToolResult[];
   context: AgentContext;
 }
 
-/** shouldStopAfterTurn 回调 */
-export type ShouldStopAfterTurnFn = (ctx: TurnContext) => Promise<boolean>;
+/** shouldStopAfterStep 回调 */
+export type ShouldStopAfterStepFn = (ctx: StepContext) => Promise<boolean>;
 
-/** onTurnComplete 回调（Harness 内部使用，做副作用，不控制停止） */
-export type OnTurnCompleteFn = (ctx: TurnContext) => Promise<void>;
+/** onStepComplete 回调（Harness 内部使用，做副作用，不控制停止） */
+export type OnStepCompleteFn = (ctx: StepContext) => Promise<void>;
 
 /** 轮次配置更新 */
-export interface TurnUpdate {
+export interface StepUpdate {
   /**
    * 下一轮上下文。若传入**新对象**，Loop 只会把字段合并回原 context 引用
    * （Agent 持有同一对象），不会替换引用。
@@ -177,8 +177,8 @@ export interface TurnUpdate {
   model?: ModelProvider;
 }
 
-/** prepareNextTurn 回调 */
-export type PrepareNextTurnFn = (ctx: TurnContext) => Promise<TurnUpdate | undefined>;
+/** prepareNextStep 回调 */
+export type PrepareNextStepFn = (ctx: StepContext) => Promise<StepUpdate | undefined>;
 
 /**
  * onError 回调（接收已分类的错误）
@@ -188,7 +188,7 @@ export type PrepareNextTurnFn = (ctx: TurnContext) => Promise<TurnUpdate | undef
  * 消费方总能看到终态。需要异常控制流的调用方应在自己的包装层根据
  * `agent_end` 自行 throw。
  *
- * - `retry`  — 重试当前迭代（yield 一条 error turn_end 后 continue）
+ * - `retry`  — 重试当前迭代（yield 一条 error step_end 后 continue）
  * - `abort` — 干净结束（yield agent_end reason='error' 后 return）
  */
 export type OnErrorFn = (error: ClassifiedError) => Promise<'retry' | 'abort'>;
@@ -197,7 +197,7 @@ export type OnErrorFn = (error: ClassifiedError) => Promise<'retry' | 'abort'>;
 // 5. Observer 接口（简化版）
 // ============================================================
 
-/** LLM 调用计时摘要（F3：随 turn_end 透传到观测通道，Run 页签耗时区消费） */
+/** LLM 调用计时摘要（F3：随 step_end 透传到观测通道，Run 页签耗时区消费） */
 export interface LoopLLMTiming {
   callId?: string;
   /** 调用总耗时（发出请求 → 最终响应） */
@@ -259,14 +259,14 @@ export interface ToolHooksConfig {
   toolExecution?: 'parallel' | 'sequential';
 }
 
-/** 轮次控制钩子配置 */
-export interface TurnHooksConfig {
+/** 模型轮控制钩子配置 */
+export interface StepHooksConfig {
   /** 用户层停止条件（始终被调用，返回 true 停止） */
-  shouldStopAfterTurn?: ShouldStopAfterTurnFn;
+  shouldStopAfterStep?: ShouldStopAfterStepFn;
   /** 轮次完成通知（Harness 内部，做副作用，不控制停止） */
-  onTurnComplete?: OnTurnCompleteFn;
+  onStepComplete?: OnStepCompleteFn;
   /** 动态切换 model/context/thinkingLevel */
-  prepareNextTurn?: PrepareNextTurnFn;
+  prepareNextStep?: PrepareNextStepFn;
   /** 错误处理（接收已分类的错误） */
   onError?: OnErrorFn;
 }
@@ -279,9 +279,9 @@ export interface TurnHooksConfig {
  *
  * 按关注点拆分为子接口：
  * - ToolHooksConfig: 工具执行钩子
- * - TurnHooksConfig: 轮次控制钩子
+ * - StepHooksConfig: 模型轮控制钩子
  */
-export interface AgentLoopConfig extends ToolHooksConfig, TurnHooksConfig {
+export interface AgentLoopConfig extends ToolHooksConfig, StepHooksConfig {
   // ── 核心（唯一必需） ──
   model: ModelProvider;
 
@@ -294,7 +294,7 @@ export interface AgentLoopConfig extends ToolHooksConfig, TurnHooksConfig {
   transformContext?: (messages: Message[], signal?: AbortSignal) => Promise<Message[]>;
 
   // ── 消息队列（由 Harness / 调用方注入 get*Messages） ──
-  /** 获取 steering 消息（当前 turn 结束后注入） */
+  /** 获取 steering 消息（当前 step 结束后注入） */
   getSteeringMessages?: () => Promise<Message[]>;
   /** 获取 followUp 消息（agent 即将停止时注入） */
   getFollowUpMessages?: () => Promise<Message[]>;
@@ -323,7 +323,7 @@ export interface AgentLoopConfig extends ToolHooksConfig, TurnHooksConfig {
 export type AgentLoopEvent =
   | { type: 'agent_start'; timestamp: number }
   | { type: 'agent_end'; reason: 'completed' | 'aborted' | 'error' | 'should_stop'; timestamp: number; error?: unknown }
-  | { type: 'turn_start'; timestamp: number }
+  | { type: 'step_start'; timestamp: number }
   /**
    * 一轮 LLM 结束。
    *
@@ -335,7 +335,7 @@ export type AgentLoopEvent =
    * turn_end；终止（terminate / should_stop）直接 `agent_end`。
    */
   | {
-      type: 'turn_end';
+      type: 'step_end';
       hasToolCalls: boolean;
       phase: 'pre_tools' | 'final';
       truncated?: boolean;

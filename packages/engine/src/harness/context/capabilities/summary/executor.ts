@@ -5,7 +5,7 @@
  */
 
 import type { LLMMessage, ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 import { estimateTextTokens } from '../../token-estimate-fns.js';
 import { computeInputBudget } from './budget.js';
 import {

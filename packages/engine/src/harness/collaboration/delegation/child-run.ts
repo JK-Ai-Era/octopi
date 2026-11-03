@@ -20,11 +20,11 @@
 
 import { randomUUID } from 'node:crypto';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import type { SessionData, SessionSpawnLink } from '../../session/types.js';
 import type { DelegationBudget, DelegationContextMode } from './types.js';
-import { emptyTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { emptyTokenUsage } from '@octopi-agent/core/types/step.js';
 
 // ── 端口形状 ──
 
@@ -112,7 +112,7 @@ export interface RunnerChildRunPortConfig {
 }
 
 /**
- * 累加 turn 级 usage 到总账（决策 C2：归集到父的 run 账）
+ * 累加 step 级 usage 到总账（决策 C2：归集到父的 run 账）
  *
  * @param total - 累计账本（原地更新）
  * @param add - 本轮 usage
@@ -189,7 +189,7 @@ export class RunnerChildRunPort implements ChildRunPort {
     try {
       for await (const event of target.runner.handle(childSessionId, userMessage, runConfig, signal)) {
         switch (event.type) {
-          case 'turn.end': {
+          case 'step.end': {
             const data = event.data as {
               content?: unknown;
               usage?: TokenUsage;
@@ -260,7 +260,7 @@ export class RunnerChildRunPort implements ChildRunPort {
         status: 'idle',
       } as SessionData['meta'],
       messages: [],
-      turns: [],
+      steps: [],
       metadata: { delegationId: input.delegationId },
     };
   }

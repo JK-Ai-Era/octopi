@@ -99,7 +99,7 @@ export interface ApplyToolOutputGateOutput {
     structuredError?: string;
   };
   /** Summary LLM 调用的 usage（用于 UsageLedger 归因；仅 L2） */
-  usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
+  usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
 }
 
 /**
@@ -143,7 +143,7 @@ export async function applyToolOutputGate(input: ApplyToolOutputGateInput): Prom
   const mode = binding?.mode ?? 'auto';
   const arg = input.summarizeArg ?? 'auto';
 
-  const finish = (body: string, truncated: boolean, summary: ApplyToolOutputGateOutput['summary'], usage?: import('@octopi-agent/core/types/turn.js').TokenUsage): ApplyToolOutputGateOutput => ({
+  const finish = (body: string, truncated: boolean, summary: ApplyToolOutputGateOutput['summary'], usage?: import('@octopi-agent/core/types/step.js').TokenUsage): ApplyToolOutputGateOutput => ({
     body,
     bodyTruncated: truncated,
     rawSizeBytes,

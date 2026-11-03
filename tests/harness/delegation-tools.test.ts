@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import type { SessionData, SessionSpawnLink } from '@octopi-agent/engine/harness/session/types.js';
 import { makeToolContext } from '../helpers/tool-context.js';
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 
 import {
   RunnerChildRunPort,
@@ -81,7 +81,7 @@ function makeFakeRunner(script: AgentEvent[], seen: { config?: unknown } = {}) {
 }
 
 const turnEnd = (content: string, u?: TokenUsage): AgentEvent => ({
-  type: 'turn.end',
+  type: 'step.end',
   timestamp: Date.now(),
   agentId: 'child',
   sessionId: 's',

@@ -238,10 +238,10 @@ describe('ConversationAdapter', () => {
       expect(r.streaming.content).toBe('Hello');
     });
 
-    it('finalizes streaming on turn.end', () => {
+    it('finalizes streaming on step.end', () => {
       let r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: 'partial' } }, sid, items);
       items = r.items;
-      r = adapter.applyEvent({ type: 'turn.end', data: { content: 'final' } }, sid, items);
+      r = adapter.applyEvent({ type: 'step.end', data: { content: 'final' } }, sid, items);
       items = r.items;
 
       const ast = items[0] as AssistantConversationItem;
@@ -251,10 +251,10 @@ describe('ConversationAdapter', () => {
       expect(r.streaming.content).toBe('');
     });
 
-    it('keeps streamed content when turn.end has no explicit content', () => {
+    it('keeps streamed content when step.end has no explicit content', () => {
       let r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: 'streamed' } }, sid, items);
       items = r.items;
-      r = adapter.applyEvent({ type: 'turn.end', data: {} }, sid, items);
+      r = adapter.applyEvent({ type: 'step.end', data: {} }, sid, items);
       items = r.items;
 
       const ast = items[0] as AssistantConversationItem;
@@ -262,10 +262,10 @@ describe('ConversationAdapter', () => {
       expect(ast.content).toBe('streamed');
     });
 
-    it('失败轮（turn.end error:true）：部分流出标 error，不冒充 completed', () => {
+    it('失败轮（step.end error:true）：部分流出标 error，不冒充 completed', () => {
       let r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: 'partial output' } }, sid, items);
       items = r.items;
-      r = adapter.applyEvent({ type: 'turn.end', data: { content: 'partial output', error: true } }, sid, items);
+      r = adapter.applyEvent({ type: 'step.end', data: { content: 'partial output', error: true } }, sid, items);
       items = r.items;
 
       const ast = items[0] as AssistantConversationItem;
@@ -280,7 +280,7 @@ describe('ConversationAdapter', () => {
     });
 
     it('失败轮无流式气泡时不得伪造 completed 回复', () => {
-      const r = adapter.applyEvent({ type: 'turn.end', data: { content: 'partial', error: true } }, sid, items);
+      const r = adapter.applyEvent({ type: 'step.end', data: { content: 'partial', error: true } }, sid, items);
       items = r.items;
 
       expect(items.some((i) => i.role === 'assistant')).toBe(false);
@@ -297,10 +297,10 @@ describe('ConversationAdapter', () => {
       expect(r.items).toHaveLength(0);
     });
 
-    it('does not create a second assistant item when turn.end is delivered twice with same content', () => {
-      // 模拟非流式：无 streaming item，两次 turn.end 携带相同 content
+    it('does not create a second assistant item when step.end is delivered twice with same content', () => {
+      // 模拟非流式：无 streaming item，两次 step.end 携带相同 content
       let r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'final answer' } },
+        { type: 'step.end', data: { content: 'final answer' } },
         sid,
         items,
       );
@@ -308,7 +308,7 @@ describe('ConversationAdapter', () => {
       expect(items.filter(i => i.role === 'assistant')).toHaveLength(1);
 
       r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'final answer' } },
+        { type: 'step.end', data: { content: 'final answer' } },
         sid,
         items,
       );
@@ -317,15 +317,15 @@ describe('ConversationAdapter', () => {
       expect((items[0] as AssistantConversationItem).content).toBe('final answer');
     });
 
-    it('still creates a new assistant item when turn.end content differs', () => {
+    it('still creates a new assistant item when step.end content differs', () => {
       let r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'first' } },
+        { type: 'step.end', data: { content: 'first' } },
         sid,
         items,
       );
       items = r.items;
       r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'second' } },
+        { type: 'step.end', data: { content: 'second' } },
         sid,
         items,
       );
@@ -333,9 +333,9 @@ describe('ConversationAdapter', () => {
       expect(items.filter(i => i.role === 'assistant')).toHaveLength(2);
     });
 
-    it('engine.start resets turn.end dedup fingerprint so same content across runs is kept', () => {
+    it('engine.start resets step.end dedup fingerprint so same content across runs is kept', () => {
       let r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'same reply' } },
+        { type: 'step.end', data: { content: 'same reply' } },
         sid,
         items,
       );
@@ -346,7 +346,7 @@ describe('ConversationAdapter', () => {
       items = r.items;
 
       r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'same reply' } },
+        { type: 'step.end', data: { content: 'same reply' } },
         sid,
         items,
       );
@@ -354,9 +354,9 @@ describe('ConversationAdapter', () => {
       expect(items.filter(i => i.role === 'assistant')).toHaveLength(2);
     });
 
-    it('does not set changed when turn.end is a pure duplicate with no streaming state', () => {
+    it('does not set changed when step.end is a pure duplicate with no streaming state', () => {
       let r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'once' } },
+        { type: 'step.end', data: { content: 'once' } },
         sid,
         items,
       );
@@ -364,7 +364,7 @@ describe('ConversationAdapter', () => {
       expect(r.changed).toBe(true);
 
       r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'once' } },
+        { type: 'step.end', data: { content: 'once' } },
         sid,
         items,
       );
@@ -373,7 +373,7 @@ describe('ConversationAdapter', () => {
 
     it('surfaces empty final turn as system warning (once)', () => {
       let r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: '', phase: 'final', hasToolCalls: false } },
+        { type: 'step.end', data: { content: '', phase: 'final', hasToolCalls: false } },
         sid,
         items,
       );
@@ -384,9 +384,9 @@ describe('ConversationAdapter', () => {
       );
       expect(warnings).toHaveLength(1);
 
-      // 重放同一空 turn.end 不得再写一条
+      // 重放同一空 step.end 不得再写一条
       r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: '', phase: 'final', hasToolCalls: false } },
+        { type: 'step.end', data: { content: '', phase: 'final', hasToolCalls: false } },
         sid,
         items,
       );
@@ -398,7 +398,7 @@ describe('ConversationAdapter', () => {
 
     it('does not warn on empty pre_tools turn (tool calls pending)', () => {
       const r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: '', phase: 'pre_tools', hasToolCalls: true } },
+        { type: 'step.end', data: { content: '', phase: 'pre_tools', hasToolCalls: true } },
         sid,
         items,
       );
@@ -412,12 +412,12 @@ describe('ConversationAdapter', () => {
       const s1 = 'sess-a';
       const s2 = 'sess-b';
       adapter.applyEvent(
-        { type: 'turn.end', data: { content: '', phase: 'final', hasToolCalls: false } },
+        { type: 'step.end', data: { content: '', phase: 'final', hasToolCalls: false } },
         s1,
         [],
       );
       const r2 = adapter.applyEvent(
-        { type: 'turn.end', data: { content: '', phase: 'final', hasToolCalls: false } },
+        { type: 'step.end', data: { content: '', phase: 'final', hasToolCalls: false } },
         s2,
         [],
       );
@@ -730,7 +730,7 @@ describe('ConversationAdapter', () => {
   // ──────────────────────────────────
 
   describe('full conversation flow', () => {
-    it('handles user → streaming → tool → turn.end sequence', () => {
+    it('handles user → streaming → tool → step.end sequence', () => {
       // User sends message
       items = adapter.injectUserMessage('search something', sid, items);
       expect(items).toHaveLength(1);
@@ -761,7 +761,7 @@ describe('ConversationAdapter', () => {
 
       // Turn ends
       r = adapter.applyEvent(
-        { type: 'turn.end', data: { content: 'Here is what I found' } },
+        { type: 'step.end', data: { content: 'Here is what I found' } },
         sid,
         items,
       );
@@ -837,7 +837,7 @@ describe('ConversationAdapter reasoning channel', () => {
     items = r.items;
     r = adapter.applyEvent({ type: 'llm_stream_delta', data: { delta: '部分回复' } }, sid, items);
     items = r.items;
-    r = adapter.applyEvent({ type: 'turn.end', data: { content: '最终回复', phase: 'final' } }, sid, items);
+    r = adapter.applyEvent({ type: 'step.end', data: { content: '最终回复', phase: 'final' } }, sid, items);
     items = r.items;
 
     const ast = items.find((i) => i.role === 'assistant') as AssistantConversationItem;
@@ -926,12 +926,12 @@ describe('ConversationAdapter 中止语义', () => {
     ) as SystemConversationItem[];
   }
 
-  it('turn.end(error) 先到、中止信号后到 → 碎片翻成 aborted（不是 error）', () => {
+  it('step.end(error) 先到、中止信号后到 → 碎片翻成 aborted（不是 error）', () => {
     const adapter = new ConversationAdapter();
     const items = run(adapter, [
       { type: 'engine.start' },
       { type: 'llm_thinking_delta', data: { delta: '正在想…' } },
-      { type: 'turn.end', data: { error: true, content: '', hasToolCalls: false, phase: 'final' } },
+      { type: 'step.end', data: { error: true, content: '', hasToolCalls: false, phase: 'final' } },
       { type: 'engine.end', data: { reason: 'aborted' } },
     ]);
     const a = assistants(items);
@@ -940,7 +940,7 @@ describe('ConversationAdapter 中止语义', () => {
     expect(abortNotices(items)).toHaveLength(1);
   });
 
-  it('aborted 事件直接收尾（无 turn.end）→ 碎片标 aborted；重复信号只加一条通知', () => {
+  it('aborted 事件直接收尾（无 step.end）→ 碎片标 aborted；重复信号只加一条通知', () => {
     const adapter = new ConversationAdapter();
     const items = run(adapter, [
       { type: 'engine.start' },
@@ -959,7 +959,7 @@ describe('ConversationAdapter 中止语义', () => {
     const items = run(adapter, [
       { type: 'engine.start' },
       { type: 'llm_stream_delta', data: { delta: '答案' } },
-      { type: 'turn.end', data: { error: false, content: '答案', hasToolCalls: false, phase: 'final' } },
+      { type: 'step.end', data: { error: false, content: '答案', hasToolCalls: false, phase: 'final' } },
       { type: 'engine.end', data: { reason: 'completed' } },
     ]);
     const a = assistants(items);
@@ -974,7 +974,7 @@ describe('ConversationAdapter 中止语义', () => {
       // run 1：正常完成
       { type: 'engine.start' },
       { type: 'llm_stream_delta', data: { delta: '第一轮答案' } },
-      { type: 'turn.end', data: { error: false, content: '第一轮答案', hasToolCalls: false, phase: 'final' } },
+      { type: 'step.end', data: { error: false, content: '第一轮答案', hasToolCalls: false, phase: 'final' } },
       { type: 'engine.end', data: { reason: 'completed' } },
       // run 2：流式碎片被中止
       { type: 'engine.start' },

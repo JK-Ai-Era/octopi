@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import type { ModelProvider, RegisteredTool, ToolExecutionContext } from '@octopi-agent/core/index.js';
 import type { LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 import { AgentBuilder } from '@octopi-agent/engine/harness/index.js';
@@ -73,7 +73,7 @@ async function captureToolContext(
         .constitution({ mode: 'off' })
         .systemPrompt('probe')
         .effectPolicy({ opsAudit: 'off' })
-        .budget({ maxWallClockMs: 5000, maxIterations: 2 }),
+        .budget({ maxWallClockMs: 5000, maxSteps: 2 }),
     ).build({ autoLoadSubsystems: false });
 
     for await (const _event of built.runner.handle(

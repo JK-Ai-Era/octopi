@@ -227,7 +227,7 @@ export class AnthropicProvider implements ModelProvider {
     let currentToolName = '';
     let toolArgsBuffer = '';
     let toolCallIndex = 0;
-    let streamUsage: import('@octopi-agent/core/types/turn.js').TokenUsage | undefined;
+    let streamUsage: import('@octopi-agent/core/types/step.js').TokenUsage | undefined;
     let finishReason: LLMResponse['finishReason'] | undefined;
 
     // 空闲超时

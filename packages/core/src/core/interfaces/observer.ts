@@ -53,7 +53,7 @@ export interface Observer {
 /** 标准指标名称 */
 export const Metrics = {
   /** 迭代次数 */
-  ITERATION_COUNT: 'agent.iteration.count',
+  STEP_COUNT: 'agent.step.count',
   /** 工具调用耗时 */
   TOOL_CALL_DURATION: 'agent.tool.call.duration_ms',
   /** 模型调用耗时 */

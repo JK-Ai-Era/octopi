@@ -33,7 +33,7 @@ function emptySession(id: string, agentId = 'a1'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };
@@ -58,8 +58,8 @@ function scriptedAgent(reason: 'completed' | 'error' | 'aborted', withTurnEnd: b
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-    setOnAfterTurn: () => {},
-    notifyAfterTurn: async () => {},
+    setOnAfterStep: () => {},
+    notifyAfterStep: async () => {},
     run: async function* (
       _s?: AbortSignal,
       _h?: unknown,
@@ -68,7 +68,7 @@ function scriptedAgent(reason: 'completed' | 'error' | 'aborted', withTurnEnd: b
       opts?.context?.messages.push({ role: 'assistant', content: 'partial', timestamp: Date.now() });
       if (withTurnEnd) {
         yield {
-          type: 'turn_end',
+          type: 'step_end',
           timestamp: Date.now(),
           hasToolCalls: false,
           phase: 'final',
@@ -151,7 +151,7 @@ describe('run 收尾原因', () => {
           },
         } as never;
         yield {
-          type: 'turn_end',
+          type: 'step_end',
           timestamp: Date.now(),
           hasToolCalls: false,
           phase: 'final',

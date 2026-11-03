@@ -27,7 +27,7 @@ Agent 的核心执行循环。纯函数 + 回调扩展，零外部依赖。
 3. `tool_results` 与 `tool_calls` 一一对应（含中止占位）
 4. `tool_end.toolCall` 携带原始 arguments
 5. 流式优先使用 provider `finishReason`（done chunk）
-6. `turn_end.phase`：`pre_tools` | `final`（工具路径不会在工具后再补 final）
+6. `step_end.phase`：`pre_tools` | `final`（工具路径不会在工具后再补 final）
 7. 事件类型仅 Loop 协议
 
 ## 文件说明

@@ -367,7 +367,7 @@ export interface RunMessagesSummary {
 export interface RunGuardMetricsView {
   sessionId?: string;
   agentId?: string;
-  iteration: number;
+  steps: number;
   totalToolCalls: number;
   /** 诊断 nominal Σ（非 spend hard） */
   nominalTotalTokens: number;
@@ -392,7 +392,7 @@ export interface RunGuardMetricsView {
   /** P2 wrap-up 状态 */
   wrapUpActive?: boolean;
   wrapUpReason?: 'context' | 'policy';
-  wrapUpTurnsRemaining?: number;
+  wrapUpStepsRemaining?: number;
   guardStoppedReason?: string;
   guardRecovered?: { reason: string; actions: string[] };
 }
@@ -456,14 +456,14 @@ export interface RunTimelineEventView {
   hasError?: boolean;
   durationMs?: number;
   reason?: string;
-  usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
-  /** F3 计时段（turn.end 的 LLM 计时 / run.timing 的 wait/build/run_end 分段） */
+  usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
+  /** F3 计时段（step.end 的 LLM 计时 / run.timing 的 wait/build/run_end 分段） */
   timing?: {
     stage?: string;
     waitMs?: number;
     buildMs?: number;
     durMs?: number;
-    /** LLM 调用总耗时（turn.end.llmTiming） */
+    /** LLM 调用总耗时（step.end.llmTiming） */
     durationMs?: number;
     /** LLM 调用标识（可关联 model.call.end 行） */
     callId?: string;
@@ -487,7 +487,7 @@ export interface RunLifecycleView {
   endedAt?: number;
   endReason?: string;
   durationMs?: number;
-  turns?: number;
+  steps?: number;
   toolCalls?: number;
   error?: string;
 }

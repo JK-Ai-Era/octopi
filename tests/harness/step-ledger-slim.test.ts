@@ -1,5 +1,5 @@
 /**
- * Turn 账本瘦身回归（性能修复：state.json 二次方膨胀）
+ * Step 账本瘦身回归（turns 为账本旧字段名，legacy 读取即剥）（性能修复：state.json 二次方膨胀）
  *
  * 1. 读取历史 state.json（turns[].input 带全量历史快照）→ 读取即剥 input
  * 2. save 写回后磁盘上不再含 turns[].input（首次 save 自然瘦身）
@@ -30,14 +30,14 @@ function makeSession(overrides?: Partial<SessionData>): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
     ...overrides,
   };
 }
 
-describe('turn ledger slim (no full-history input snapshots)', () => {
+describe('step ledger slim (no full-history input snapshots)', () => {
   let dir: string;
 
   beforeEach(async () => {
@@ -56,7 +56,7 @@ describe('turn ledger slim (no full-history input snapshots)', () => {
     // 模拟历史 state.json：turns[].input 带全量历史快照
     const statePath = join(dir, `${toSessionFileName(session.id)}.state.json`);
     const state = JSON.parse(await readFile(statePath, 'utf-8'));
-    state.turns = [
+    delete state.steps;    state.turns = [
       {
         id: 'turn_legacy',
         input: [{ role: 'user', content: 'huge history snapshot', timestamp: 1 }],
@@ -70,26 +70,26 @@ describe('turn ledger slim (no full-history input snapshots)', () => {
 
     const reloaded = await store.load(session.id);
     expect(reloaded).not.toBeNull();
-    expect(reloaded!.turns).toHaveLength(1);
+    expect(reloaded!.steps).toHaveLength(1);
     // 读取即剥：不得再暴露 input 全量快照
-    expect('input' in reloaded!.turns[0]).toBe(false);
+    expect('input' in reloaded!.steps[0]).toBe(false);
     // 其余账本字段保全（枚举输入键逐一断言，防漏映射）
     const legacyTurn = state.turns[0];
     for (const key of Object.keys(legacyTurn)) {
       if (key === 'input') continue;
-      expect(key in reloaded!.turns[0]).toBe(true);
-      expect((reloaded!.turns[0] as unknown as Record<string, unknown>)[key]).toEqual(legacyTurn[key]);
+      expect(key in reloaded!.steps[0]).toBe(true);
+      expect((reloaded!.steps[0] as unknown as Record<string, unknown>)[key]).toEqual(legacyTurn[key]);
     }
   });
 
-  it('save rewrites state.json without turns[].input (first-save slimming)', async () => {
+  it('save rewrites state.json as steps[] without input (legacy turns[] first-save slimming)', async () => {
     const store = new JsonlSessionStore({ sessionsDir: dir });
     const session = makeSession();
     await store.save(session.id, session);
 
     const statePath = join(dir, `${toSessionFileName(session.id)}.state.json`);
     const state = JSON.parse(await readFile(statePath, 'utf-8'));
-    state.turns = [
+    delete state.steps;    state.turns = [
       {
         id: 'turn_legacy',
         input: [{ role: 'user', content: 'huge history snapshot', timestamp: 1 }],
@@ -105,22 +105,22 @@ describe('turn ledger slim (no full-history input snapshots)', () => {
     const reloaded = (await store.load(session.id))!;
     await store.save(session.id, reloaded);
     const rewritten = JSON.parse(await readFile(statePath, 'utf-8'));
-    expect(rewritten.turns).toHaveLength(1);
-    expect('input' in rewritten.turns[0]).toBe(false);
-    expect(rewritten.turns[0].id).toBe('turn_legacy');
+    expect(rewritten.steps).toHaveLength(1);
+    expect('input' in rewritten.steps[0]).toBe(false);
+    expect(rewritten.steps[0].id).toBe('turn_legacy');
 
     // 换新实例重读（防只在内存里瘦身的假绿）
     const fresh = new JsonlSessionStore({ sessionsDir: dir });
     const reread = await fresh.load(session.id);
-    expect(reread!.turns[0].id).toBe('turn_legacy');
-    expect(reread!.turns[0].output).toEqual({ role: 'assistant', content: 'ok', timestamp: 2 });
-    expect('input' in reread!.turns[0]).toBe(false);
+    expect(reread!.steps[0].id).toBe('turn_legacy');
+    expect(reread!.steps[0].output).toEqual({ role: 'assistant', content: 'ok', timestamp: 2 });
+    expect('input' in reread!.steps[0]).toBe(false);
   });
 
-  it('new-style turn ledger round-trips with field preservation', async () => {
+  it('new-style step ledger round-trips with field preservation', async () => {
     const store = new JsonlSessionStore({ sessionsDir: dir });
     const session = makeSession({
-      turns: [
+      steps: [
         {
           id: 'turn_1',
           inputCount: 42,
@@ -136,9 +136,9 @@ describe('turn ledger slim (no full-history input snapshots)', () => {
     // 换新实例重读
     const fresh = new JsonlSessionStore({ sessionsDir: dir });
     const reread = await fresh.load(session.id);
-    expect(reread!.turns).toHaveLength(1);
-    const original = session.turns[0] as unknown as Record<string, unknown>;
-    const loaded = reread!.turns[0] as unknown as Record<string, unknown>;
+    expect(reread!.steps).toHaveLength(1);
+    const original = session.steps[0] as unknown as Record<string, unknown>;
+    const loaded = reread!.steps[0] as unknown as Record<string, unknown>;
     for (const key of Object.keys(original)) {
       expect(key in loaded).toBe(true);
     }

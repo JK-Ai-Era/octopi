@@ -106,8 +106,8 @@ skipIfNoKey('Chat Simulation', () => {
       if (event.type === 'tool.exec.start') {
         toolCalls.push(event.data?.toolName as string);
       }
-      if (event.type === 'turn.end' && event.data?.content) {
-        // 如果流式没有内容，用 turn.end 的
+      if (event.type === 'step.end' && event.data?.content) {
+        // 如果流式没有内容，用 step.end 的
         if (!finalContent) {
           finalContent = event.data.content as string;
         }
@@ -121,7 +121,7 @@ skipIfNoKey('Chat Simulation', () => {
     const result = await sendMessage('你好，请用一句话介绍你自己');
     console.log('  🤖 回复:', result.content.substring(0, 100));
     expect(result.content.length).toBeGreaterThan(0);
-    expect(result.events).toContain('turn.end');
+    expect(result.events).toContain('step.end');
   }, 30_000);
 
   it('should use correct cwd for file operations', async () => {

@@ -15,7 +15,7 @@ import { createRunTelemetry } from '@octopi-agent/engine/integration/observabili
 import { InMemorySessionStore } from '@octopi-agent/engine/harness/session/in-memory-store.js';
 import type { ModelProvider } from '@octopi-agent/core/index.js';
 import type { LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 function mockProvider(): ModelProvider {

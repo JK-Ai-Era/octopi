@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
@@ -112,10 +112,10 @@ describe('Engine: empty response after tool execution', () => {
     const types = events.map(e => e.type);
 
     // 应该有 turn_end（即使内容为空）
-    expect(types).toContain('turn_end');
+    expect(types).toContain('step_end');
 
     // turn_end 应该标记有工具调用
-    const turnEnd = events.find(e => e.type === 'turn_end');
+    const turnEnd = events.find(e => e.type === 'step_end');
     expect((turnEnd as any).hasToolCalls).toBe(true);
 
     // 应该有 assistant_message
@@ -161,7 +161,7 @@ describe('Engine: empty response after tool execution', () => {
 
     // 最终仍然有 turn_end
     const types = events.map(e => e.type);
-    expect(types).toContain('turn_end');
+    expect(types).toContain('step_end');
   });
 
   it('should retry empty response after tool calls', async () => {
@@ -183,7 +183,7 @@ describe('Engine: empty response after tool execution', () => {
     const types = events.map(e => e.type);
 
     // 应该有 turn_end 且标记有工具调用
-    const turnEnds = events.filter(e => e.type === 'turn_end');
+    const turnEnds = events.filter(e => e.type === 'step_end');
     expect(turnEnds.some(e => (e as any).hasToolCalls)).toBe(true);
 
     // 最终应该有正常回复

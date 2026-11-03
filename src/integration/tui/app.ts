@@ -280,7 +280,7 @@ export class TuiApp {
       case 'command.result': {
         const newSessionId = event.data?.newSessionId as string | undefined;
         const enterLoop = event.data?.enterLoop as boolean | undefined;
-        // 正文由合成 turn.end 走 assistant 渲染；这里只处理会话切换等元数据
+        // 正文由合成 step.end 走 assistant 渲染；这里只处理会话切换等元数据
         if (newSessionId) {
           this.sessionIdRef.current = newSessionId;
           this.streamedContent = '';
@@ -373,11 +373,11 @@ export class TuiApp {
       }
 
       // ── 回合结束 ──
-      case 'turn.end': {
+      case 'step.end': {
         const content = (event.data?.content as string) ?? '';
         const hasToolCalls = event.data?.hasToolCalls as boolean | undefined;
         const phase = (event.data?.phase as string | undefined) ?? 'final';
-        // 失败尝试（turn_end error=true 只出现在重试中途）：残句不得冒充正常回复，
+        // 失败尝试（step_end error=true 只出现在重试中途）：残句不得冒充正常回复，
         // 也不算空响应；重试仍在进行，不置空闲
         const isError = (event.data as { error?: boolean } | undefined)?.error === true;
         this.chatLog.clearTransientSystem();
@@ -403,7 +403,7 @@ export class TuiApp {
         }
         this.streamedContent = '';
 
-        // pre_tools：工具即将执行，保持 processing，直到 final turn_end 或 agent_end
+        // pre_tools：工具即将执行，保持 processing，直到 final step_end 或 agent_end
         // error：重试仍在进行，同样保持 processing（engine.error/aborted 才是终态）
         if (isError) {
           this.setStatus('retrying…');
@@ -414,7 +414,7 @@ export class TuiApp {
           this.setStatus('running tools…');
         }
 
-        // 更新 context 信息（来自 runner 在 turn.end 事件中附带的 LLM usage）
+        // 更新 context 信息（来自 runner 在 step.end 事件中附带的 LLM usage）
         const contextTokens = event.data?.contextTokens as number | undefined;
         const contextWindow = event.data?.contextWindow as number | undefined;
         if (contextTokens !== undefined) {
@@ -524,7 +524,7 @@ export class TuiApp {
       }
 
       case 'engine.end': {
-        // 安全网：无条件清除状态，即使 turn.end 已处理
+        // 安全网：无条件清除状态，即使 step.end 已处理
         this.chatLog.clearTransientSystem();
         if (this.isProcessing) {
           if (this.streamedContent) {

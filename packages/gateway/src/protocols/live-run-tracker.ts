@@ -122,11 +122,11 @@ export class LiveRunTracker {
         break;
       }
 
-      case 'turn.end': {
+      case 'step.end': {
         const phase = event.data?.phase;
         entry.status =
           phase === 'pre_tools' || entry.runningTools.size > 0 ? 'tools' : 'waiting';
-        // 与 ConversationAdapter.turn.end 同语义：assistant 消息已定形入转录，
+        // 与 ConversationAdapter.step.end 同语义：assistant 消息已定形入转录，
         // 流式缓冲必须清空——否则 overlay 会把已定形正文再合成一条 streaming 气泡
         // （重复渲染），followUp 续轮还会把两轮正文粘连。
         entry.streamingContent = '';

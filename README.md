@@ -21,7 +21,7 @@ Between "works in the demo" and "runs in production" stand five walls:
 - **Garbage memory** — a bolted-on vector store happily remembers things it should never have believed.
 - **Context rot** — the window fills until the model can no longer see what matters, and nobody can say why.
 - **Unenforced authority** — permissions are a promise in a prompt, not a constraint in the engine.
-- **Unattended runs** — the first time a run goes sideways at 3 a.m., nothing is watching, and the only policy is `maxTurns`.
+- **Unattended runs** — the first time a run goes sideways at 3 a.m., nothing is watching, and the only policy is `maxSteps`.
 
 Frameworks hand you the loop and wish you luck with the walls.
 

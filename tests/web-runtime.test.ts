@@ -88,7 +88,7 @@ describe('OctopiRuntimeStore', () => {
     expect(store.getState().chat.streamingContent).toBe('Hello world');
   });
 
-  it('finalizes assistant message on turn.end', () => {
+  it('finalizes assistant message on step.end', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client as any);
 
@@ -100,7 +100,7 @@ describe('OctopiRuntimeStore', () => {
       data: { delta: 'partial-' },
     });
     client.emitEvent(undefined, {
-      type: 'turn.end',
+      type: 'step.end',
       data: { content: 'final-answer' },
     });
 
@@ -131,13 +131,13 @@ describe('OctopiRuntimeStore', () => {
     expect(store.getState().chat.inspector.truncatedFrom).toBe(20);
   });
 
-  it('sets runStatus to tools on turn.end pre_tools even without conversation change', () => {
+  it('sets runStatus to tools on step.end pre_tools even without conversation change', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client as any);
 
     // 仅 tool_calls、无文本：conversation 可能不变，但状态必须切到 tools
     client.emitEvent(undefined, {
-      type: 'turn.end',
+      type: 'step.end',
       data: { content: '', hasToolCalls: true, phase: 'pre_tools' },
     });
     expect(store.getState().chat.runStatus).toBe('tools');
@@ -149,12 +149,12 @@ describe('OctopiRuntimeStore', () => {
     expect(store.getState().chat.runStatus).toBe('tools');
   });
 
-  it('leaves tools on iteration.start (next LLM call after tools)', () => {
+  it('leaves tools on step.start (next LLM call after tools)', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client as any);
 
     client.emitEvent(undefined, {
-      type: 'turn.end',
+      type: 'step.end',
       data: { content: '', hasToolCalls: true, phase: 'pre_tools' },
     });
     client.emitEvent(undefined, {
@@ -167,35 +167,35 @@ describe('OctopiRuntimeStore', () => {
     });
     expect(store.getState().chat.runStatus).toBe('tools');
 
-    // 工具结束 → 下一轮 LLM：Loop 发 iteration.start，在首个 token 前可能很久
-    client.emitEvent(undefined, { type: 'iteration.start', data: {} });
+    // 工具结束 → 下一轮 LLM：Loop 发 step.start，在首个 token 前可能很久
+    client.emitEvent(undefined, { type: 'step.start', data: {} });
     expect(store.getState().chat.runStatus).toBe('waiting');
 
     client.emitEvent(undefined, { type: 'llm_stream_delta', data: { delta: 'x' } });
     expect(store.getState().chat.runStatus).toBe('streaming');
   });
 
-  it('treats turn.end error:true as retry (waiting), not idle', () => {
+  it('treats step.end error:true as retry (waiting), not idle', () => {
     const client = createMockClient();
     const store = new OctopiRuntimeStore(client as any);
 
-    client.emitEvent(undefined, { type: 'iteration.start', data: {} });
+    client.emitEvent(undefined, { type: 'step.start', data: {} });
     client.emitEvent(undefined, {
-      type: 'turn.end',
+      type: 'step.end',
       data: { content: '', hasToolCalls: false, phase: 'final', error: true },
     });
     expect(store.getState().chat.runStatus).toBe('waiting');
 
     // 重试下一轮
-    client.emitEvent(undefined, { type: 'iteration.start', data: {} });
+    client.emitEvent(undefined, { type: 'step.start', data: {} });
     client.emitEvent(undefined, { type: 'llm_stream_delta', data: { delta: 'ok' } });
     expect(store.getState().chat.runStatus).toBe('streaming');
 
     client.emitEvent(undefined, {
-      type: 'turn.end',
+      type: 'step.end',
       data: { content: 'ok', hasToolCalls: false, phase: 'final' },
     });
-    // turn.end 只收模型回合；插话/followUp 仍可在同 run 续接，engine.end 才是空闲边界
+    // step.end 只收模型回合；插话/followUp 仍可在同 run 续接，engine.end 才是空闲边界
     expect(store.getState().chat.runStatus).toBe('waiting');
 
     client.emitEvent(undefined, { type: 'engine.end', data: {} });
@@ -236,10 +236,10 @@ describe('OctopiRuntimeStore', () => {
       data: { delta: 'hello' },
     });
     client.emitEvent(undefined, {
-      type: 'turn.end',
+      type: 'step.end',
       data: { content: 'hello', hasToolCalls: false, phase: 'final' },
     });
-    // 空闲边界是 engine.end（turn.end 后同 run 可能还有插话/followUp）
+    // 空闲边界是 engine.end（step.end 后同 run 可能还有插话/followUp）
     client.emitEvent(undefined, { type: 'engine.end', data: {} });
     expect(store.getState().chat.runStatus).toBe('idle');
 
@@ -282,7 +282,7 @@ describe('OctopiRuntimeStore', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     (client as any).getSessionMessages = async () => ({ messages: [] });
     (client as any).listApprovals = async () => [];
@@ -358,7 +358,7 @@ describe('ViewMode transitions', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({
       messages: [{ role: 'user', content: 'hi', timestamp: 1000 }],
@@ -402,7 +402,7 @@ describe('ViewMode transitions', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -438,7 +438,7 @@ describe('ViewMode transitions', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -474,7 +474,7 @@ describe('ViewMode transitions', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -505,7 +505,7 @@ describe('ViewMode transitions', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -541,7 +541,7 @@ describe('ViewMode transitions', () => {
         updatedAt: 0,
       },
       messageCount: 2,
-      turnCount: 1,
+      stepCount: 1,
     });
     client.getSessionMessages = async () => ({
       messages: [
@@ -597,7 +597,7 @@ describe('Hybrid mode paths', () => {
         updatedAt: 0,
       },
       messageCount: 1,
-      turnCount: 1,
+      stepCount: 1,
     });
     client.getSessionMessages = async () => ({
       messages: [{ role: 'user', content: 'old question', timestamp: 100 }],
@@ -637,7 +637,7 @@ describe('Hybrid mode paths', () => {
     expect(historyItem.source).toBe('history');
 
     client.emitEvent('s1', { type: 'llm_stream_delta', data: { delta: 'answer' } });
-    client.emitEvent('s1', { type: 'turn.end', data: { content: 'answer' } });
+    client.emitEvent('s1', { type: 'step.end', data: { content: 'answer' } });
 
     const items = store.getState().chat.conversation;
     expect(items).toHaveLength(2);
@@ -694,7 +694,7 @@ describe('Hybrid mode paths', () => {
     client.getSession = async () => ({
       meta: { id: 's2', agentId: 'a1' },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     await store.openSession('s2');
@@ -708,7 +708,7 @@ describe('Hybrid mode paths', () => {
     client.getSession = async (sessionId: string) => ({
       meta: { id: sessionId, agentId: 'a1' },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -756,7 +756,7 @@ describe('Session switch preserves tool execution state', () => {
     client.getSession = async (id: string) => ({
       meta: { id, agentId: 'a1' },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -895,7 +895,7 @@ describe('Session switch preserves tool execution state', () => {
     client.getSession = async (id: string) => ({
       meta: { id, agentId: 'a1' },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.listApprovals = async () => [];
     (client as any).listClientToolCalls = async () => [];
@@ -934,17 +934,17 @@ describe('Session switch preserves tool execution state', () => {
     client.getSession = async (id: string) => ({
       meta: { id, agentId: 'a1' },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
     (client as any).listClientToolCalls = async () => [];
     await store.openSession('s1');
 
-    // 工具完成 → 下一轮 LLM（iteration.start = waiting）
+    // 工具完成 → 下一轮 LLM（step.start = waiting）
     client.emitEvent('s1', { type: 'tool.exec.start', data: { toolCallId: 'tc1', toolName: 'search' } });
     client.emitEvent('s1', { type: 'tool.exec.end', data: { toolCallId: 'tc1', result: 'ok' } });
-    client.emitEvent('s1', { type: 'iteration.start', data: {} });
+    client.emitEvent('s1', { type: 'step.start', data: {} });
     expect(store.getState().chat.runStatus).toBe('waiting');
 
     // 切走：后台仍 waiting（无 running 工具、无 streaming）
@@ -973,7 +973,7 @@ describe('send failure / abort / reconnect recovery', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -1003,7 +1003,7 @@ describe('send failure / abort / reconnect recovery', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -1041,7 +1041,7 @@ describe('send failure / abort / reconnect recovery', () => {
         updatedAt: 0,
       },
       messageCount: 0,
-      turnCount: 0,
+      stepCount: 0,
     });
     client.getSessionMessages = async () => ({ messages: [] });
     client.listApprovals = async () => [];
@@ -1078,7 +1078,7 @@ describe('send failure / abort / reconnect recovery', () => {
         updatedAt: 0,
       },
         messageCount: 0,
-        turnCount: 0,
+        stepCount: 0,
       });
       client.getSessionMessages = async () => ({ messages: [] });
       client.listApprovals = async () => [];
@@ -1114,7 +1114,7 @@ describe('send failure / abort / reconnect recovery', () => {
         updatedAt: 0,
       },
         messageCount: 0,
-        turnCount: 0,
+        stepCount: 0,
       });
       client.getSessionMessages = async () => ({ messages: [] });
       client.listApprovals = async () => [];

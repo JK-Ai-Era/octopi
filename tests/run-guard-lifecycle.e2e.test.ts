@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { DefaultRunGuard } from '@octopi-agent/engine/harness/run/run-guard/default-run-guard.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import { BudgetPolicyEngine } from '@octopi-agent/engine/harness/run/budget/budget.js';

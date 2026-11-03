@@ -31,7 +31,7 @@ function createTestSession(id: string, agentId = 'agent-1'): SessionData {
       { role: 'user', content: 'hello', timestamp: Date.now() },
       { role: 'assistant', content: 'hi there', timestamp: Date.now() },
     ],
-    turns: [],
+    steps: [],
     metadata: {},
   };
 }

@@ -11,8 +11,8 @@
  * - ErrorStrategy 重试策略（通过 onError 注入）
  *
  * 设计原则：
- * - 使用 onTurnComplete 做副作用（注入 steer 指令），不直接控制停止
- * - 使用 shouldStopAfterTurn 做停止决策（critical 循环、RunGuard）
+ * - 使用 onStepComplete 做副作用（注入 steer 指令），不直接控制停止
+ * - 使用 shouldStopAfterStep 做停止决策（critical 循环、RunGuard）
  * - 两层分离，不互相覆盖
  */
 
@@ -24,7 +24,7 @@ import type {
   AgentLoopEvent,
   ClassifiedError,
   LoopToolResult,
-  TurnContext,
+  StepContext,
 } from '@octopi-agent/core/loop/types.js';
 import type { HarnessLoopEvent, PolicyUnit } from './harness-events.js';
 import { classifyError } from '@octopi-agent/core/loop/error-classifier.js';
@@ -43,13 +43,13 @@ import {
 import type { SecurityGuard } from '@octopi-agent/core/security-guard.js';
 import { severityToAction } from '@octopi-agent/core/security-guard.js';
 import type { ErrorStrategy, ClassifiedError as CoreClassifiedError } from '@octopi-agent/core/interfaces/error-strategy.js';
-import type { RunGuard, CheckpointContext, CheckpointVerdict, TurnSummary } from '@octopi-agent/core/interfaces/run-guard.js';
+import type { RunGuard, CheckpointContext, CheckpointVerdict, StepSummary } from '@octopi-agent/core/interfaces/run-guard.js';
 import type { ReliabilityHarness as CoreReliabilityHarness } from '@octopi-agent/core/interfaces/reliability.js';
 import { RunMetricsCollector } from './run-metrics-collector.js';
 import { BudgetPolicyEngine } from '../budget/budget.js';
 import { UsageLedger } from '../../governance/accounting/usage-ledger.js';
 import type { UsageLedgerSnapshot } from '../../governance/accounting/usage-ledger.js';
-import { nominalTotalTokens } from '@octopi-agent/core/types/turn.js';
+import { nominalTotalTokens } from '@octopi-agent/core/types/step.js';
 import { getRunScope } from '../run-scope.js';
 import { resolveHitlDecision } from '../../governance/human-in-the-loop/decision-cache.js';
 
@@ -76,7 +76,7 @@ export interface ReliabilityConfig {
   /** wrap-up 相关配置 */
   wrapUp?: {
     /** wrap-up 窗口的轮次数（默认 3） */
-    turns?: number;
+    steps?: number;
     /** Policy 触达时的行为（默认 wrap_up_then_stop） */
     onPolicyHit?: 'stop' | 'wrap_up_then_stop';
     /** context 轴 wrap-up 触发阈值比例（默认 0.85） */
@@ -176,9 +176,9 @@ interface ReliabilityState {
   toolCallHistory: ToolCallRecord[];
   loopCriticalTriggered: boolean;
   collector: RunMetricsCollector;
-  checkpointIterationCount: number;
+  checkpointStepCount: number;
   currentCheckpointInterval: number;
-  lastCheckpointIteration: number;
+  lastCheckpointStep: number;
   budgetStop: false | { reason: string; report?: unknown };
   runGuardStop: false | { reason: string; userMessage?: string };
   runGuardRecovered: false | { reason: string; actions: string[] };
@@ -186,9 +186,9 @@ interface ReliabilityState {
   forceCheckpoint: boolean;
   /** 连续模型错误的 attempt 序号（从 0 起）；成功一轮后重置 */
   modelErrorAttempt: number;
-  /** hard 在 onTurnComplete 补判：generator 下一事件后 yield */
+  /** hard 在 onStepComplete 补判：generator 下一事件后 yield */
   pendingBudgetHardYield: false | {
-    reason: 'wall_clock' | 'iteration' | 'tool_calls';
+    reason: 'wall_clock' | 'steps' | 'tool_calls';
     report?: unknown;
   };
   /** SecurityGuard 拦截：在 generator 主循环 yield（beforeToolCall 不能 yield） */
@@ -219,7 +219,7 @@ interface ReliabilityState {
   /** wrap-up 状态：false 表示未进入 wrap-up */
   wrapUp: false | {
     reason: 'context' | 'policy';
-    turnsRemaining: number;
+    stepsRemaining: number;
     /** 进入 wrap-up 时的用户消息 */
     userMessage: string;
     /** 是否已注入 wrap-up 提示 */
@@ -318,9 +318,9 @@ function createInitialState(checkpointInterval = 15): ReliabilityState {
     toolCallHistory: [],
     loopCriticalTriggered: false,
     collector: new RunMetricsCollector(),
-    checkpointIterationCount: 0,
+    checkpointStepCount: 0,
     currentCheckpointInterval: checkpointInterval,
-    lastCheckpointIteration: 0,
+    lastCheckpointStep: 0,
     budgetStop: false,
     runGuardStop: false,
     runGuardRecovered: false,
@@ -473,7 +473,7 @@ export async function* runAgentWithReliability(
   const ledger = new UsageLedger();
 
   // ── 用于空响应/planning-only 重试的消息缓冲 ──
-  // onTurnComplete 将 steer 消息推入此数组，getFollowUpMessages 返回给 agentLoop
+  // onStepComplete 将 steer 消息推入此数组，getFollowUpMessages 返回给 agentLoop
   // 使循环在无 tool_calls 时也能继续执行重试
   const pendingFollowUps: Message[] = [];
 
@@ -544,7 +544,7 @@ export async function* runAgentWithReliability(
           state.pendingBudgetHardYield = {
             reason: (hard.reason ?? 'wall_clock') as
               | 'wall_clock'
-              | 'iteration'
+              | 'steps'
               | 'tool_calls',
             report: hard.report,
           };
@@ -781,8 +781,8 @@ export async function* runAgentWithReliability(
         }
       : undefined,
 
-    // onTurnComplete：可靠性副作用（注入 steer 指令，不控制停止）
-    onTurnComplete: async (ctx) => {
+    // onStepComplete：可靠性副作用（注入 steer 指令，不控制停止）
+    onStepComplete: async (ctx) => {
       // 一轮成功走到这里：重置模型错误 attempt
       state.modelErrorAttempt = 0;
 
@@ -792,7 +792,7 @@ export async function* runAgentWithReliability(
       const hasToolCallInMessage = ctx.message.toolCalls && ctx.message.toolCalls.length > 0;
 
       // 0. 记录本轮摘要（token 在 generator 层从 turn_end.usage 累加）
-      const summary: TurnSummary = {
+      const summary: StepSummary = {
         role: 'assistant',
         contentPreview: contentText.slice(0, 200),
         toolCalls: ctx.message.toolCalls?.map(t => t.name),
@@ -800,7 +800,7 @@ export async function* runAgentWithReliability(
         tokenDelta: 0,
         timestamp: Date.now(),
       };
-      state.collector.recordTurn(summary);
+      state.collector.recordStep(summary);
       state.hasProgress = state.collector.hasProgress();
 
       // 0b. Budget hard（P0：无 soft 续租；nominal tokens 仅诊断）
@@ -814,7 +814,7 @@ export async function* runAgentWithReliability(
           state.pendingBudgetHardYield = {
             reason: (hardEval.reason ?? 'wall_clock') as
               | 'wall_clock'
-              | 'iteration'
+              | 'steps'
               | 'tool_calls',
             report: hardEval.report,
           };
@@ -945,7 +945,7 @@ export async function* runAgentWithReliability(
               // 高危信号：立即触发检查点（不等固定 interval）
               state.forceCheckpoint = true;
               if (state.loopCriticalTriggered) {
-                // 二次 critical：通过 shouldStopAfterTurn 停止
+                // 二次 critical：通过 shouldStopAfterStep 停止
                 (state as any)._loopCriticalTwice = true;
                 // 停止必须可见：与 RunGuard 走同一事件通道
                 state.runGuardStop = {
@@ -975,12 +975,12 @@ export async function* runAgentWithReliability(
 
       // 5. RunGuard 检查点（周期 + 高危即时）
       if (harness.runGuard) {
-        state.checkpointIterationCount++;
+        state.checkpointStepCount++;
         const due =
           state.forceCheckpoint ||
-          state.checkpointIterationCount >= state.currentCheckpointInterval;
+          state.checkpointStepCount >= state.currentCheckpointInterval;
         if (due) {
-          state.checkpointIterationCount = 0;
+          state.checkpointStepCount = 0;
           state.forceCheckpoint = false;
           try {
             // I1：checkpoint 身份优先 RunScope ALS（harness.sessionId 仅为回退）
@@ -1003,7 +1003,7 @@ export async function* runAgentWithReliability(
                 executeRecoveryActions(verdict.recoveryActions, ctx.context.messages);
               }
               state.collector.recordRecovery({
-                iteration: ctxForGuard.iteration,
+                steps: ctxForGuard.steps,
                 actionType: primary,
                 reason: verdict.reason,
                 failureKind: verdict.failureKind,
@@ -1017,7 +1017,7 @@ export async function* runAgentWithReliability(
             if (verdict.nextCheckpointIn && verdict.nextCheckpointIn > 0) {
               state.currentCheckpointInterval = verdict.nextCheckpointIn;
             }
-            state.lastCheckpointIteration = ctxForGuard.iteration;
+            state.lastCheckpointStep = ctxForGuard.steps;
             // 检查点后清空已消费的 external signals
             state.collector.drainExternalSignals();
           } catch {
@@ -1025,17 +1025,17 @@ export async function* runAgentWithReliability(
           }
         }
       } else {
-        state.checkpointIterationCount++;
+        state.checkpointStepCount++;
       }
 
-      // 调用用户的 onTurnComplete（如果有）
-      if (config.onTurnComplete) {
-        await config.onTurnComplete(ctx);
+      // 调用用户的 onStepComplete（如果有）
+      if (config.onStepComplete) {
+        await config.onStepComplete(ctx);
       }
     },
 
-    // shouldStopAfterTurn：停止决策
-    shouldStopAfterTurn: async (ctx) => {
+    // shouldStopAfterStep：停止决策
+    shouldStopAfterStep: async (ctx) => {
       // 0. Budget hard
       if (state.budgetStop) {
         return true;
@@ -1053,8 +1053,8 @@ export async function* runAgentWithReliability(
         return true;
       }
       // 4. 用户的停止条件
-      if (config.shouldStopAfterTurn) {
-        return config.shouldStopAfterTurn(ctx);
+      if (config.shouldStopAfterStep) {
+        return config.shouldStopAfterStep(ctx);
       }
       return false;
     },
@@ -1146,13 +1146,13 @@ export async function* runAgentWithReliability(
       budget?.recordToolCall(1);
       ledger.recordToolCall(1);
       // Summary LLM usage 归因（capabilities/summary 产生的 LLM 调用）
-      const toolResult = event.result as { summaryUsage?: import('@octopi-agent/core/types/turn.js').TokenUsage };
+      const toolResult = event.result as { summaryUsage?: import('@octopi-agent/core/types/step.js').TokenUsage };
       if (toolResult.summaryUsage) {
         ledger.recordUsage(toolResult.summaryUsage, { summary: true });
       }
     }
 
-    if (event.type === 'turn_end') {
+    if (event.type === 'step_end') {
       // P0/P1：nominal tokens 入账诊断 + UsageLedger；不触发 spend hard
       if (event.usage && !event.error) {
         const nominal = nominalTotalTokens(event.usage);
@@ -1160,7 +1160,7 @@ export async function* runAgentWithReliability(
         budget?.consumeTokens(nominal);
         ledger.recordUsage(event.usage);
       }
-      budget?.recordIteration();
+      budget?.recordStep();
 
       // P5: 更新 context 压力信息
       if (harness.getContextPressure) {
@@ -1209,7 +1209,7 @@ export async function* runAgentWithReliability(
         const policyUnits = relConfig.policyUnits;
         const snapshot = ledger.snapshot({ scope: 'run' });
         const onPolicyHit = relConfig.wrapUp?.onPolicyHit ?? 'wrap_up_then_stop';
-        const wrapUpTurns = relConfig.wrapUp?.turns ?? 3;
+        const wrapUpSteps = relConfig.wrapUp?.steps ?? 3;
 
         if (policyUnits) {
           // 检查所有 policy 单位，找到第一个超限的
@@ -1246,7 +1246,7 @@ export async function* runAgentWithReliability(
               // 先 wrap-up，再 stop
               state.wrapUp = {
                 reason: 'policy',
-                turnsRemaining: wrapUpTurns,
+                stepsRemaining: wrapUpSteps,
                 userMessage: `${userMessage}。停止新的探索性工具调用；基于已有信息输出结论、证据与未完成项。`,
                 hintInjected: false,
               };
@@ -1284,7 +1284,7 @@ export async function* runAgentWithReliability(
       // P2 wrap-up 控制梯：检查是否需要进入 wrap-up
       if (!state.wrapUp && !state.budgetStop) {
         const wrapUpConfig = relConfig.wrapUp;
-        const wrapUpTurns = wrapUpConfig?.turns ?? 3;
+        const wrapUpSteps = wrapUpConfig?.steps ?? 3;
         const contextRatio = wrapUpConfig?.contextRatio ?? 0.85;
 
         // 检查 context 轴 wrap-up（contextEstTokens / contextWindowTokens）
@@ -1294,7 +1294,7 @@ export async function* runAgentWithReliability(
           if (contextPressure >= contextRatio) {
             state.wrapUp = {
               reason: 'context',
-              turnsRemaining: wrapUpTurns,
+              stepsRemaining: wrapUpSteps,
               userMessage: `[Context] 上下文压力接近上限（${Math.round(contextPressure * 100)}%）。停止新的探索性工具调用；基于已有信息输出结论、证据与未完成项。`,
               hintInjected: false,
             };
@@ -1319,7 +1319,7 @@ export async function* runAgentWithReliability(
           if (report.elapsedMs >= wrapUpThreshold) {
             state.wrapUp = {
               reason: 'policy',
-              turnsRemaining: wrapUpTurns,
+              stepsRemaining: wrapUpSteps,
               userMessage: `[Resource] 预算策略接近上限（wall_clock: ${Math.round(report.elapsedMs / 1000)}s / ${Math.round(maxWallClock / 1000)}s）。停止新的探索性工具调用；基于已有信息输出结论、证据与未完成项。`,
               hintInjected: false,
             };
@@ -1339,8 +1339,8 @@ export async function* runAgentWithReliability(
 
       // wrap-up 窗口倒计时
       if (state.wrapUp) {
-        state.wrapUp.turnsRemaining--;
-        if (state.wrapUp.turnsRemaining <= 0) {
+        state.wrapUp.stepsRemaining--;
+        if (state.wrapUp.stepsRemaining <= 0) {
           // wrap-up 窗口结束，触发 stop
           state.budgetStop = {
             reason: state.wrapUp.reason,
@@ -1369,7 +1369,7 @@ export async function* runAgentWithReliability(
             data: {
               reason: (hardResult.reason ?? 'wall_clock') as
                 | 'wall_clock'
-                | 'iteration'
+                | 'steps'
                 | 'tool_calls',
               report: hardResult.report,
             },
@@ -1378,7 +1378,7 @@ export async function* runAgentWithReliability(
       }
     }
 
-    // onTurnComplete 补判的 hard
+    // onStepComplete 补判的 hard
     if (state.pendingBudgetHardYield) {
       const hard = state.pendingBudgetHardYield;
       state.pendingBudgetHardYield = false;

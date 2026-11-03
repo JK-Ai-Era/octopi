@@ -99,7 +99,7 @@ describe('validateSubsystemSpec', () => {
           source: 'eventBus',
           filter: {
             events: ['test.event'],
-            condition: 'turn.count > 0',
+            condition: 'step.count > 0',
             conditionRef: './handler.ts:check',
           },
           isolation: 'structured',
@@ -115,7 +115,7 @@ describe('validateSubsystemSpec', () => {
       const spec = makeSpec({
         sense: {
           source: 'eventBus',
-          filter: { events: ['test.event'], condition: 'turn.count > 0' },
+          filter: { events: ['test.event'], condition: 'step.count > 0' },
           isolation: 'structured',
         },
       });
@@ -206,7 +206,7 @@ describe('validateSubsystemSpec', () => {
       const spec = makeSpec({
         sense: {
           source: 'eventBus',
-          filter: { events: ['iteration.end'], condition: 'turn.count % 10 === 0' },
+          filter: { events: ['iteration.end'], condition: 'step.count % 10 === 0' },
           isolation: 'structured',
         },
         think: {
@@ -214,7 +214,7 @@ describe('validateSubsystemSpec', () => {
           implementation: 'llm',
           systemPrompt: 'You are a memory extractor.',
           model: 'mini',
-          maxIterations: 1,
+          maxSteps: 1,
         },
         act: { mode: 'none' },
         signal: { severity: 'advisory', channel: ['event'] },

@@ -542,7 +542,7 @@ export class SenseEngine {
    * - 字符串字面量原样保留（不再把 `'recent'` 误识别为变量）
    * - SenseContext 顶层字段（sessionLifecycle / eventData / …）→ `ctx.<field>`
    * - `eventData.x` → `ctx.eventData.x`；`metrics.x` → `ctx.metrics['x']`
-   * - 其余标识符 → `ctx.metrics['id']`（兼容 `turn.count` 等指标键）
+   * - 其余标识符 → `ctx.metrics['id']`（兼容 `step.count` 等指标键）
    */
   private compileConditionExpression(expr: string): (ctx: SenseContext) => boolean {
     const body = rewriteConditionExpression(expr);
@@ -654,7 +654,7 @@ export function rewriteConditionExpression(expr: string): string {
         continue;
       }
 
-      // 其余标识符：整段 dotted name 作为 metrics key（turn.count）
+      // 其余标识符：整段 dotted name 作为 metrics key（step.count）
       let name = base;
       let rest = j;
       while (

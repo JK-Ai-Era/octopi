@@ -43,7 +43,7 @@ function makeSession(messages: Message[]): SessionData {
       updatedAt: Date.now(),
     },
     messages,
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };

@@ -18,7 +18,7 @@ export interface GatewayConfig {
   };
   /** Run 安全阀/策略；见 arch/budget-redesign.md（无 nominal token hard） */
   budgetPolicy?: {
-    maxIterations?: number;
+    maxSteps?: number;
     maxToolCalls?: number;
     maxWallClockMs?: number;
   };

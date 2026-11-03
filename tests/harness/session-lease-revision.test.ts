@@ -28,7 +28,7 @@ function emptySession(id: string, agentId = 'a1'): SessionData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
   };
 }
@@ -117,8 +117,8 @@ describe('InProcessSessionLock (E2)', () => {
       setSessionCompactState: (..._a: unknown[]) => {},
       getSessionCompactState: (..._a: unknown[]) => undefined,
       toolsForSession: () => [],
-      setOnAfterTurn: () => {},
-      notifyAfterTurn: async () => {},
+      setOnAfterStep: () => {},
+      notifyAfterStep: async () => {},
       run: async function* (
         _s?: AbortSignal,
         _h?: unknown,
@@ -131,7 +131,7 @@ describe('InProcessSessionLock (E2)', () => {
             timestamp: Date.now(),
           });
         }
-        yield { type: 'turn_end', timestamp: Date.now(), usage: undefined } as never;
+        yield { type: 'step_end', timestamp: Date.now(), usage: undefined } as never;
         yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
       },
     } as unknown as Agent;
@@ -167,8 +167,8 @@ describe('AgentRevision field slot (G2)', () => {
       setSessionCompactState: () => {},
       getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-      setOnAfterTurn: () => {},
-      notifyAfterTurn: async () => {},
+      setOnAfterStep: () => {},
+      notifyAfterStep: async () => {},
       run: async function* (
         _s?: AbortSignal,
         _h?: unknown,
@@ -185,7 +185,7 @@ describe('AgentRevision field slot (G2)', () => {
             timestamp: Date.now(),
           });
         }
-        yield { type: 'turn_end', timestamp: Date.now(), usage: undefined } as never;
+        yield { type: 'step_end', timestamp: Date.now(), usage: undefined } as never;
         yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
       },
     } as unknown as Agent;
@@ -228,8 +228,8 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
         setSessionCompactState: (..._a: unknown[]) => {},
         getSessionCompactState: (..._a: unknown[]) => undefined,
       toolsForSession: () => [],
-        setOnAfterTurn: () => {},
-        notifyAfterTurn: async () => {},
+        setOnAfterStep: () => {},
+        notifyAfterStep: async () => {},
         run: async function* (
           _s?: AbortSignal,
           _h?: unknown,
@@ -245,7 +245,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
             });
           }
           order.push(`${tag}:end`);
-          yield { type: 'turn_end', timestamp: Date.now(), usage: undefined } as never;
+          yield { type: 'step_end', timestamp: Date.now(), usage: undefined } as never;
           yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
         },
       }) as unknown as Agent;
@@ -292,8 +292,8 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
       setSessionCompactState: (..._a: unknown[]) => {},
       getSessionCompactState: (..._a: unknown[]) => undefined,
       toolsForSession: () => [],
-      setOnAfterTurn: () => {},
-      notifyAfterTurn: async () => {},
+      setOnAfterStep: () => {},
+      notifyAfterStep: async () => {},
       run: async function* () {
         ran.push('should-not-run');
         yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
@@ -336,8 +336,8 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
       setSessionCompactState: (..._a: unknown[]) => {},
       getSessionCompactState: (..._a: unknown[]) => undefined,
       toolsForSession: () => [],
-      setOnAfterTurn: () => {},
-      notifyAfterTurn: async () => {},
+      setOnAfterStep: () => {},
+      notifyAfterStep: async () => {},
       run: async function* (
         _s?: AbortSignal,
         _h?: unknown,
@@ -350,7 +350,7 @@ describe('shared SessionLease + ACL on handle (review fixes)', () => {
             timestamp: Date.now(),
           });
         }
-        yield { type: 'turn_end', timestamp: Date.now(), usage: undefined } as never;
+        yield { type: 'step_end', timestamp: Date.now(), usage: undefined } as never;
         yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
       },
     } as unknown as Agent;
@@ -391,8 +391,8 @@ describe('session status recovery after crash / error residue', () => {
       setSessionCompactState: (..._a: unknown[]) => {},
       getSessionCompactState: (..._a: unknown[]) => undefined,
       toolsForSession: () => [],
-      setOnAfterTurn: () => {},
-      notifyAfterTurn: async () => {},
+      setOnAfterStep: () => {},
+      notifyAfterStep: async () => {},
       run: async function* (
         _s?: AbortSignal,
         _h?: unknown,
@@ -405,7 +405,7 @@ describe('session status recovery after crash / error residue', () => {
             timestamp: Date.now(),
           });
         }
-        yield { type: 'turn_end', timestamp: Date.now(), usage: undefined } as never;
+        yield { type: 'step_end', timestamp: Date.now(), usage: undefined } as never;
         yield { type: 'agent_end', reason: 'done', timestamp: Date.now() } as never;
       },
     } as unknown as Agent;

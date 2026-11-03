@@ -124,7 +124,7 @@ export class ConversationAdapter {
   private toolIndex: Record<string, string> = {}; // toolCallId → conversationItemId
   private streamingContent = '';
   private streamingReasoning = '';
-  /** 最近一次 turn.end 写入的 content 指纹；engine.start / 新流式会重置，用于去重重复投递 */
+  /** 最近一次 step.end 写入的 content 指纹；engine.start / 新流式会重置，用于去重重复投递 */
   private lastTurnEndContent: string | undefined;
   /** 已提示过 empty response 的 session（adapter 跨会话复用，不得互吞） */
   private emptyWarnedSessions = new Set<string>();
@@ -189,7 +189,7 @@ export class ConversationAdapter {
         if (!delta) break;
 
         this.streamingContent += delta;
-        // 新流式输出开始：清除上一轮 turn.end 指纹，避免跨 turn 误去重
+        // 新流式输出开始：清除上一轮 step.end 指纹，避免跨 turn 误去重
         this.lastTurnEndContent = undefined;
         this.emptyWarnedSessions.clear();
 
@@ -311,7 +311,7 @@ export class ConversationAdapter {
         break;
       }
 
-      // ── 命令结果：只清流式缓冲；正文由合成 turn.end 展示，避免双份气泡 ──
+      // ── 命令结果：只清流式缓冲；正文由合成 step.end 展示，避免双份气泡 ──
       case 'command.result': {
         const data = event.data as { enterLoop?: boolean } | undefined;
         if (data?.enterLoop) break;
@@ -323,17 +323,17 @@ export class ConversationAdapter {
         break;
       }
 
-      // ── Turn end ──
+      // ── Step end ──
       // phase=pre_tools：assistant 消息已定稿但工具未跑完；仍 finalize 文本，
       // 但由 store 用 phase 区分 runStatus（tools vs idle），避免 UI 误判空闲。
-      case 'turn.end': {
+      case 'step.end': {
         const raw = event.data?.content;
         // 空串不能用 ?? 回落：runner 常带 content:''，应吃掉 streaming 缓冲
         const content = String((raw != null && raw !== '') ? raw : (this.streamingContent ?? ''));
         const phase = String((event.data as { phase?: string } | undefined)?.phase ?? 'final');
         const hasToolCalls = Boolean((event.data as { hasToolCalls?: boolean } | undefined)?.hasToolCalls);
         // 失败轮（重试中的某次尝试失败）：部分流出不得标成 completed 冒充回复
-        const isErrorTurn = Boolean((event.data as { error?: boolean } | undefined)?.error);
+        const isErrorStep = Boolean((event.data as { error?: boolean } | undefined)?.error);
         if (this.currentAssistantId) {
           items = items.map((it) =>
             it.id === this.currentAssistantId && it.role === 'assistant'
@@ -341,7 +341,7 @@ export class ConversationAdapter {
                   ...it,
                   status: (this.runAborted
                     ? 'aborted'
-                    : isErrorTurn
+                    : isErrorStep
                       ? 'error'
                       : 'completed') as 'completed' | 'error' | 'aborted',
                   content: content || (it as AssistantConversationItem).content,
@@ -352,7 +352,7 @@ export class ConversationAdapter {
           );
           this.lastTurnEndContent = content || undefined;
           changed = true;
-        } else if (content && !isErrorTurn) {
+        } else if (content && !isErrorStep) {
           // 非流式 / 无 streaming item：按 run 内 content 指纹去重（事件重放 / 双通道投递）
           // engine.start / llm_stream_delta 会重置指纹，不会误吞跨 turn 的同文回复
           if (content !== this.lastTurnEndContent) {
@@ -372,7 +372,7 @@ export class ConversationAdapter {
             changed = true;
           }
         } else if (
-          !isErrorTurn &&
+          !isErrorStep &&
           phase === 'final' &&
           !hasToolCalls &&
           !this.emptyWarnedSessions.has(sessionId)
@@ -463,7 +463,7 @@ export class ConversationAdapter {
       case 'engine.end':
       case 'interrupted':
       case 'aborted': {
-        // 中止语义：用户主动停止不是错误。turn.end(error) 可能先到（碎片被标 error），
+        // 中止语义：用户主动停止不是错误。step.end(error) 可能先到（碎片被标 error），
         // 中止信号后到时翻成 aborted——中止对本轮碎片有最终解释权；已完成轮不动。
         const isAbort =
           event.type === 'aborted' ||

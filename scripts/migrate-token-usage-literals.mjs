@@ -19,7 +19,7 @@ const objectRe =
 
 let changed = 0;
 for (const file of files) {
-  if (file.includes('core/types/turn.ts')) continue;
+  if (file.includes('core/types/step.ts')) continue;
   if (file.includes('integration/providers/usage.ts')) continue;
   let text = readFileSync(file, 'utf8');
   const before = text;
@@ -49,15 +49,15 @@ for (const file of files) {
       if (idx >= 0) {
         const importPath = file.includes(`${'\\'}src${'\\'}`) || file.includes('/src/')
           ? (file.includes('tests/') || file.includes('tests\\')
-              ? '../src/core/types/turn.js'
-              : '../../core/types/turn.js')
-          : '../src/core/types/turn.js';
+              ? '../src/core/types/step.js'
+              : '../../core/types/step.js')
+          : '../src/core/types/step.js';
         // relative from tests/* vs tests/harness/*
-        let rel = '../src/core/types/turn.js';
-        if (file.replace(/\\/g, '/').includes('tests/harness/')) rel = '../../src/core/types/turn.js';
+        let rel = '../src/core/types/step.js';
+        if (file.replace(/\\/g, '/').includes('tests/harness/')) rel = '../../src/core/types/step.js';
         if (file.replace(/\\/g, '/').includes('src/')) {
           const depth = file.replace(/\\/g, '/').split('src/')[1].split('/').length - 1;
-          rel = `${'../'.repeat(depth + 1)}core/types/turn.js`;
+          rel = `${'../'.repeat(depth + 1)}core/types/step.js`;
         }
         lines.splice(idx + 1, 0, `import { makeTokenUsage } from '${rel}';`);
         text = lines.join('\n');

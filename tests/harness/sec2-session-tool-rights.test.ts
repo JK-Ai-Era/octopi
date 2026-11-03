@@ -36,7 +36,7 @@ function session(id = 's1', agentId = 'owner-agent'): SessionStoreData {
       updatedAt: Date.now(),
     },
     messages: [],
-    turns: [],
+    steps: [],
     metadata: {},
     tasks: [],
   };

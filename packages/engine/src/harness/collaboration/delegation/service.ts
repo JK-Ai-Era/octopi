@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import type { AgentRegistry } from './registry-types.js';
 import type {
@@ -169,7 +169,7 @@ export function intersectBudget(
     return Math.min(a, b);
   };
   return {
-    maxTurns: pick(requested?.maxTurns, ceiling?.maxTurns),
+    maxSteps: pick(requested?.maxSteps, ceiling?.maxSteps),
     maxTokens: pick(requested?.maxTokens, ceiling?.maxTokens),
     timeoutMs: pick(requested?.timeoutMs, ceiling?.timeoutMs),
   };

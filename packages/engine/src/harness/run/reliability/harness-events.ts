@@ -43,11 +43,11 @@ export interface BudgetControlEvent {
   resumeHint?: string;
 }
 
-/** 资源 hard 总闸触发（P0：无 tokens 轴；wall_clock/iteration/tool_calls） */
+/** 资源 hard 总闸触发（P0：无 tokens 轴；wall_clock/steps/tool_calls） */
 export type BudgetExceededEvent = {
   type: 'budget_exceeded';
   timestamp: number;
-  data: { reason: 'wall_clock' | 'iteration' | 'tool_calls'; report?: unknown };
+  data: { reason: 'wall_clock' | 'steps' | 'tool_calls'; report?: unknown };
 };
 
 /** RunGuard 判定 recover */
@@ -71,7 +71,7 @@ export type RunGuardMetricsEvent = {
   data: {
     sessionId?: string;
     agentId?: string;
-    iteration: number;
+    steps: number;
     totalToolCalls: number;
     /** 诊断 nominal Σ（非成本 hard） */
     nominalTotalTokens: number;

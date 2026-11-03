@@ -1,5 +1,5 @@
 /**
- * Turn（轮次）类型 + TokenUsage（cache-aware）
+ * Step（模型轮）类型 + TokenUsage（cache-aware）
  *
  * 见 arch/budget-redesign.md P1：账本吃 provider 分项，禁止用 nominal Σ 做默认 hard。
  */
@@ -97,15 +97,15 @@ export function reportedPromptTokens(usage: TokenUsage): number {
 }
 
 /**
- * Turn — 一次 Agent 轮次的账本记录
+ * Step — 一个模型轮（一次 LLM 调用）的账本记录
  *
  * 只记账不记正文：输入/输出消息的唯一权威是 Session.messages（Discourse），
  * 此处不得再保存全量历史快照（曾因 `input: Message[]` 全量拷贝导致
  * state.json 二次方膨胀）。审计/回放需要输入正文时从 messages 取。
  */
-export interface Turn {
+export interface Step {
   id: string;
-  /** 本轮输入消息条数（信息性计数；正文见 Session.messages） */
+  /** 本步输入消息条数（信息性计数；正文见 Session.messages） */
   inputCount: number;
   output: Message;
   usage?: TokenUsage;
@@ -113,8 +113,8 @@ export interface Turn {
   model: string;
   timestamp: number;
   /**
-   * 本轮 LLM 调用失败（重试中止或彻底失败）。
-   * 失败轮的 `output.content` 是该次调用已流出的部分文本，不是完整回复——
+   * 本步 LLM 调用失败（重试中止或彻底失败）。
+   * 失败步的 `output.content` 是该次调用已流出的部分文本，不是完整回复——
    * 不得按正常回复回放。缺省 = 正常完成。
    */
   error?: boolean;

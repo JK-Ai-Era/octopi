@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeTokenUsage, nominalTotalTokens } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage, nominalTotalTokens } from '@octopi-agent/core/types/step.js';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

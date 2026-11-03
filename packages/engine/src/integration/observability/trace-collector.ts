@@ -35,8 +35,8 @@ export class TraceCollector {
   private logger: TraceLogger;
   private metrics: MetricsAggregator | null;
   private config: TraceCollectorConfig;
-  private turnCount = 0;
-  private currentTurnId?: string;
+  private stepCount = 0;
+  private currentStepId?: string;
 
   constructor(config?: TraceCollectorConfig) {
     this.config = {
@@ -69,25 +69,25 @@ export class TraceCollector {
     events: AsyncGenerator<AgentEvent>,
     ctx: { sessionId?: string; agentId?: string } = {},
   ): AsyncGenerator<AgentEvent> {
-    const turnId = `turn_${++this.turnCount}`;
-    this.currentTurnId = turnId;
+    const stepId = `step_${++this.stepCount}`;
+    this.currentStepId = stepId;
 
-    this.logger.info(TRACE_EVENTS.TURN_START, { turnId }, ctx);
+    this.logger.info(TRACE_EVENTS.STEP_START, { stepId }, ctx);
 
-    let sawTurnEnd = false;
+    let sawStepEnd = false;
     for await (const event of events) {
-      if (event.type === 'turn.end') sawTurnEnd = true;
+      if (event.type === 'step.end') sawStepEnd = true;
       // 记录到 trace
-      this.recordEvent(event, ctx, turnId);
+      this.recordEvent(event, ctx, stepId);
 
       // 原样传递
       yield event;
     }
 
-    // 收口行仅在事件流自身无 turn.end 时补——recordEvent 已把 turn.end 映射为 TURN_END，
-    // 再补一行即双计（turn 统计翻倍）
-    if (!sawTurnEnd) {
-      this.logger.info(TRACE_EVENTS.TURN_END, { turnId }, ctx);
+    // 收口行仅在事件流自身无 step.end 时补——recordEvent 已把 step.end 映射为 STEP_END，
+    // 再补一行即双计（step 统计翻倍）
+    if (!sawStepEnd) {
+      this.logger.info(TRACE_EVENTS.STEP_END, { stepId }, ctx);
     }
   }
 
@@ -105,15 +105,15 @@ export class TraceCollector {
    *
    * @param event - AgentEvent
    * @param ctx - 会话上下文
-   * @param turnId - 轮次 id（可选）
+   * @param stepId - 轮次 id（可选）
    */
   record(
     event: AgentEvent,
     ctx: { sessionId?: string; agentId?: string } = {},
-    turnId = `turn_${++this.turnCount}`,
+    stepId = `step_${++this.stepCount}`,
   ): void {
-    if (!this.currentTurnId) this.currentTurnId = turnId;
-    this.recordEvent(event, ctx, turnId);
+    if (!this.currentStepId) this.currentStepId = stepId;
+    this.recordEvent(event, ctx, stepId);
   }
 
   /**
@@ -122,7 +122,7 @@ export class TraceCollector {
   private recordEvent(
     event: AgentEvent,
     ctx: { sessionId?: string; agentId?: string },
-    turnId: string,
+    stepId: string,
   ): void {
     const base = {
       sessionId: event.sessionId ?? ctx.sessionId,
@@ -135,20 +135,19 @@ export class TraceCollector {
         this.logger.info(TRACE_EVENTS.ENGINE_START, event.data, base);
         break;
 
-      // Runner 词表：iteration.start ≈ turn 开始
-      case 'iteration.start':
-      case 'turn.start':
-        this.logger.info(TRACE_EVENTS.TURN_START, { turnId }, base);
+      // step.start = 模型轮开始
+      case 'step.start':
+        this.logger.info(TRACE_EVENTS.STEP_START, { stepId }, base);
         break;
 
-      // Runner 词表：turn.end 携带 usage。F3-c 起不再冒充 model.call.end
+      // Runner 词表：step.end 携带 usage。F3-c 起不再冒充 model.call.end
       //（LoopObserver 的 model.call.end 才带 durationMs/ttft；两行各归各位，p50/p95 取数不双计。
-      //  F3-d 起 turn.end 事件还带 llmTiming 供 UI timeline 展示，本白名单仍不落盘——trace 指标只认 model.call.*）
-      case 'turn.end':
-        this.logger.info(TRACE_EVENTS.TURN_END, {
+      //  F3-d 起 step.end 事件还带 llmTiming 供 UI timeline 展示，本白名单仍不落盘——trace 指标只认 model.call.*）
+      case 'step.end':
+        this.logger.info(TRACE_EVENTS.STEP_END, {
           contentLength: (event.data?.content as string)?.length ?? 0,
           usage: event.data?.usage,
-          turnId,
+          stepId,
         }, base);
         break;
 
@@ -158,7 +157,7 @@ export class TraceCollector {
           callId: event.data?.callId,
           reqChars: event.data?.reqChars,
           toolChars: event.data?.toolChars,
-          turnId,
+          stepId,
         }, base);
         break;
 
@@ -174,7 +173,7 @@ export class TraceCollector {
           contentLength: (event.data?.content as string)?.length ?? 0,
           toolCallCount: event.data?.toolCallCount ?? 0,
           usage: event.data?.usage,
-          turnId,
+          stepId,
         }, base);
         break;
 
@@ -186,7 +185,7 @@ export class TraceCollector {
       case 'model.call.error':
         this.logger.error(TRACE_EVENTS.MODEL_CALL_ERROR, {
           error: event.data?.error,
-          turnId,
+          stepId,
         }, base);
         break;
 
@@ -195,7 +194,7 @@ export class TraceCollector {
         this.logger.info(TRACE_EVENTS.TOOL_EXEC_START, {
           toolName: event.data?.toolName,
           toolCallId: event.data?.toolCallId,
-          turnId,
+          stepId,
         }, base);
         break;
 
@@ -203,7 +202,7 @@ export class TraceCollector {
         this.logger.info(TRACE_EVENTS.TOOL_EXEC_END, {
           toolName: event.data?.toolName,
           hasError: event.data?.hasError,
-          turnId,
+          stepId,
         }, base);
         break;
 
@@ -212,7 +211,7 @@ export class TraceCollector {
         if (this.config.captureStreamDeltas) {
           this.logger.trace(TRACE_EVENTS.MODEL_STREAM_DELTA, {
             delta: event.data?.delta,
-            turnId,
+            stepId,
           }, base);
         }
         break;
@@ -221,7 +220,7 @@ export class TraceCollector {
       case 'retry':
         this.logger.warn(TRACE_EVENTS.MODEL_RETRY, {
           delayMs: event.data?.delayMs,
-          turnId,
+          stepId,
         }, base);
         break;
 
@@ -283,7 +282,7 @@ export class TraceCollector {
   recordSessionState(ctx: {
     sessionId: string;
     messageCount: number;
-    turnCount: number;
+    stepCount: number;
     sessionSize?: string;
     agentId?: string;
   }): void {

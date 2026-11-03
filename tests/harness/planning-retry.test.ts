@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
@@ -116,10 +116,10 @@ describe('Planning-only Retry', () => {
     const types = events.map(e => e.type);
 
     // 应该有 turn_end（planning-only 回合）
-    expect(types).toContain('turn_end');
+    expect(types).toContain('step_end');
 
     // 应该有 tool 执行（第二次调用执行了工具）
-    const turnEndsWithTools = events.filter(e => e.type === 'turn_end' && (e as any).hasToolCalls);
+    const turnEndsWithTools = events.filter(e => e.type === 'step_end' && (e as any).hasToolCalls);
     expect(turnEndsWithTools.length).toBeGreaterThanOrEqual(1);
 
     // 最终应该有正常回复

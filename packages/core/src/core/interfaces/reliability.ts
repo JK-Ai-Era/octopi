@@ -30,7 +30,7 @@ export interface ResourceBudgetLike {
   /** 累计 token（仅记账/诊断，不触发 hard） */
   consumeTokens(tokens: number): void;
   /** 记录一次迭代 */
-  recordIteration(): void;
+  recordStep(): void;
   /** 记录工具调用 */
   recordToolCall(n?: number): void;
   /**
@@ -39,13 +39,13 @@ export interface ResourceBudgetLike {
    */
   evaluate(_hasProgress?: boolean): {
     status: 'ok' | 'hard';
-    reason?: 'wall_clock' | 'iteration' | 'tool_calls';
+    reason?: 'wall_clock' | 'steps' | 'tool_calls';
     report: unknown;
   };
   /** 仅检查 hard（无 soft 路径） */
   checkHardOnly(): {
     status: 'ok' | 'hard';
-    reason?: 'wall_clock' | 'iteration' | 'tool_calls';
+    reason?: 'wall_clock' | 'steps' | 'tool_calls';
     report: unknown;
   };
   /** 重置本轮计数（长驻场景；优先用 per-run 克隆代替共享 reset） */
@@ -55,12 +55,12 @@ export interface ResourceBudgetLike {
   /** 获取预算报告（观测用） */
   report(): {
     status: string;
-    iterations: number;
+    steps: number;
     toolCalls: number;
     nominalTokens: number;
     elapsedMs: number;
     remaining: {
-      iterations: number | null;
+      steps: number | null;
       toolCalls: number | null;
       wallClockMs: number;
     };

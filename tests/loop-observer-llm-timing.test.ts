@@ -96,7 +96,7 @@ describe('agentLoop 计时回调（真实循环）', () => {
     expect(end.finishReason).toBe('stop');
 
     // F3-d：turn_end 协议事件携带 llmTiming（Run 页签耗时区的取数通道）
-    const turnEnd = loopEvents.find((e) => e.type === 'turn_end') as
+    const turnEnd = loopEvents.find((e) => e.type === 'step_end') as
       | { llmTiming?: Record<string, unknown> }
       | undefined;
     expect(turnEnd?.llmTiming?.ttftMs).toBe(first.ttftMs);
@@ -236,14 +236,14 @@ describe('错误路径计时收口', () => {
   });
 });
 
-describe('trace-collector turn.end 去双计', () => {
-  it('record：turn.end 只产 turn.end 行，不冒充 model.call.end', async () => {
+describe('trace-collector step.end 去双计', () => {
+  it('record：step.end 只产 step.end 行，不冒充 model.call.end', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'octopi-trace-'));
     const factory = await createTelemetryFactoryFromConfig({ level: 3, traceDir: dir });
     const t = factory({ enableMetrics: true });
     t.onEvent?.(
       {
-        type: 'turn.end',
+        type: 'step.end',
         timestamp: Date.now(),
         data: { content: 'x', hasToolCalls: false, phase: 'final' },
       } as never,
@@ -257,16 +257,16 @@ describe('trace-collector turn.end 去双计', () => {
       .split('\n')
       .map((l) => JSON.parse(l) as { type: string });
     expect(rows.filter((r) => r.type === 'model.call.end').length).toBe(0);
-    expect(rows.filter((r) => r.type === 'turn.end').length).toBe(1);
+    expect(rows.filter((r) => r.type === 'step.end').length).toBe(1);
   });
 
-  it('wrap：事件流自带 turn.end 时不再补收口行（turn 统计不翻倍）', async () => {
+  it('wrap：事件流自带 step.end 时不再补收口行（turn 统计不翻倍）', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'octopi-trace-'));
     const { TraceCollector } = await import('@octopi-agent/engine/integration/observability/trace-collector.js');
     const collector = new TraceCollector({ outputDir: dir, level: 3, consoleLevel: null });
     async function* events(): AsyncGenerator<never> {
       yield {
-        type: 'turn.end',
+        type: 'step.end',
         timestamp: Date.now(),
         data: { content: 'x', hasToolCalls: false, phase: 'final' },
       } as never;
@@ -281,7 +281,7 @@ describe('trace-collector turn.end 去双计', () => {
       .trim()
       .split('\n')
       .map((l) => JSON.parse(l) as { type: string });
-    expect(rows.filter((r) => r.type === 'turn.end').length).toBe(1);
+    expect(rows.filter((r) => r.type === 'step.end').length).toBe(1);
   });
 });
 

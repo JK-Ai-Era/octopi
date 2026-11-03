@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { DefaultRunGuard, createRunGuard } from '@octopi-agent/engine/harness/run/run-guard/default-run-guard.js';
 import type { CheckpointContext, CheckpointMetrics } from '@octopi-agent/core/interfaces/run-guard.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
@@ -26,7 +26,7 @@ function createContext(overrides?: Partial<CheckpointContext>): CheckpointContex
   return {
     sessionId: 'test-session',
     agentId: 'test-agent',
-    iteration: 15,
+    steps: 15,
     totalToolCalls: 10,
     nominalTotalTokens: 5000,
     elapsedMs: 30000,
@@ -45,7 +45,7 @@ describe('DefaultRunGuard', () => {
   describe('硬上限检查', () => {
     it('默认不启用 Guard hardLimit（资源归 Budget）', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
-      const ctx = createContext({ iteration: 5000, elapsedMs: 99_000_000 });
+      const ctx = createContext({ steps: 5000, elapsedMs: 99_000_000 });
 
       const verdict = await runGuard.checkpoint(ctx);
 
@@ -54,7 +54,7 @@ describe('DefaultRunGuard', () => {
 
     it('应该在迭代数达到硬上限时停止', async () => {
       const runGuard = new DefaultRunGuard({ hardLimit: 100 });
-      const ctx = createContext({ iteration: 100 });
+      const ctx = createContext({ steps: 100 });
 
       const verdict = await runGuard.checkpoint(ctx);
 
@@ -358,7 +358,7 @@ describe('DefaultRunGuard', () => {
   describe('自适应间隔', () => {
     it('正常运行时应该建议放宽间隔', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
-      const ctx = createContext({ iteration: 15 });
+      const ctx = createContext({ steps: 15 });
 
       const verdict = await runGuard.checkpoint(ctx);
 
@@ -369,7 +369,7 @@ describe('DefaultRunGuard', () => {
     it('异常恢复时应该建议收紧间隔', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false, minCheckpointInterval: 5 });
       const ctx = createContext({
-        iteration: 30,
+        steps: 30,
         metrics: createMetrics({ consecutiveIdenticalCalls: 5 }),
       });
 
@@ -385,7 +385,7 @@ describe('DefaultRunGuard', () => {
     it('同一 failureKind 连续 recover 3 次后应 stop', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const recoveryHistory = Array.from({ length: 3 }, (_, i) => ({
-        iteration: i + 1,
+        steps: i + 1,
         actionType: 'inject_hint' as const,
         reason: 'loop',
         failureKind: 'loop' as const,
@@ -406,7 +406,7 @@ describe('DefaultRunGuard', () => {
     it('第 3 次 recover 前建议 clear_recent_turns', async () => {
       const runGuard = new DefaultRunGuard({ enableLLMReview: false });
       const recoveryHistory = Array.from({ length: 2 }, (_, i) => ({
-        iteration: i + 1,
+        steps: i + 1,
         actionType: 'inject_hint' as const,
         reason: 'loop',
         failureKind: 'loop' as const,

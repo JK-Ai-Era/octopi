@@ -114,7 +114,7 @@ describe('context lease (idleExpiryMs opt-in)', () => {
         sessionStartedAt: oldTs,
       },
       messages: [userMsg('old', oldTs)],
-      turns: [],
+      steps: [],
       metadata: {},
     });
 
@@ -159,7 +159,7 @@ describe('context lease (idleExpiryMs opt-in)', () => {
         sessionStartedAt: oldTs,
       },
       messages: [userMsg('old-secret', oldTs), { role: 'assistant', content: 'old-reply', timestamp: oldTs + 1 }],
-      turns: [],
+      steps: [],
       metadata: {},
     });
 
@@ -211,7 +211,7 @@ describe('context lease (idleExpiryMs opt-in)', () => {
         sessionStartedAt: recent,
       },
       messages: [userMsg('keep-me', recent)],
-      turns: [],
+      steps: [],
       metadata: {},
     });
 
@@ -247,7 +247,7 @@ describe('context lease (idleExpiryMs opt-in)', () => {
         sessionStartedAt: oldTs,
       },
       messages: [userMsg('x', oldTs)],
-      turns: [],
+      steps: [],
       metadata: {},
     });
 

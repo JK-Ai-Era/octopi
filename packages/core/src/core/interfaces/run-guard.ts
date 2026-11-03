@@ -2,7 +2,7 @@
  * RunGuard — 过程监督接口
  *
  * 与 ResourceBudget 组合（非替代）：
- * - Budget：每轮资源 hard（wall-clock / iteration / tool_calls）
+ * - Budget：每轮资源 hard（wall-clock / steps / tool_calls）
  * - RunGuard：周期性行为监督（continue / recover / stop）
  *
  * 设计原则：
@@ -16,7 +16,7 @@
 // ── 检查点上下文 ──
 
 /** 单轮对话摘要 */
-export interface TurnSummary {
+export interface StepSummary {
   /** 角色 */
   role: 'assistant' | 'tool';
   /** 内容预览（前 200 字符） */
@@ -80,7 +80,7 @@ export interface CheckpointMetrics {
 
 /** 恢复尝试记录（供升级阶梯） */
 export interface RecoveryAttemptRecord {
-  iteration: number;
+  steps: number;
   actionType: RecoveryAction['type'];
   reason: string;
   failureKind?: RunFailureKind;
@@ -94,7 +94,7 @@ export interface CheckpointContext {
   /** Agent ID */
   agentId: string;
   /** 当前迭代次数（run 内全局，永不因检查点清零） */
-  iteration: number;
+  steps: number;
   /** 总工具调用数 */
   totalToolCalls: number;
   /** 诊断：名义 token 总量（Σ nominal）；禁止作为 hard 单位 */
@@ -102,7 +102,7 @@ export interface CheckpointContext {
   /** 已运行时间（毫秒） */
   elapsedMs: number;
   /** 最近几轮的摘要 */
-  recentSummaries: TurnSummary[];
+  recentSummaries: StepSummary[];
   /** 关键指标 */
   metrics: CheckpointMetrics;
   /** 当前任务描述（如果有） */

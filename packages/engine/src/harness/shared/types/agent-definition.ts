@@ -68,7 +68,7 @@ export interface AgentDefinition {
     rightsCeiling?: SessionRights;
     /** 委派预算上限（请求预算与此取交集） */
     budget?: {
-      maxTurns?: number;
+      maxSteps?: number;
       maxTokens?: number;
       timeoutMs?: number;
     };

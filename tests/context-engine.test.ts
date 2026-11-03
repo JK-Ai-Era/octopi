@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import type {
@@ -940,7 +940,7 @@ describe('DefaultContextEngine', () => {
     });
   });
 
-  describe('afterTurn', () => {
+  describe('afterStep', () => {
     it('should update state after turn', async () => {
       // First assemble to create state
       await engine.assemble({
@@ -952,9 +952,9 @@ describe('DefaultContextEngine', () => {
       });
 
       // Should not throw
-      await engine.afterTurn!({
+      await engine.afterStep!({
         sessionId: 'test',
-        turn: [createMessage('assistant', 'Response')],
+        step: [createMessage('assistant', 'Response')],
         usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }),
       });
     });
@@ -970,10 +970,10 @@ describe('DefaultContextEngine', () => {
       });
       const firstEstimate = result1.estimatedTokens;
 
-      // afterTurn with real usage that's 2x the estimate
-      await engine.afterTurn!({
+      // afterStep with real usage that's 2x the estimate
+      await engine.afterStep!({
         sessionId: 'calibrate-test',
-        turn: [createMessage('assistant', 'Response')],
+        step: [createMessage('assistant', 'Response')],
         usage: makeTokenUsage({ promptTokens: firstEstimate * 2, completionTokens: 50 }),
       });
 
@@ -1001,10 +1001,10 @@ describe('DefaultContextEngine', () => {
         tokenBudget: 100000,
       });
 
-      // afterTurn with extremely high usage (100x)
-      await engine.afterTurn!({
+      // afterStep with extremely high usage (100x)
+      await engine.afterStep!({
         sessionId: 'clamp-test',
-        turn: [createMessage('assistant', 'Response')],
+        step: [createMessage('assistant', 'Response')],
         usage: makeTokenUsage({ promptTokens: 100000, completionTokens: 50 }),
       });
 
@@ -1206,10 +1206,10 @@ describe('ContextEngine Integration', () => {
       tokenBudget: 100000,
     });
 
-    // afterTurn
-    await engine.afterTurn!({
+    // afterStep
+    await engine.afterStep!({
       sessionId: 'state-test',
-      turn: [createMessage('assistant', 'Response')],
+      step: [createMessage('assistant', 'Response')],
       usage: makeTokenUsage({ promptTokens: 100, completionTokens: 50 }),
     });
 

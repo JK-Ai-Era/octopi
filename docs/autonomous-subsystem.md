@@ -127,12 +127,12 @@ sense:
   source: eventBus
   filter:
     events: [iteration.end]
-    condition: "turn.count % 10 === 0"
+    condition: "step.count % 10 === 0"
 ```
 
 - Variable sources depend on the sense mode:
   - **event mode**: SenseContext top-level fields (`sessionLifecycle` / `idleMs` / `lastInteractionAt` / `extractionStatus` / `agentId` / `sessionId`) are mapped from the event payload and can be referenced directly (e.g. `sessionLifecycle === 'recent'`); `eventData.x` reads the payload; any other identifier falls back to `ctx.metrics['id']`.
-  - **schedule mode**: the context carries **only** metrics — use metric keys: `turn.count` (updated per turn by the main loop) and `session.idle.ms` / `session.lifecycle.*` / `session.extraction.*` (maintained by SessionLifecycleBridge, wired into `SubsystemRuntime`).
+  - **schedule mode**: the context carries **only** metrics — use metric keys: `step.count` (updated per step by the main loop) and `session.idle.ms` / `session.lifecycle.*` / `session.extraction.*` (maintained by SessionLifecycleBridge, wired into `SubsystemRuntime`).
 - Supports multiple variables and dot-separated keys.
 - Mutually exclusive with `conditionRef`.
 
@@ -159,7 +159,7 @@ sense:
   interval: 60000          # milliseconds; must be >= 1000
   isolation: structured
   filter:
-    condition: "turn.count > 0"   # optional
+    condition: "step.count > 0"   # optional
 ```
 
 - `interval` is required and must be ≥ 1000ms, otherwise registration fails.

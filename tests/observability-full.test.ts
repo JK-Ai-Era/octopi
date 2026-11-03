@@ -183,7 +183,7 @@ describe('TraceLogger', () => {
       const logger = new TraceLogger({ level: TraceLevel.TRACE, consoleLevel: null, outputDir: tempDir });
 
       // INFO 级别
-      logger.logEngineEvent({ type: 'turn.start', timestamp: Date.now() });
+      logger.logEngineEvent({ type: 'step.start', timestamp: Date.now() });
       logger.logEngineEvent({ type: 'model.call.start', timestamp: Date.now() });
       logger.logEngineEvent({ type: 'tool.exec.end', timestamp: Date.now() });
 
@@ -206,7 +206,7 @@ describe('TraceLogger', () => {
       expect(events.length).toBe(8);
 
       // 验证级别映射
-      const turnStart = events.find(e => e.type === 'turn.start');
+      const turnStart = events.find(e => e.type === 'step.start');
       expect(turnStart?.level).toBe(TraceLevel.INFO);
 
       const error = events.find(e => e.type === 'model.call.error');
@@ -257,7 +257,7 @@ describe('TraceCollector', () => {
 
     async function* mockEvents() {
       yield { type: 'model.call.start', timestamp: Date.now(), data: { model: 'test' } };
-      yield { type: 'turn.end', timestamp: Date.now(), data: { content: 'hi' } };
+      yield { type: 'step.end', timestamp: Date.now(), data: { content: 'hi' } };
     }
 
     const events: string[] = [];
@@ -265,13 +265,13 @@ describe('TraceCollector', () => {
       events.push(e.type);
     }
 
-    expect(events).toEqual(['model.call.start', 'turn.end']);
+    expect(events).toEqual(['model.call.start', 'step.end']);
     collector.finalize();
 
     const lines = readTraceLines(tempDir);
     const types = lines.map(l => l.type);
-    expect(types).toContain('turn.start');
-    expect(types).toContain('turn.end');
+    expect(types).toContain('step.start');
+    expect(types).toContain('step.end');
   });
 
   it('should record empty response warning', () => {
@@ -340,7 +340,7 @@ describe('TraceCollector', () => {
     collector.recordSessionState({
       sessionId: 's1',
       messageCount: 7,
-      turnCount: 3,
+      stepCount: 3,
       sessionSize: '2.3KB',
       agentId: 'a1',
     });
@@ -350,7 +350,7 @@ describe('TraceCollector', () => {
     const lines = readTraceLines(tempDir);
     const stateEvent = lines.find(l => l.type === 'session.state');
     expect(stateEvent).toBeDefined();
-    expect(stateEvent?.data!.turnCount).toBe(3);
+    expect(stateEvent?.data!.stepCount).toBe(3);
   });
 
   it('should record tool context with args', () => {
@@ -408,24 +408,24 @@ describe('TraceCollector', () => {
     // Turn 1
     async function* events1() {
       yield { type: 'model.call.start', timestamp: Date.now(), data: {} };
-      yield { type: 'turn.end', timestamp: Date.now(), data: { content: 'a' } };
+      yield { type: 'step.end', timestamp: Date.now(), data: { content: 'a' } };
     }
     for await (const _ of collector.wrap(events1())) { /* consume */ }
 
     // Turn 2
     async function* events2() {
       yield { type: 'model.call.start', timestamp: Date.now(), data: {} };
-      yield { type: 'turn.end', timestamp: Date.now(), data: { content: 'b' } };
+      yield { type: 'step.end', timestamp: Date.now(), data: { content: 'b' } };
     }
     for await (const _ of collector.wrap(events2())) { /* consume */ }
 
     collector.finalize();
 
     const lines = readTraceLines(tempDir);
-    const turnStarts = lines.filter(l => l.type === 'turn.start');
+    const turnStarts = lines.filter(l => l.type === 'step.start');
     expect(turnStarts.length).toBe(2);
-    expect(turnStarts[0]!.data!.turnId).toBe('turn_1');
-    expect(turnStarts[1]!.data!.turnId).toBe('turn_2');
+    expect(turnStarts[0]!.data!.stepId).toBe('step_1');
+    expect(turnStarts[1]!.data!.stepId).toBe('step_2');
   });
 });
 

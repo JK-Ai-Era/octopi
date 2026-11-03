@@ -29,14 +29,14 @@ export { DEFAULT_CONTEXT_WINDOW } from './model-info.js';
 export type { SessionStatus, SessionMeta, SessionAgentMatchPick } from './session.js';
 export { sessionMatchesAgent } from './session.js';
 
-// ── Turn ──
-export type { TokenUsage, Turn } from './turn.js';
+// ── Step ──
+export type { TokenUsage, Step } from './step.js';
 export {
   emptyTokenUsage,
   makeTokenUsage,
   nominalTotalTokens,
   reportedPromptTokens,
-} from './turn.js';
+} from './step.js';
 
 // ── 工具系统 ──
 export { TOOL_CAPABILITIES } from './tools.js';

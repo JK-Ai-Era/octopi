@@ -28,7 +28,7 @@ function makeSession(id: string, agentId: string): SessionData {
       { role: 'user', content: '你好', timestamp: 1 },
       { role: 'assistant', content: '你好！', timestamp: 2 },
     ],
-    turns: [],
+    steps: [],
     metadata: { source: 'test' },
     tasks: [
       {

@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { adaptLoopEvent } from '@octopi-agent/engine/harness/run/runner.js';
 import type { HarnessLoopEvent } from '@octopi-agent/engine/harness/run/reliability/harness-events.js';
 
@@ -36,21 +36,21 @@ describe('adaptLoopEvent bridge map', () => {
     expect(e?.data?.error).toBe('boom');
   });
 
-  it('turn_start → iteration.start（必须带 sessionId 供 WS 广播）', () => {
-    const e = adapt({ type: 'turn_start', timestamp: 1 });
-    expect(e?.type).toBe('iteration.start');
+  it('turn_start → step.start（必须带 sessionId 供 WS 广播）', () => {
+    const e = adapt({ type: 'step_start', timestamp: 1 });
+    expect(e?.type).toBe('step.start');
     expect(e?.sessionId).toBe('s1');
     expect(e?.agentId).toBe('a1');
   });
 
-  it('turn_end → turn.end（含 phase / hasToolCalls / userText）', () => {
+  it('turn_end → step.end（含 phase / hasToolCalls / userText）', () => {
     const e = adapt({
-      type: 'turn_end',
+      type: 'step_end',
       hasToolCalls: true,
       phase: 'pre_tools',
       usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
     });
-    expect(e?.type).toBe('turn.end');
+    expect(e?.type).toBe('step.end');
     expect(e?.data).toMatchObject({
       hasToolCalls: true,
       phase: 'pre_tools',

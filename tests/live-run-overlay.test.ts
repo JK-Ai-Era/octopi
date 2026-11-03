@@ -87,14 +87,14 @@ describe('LiveRunTracker', () => {
     expect(t.get('never-ran')).toBeUndefined();
   });
 
-  it('turn.end 清流式缓冲（B1 回归：与 ConversationAdapter 同语义，防重复气泡/跨轮粘连）', () => {
+  it('step.end 清流式缓冲（B1 回归：与 ConversationAdapter 同语义，防重复气泡/跨轮粘连）', () => {
     const t = new LiveRunTracker();
     t.observe('s1', { type: 'llm_stream_delta', data: { delta: '第一轮正文' } });
-    t.observe('s1', { type: 'turn.end', data: { phase: 'final' } });
+    t.observe('s1', { type: 'step.end', data: { phase: 'final' } });
     const live = t.get('s1')!;
     expect(live.streamingContent).toBe('');
     expect(live.streamingReasoning).toBe('');
-    // turn.end 后 overlay 不得再合成 streaming 条目（消息已定形入转录）
+    // step.end 后 overlay 不得再合成 streaming 条目（消息已定形入转录）
     expect(live.status).toBe('waiting');
   });
 

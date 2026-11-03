@@ -78,7 +78,7 @@ export interface AgentConfig {
     rightsCeiling?: import('@octopi-agent/engine/harness/governance/session-acl/types.js').SessionRights;
     /** 委派预算上限（请求预算与此取交集） */
     budget?: {
-      maxTurns?: number;
+      maxSteps?: number;
       maxTokens?: number;
       timeoutMs?: number;
     };
@@ -355,7 +355,7 @@ export interface ChannelConfig {
  *
  * 见 arch/budget-redesign.md：
  * - 默认 **无** nominal token hard（Σ nominalTotalTokens 不作为出厂熔断）
- * - P0：仅 wall-clock 安全阀 + 可显式 iteration/tool 上限
+ * - P0：仅 wall-clock 安全阀 + 可显式 steps/tool 上限
  * - P2：控制梯配置（wrap-up 策略）
  * - P3：扩展 usd / uncached 等 opt-in 单位；键名仅 budgetPolicy（无 budget）
  */
@@ -363,14 +363,14 @@ export interface BudgetPolicyJsonConfig {
   /** 安全阀：最大运行时间毫秒（默认 6h） */
   maxWallClockMs?: number;
   /** 最大迭代次数。仅显式设置时硬停 */
-  maxIterations?: number;
+  maxSteps?: number;
   /** 最大工具调用次数。仅显式设置时硬停 */
   maxToolCalls?: number;
   // ── P2 控制梯配置 ──
   /** Policy 触达时的行为：'stop' 立即停止 | 'wrap_up_then_stop' 先总结再停止（默认） */
   onPolicyHit?: 'stop' | 'wrap_up_then_stop';
   /** wrap-up 窗口的轮次数（默认 3） */
-  wrapUpTurns?: number;
+  wrapUpSteps?: number;
   /** context 轴 wrap-up 触发阈值比例（默认 0.85） */
   contextWrapUpRatio?: number;
   // ── P3 Policy 单位配置 ──

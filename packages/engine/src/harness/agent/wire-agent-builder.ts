@@ -417,14 +417,14 @@ function wireBudget(
 ): void {
   const engineConfig: Partial<BudgetPolicyConfig> = {
     maxWallClockMs: budgetConfig.maxWallClockMs,
-    maxIterations: budgetConfig.maxIterations,
+    maxSteps: budgetConfig.maxSteps,
     maxToolCalls: budgetConfig.maxToolCalls,
   };
   builder.budget(engineConfig);
 
   const wrapUpConfig: Record<string, unknown> = {};
-  if ('wrapUpTurns' in budgetConfig && budgetConfig.wrapUpTurns !== undefined) {
-    wrapUpConfig.turns = budgetConfig.wrapUpTurns;
+  if ('wrapUpSteps' in budgetConfig && budgetConfig.wrapUpSteps !== undefined) {
+    wrapUpConfig.steps = budgetConfig.wrapUpSteps;
   }
   if ('onPolicyHit' in budgetConfig && budgetConfig.onPolicyHit !== undefined) {
     wrapUpConfig.onPolicyHit = budgetConfig.onPolicyHit;

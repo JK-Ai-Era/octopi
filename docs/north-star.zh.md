@@ -36,6 +36,8 @@
 | **RoleBinding** | Agent 以某角色出现在某 Session 上的参与记录（权利预设 + 可覆盖） | Control |
 | **Run** | 一次 episode：`(sessionId, agentId, …)` | Execution |
 | **RunScope** | 该次 episode 的全部 **可变上下文**（messages 工作区、systemPrompt 身份、tool 运行时、compact 播种、resolvedModel…） | **仅 Run** / Execution |
+| **Turn** | 一次话语回合：一条**开轮锚点**用户角色刺激（真人发言或合成信封；载体槽位与 notify 便签不开 Turn）+ 其完整回应；边界 `<turn_start id>`…`<turn_end id/>`。**Session 级**；经其 Run 归属到 Agent | Continuity |
+| **Step** | 一个模型轮：一次 LLM 调用 + 其产出（tool_calls 或最终文本） | Execution |
 | **Tool** | 可调用能力（定义 + 执行器）；挂 Agent，经 Run 调用 | Extension |
 | **Effect** | 工具对世界的效应（cwd / 副作用 / 并发 / 幂等）；受 I5 约束 | Extension 定义 + Execution 执行 |
 
@@ -50,6 +52,8 @@ Host ──(conversationId ↔ sessionId)── Session 聚合
 
 **写回关系（非实体）**：Run 结束 → Discourse 追加 + Projection 更新 + Audit 落盘。原「Episode 产物」**不作**本体实体。
 
+**Run ↔ Turn ↔ Step 映射**：1 Run = 1..N Turn（信号在消息边界续接时扩展同一 Run）；1 Turn = 1..N Step；1 Step = 0..N ToolCall。Run 是执行/权责轴（谁、以何角色/预算行动），Turn 是话语轴（消息边界）。仅在简单情形（一刺激 → 一 Run）两者 1:1 重合。
+
 **易混对照（强制分词）**：
 
 | 问句 | 概念 |
@@ -57,7 +61,10 @@ Host ──(conversationId ↔ sessionId)── Session 聚合
 | 我学到过什么？ | **Substrate / Memory** |
 | 世界上写着什么？ | **Knowledge**（源锚定；索引非权威） |
 | 发生过什么？ | **Discourse**（追加权威） |
-| 这一轮的临时棚？ | **RunScope**（仅 Run） |
+| 本次 Run 的临时棚？ | **RunScope**（仅 Run） |
+| 一次用户回合？ | **Turn**（Session 级话语边界；经其 Run 归属到 Agent） |
+| 一个模型轮？ | **Step**（绝不叫「turn」） |
+| 机器内容 vs 人话？ | 合成的用户角色内容在 LLM 视图必须可辨识（视图级信封，如 `<schedule_notice>` / `<delegation_result>`）；绝不冒充人话 |
 | 它是谁、出厂怎么配？ | **Agent**（模板；不含学习产物） |
 | 手 vs 手碰过什么？ | **Tool** vs **Effect**；活系统当前态用 Tool，文档用 Knowledge |
 
@@ -336,6 +343,7 @@ Agent & Substrate（跨 Run 持久）:
 
 | 日期 | 内容 |
 |------|------|
+| 2026-11-04 | **词汇修订：Turn / Step 拆分**（治理一词双记）——`turn` 曾同时指「用户回合」与「模型轮」。强制分词：**Turn** = 一次话语回合（`<turn_start id>`…`<turn_end id/>`；Session 级；经其 Run 归属到 Agent）；**Step** = 一个模型轮（一次 LLM 调用 + 其产出）。映射：1 Run = 1..N Turn，1 Turn = 1..N Step，1 Step = 0..N ToolCall。代码**直改无别名**（loop 事件 `turn_start`/`turn_end` → `step_start`/`step_end`、`Turn` → `Step`）。schedule `notify` 便签：不开 Turn、不跑 Run，且 LLM 视图以机器信封（`<schedule_notice>`）包裹，机器内容绝不冒充人话。I1–I6 / E1–E8 未改。 |
 | 2026-10-20 | **E8 扩展 — turn 信封 + 全回放**（`<turn_start id>` / `<turn_end id/>`，槽位在 turn 作用域 `<turn_context>` 内；历史 append-only）。取消 last-only 槽位回放与历史中部剥槽（每 user 轮打穿前缀）。陈旧择取由 ephemeral turn 作用域 + 以新为准约束，而非删除。另：压缩注记禁止拼进 system prompt（请求头动态文本烧掉全缓存）。 |
 | 2026-10-18 | **新增 E8 — 缓存稳定的装配位置**（易变块从 system prompt 移至消息尾部）。八层类型轴不变（I4）；这是*装配位置*规则，不是新层。动因：前缀缓存命中同时决定 TTFT 与成本（实测：缓存失效请求 34–134s vs 命中 3–5s；未命中输入 token 全价计费）。 |
 | 2026-09-27 | **英文版成为工作权威**；中文移至 `docs/north-star.zh.md`。对外文档一律英文权威 + `*.zh.md` 对译（变更须双语同步）。I1–I6 / E1–E7 未改。 |

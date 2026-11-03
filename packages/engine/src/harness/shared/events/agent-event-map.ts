@@ -29,11 +29,11 @@ export interface AgentEventMap {
     delayMs: number;
     error: string;
   };
-  'iteration.start': Record<string, never>;
+  'step.start': Record<string, never>;
   'llm.usage': {
-    usage: import('@octopi-agent/core/types/turn.js').TokenUsage;
+    usage: import('@octopi-agent/core/types/step.js').TokenUsage;
   };
-  'turn.end': {
+  'step.end': {
     /** 本次调用的正文；error=true 时 = 中断前的部分流出（不是回答，不得当回复外发） */
     content?: string;
     userText?: string;
@@ -43,7 +43,7 @@ export interface AgentEventMap {
     stopped?: boolean;
     /** 本次 LLM 调用失败（只出现在重试中途；彻底失败走 agent_end reason='error'） */
     error?: boolean;
-    usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
+    usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
     /** F3 LLM 计时摘要（loop turn_end 透传；Run 页签耗时区消费） */
     llmTiming?: import('@octopi-agent/core/loop/types.js').LoopLLMTiming;
     contextTokens?: number;
@@ -110,7 +110,7 @@ export interface AgentEventMap {
 
   // ── 预算 / 过程监督 ──
   'budget.exceeded': {
-    reason: 'wall_clock' | 'iteration' | 'tool_calls';
+    reason: 'wall_clock' | 'steps' | 'tool_calls';
     report?: unknown;
   };
   'run_guard.stopped': { reason: string; userMessage?: string };
@@ -298,8 +298,8 @@ export const AgentEvents = {
   ENGINE_END: 'engine.end',
   ENGINE_ERROR: 'engine.error',
   ENGINE_MODEL_RETRY: 'engine.model_retry',
-  ITERATION_START: 'iteration.start',
-  TURN_END: 'turn.end',
+  STEP_START: 'step.start',
+  STEP_END: 'step.end',
 
   /** Runner 收口计时（F3 转正） */
   RUN_TIMING: 'run.timing',

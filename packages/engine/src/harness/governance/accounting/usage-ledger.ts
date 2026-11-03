@@ -4,8 +4,8 @@
  * 见 arch/budget-redesign.md：只记录，不 kill。Policy 另层（P3+）。
  */
 
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
-import { nominalTotalTokens } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
+import { nominalTotalTokens } from '@octopi-agent/core/types/step.js';
 
 /** 账本快照（Observer + Policy 只读输入） */
 export interface UsageLedgerSnapshot {

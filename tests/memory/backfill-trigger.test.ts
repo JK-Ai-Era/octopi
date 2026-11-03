@@ -44,7 +44,7 @@ function makeSession(id: string, turns = 3): SessionData {
       lastInteractionAt: 9000,
     },
     messages,
-    turns: [],
+    steps: [],
     metadata: {},
   } as unknown as SessionData;
 }

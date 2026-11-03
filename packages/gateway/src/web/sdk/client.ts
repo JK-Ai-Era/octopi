@@ -163,7 +163,7 @@ export interface SessionSummary {
 export interface SessionView {
   meta: SessionSummary;
   messageCount: number;
-  turnCount: number;
+  stepCount: number;
   taskCount?: number;
   /** 被中止的轮（编辑重发入口）；userMessageIndex 为 session.messages 下标 */
   abortedTurn?: { userMessageIndex: number; at?: number };
@@ -519,14 +519,14 @@ export interface RunTimelineEventDto {
   hasError?: boolean;
   durationMs?: number;
   reason?: string;
-  usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
-  /** F3 计时段（turn.end 的 LLM 计时 / run.timing 的 wait/build/run_end 分段） */
+  usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
+  /** F3 计时段（step.end 的 LLM 计时 / run.timing 的 wait/build/run_end 分段） */
   timing?: {
     stage?: string;
     waitMs?: number;
     buildMs?: number;
     durMs?: number;
-    /** LLM 调用总耗时（turn.end.llmTiming） */
+    /** LLM 调用总耗时（step.end.llmTiming） */
     durationMs?: number;
     /** LLM 调用标识（可关联 model.call.end 行） */
     callId?: string;
@@ -577,7 +577,7 @@ export interface RunObservatorySnapshotDto {
     endedAt?: number;
     endReason?: string;
     durationMs?: number;
-    turns?: number;
+    steps?: number;
     toolCalls?: number;
     error?: string;
   };

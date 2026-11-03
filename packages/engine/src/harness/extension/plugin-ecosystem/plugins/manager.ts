@@ -273,7 +273,7 @@ export interface AfterIterationEvent {
   /** 本轮工具结果 */
   toolResults: ToolResult[];
   /** Token 用量 */
-  usage?: import('@octopi-agent/core/types/turn.js').TokenUsage;
+  usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
   /** Session ID */
   sessionId: string;
   /** 上下文 */

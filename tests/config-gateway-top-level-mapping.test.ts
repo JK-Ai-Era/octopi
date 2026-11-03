@@ -93,7 +93,7 @@ function fullyPopulatedConfig(): NormalizedHarnessConfig {
       blockList: ['blocked.plugin'],
       entries: { 'acme.search': { enabled: true, config: { region: 'cn' } } },
     },
-    budgetPolicy: { maxIterations: 5 },
+    budgetPolicy: { maxSteps: 5 },
     runGuard: { enabled: true },
     modelCall: { idleTimeoutMs: 1000 },
     agentRuntime: { coalesceWindowMs: 10 },

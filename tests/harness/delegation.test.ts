@@ -362,8 +362,8 @@ describe('InProcessTransport', () => {
 
 describe('intersectBudget', () => {
   it('takes the tighter side on every field', () => {
-    expect(intersectBudget({ maxTurns: 10, maxTokens: 100 }, { maxTurns: 5, maxTokens: 500 }))
-      .toEqual({ maxTurns: 5, maxTokens: 100, timeoutMs: undefined });
+    expect(intersectBudget({ maxSteps: 10, maxTokens: 100 }, { maxSteps: 5, maxTokens: 500 }))
+      .toEqual({ maxSteps: 5, maxTokens: 100, timeoutMs: undefined });
   });
 
   it('returns undefined when both are absent', () => {
@@ -371,7 +371,7 @@ describe('intersectBudget', () => {
   });
 
   it('keeps the present side when the other is absent', () => {
-    expect(intersectBudget({ maxTurns: 3 }, undefined)).toEqual({ maxTurns: 3, maxTokens: undefined, timeoutMs: undefined });
+    expect(intersectBudget({ maxSteps: 3 }, undefined)).toEqual({ maxSteps: 3, maxTokens: undefined, timeoutMs: undefined });
   });
 });
 
@@ -556,7 +556,7 @@ describe('DelegateService', () => {
       target: { agentId: 'worker' },
       task: 't',
       input: 'i',
-      budget: { maxTurns: 10, maxTokens: 1000 },
+      budget: { maxSteps: 10, maxTokens: 1000 },
     });
 
     expect(seen).toBeDefined();
@@ -871,7 +871,7 @@ describe('rightsCeiling plumbing', () => {
       async *handle(_s: string, _i: unknown, runConfig: { rightsCeiling?: unknown }, _sig?: AbortSignal) {
         seen.push({ rightsCeiling: runConfig.rightsCeiling });
         yield {
-          type: 'turn.end',
+          type: 'step.end',
           timestamp: Date.now(),
           agentId: 'w',
           sessionId: 's',
@@ -911,14 +911,14 @@ describe('failed child run never delivers stale output', () => {
     const fake = {
       async *handle(_s: string, _i: unknown, _runConfig: unknown, _sig?: AbortSignal) {
         yield {
-          type: 'turn.end',
+          type: 'step.end',
           timestamp: Date.now(),
           agentId: 'w',
           sessionId: 's',
           data: { content: '上一轮的完整回复' },
         } as never;
         yield {
-          type: 'turn.end',
+          type: 'step.end',
           timestamp: Date.now(),
           agentId: 'w',
           sessionId: 's',

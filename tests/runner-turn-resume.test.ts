@@ -55,8 +55,8 @@ function makeAgent(provider: ModelProvider, onRun?: () => Promise<void>): Agent 
     setSessionCompactState: () => {},
     getSessionCompactState: () => undefined,
     toolsForSession: () => [],
-    setOnAfterTurn: () => {},
-    notifyAfterTurn: async () => {},
+    setOnAfterStep: () => {},
+    notifyAfterStep: async () => {},
     harness: {},
     run: async function* () {
       if (onRun) await onRun();
@@ -96,7 +96,7 @@ function crashStateSession(id: string, metadata: SessionData['metadata']): Sessi
       updatedAt: Date.now(),
     },
     messages: [turnStart('t1', '第一轮（中断未收尾）')],
-    turns: [],
+    steps: [],
     metadata,
   };
 }

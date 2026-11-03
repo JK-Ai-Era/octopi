@@ -16,7 +16,7 @@ import { TraceLogger, type TraceLoggerConfig } from './trace-logger.js';
 import { MetricsAggregator, type MetricsAggregatorConfig } from './metrics.js';
 import { TraceLevel, TRACE_EVENTS } from './trace-events.js';
 import type { TraceEvent } from './trace-events.js';
-import { makeTokenUsage } from '@octopi-agent/core/types/turn.js';
+import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 
 // ── Span 实现 ──
 
@@ -222,7 +222,7 @@ export class ObserverBridge implements Observer {
         return { ts: Date.now(), level: TraceLevel.INFO, type: TRACE_EVENTS.MODEL_CALL_START, data: attributes as Record<string, unknown> };
       case 'agent.tool.exec':
         return { ts: Date.now(), level: TraceLevel.INFO, type: TRACE_EVENTS.TOOL_EXEC_START, data: attributes as Record<string, unknown> };
-      case 'agent.iteration':
+      case 'agent.step':
         // 迭代开始，MetricsAggregator 不直接处理这个
         return null;
       default:

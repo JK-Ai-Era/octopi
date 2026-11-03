@@ -285,7 +285,7 @@ describe('压缩摘要 Session 持久化', () => {
         sessionStartedAt: Date.now(),
       },
       messages: [],
-      turns: [],
+      steps: [],
       metadata: {},
       contextCompact: {
         summary: '## Conversation Summary\nfrom-disk',

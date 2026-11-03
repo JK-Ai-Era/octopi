@@ -118,7 +118,7 @@ export type ContextField =
 export interface SenseFilter {
   /** 监听的事件类型（source=eventBus 时） */
   events?: string[];
-  /** 声明式条件表达式（如 "turn.count % 10 === 0"） */
+  /** 声明式条件表达式（如 "step.count % 10 === 0"） */
   condition?: string;
   /** 代码引用（如 "./handler.ts:shouldExtract"），与 condition 互斥 */
   conditionRef?: string;
@@ -179,7 +179,7 @@ export interface ThinkConfig {
   /** 模型级别引用（如 "mini"、"standard"、"pro"）或 provider/model 格式 */
   model?: string;
   /** 最大推理轮次（默认 1） */
-  maxIterations?: number;
+  maxSteps?: number;
   /** hybrid 模式的预处理函数 */
   preProcess?: (input: SubsystemInput) => Promise<SubsystemInput>;
   /** hybrid 模式的后处理函数 */
@@ -376,7 +376,7 @@ export interface SubsystemInput {
   /** 工作目录 */
   workingDirectory?: string;
   /** 会话元数据 */
-  sessionMetadata?: { agentId: string; sessionId: string; turnCount: number } & Record<string, unknown>;
+  sessionMetadata?: { agentId: string; sessionId: string; stepCount: number } & Record<string, unknown>;
   /** Token 使用量 */
   tokenCount?: { used: number; limit: number };
   /** 对话历史（仅 visibility 高于 structured 时） */

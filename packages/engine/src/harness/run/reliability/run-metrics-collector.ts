@@ -8,7 +8,7 @@
 import type {
   CheckpointContext,
   CheckpointMetrics,
-  TurnSummary,
+  StepSummary,
   RecoveryAttemptRecord,
 } from '@octopi-agent/core/interfaces/run-guard.js';
 import { hashToolCall, hashToolOutcome } from '../concurrency/tool-loop-detection-core.js';
@@ -60,7 +60,7 @@ export class RunMetricsCollector {
   private readonly startTime = Date.now();
   /** 人类输入等待累计（ask_user 等回传）；elapsedMs 口径与 Budget 一致：等人不算运行 */
   private humanWaitMs = 0;
-  private globalIteration = 0;
+  private globalSteps = 0;
   private totalToolCalls = 0;
   private nominalTotalTokens = 0;
   private lastToolName = '';
@@ -74,7 +74,7 @@ export class RunMetricsCollector {
   private consecutiveIdenticalFailures = 0;
   private uniqueTools = new Set<string>();
   private recentToolCalls: Array<{ name: string; success: boolean }> = [];
-  private turnSummaries: TurnSummary[] = [];
+  private stepSummaries: StepSummary[] = [];
   private tokenDeltas: number[] = [];
   private recoveryHistory: RecoveryAttempt[] = [];
   private externalSignals: ExternalRunSignal[] = [];
@@ -82,25 +82,25 @@ export class RunMetricsCollector {
   private lastSuccessAt = 0;
   private lastSubstantialTextAt = 0;
 
-  /** 记录一轮结束（token 另经 recordTokens 从 turn_end.usage 累加） */
-  recordTurn(summary: TurnSummary): void {
-    this.globalIteration++;
-    this.turnSummaries.push(summary);
-    if (this.turnSummaries.length > SUMMARIES_MAX) {
-      this.turnSummaries = this.turnSummaries.slice(-SUMMARIES_MAX);
+  /** 记录一轮结束（token 另经 recordTokens 从 step_end.usage 累加） */
+  recordStep(summary: StepSummary): void {
+    this.globalSteps++;
+    this.stepSummaries.push(summary);
+    if (this.stepSummaries.length > SUMMARIES_MAX) {
+      this.stepSummaries = this.stepSummaries.slice(-SUMMARIES_MAX);
     }
     if (summary.contentPreview && summary.contentPreview.length >= 80) {
-      this.lastSubstantialTextAt = this.globalIteration;
+      this.lastSubstantialTextAt = this.globalSteps;
     }
   }
 
-  /** 记录本轮 token 消耗（与 Budget 共用 turn_end.usage） */
+  /** 记录本轮 token 消耗（与 Budget 共用 step_end.usage） */
   recordTokens(delta: number): void {
     if (delta <= 0) return;
     this.nominalTotalTokens += delta;
     this.tokenDeltas.push(delta);
     if (this.tokenDeltas.length > TOKEN_WINDOW) this.tokenDeltas.shift();
-    const last = this.turnSummaries[this.turnSummaries.length - 1];
+    const last = this.stepSummaries[this.stepSummaries.length - 1];
     if (last) last.tokenDelta += delta;
   }
 
@@ -168,7 +168,7 @@ export class RunMetricsCollector {
       this.consecutiveIdenticalFailures = 0;
       this.lastFailureFingerprint = '';
       if (!isNoop) {
-        this.lastSuccessAt = this.globalIteration;
+        this.lastSuccessAt = this.globalSteps;
         this.noopStreak = 0;
       }
     } else {
@@ -196,19 +196,19 @@ export class RunMetricsCollector {
   hasProgress(): boolean {
     if (this.noopStreak >= 3) return false;
     // 成功工具或实质文本出现在最近 3 轮内
-    if (this.globalIteration - this.lastSuccessAt <= 3 && this.lastSuccessAt > 0) return true;
+    if (this.globalSteps - this.lastSuccessAt <= 3 && this.lastSuccessAt > 0) return true;
     if (
-      this.globalIteration - this.lastSubstantialTextAt <= 3 &&
+      this.globalSteps - this.lastSubstantialTextAt <= 3 &&
       this.lastSubstantialTextAt > 0
     ) {
       return true;
     }
     // 刚开始的 run：尚无失败堆积时视为有进展
-    if (this.globalIteration <= 2 && this.consecutiveErrors === 0) return true;
+    if (this.globalSteps <= 2 && this.consecutiveErrors === 0) return true;
     // 连续无成功且无实质文本
     if (
-      this.globalIteration - Math.max(this.lastSuccessAt, this.lastSubstantialTextAt) >= 3 &&
-      this.globalIteration >= 3
+      this.globalSteps - Math.max(this.lastSuccessAt, this.lastSubstantialTextAt) >= 3 &&
+      this.globalSteps >= 3
     ) {
       return false;
     }
@@ -236,8 +236,8 @@ export class RunMetricsCollector {
     return s;
   }
 
-  get iteration(): number {
-    return this.globalIteration;
+  get steps(): number {
+    return this.globalSteps;
   }
 
   get tokens(): number {
@@ -284,11 +284,11 @@ export class RunMetricsCollector {
     return {
       sessionId: ids.sessionId ?? 'inline',
       agentId: ids.agentId ?? 'default',
-      iteration: this.globalIteration,
+      steps: this.globalSteps,
       totalToolCalls: this.totalToolCalls,
       nominalTotalTokens: this.nominalTotalTokens,
       elapsedMs: Math.max(0, Date.now() - this.startTime - this.humanWaitMs),
-      recentSummaries: this.turnSummaries.slice(-8),
+      recentSummaries: this.stepSummaries.slice(-8),
       metrics,
       recoveryHistory: [...this.recoveryHistory],
       externalSignals: this.externalSignals.map(s => ({
@@ -308,7 +308,7 @@ export class RunMetricsCollector {
   toObserverSnapshot(ids: { sessionId?: string; agentId?: string } = {}): {
     sessionId?: string;
     agentId?: string;
-    iteration: number;
+    steps: number;
     totalToolCalls: number;
     nominalTotalTokens: number;
     elapsedMs: number;
@@ -325,7 +325,7 @@ export class RunMetricsCollector {
     return {
       sessionId: ids.sessionId,
       agentId: ids.agentId,
-      iteration: this.globalIteration,
+      steps: this.globalSteps,
       totalToolCalls: this.totalToolCalls,
       nominalTotalTokens: this.nominalTotalTokens,
       elapsedMs: Date.now() - this.startTime,

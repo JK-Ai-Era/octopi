@@ -26,7 +26,7 @@ export function buildAgentInput(spec: SubsystemSpec, ctx: AgentContext): Subsyst
     input.sessionMetadata = {
       agentId: ctx.runConfig.agentId ?? 'unknown',
       sessionId: ctx.runConfig.sessionId ?? 'unknown',
-      turnCount: ctx.messages.filter((m) => m.role === 'assistant').length,
+      stepCount: ctx.messages.filter((m) => m.role === 'assistant').length,
       sessionLifecycle: ctx.sessionLifecycle,
       lastInteractionAt: ctx.lastInteractionAt,
       idleMs: ctx.idleMs,
@@ -58,7 +58,7 @@ export function buildAgentInput(spec: SubsystemSpec, ctx: AgentContext): Subsyst
         input.sessionMetadata = {
           agentId: ctx.runConfig.agentId ?? 'unknown',
           sessionId: ctx.runConfig.sessionId ?? 'unknown',
-          turnCount: ctx.messages.filter((m) => m.role === 'assistant').length,
+          stepCount: ctx.messages.filter((m) => m.role === 'assistant').length,
         };
         break;
       case 'token_count':
@@ -75,7 +75,7 @@ export function buildAgentInput(spec: SubsystemSpec, ctx: AgentContext): Subsyst
           ...(input.sessionMetadata ?? {
             agentId: ctx.runConfig.agentId ?? 'unknown',
             sessionId: ctx.runConfig.sessionId ?? 'unknown',
-            turnCount: ctx.messages.filter((m) => m.role === 'assistant').length,
+            stepCount: ctx.messages.filter((m) => m.role === 'assistant').length,
           }),
           sessionLifecycle: ctx.sessionLifecycle,
           lastInteractionAt: ctx.lastInteractionAt,
@@ -97,7 +97,7 @@ export function buildAgentInput(spec: SubsystemSpec, ctx: AgentContext): Subsyst
     input.sessionMetadata = {
       agentId: ctx.runConfig.agentId ?? 'unknown',
       sessionId: ctx.runConfig.sessionId ?? 'unknown',
-      turnCount: ctx.messages.filter((m) => m.role === 'assistant').length,
+      stepCount: ctx.messages.filter((m) => m.role === 'assistant').length,
     };
     if (ctx.pendingToolCall) input.pendingToolCall = ctx.pendingToolCall;
   }

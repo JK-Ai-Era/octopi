@@ -73,7 +73,7 @@ describe('edit-resend (truncate aborted turn)', () => {
         assistantMsg('partial debris', t + 3),
         { role: 'tool', content: 'tool debris', timestamp: t + 4, toolResults: [] } as Message,
       ],
-      turns: [],
+      steps: [],
       metadata: {
         abortedTurn: { userMessageIndex: 2, at: t + 5 },
       },
@@ -115,7 +115,7 @@ describe('edit-resend (truncate aborted turn)', () => {
         updatedAt: t,
       },
       messages: [userMsg('u0', t), assistantMsg('a0', t + 1), userMsg('u1', t + 2)],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t } },
       tasks: [],
       // 租约点在消息之后（大于 truncate 起点），用于验证 detach 随截断收缩
@@ -148,7 +148,7 @@ describe('edit-resend (truncate aborted turn)', () => {
         updatedAt: t,
       },
       messages: [userMsg('u', t), assistantMsg('partial', t + 1)],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t } },
       tasks: [],
     });
@@ -183,7 +183,7 @@ describe('edit-resend (truncate aborted turn)', () => {
         userMsg('later completed', t + 2),
         assistantMsg('done', t + 3),
       ],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t } },
       tasks: [],
     });
@@ -227,7 +227,7 @@ describe('edit-resend (truncate aborted turn)', () => {
           metadata: { source: 'turnEnd', turnId: 't1' },
         } as Message,
       ],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t + 4 } },
       tasks: [],
     });
@@ -271,7 +271,7 @@ describe('edit-resend (truncate aborted turn)', () => {
         userMsg('real follow-up', t + 3),
         assistantMsg('done', t + 4),
       ],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t + 5 } },
       tasks: [],
     });
@@ -314,7 +314,7 @@ describe('edit-resend (truncate aborted turn)', () => {
           },
         } as Message,
       ],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 0, at: t + 3 } },
       tasks: [],
     });
@@ -354,7 +354,7 @@ describe('edit-resend (truncate aborted turn)', () => {
           metadata: { source: 'turnEnd', turnId: 't1' },
         } as Message,
       ],
-      turns: [],
+      steps: [],
       // 损坏/legacy 元数据：锚点落在引擎载体上（下标 2）
       metadata: { abortedTurn: { userMessageIndex: 2, at: t + 3 } },
       tasks: [],
@@ -390,7 +390,7 @@ describe('edit-resend (truncate aborted turn)', () => {
         // 本轮 input：push 后、bake 前被 abort —— 无信封的裸用户消息
         { role: 'user', content: '编辑这条消息', timestamp: t + 2 } as Message,
       ],
-      turns: [],
+      steps: [],
       metadata: { abortedTurn: { userMessageIndex: 2, at: t + 3 } },
       tasks: [],
     });
@@ -436,7 +436,7 @@ describe('edit-resend (truncate aborted turn)', () => {
           },
         } as Message,
       ],
-      turns: [],
+      steps: [],
       // 损坏/legacy 元数据：锚点落在 notify 便签上
       metadata: { abortedTurn: { userMessageIndex: 0, at: t + 1 } },
       tasks: [],

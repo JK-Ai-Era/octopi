@@ -19,7 +19,7 @@ import type {
   LLMStreamChunk,
   LLMResponse,
 } from '@octopi-agent/core/interfaces/model-provider.js';
-import type { TokenUsage } from '@octopi-agent/core/types/turn.js';
+import type { TokenUsage } from '@octopi-agent/core/types/step.js';
 
 function parseOpenAIChunk(provider: OpenAIProvider, payload: Record<string, unknown>): LLMStreamChunk[] {
   return provider['parseSSELine'](

@@ -358,7 +358,7 @@ async function buildSpec(
       implementation: impl,
       systemPrompt: (thinkRaw.systemPrompt as string) ?? systemPrompt,
       model: (thinkRaw.model as string) ?? (config.model as string),
-      maxIterations: (thinkRaw.maxIterations as number) ?? (config.maxIterations as number),
+      maxSteps: (thinkRaw.maxSteps as number) ?? (config.maxSteps as number),
       handler,
       preProcess,
       postProcess,
