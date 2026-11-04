@@ -127,7 +127,7 @@ lifecycle:
 sense:
   source: eventBus
   filter:
-    events: [iteration.end]
+    events: [step.end]
     condition: "step.count % 10 === 0"
 ```
 

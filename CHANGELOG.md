@@ -112,6 +112,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 ---
 
 
+## v0.99.1 (2026-11-04)
+
+### fix(engine): 适配事件上 EventBus——子系统 trigger 事件名通路打通
+
+- 此前 runner 适配事件只走 onEvent/observer 通道、**不上 EventBus**：子系统 trigger（`filter.events` 按事件名挂总线监听）命名的任何事件都永远不触发。现 builder `eventSink` 统一把适配事件转发到 EventBus（`llm_stream_delta` 高频流片除外），telemetry/旁路语义不变。回归测试：`tests/harness/runner-events-on-bus.test.ts`。
+
+### refactor(*): 词汇收尾两口子
+
+- **子系统 trigger 死词 `iteration.end` 对齐真实事件 `step.end`**（设计稿示例、boundary-validator fixture；配套 `condition: 'step.count % 10 === 0'`）。
+- **`steered` → `continued`**（activation 续接回执与 `ChannelMessageDelivery`）：原 `steered` 语义是「刺激被活跃 Run 续接」，与 steer 引导注入家族（队列模式 `'steer'` / `steering` 信号 / steering 消息）撞名且语义异类。steer 家族保留本义；宪法 Confusables 新增「steer vs continued」词义裁决（英中）。
+
+---
+
 ## v0.99.0 (2026-11-04)
 
 ### refactor(core/engine/gateway): Run / Turn / Step 词汇定案——模型轮由 turn 正名为 step（breaking）

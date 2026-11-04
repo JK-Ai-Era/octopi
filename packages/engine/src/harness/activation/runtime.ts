@@ -382,9 +382,9 @@ export class AgentRuntime {
     // 单一 offer 点：活跃 Run 接收 = 不再开新 Run（原 Trigger 不 dispatch，
     // Run 关闭未消费时由 inbox 按原 Trigger 重投）
     const offerResult = this.offerToTarget(trigger, agent, sessionId, options?.onEvent);
-    if (offerResult === 'steered' || offerResult === 'duplicate') {
-      options?.onDelivery?.('steered');
-      return { status: 'accepted', agentId: agent.agentId, sessionId, delivery: 'steered' };
+    if (offerResult === 'continued' || offerResult === 'duplicate') {
+      options?.onDelivery?.('continued');
+      return { status: 'accepted', agentId: agent.agentId, sessionId, delivery: 'continued' };
     }
     options?.onDelivery?.('run');
 

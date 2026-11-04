@@ -2,7 +2,7 @@
  * SessionInbox — 活跃 Run 消息接续队列契约
  *
  * 不变量：
- * - offer 只被持锁的活跃 Run 接收（steered）；否则走原 Trigger 唤醒（dispatched）
+ * - offer 只被持锁的活跃 Run 接收（continued）；否则走原 Trigger 唤醒（dispatched）
  * - 同 entryId 只进一次父上下文（owned / delivered 去重）
  * - close 未消费 = 未送达：按原 Trigger 重投（带 onEvent），已 ack 不重投
  * - 显式换模型 / 带附件输入不接续（完整新 Run 装配）
@@ -37,13 +37,13 @@ describe('SessionInbox', () => {
     ).toBe('dispatched');
   });
 
-  it('活跃 Run 接收：steered + onAdmitted，drain 人话优先且保持到达序', () => {
+  it('活跃 Run 接收：continued + onAdmitted，drain 人话优先且保持到达序', () => {
     const inbox = new SessionInbox(() => {});
     const run = inbox.open('s1', 'a1', 'r1', []);
     const admitted = vi.fn();
     expect(
       inbox.offer({ agentId: 'a1', sessionId: 's1', message: msg('notice-1'), entryId: 'n1' }),
-    ).toBe('steered');
+    ).toBe('continued');
     expect(
       inbox.offer({
         agentId: 'a1',
@@ -53,11 +53,11 @@ describe('SessionInbox', () => {
         human: true,
         onAdmitted: admitted,
       }),
-    ).toBe('steered');
+    ).toBe('continued');
     expect(
       inbox.offer({ agentId: 'a1', sessionId: 's1', message: msg('notice-2'), entryId: 'n2' }),
-    ).toBe('steered');
-    expect(admitted).toHaveBeenCalledWith('steered');
+    ).toBe('continued');
+    expect(admitted).toHaveBeenCalledWith('continued');
 
     const drained = run.drain();
     expect(drained.map((e) => e.id)).toEqual(['h1', 'n1', 'n2']);
@@ -68,7 +68,7 @@ describe('SessionInbox', () => {
     const run = inbox.open('s1', 'a1', 'r1', []);
     expect(
       inbox.offer({ agentId: 'a1', sessionId: 's1', message: msg('x'), entryId: 'e1' }),
-    ).toBe('steered');
+    ).toBe('continued');
     // owned：同一 id 再来不得重复排队
     expect(
       inbox.offer({ agentId: 'a1', sessionId: 's1', message: msg('x'), entryId: 'e1' }),
@@ -118,7 +118,7 @@ describe('SessionInbox', () => {
         modelOverride: 'gpt-x',
         modelProvider: 'openai',
       }),
-    ).toBe('steered');
+    ).toBe('continued');
     // 真换模型 → 完整新 Run（保模型快照）
     expect(
       inbox.offer({
@@ -147,7 +147,7 @@ describe('SessionInbox', () => {
         trigger,
         onEvent,
       }),
-    ).toBe('steered');
+    ).toBe('continued');
 
     run.close();
     await vi.waitFor(() => expect(redispatch).toHaveBeenCalledTimes(1));

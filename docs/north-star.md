@@ -65,6 +65,7 @@ Host ──(conversationId ↔ sessionId)── Session aggregate
 | One user exchange? | **Turn** (Session-level discourse boundary; attributed to an Agent via its Run) |
 | One model round? | **Step** (never “turn”) |
 | Machine content vs human speech? | Synthesized user-role content must be machine-identifiable in the LLM view (view-level envelope, e.g. `<schedule_notice>` / `<delegation_result>`); never disguised as human speech |
+| steer vs continued? | **steer** = guidance-injection family (queue mode `'steer'` / `steering` signals / steering messages — injected as guidance, opens no Turn); **continued** = a stimulus absorbed by the active Run (new Turn at the next message boundary; vs dispatching a new Run) |
 | Who is it / how is it configured at birth? | **Agent** (template; excludes learning products) |
 | The hand vs what the hand touched? | **Tool** vs **Effect**; live system state → Tool, documents → Knowledge |
 

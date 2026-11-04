@@ -715,13 +715,13 @@ export interface WsEnvelope {
   agents?: AgentSummary[];
   event?: AgentEventEnvelope;
   state?: string;
-  delivery?: 'steered' | 'followup' | 'run';
+  delivery?: 'continued' | 'followup' | 'run';
 }
 
 export interface OctopiClientEvents {
   onConnectionState?: (state: ConnectionState) => void;
   onWelcome?: (agents: AgentSummary[]) => void;
-  onAccepted?: (sessionId: string | undefined, messageId: string | undefined, delivery?: 'steered' | 'followup' | 'run') => void;
+  onAccepted?: (sessionId: string | undefined, messageId: string | undefined, delivery?: 'continued' | 'followup' | 'run') => void;
   onEvent?: (sessionId: string | undefined, event: AgentEventEnvelope) => void;
   onState?: (sessionId: string | undefined, state: string) => void;
   onError?: (error: Error) => void;

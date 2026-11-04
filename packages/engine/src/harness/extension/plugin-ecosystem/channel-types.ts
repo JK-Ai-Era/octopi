@@ -10,7 +10,7 @@
  * - Gateway / Integration 按部署形态挂载具体 adapter
  */
 
-export type ChannelMessageDelivery = 'steered' | 'followup' | 'run';
+export type ChannelMessageDelivery = 'continued' | 'followup' | 'run';
 
 export interface ChannelMessage {
   id: string;

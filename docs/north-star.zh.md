@@ -65,6 +65,7 @@ Host ──(conversationId ↔ sessionId)── Session 聚合
 | 一次用户回合？ | **Turn**（Session 级话语边界；经其 Run 归属到 Agent） |
 | 一个模型轮？ | **Step**（绝不叫「turn」） |
 | 机器内容 vs 人话？ | 合成的用户角色内容在 LLM 视图必须可辨识（视图级信封，如 `<schedule_notice>` / `<delegation_result>`）；绝不冒充人话 |
+| steer vs continued？ | **steer** = 引导注入家族（队列模式 `'steer'` / `steering` 信号 / steering 消息——作为引导注入，不开 Turn）；**continued** = 刺激被活跃 Run 续接（下一消息边界开新 Turn；区别于开新 Run） |
 | 它是谁、出厂怎么配？ | **Agent**（模板；不含学习产物） |
 | 手 vs 手碰过什么？ | **Tool** vs **Effect**；活系统当前态用 Tool，文档用 Knowledge |
 

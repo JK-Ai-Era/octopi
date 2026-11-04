@@ -177,7 +177,7 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
         entryId: 'h1',
         human: true,
       }),
-    ).toBe('steered');
+    ).toBe('continued');
 
     while (!(await events.next()).done) {
       // 消费余下事件直到 Run 结束
@@ -244,18 +244,18 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
       sessionId: 's1',
       message: {
         role: 'user',
-        content: 'result-steered',
+        content: 'result-continued',
         timestamp: Date.now(),
-        metadata: { delegationId: 'del-steered', source: 'runtime' },
+        metadata: { delegationId: 'del-continued', source: 'runtime' },
       },
-      entryId: 'del-steered',
+      entryId: 'del-continued',
     });
     for await (const _ev of events) {
       // 消费余下事件直到 Run 结束
     }
 
     expect(acked).toContain('del-wake');
-    expect(acked).toContain('del-steered');
+    expect(acked).toContain('del-continued');
   });
 
   it('Run 关闭未消费：按原 Trigger 重投恰好一次（带 onEvent）', async () => {
@@ -296,7 +296,7 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
         trigger,
         onEvent,
       }),
-    ).toBe('steered');
+    ).toBe('continued');
 
     while (!(await events.next()).done) {
       // 消费余下事件直到 Run 结束
@@ -361,7 +361,7 @@ describe('inbox 插话接续（Runner × Dispatcher）', () => {
         entryId: 'del-x',
         trigger,
       }),
-    ).toBe('steered');
+    ).toBe('continued');
 
     await expect(async () => {
       while (!(await events.next()).done) {

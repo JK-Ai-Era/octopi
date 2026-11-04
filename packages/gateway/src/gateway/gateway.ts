@@ -2623,7 +2623,7 @@ export class Gateway {
    * @param sessionId - 目标会话
    */
   /**
-   * steered 消息的晚到回复：被接续进活跃 Run 后，回答在后续 turn 才产生。
+   * continued 消息的晚到回复：被接续进活跃 Run 后，回答在后续 turn 才产生。
    * 由事件转发触发、恰好发送一次（与同步回复路径互斥，评审 F3）。
    */
   private async sendLateChannelReply(
@@ -4972,9 +4972,9 @@ export class Gateway {
 
     // 4–5. 经激活宿主执行（模型 A）；onEvent 做流式广播（不变量 #6）
     let finalContent = '';
-    // steered（插话进活跃 Run）：回复晚于 dispatch 返回，由事件转发触发晚到发送（评审 F3）
-    let steeredDelivery = false;
-    let steeredReplySent = false;
+    // continued（插话进活跃 Run）：回复晚于 dispatch 返回，由事件转发触发晚到发送（评审 F3）
+    let continuedDelivery = false;
+    let continuedReplySent = false;
     // 会话附件指针（OP-15）：metadata.attachmentIds → Trigger.attachments
     let attachMetadata: Record<string, unknown> = {};
     const rawAttachIds = (msg.metadata as { attachmentIds?: unknown } | undefined)?.attachmentIds;
@@ -4997,7 +4997,7 @@ export class Gateway {
         content: inboundContent,
         metadata: { ...(msg.metadata ?? {}), ...attachMetadata },
         onDelivery: (delivery) => {
-          if (delivery === 'steered' || delivery === 'followup') steeredDelivery = true;
+          if (delivery === 'continued' || delivery === 'followup') continuedDelivery = true;
         },
       },
       resolveAgentId: () => agent.id,
@@ -5009,10 +5009,10 @@ export class Gateway {
           // 失败尝试的 partial 不是回答：不得当最终回复外发（10-27 事故形态）
           if (!isError) {
             finalContent = event.data.content as string;
-            // steered 消息的回答晚于 dispatch 返回：首个终态 step 恰好发一次（评审 F3）
+            // continued 消息的回答晚于 dispatch 返回：首个终态 step 恰好发一次（评审 F3）
             const phase = (event.data as { phase?: string } | undefined)?.phase;
-            if (steeredDelivery && !steeredReplySent && phase !== 'pre_tools' && finalContent) {
-              steeredReplySent = true;
+            if (continuedDelivery && !continuedReplySent && phase !== 'pre_tools' && finalContent) {
+              continuedReplySent = true;
               void this.sendLateChannelReply(msg, sessionKey, agent.id, finalContent);
             }
           }
@@ -5060,9 +5060,9 @@ export class Gateway {
       return;
     }
 
-    // 7. 发送回复（steered 的回复由晚到通道恰好发一次，这里不重复）
+    // 7. 发送回复（continued 的回复由晚到通道恰好发一次，这里不重复）
     const adapter = this.channels.get(msg.channel);
-    if (!steeredDelivery && adapter && channelReply.content) {
+    if (!continuedDelivery && adapter && channelReply.content) {
       await adapter.send(channelReply);
       await this.pluginManager.runAllHooks('message_sent', { ...hookCtx, reply: channelReply });
     }

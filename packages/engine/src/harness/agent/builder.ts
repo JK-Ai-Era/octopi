@@ -1399,9 +1399,13 @@ export class AgentBuilder {
       sessionTaskService,
       sessionScheduleService,
       events,
-      eventSink: this._telemetry?.onEvent
-        ? (event, ctx) => this._telemetry?.onEvent?.(event, ctx)
-        : this._runnerConfig?.eventSink,
+      eventSink: (event, ctx) => {
+        // 适配事件上 EventBus：子系统 trigger（filter.events）与总线消费方按事件名
+        // 匹配的通路（2026-11-04 拍板 A）。llm_stream_delta 高频流片不上总线。
+        if (event.type !== 'llm_stream_delta') events.emit(event);
+        if (this._telemetry?.onEvent) this._telemetry.onEvent(event, ctx);
+        else this._runnerConfig?.eventSink?.(event, ctx);
+      },
     });
     runner.setToolContextProvider(this._contextProvider);
     if (this._personaResolver) {

@@ -226,7 +226,7 @@ describe('审查修复：粘滞增量 / isMidTurn 注入 / 空丢弃', () => {
     expect(isMidTurn(mid)).toBe(true);
 
     // 根因契约：来源是 engineHint 才算引擎注入（与文案前缀无关）
-    const steered: Message[] = [
+    const continued: Message[] = [
       ...mid,
       {
         role: 'user',
@@ -235,7 +235,7 @@ describe('审查修复：粘滞增量 / isMidTurn 注入 / 空丢弃', () => {
         metadata: { source: 'engineHint' },
       },
     ];
-    expect(isMidTurn(steered)).toBe(true);
+    expect(isMidTurn(continued)).toBe(true);
 
     // 真实用户发言（无 source）仍重置边界
     const realUser: Message[] = [...mid, userMsg('next human turn')];

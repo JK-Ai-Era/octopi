@@ -206,7 +206,7 @@ describe('validateSubsystemSpec', () => {
       const spec = makeSpec({
         sense: {
           source: 'eventBus',
-          filter: { events: ['iteration.end'], condition: 'step.count % 10 === 0' },
+          filter: { events: ['step.end'], condition: 'step.count % 10 === 0' },
           isolation: 'structured',
         },
         think: {

@@ -120,7 +120,7 @@ export interface DispatchOptions {
   /** Run 事件流转发（频道回复捕获等）；不变量 #6 */
   onEvent?: (event: AgentEvent) => void;
   /** 活跃 Run 接收即回执（早于 Run 结束）；run = 走新 Run。 */
-  onDelivery?: (delivery: 'steered' | 'run') => void;
+  onDelivery?: (delivery: 'continued' | 'run') => void;
 }
 
 // ── Router ──
@@ -171,7 +171,7 @@ export type DispatchResult =
       status: 'accepted';
       agentId: string;
       sessionId: string;
-      delivery: 'steered';
+      delivery: 'continued';
     }
   | {
       status: 'skipped';

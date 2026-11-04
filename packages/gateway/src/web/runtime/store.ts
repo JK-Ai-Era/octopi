@@ -300,7 +300,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.client.on({
       onConnectionState: (state: ConnectionState) => this.applyConnectionState(state),
       onWelcome: (agents: AgentSummary[]) => this.applyWelcome(agents),
-      onAccepted: (sessionId: string | undefined, _messageId: string | undefined, delivery?: 'steered' | 'followup' | 'run') => this.applyAccepted(sessionId, delivery),
+      onAccepted: (sessionId: string | undefined, _messageId: string | undefined, delivery?: 'continued' | 'followup' | 'run') => this.applyAccepted(sessionId, delivery),
       onEvent: (sessionId: string | undefined, event: AgentEventEnvelope) => this.applyEvent(sessionId, event),
       onState: (sessionId: string | undefined, state: string) => this.applyExternalState(sessionId, state),
       onError: (error: Error) => {
@@ -1627,7 +1627,7 @@ export class OctopiRuntimeStore extends EventTarget {
     this.syncSubscriptions();
   }
 
-  private applyAccepted(sessionId?: string, delivery?: 'steered' | 'followup' | 'run'): void {
+  private applyAccepted(sessionId?: string, delivery?: 'continued' | 'followup' | 'run'): void {
     // 后台会话的 accepted 不更新 UI（M4）：有活动会话时非当前会话忽略；空态时仅对已切走的
     // 会话忽略（初始空态保持既有语义）
     if (sessionId && sessionId !== this.chat.sessionId) {
@@ -1635,7 +1635,7 @@ export class OctopiRuntimeStore extends EventTarget {
     }
     this.clearSendWatchdog();
     this.engineActive = true;
-    if (delivery === 'steered' || delivery === 'followup') {
+    if (delivery === 'continued' || delivery === 'followup') {
       if (this.chat.runStatus === 'sending' || this.chat.runStatus === 'idle') {
         this.setRunStatus('waiting');
       }

@@ -12,7 +12,7 @@ import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { Trigger } from './types.js';
 
-export type InboxOfferResult = 'steered' | 'dispatched' | 'duplicate';
+export type InboxOfferResult = 'continued' | 'dispatched' | 'duplicate';
 
 export interface SessionInboxSignal {
   agentId: string;
@@ -30,7 +30,7 @@ export interface SessionInboxSignal {
   trigger?: Trigger;
   /** 调用方的收尾通道（频道回复捕获等）；消费时由 Runner 转发事件。 */
   onEvent?: (event: AgentEvent) => void;
-  onAdmitted?: (delivery: 'steered') => void;
+  onAdmitted?: (delivery: 'continued') => void;
 }
 
 export interface SessionInboxEntry {
@@ -107,7 +107,7 @@ export class SessionInbox {
   ) {}
 
   /**
-   * 有兼容的活跃接收端才接收（返回 steered）；否则调用方继续原 Trigger。
+   * 有兼容的活跃接收端才接收（返回 continued）；否则调用方继续原 Trigger。
    * duplicate = 同 id 已被接收或已入上下文，不得再次执行。
    * 兼容性：显式换模型（≠ 活跃 Run 模型）/ 带附件输入不接续，走完整新 Run。
    */
@@ -137,8 +137,8 @@ export class SessionInbox {
     };
     this.owned.add(id);
     active.state.pending.push(entry);
-    signal.onAdmitted?.('steered');
-    return 'steered';
+    signal.onAdmitted?.('continued');
+    return 'continued';
   }
 
   /** 仅 Runner 持锁后调用；同 (agent, session) 同时只有一个接收端。 */
