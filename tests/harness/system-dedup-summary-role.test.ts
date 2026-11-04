@@ -49,9 +49,14 @@ describe('buildLlmMessages 托管 system 去重', () => {
       tools: [],
       tokenBudget: 32000,
     });
+    // P0-B 反向围栏：非托管 system 降级为 engineHint 载体（user 形态），
+    // 内容保留（不丢消息），但不进 provider system 字段
     const systems = result.messages.filter((m) => m.role === 'system');
-    expect(systems.length).toBe(2);
-    expect(result.messages.some((m) => m.content === 'imported policy')).toBe(true);
+    expect(systems.length).toBe(1);
+    expect(systems[0]?.content).toBe('persona');
+    const carried = result.messages.find((m) => m.content === 'imported policy');
+    expect(carried).toBeDefined();
+    expect(carried?.role).toBe('user');
   });
 });
 

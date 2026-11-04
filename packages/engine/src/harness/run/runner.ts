@@ -2636,6 +2636,8 @@ export class SessionAwareRunner {
       });
 
       if (result.ok && result.summary && result.compacted) {
+        // 手抄映射表（result 形状 ≠ 快照形状）：ContextCompactSnapshot 加字段时必须
+        // 同步此处，否则持久快照静默丢字段（审查 M2）。收口项：由引擎直接回传快照。
         const snap: ContextCompactSnapshot = {
           summary: result.summary,
           lastProactiveMessageCount: session.messages.length,

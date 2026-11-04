@@ -66,11 +66,13 @@ async function collect(context: AgentContext, config: AgentLoopConfig): Promise<
 }
 
 function ephemeralMsg(n: number): Message {
+  // 夹具对齐生产形态（delegation hint = user + engineHint 载体）
   return {
-    role: 'system',
+    role: 'user',
     content: `<delegation_status>${n} running</delegation_status>`,
     timestamp: Date.now(),
     ephemeral: true,
+    metadata: { source: 'engineHint' },
   };
 }
 
@@ -102,6 +104,89 @@ describe('ephemeral 消息 — Loop 内不累积', () => {
     expect(ephemeralLeft).toHaveLength(1);
     // 保留的是最新快照，不是第一次的
     expect(String(ephemeralLeft[0].content)).toContain(`${calls} running`);
+  });
+
+  it('快照更新原位替换：不把旧快照从历史中部删掉再尾插（前缀稳定）', async () => {
+    const provider = createProvider([
+      { content: '', toolCalls: [{ id: 'c1', name: 'noop', arguments: {} }], model: 'test', finishReason: 'tool_calls' },
+      { content: '', toolCalls: [{ id: 'c2', name: 'noop', arguments: {} }], model: 'test', finishReason: 'tool_calls' },
+      { content: 'done', model: 'test', finishReason: 'stop' },
+    ]);
+
+    let calls = 0;
+    const context: AgentContext = {
+      systemPrompt: '',
+      messages: [{ role: 'user', content: 'go', timestamp: Date.now() }],
+      tools: [tool()],
+    };
+
+    await collect(context, {
+      model: provider,
+      modelCallIdleTimeoutMs: 5_000,
+      modelCallAbsoluteTimeoutMs: 10_000,
+      getSteeringMessages: async () => [ephemeralMsg(++calls)],
+    });
+
+    // 原位替换的直接效果：最新快照仍在**首次注入的槽位**（历史前部），
+    // 其后的工具回合不动；旧实现（删旧 + 尾插）会把快照挪到数组尾部
+    const idx = context.messages.findIndex((m) => m.ephemeral === true);
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(idx).toBeLessThan(context.messages.length - 1);
+  });
+
+  it('新旧快照数量交叉：2→1 合并进首槽位，1→2 尾插补位', async () => {
+    // 2→1：旧两份快照被一份替换（首槽位替换 + 次槽位删除）
+    {
+      // steering 在每轮工具调用后消费 → 两轮工具调用才会有第二次快照更新
+      const provider = createProvider([
+        { content: '', toolCalls: [{ id: 'c1', name: 'noop', arguments: {} }], model: 'test', finishReason: 'tool_calls' },
+        { content: '', toolCalls: [{ id: 'c2', name: 'noop', arguments: {} }], model: 'test', finishReason: 'tool_calls' },
+        { content: 'done', model: 'test', finishReason: 'stop' },
+      ]);
+      let calls = 0;
+      const context: AgentContext = {
+        systemPrompt: '',
+        messages: [{ role: 'user', content: 'go', timestamp: Date.now() }],
+        tools: [tool()],
+      };
+      await collect(context, {
+        model: provider,
+        modelCallIdleTimeoutMs: 5_000,
+        modelCallAbsoluteTimeoutMs: 10_000,
+        getSteeringMessages: async () => {
+          calls++;
+          return calls === 1 ? [ephemeralMsg(1), ephemeralMsg(2)] : [ephemeralMsg(3)];
+        },
+      });
+      const left = context.messages.filter((m) => m.ephemeral === true);
+      expect(left).toHaveLength(1);
+      expect(String(left[0].content)).toContain('3 running');
+    }
+    // 1→2：新快照多于旧槽位（首槽替换 + 尾插）
+    {
+      const provider = createProvider([
+        { content: '', toolCalls: [{ id: 'c1', name: 'noop', arguments: {} }], model: 'test', finishReason: 'tool_calls' },
+        { content: '', toolCalls: [{ id: 'c2', name: 'noop', arguments: {} }], model: 'test', finishReason: 'tool_calls' },
+        { content: 'done', model: 'test', finishReason: 'stop' },
+      ]);
+      let calls = 0;
+      const context: AgentContext = {
+        systemPrompt: '',
+        messages: [{ role: 'user', content: 'go', timestamp: Date.now() }],
+        tools: [tool()],
+      };
+      await collect(context, {
+        model: provider,
+        modelCallIdleTimeoutMs: 5_000,
+        modelCallAbsoluteTimeoutMs: 10_000,
+        getSteeringMessages: async () => {
+          calls++;
+          return calls === 1 ? [ephemeralMsg(1)] : [ephemeralMsg(2), ephemeralMsg(3)];
+        },
+      });
+      const left = context.messages.filter((m) => m.ephemeral === true);
+      expect(left).toHaveLength(2);
+    }
   });
 
   it('非 ephemeral 的 steering 正常累积（不误删普通消息）', async () => {

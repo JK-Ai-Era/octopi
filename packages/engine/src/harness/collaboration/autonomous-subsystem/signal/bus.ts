@@ -37,7 +37,14 @@ export interface ContextInjection {
   /** 来源子系统 ID */
   subsystemId: string;
   /** 消息列表 */
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  messages: Array<{
+    role: 'system' | 'user' | 'assistant';
+    content: string;
+    /** 载体标记（engineHint 等）；isTurnAnchor/回放按此判语义 */
+    metadata?: { source?: string };
+    /** 状态快照类注入：同 run 只留最新一份，不落库 */
+    ephemeral?: boolean;
+  }>;
   /** 是否标记为压缩结果 */
   compressed?: boolean;
 }
@@ -136,7 +143,12 @@ export class SignalBus {
         messages.push({
           ...msg,
           timestamp: Date.now(),
-          metadata: injection.compressed ? { compressed: true } : { source: 'subsystem' },
+          // P0-B 同范式：统一 engineHint 载体（ENGINE_CARRIER_SOURCES 成员，
+          // 不被 isTurnAnchor 认作轮锚点——否则信号更新会钉死老化边界）；
+          // compressed 快照保留既有标记。上游 metadata 不透传：载体内涵由本转换定义。
+          metadata: injection.compressed
+            ? { compressed: true, source: 'engineHint' }
+            : { source: 'engineHint' },
         } as Message);
       }
     }
@@ -219,14 +231,30 @@ export class SignalBus {
     if (signal.action === 'replace') {
       this.contextQueue.push({
         subsystemId,
-        messages: [{ role: 'system', content: signal.reason }],
+        // 状态快照：engineHint 载体 + ephemeral（同 run 只留最新一份，不落库）
+        messages: [
+          {
+            role: 'user',
+            content: signal.reason,
+            ephemeral: true,
+            metadata: { source: 'engineHint' },
+          },
+        ],
         compressed: true,
       });
     } else {
-      // suggest / alert → 注入为系统消息
+      // suggest / alert → 注入为引擎提示（user 形态 + engineHint 标记，随历史保留）。
+      // 不用 role:'system'：非托管 system 会被 provider 适配层拼进 system 字段，
+      // 状态变化即前缀整段失效（context-size-accounting.md §1）。
       this.contextQueue.push({
         subsystemId,
-        messages: [{ role: 'system', content: `[${signal.action}] ${signal.reason}` }],
+        messages: [
+          {
+            role: 'user',
+            content: `[${signal.action}] ${signal.reason}`,
+            metadata: { source: 'engineHint' },
+          },
+        ],
       });
     }
   }

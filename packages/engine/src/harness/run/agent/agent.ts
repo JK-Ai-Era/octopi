@@ -11,6 +11,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
+import type { ContextCompactSnapshot } from '../../context/types.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type {
   AgentContext,
@@ -84,12 +85,7 @@ export class Agent {
    */
   private _contextSessionId = 'default';
   /** sessionId → 压缩状态快照；Runner 从 Session 播种，assemble 后回写 Session */
-  private _sessionCompactStates = new Map<string, {
-    summary?: string;
-    lastProactiveMessageCount?: number;
-    lastProactiveCoverEnd?: number;
-    lastProactiveTokens?: number;
-  }>();
+  private _sessionCompactStates = new Map<string, ContextCompactSnapshot>();
   private _onAfterStep?: (usage?: import('@octopi-agent/core/types/step.js').TokenUsage, step?: Message[]) => Promise<void>;
   /** Client Tool 会话可见性；undefined = 全部可见 */
   private _toolVisibilityFilter?: (sessionId: string, toolName: string) => boolean;
@@ -214,12 +210,7 @@ export class Agent {
   setSessionCompactState(
     sessionId: string,
     agentId: string,
-    state: {
-      summary?: string;
-      lastProactiveMessageCount?: number;
-      lastProactiveCoverEnd?: number;
-      lastProactiveTokens?: number;
-    } | undefined,
+    state: ContextCompactSnapshot | undefined,
   ): void {
     const key = compactStateKey(sessionId, agentId);
     if (state && (state.summary || state.lastProactiveMessageCount != null)) {
@@ -236,14 +227,7 @@ export class Agent {
    * @param agentId - 目标 agent
    * @returns 快照；无则 undefined
    */
-  getSessionCompactState(sessionId: string, agentId: string):
-    | {
-        summary?: string;
-        lastProactiveMessageCount?: number;
-        lastProactiveCoverEnd?: number;
-        lastProactiveTokens?: number;
-      }
-    | undefined {
+  getSessionCompactState(sessionId: string, agentId: string): ContextCompactSnapshot | undefined {
     return this._sessionCompactStates.get(compactStateKey(sessionId, agentId));
   }
 

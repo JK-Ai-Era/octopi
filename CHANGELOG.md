@@ -111,6 +111,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.99.3 (2026-11-05)
+
+### fix(engine/core): 装配视图确定性与系统围栏——消除逐请求字节抖动与 system 前缀击穿
+
+- **视图纪律**：语义过滤（semanticHistory）只进摘要素材，视图消息一律原样切片（全回放）。此前 sticky 增量段与 buildStructuralView 增量段经过语义过滤，`<turn_end>` 等信封随 tail 窗口滑动时隐时现，逐请求击穿 provider 前缀缓存（生产实证：firstDiff 恒落在距尾部 ~20 条；缓存命中 99.7% → 0% → 98.5% 的整段重买）。
+- **系统围栏（B0）**：delegation hint 与子系统信号改 `role:'user'` + `metadata.source:'engineHint'` 载体（状态快照类带 ephemeral），不再进 provider system 字段；buildLlmMessages 反向围栏把非托管 system 降级为 engineHint user（内容保留，不丢消息）；anthropic 适配层 system>1 触发 contract-violation 告警并 join 容错（决策：不采用 dev throw——库语境无可靠 NODE_ENV，严格性由单测断言保证）。
+- **ephemeral 快照原位替换**：steering 状态快照更新从「删旧（可能在历史中部）+尾插」改为同槽位替换，其后消息不再整体平移。
+- **行为变更**（测试随行为更新）：外部 system 消息在 LLM 视图中降级为 user 载体（此前保留 system 角色）；子系统信号统一 engineHint 标记（此前 `source:'subsystem'` 不在引擎载体列表，会被误认作轮锚点钉死老化边界）。
+- 修复过程经独立子 agent 对抗性评审：初版 2 个 high（粘滞重建双边界致视图重复/丢尾、coverEnd 交叉重灌）已修；初版「tail 冻结锚点」经核实对内容是空操作（切点对拼接不可见），整体撤销，字节稳定性由原样切片保证；快照字段表同步与内联类型漂移（评审 M2/M3）一并修复。
+- **验证**：新增视图确定性与系统围栏红线 8 项（信封原样回放/尾部真前缀/无摘要视图无重无丢/engineHint 不钉死老化边界/反向围栏/provider 契约告警/快照原位替换/数量交叉）；`npm test` 4055 passed | 7 skipped | 0 failed；`npm run lint`（eslint + 测试类型检 + webui tsc）绿。
+
+---
 
 ## v0.99.2 (2026-11-04)
 
