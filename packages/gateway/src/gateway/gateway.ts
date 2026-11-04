@@ -75,7 +75,8 @@ import {
   pluginCommandsFromManager,
   type BuiltinHost,
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/commands/index.js';
-import type { CommandCatalogItem, SessionOp, SessionReadView } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/commands/types.js';
+import type { CommandCatalogItem, CommandDefinition, CommandResult, PrincipalRef, SessionOp, SessionReadView } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/commands/types.js';
+import { CommandAuditJournal } from './command-audit.js';
 import { IssueRegistry } from '@octopi-agent/engine/harness/observability/diagnostics/registry.js';
 import type { SystemIssue } from '@octopi-agent/engine/harness/observability/diagnostics/types.js';
 
@@ -424,6 +425,7 @@ export class Gateway {
   private channels = new Map<string, ChannelAdapter>();
   /** Plugin Manager */
   private pluginManager: PluginManager;
+  private readonly commandAudit!: CommandAuditJournal;
   /** 插件发现幂等位：PluginLoader 不去重，重复 discover 会双注册 hooks/命令 */
   private pluginsDiscovered = false;
   /** Session Store */
@@ -530,6 +532,7 @@ export class Gateway {
 
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
+    this.commandAudit = new CommandAuditJournal(() => join(getOctopiHome(), 'audit'));
     this.dmScope = config.session?.dmScope ?? 'main';
     this.pluginManager = new PluginManager({
       loadPaths: config.plugins?.loadPaths ?? [],
@@ -1981,8 +1984,8 @@ export class Gateway {
 
   /** Plugin registerCommand → Router（plugin load 后调用） */
   registerPluginCommands(): void {
-    for (const def of pluginCommandsFromManager(this.pluginManager)) {
-      const r = this.commandRouter.register(def, `plugin:${def.name}`);
+    for (const { definition: def, ref } of pluginCommandsFromManager(this.pluginManager)) {
+      const r = this.commandRouter.register(def, ref);
       if (!r.ok) {
         this.issueRegistry.report({
           id: `commands:command.conflict:${def.name}`,
@@ -1991,7 +1994,7 @@ export class Gateway {
           severity: 'warning',
           title: `命令 /${def.name} 冲突`,
           detail: `plugin 命令注册冲突（${r.reason}）`,
-          refs: [{ label: `plugin: ${def.name}`, pluginId: def.name }],
+          refs: [{ label: `plugin: ${ref}`, pluginId: ref }],
         });
       }
     }
@@ -2003,6 +2006,95 @@ export class Gateway {
       agentId,
       hasActiveRun: this.runtime.hasActiveRun(agentId, sessionId),
     };
+  }
+
+  /**
+   * Authorize every Plugin SessionOp before applying any operation. Only the
+   * effective manifest registry supplies grants; handler output supplies none.
+   *
+   * @param definition - Mounted Command returned by CommandRouter
+   * @param executionSource - Host-assigned identity of the activated Router entry
+   * @param ops - Operations returned by the handler
+   * @param result - Mutable result sanitized on denial
+   * @param principal - Host-supplied caller for the audit record
+   * @param sessionId - Session that would receive the effects
+   * @param agentId - Agent responsible for the command's Session
+   * @returns Whether the entire operation batch may be applied
+   */
+  private async authorizePluginSessionOps(
+    definition: CommandDefinition | undefined,
+    executionSource: { source: string; ref: string } | undefined,
+    ops: SessionOp[] | undefined,
+    result: CommandResult,
+    principal: PrincipalRef,
+    sessionId: string,
+    agentId: string,
+  ): Promise<boolean> {
+    if (definition?.source !== 'plugin') return true;
+    // Only applySessionOps may mint this client-routing field after new_session.
+    delete result.newSessionId;
+    const pluginId = executionSource?.source === 'plugin' ? executionSource.ref : undefined;
+    if (result.enterLoop || result.messages) {
+      if (definition.kind !== 'prompt' || ops?.length) {
+        delete result.enterLoop;
+        delete result.messages;
+      } else if (!result.enterLoop || !result.messages?.length) {
+        delete result.enterLoop;
+        delete result.messages;
+      }
+    }
+    if (!ops?.length) return true;
+    const declared = pluginId
+      ? this.pluginManager.getCommandSessionOps(pluginId, definition.name)
+      : undefined;
+    const granted = new Set(declared ?? []);
+    const deniedOps = [...new Set(ops.map((op) => op.op).filter((op) => !granted.has(op)))];
+    if (declared && deniedOps.length === 0) return true;
+
+    const requestedOps = ops.map((op) => op.op);
+    delete result.sessionOps;
+    delete result.enterLoop;
+    delete result.messages;
+    delete result.newSessionId;
+    result.status = 'denied';
+    result.display = {
+      type: 'text',
+      text: `命令 /${definition.name} 被 Host 拒绝：请求了未声明的 SessionOp（${deniedOps.join(', ') || requestedOps.join(', ')}）。本次未执行任何会话操作。`,
+    };
+    result.effects = [{
+      kind: 'command_denied',
+      summary: `Plugin ${pluginId ?? 'unknown'} /${definition.name}: ${requestedOps.join(', ')}`,
+    }];
+    try {
+      await this.commandAudit.appendDenied({
+        type: 'command_denied',
+        at: Date.now(),
+        sessionId,
+        agentId,
+        command: definition.name,
+        source: 'plugin',
+        pluginId: pluginId ?? 'unknown',
+        principal,
+        requestedOps,
+        deniedOps,
+        reason: declared ? 'undeclared_session_ops' : 'unregistered_contribution',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // The operation is already denied; a missing audit sink must be a visible
+      // durable-system failure, not a reason to apply the forbidden operation.
+      console.error(`[Gateway] command_denied audit write failed: ${message}`);
+      this.issueRegistry.report({
+        id: 'commands:command.audit_failed',
+        domain: 'commands',
+        code: 'command.audit_failed',
+        severity: 'error',
+        title: 'Command 拒绝审计写入失败',
+        detail: message,
+        refs: [{ label: `plugin: ${pluginId ?? 'unknown'}`, pluginId }],
+      });
+    }
+    return false;
   }
 
   private async applySessionOps(
@@ -4892,17 +4984,29 @@ export class Gateway {
         // view.model 可缺省
       }
 
+      const principal = { actorId: msg.senderId, actorType: 'user' as const };
       const outcome = await this.commandRouter.execute({
         content: msg.content,
         sessionId: sessionKey,
         agentId: agent.id,
-        principal: { actorId: msg.senderId, actorType: 'user' },
+        principal,
         view,
       });
 
       if (outcome.kind === 'command') {
         const result = outcome.result;
-        await this.applySessionOps(sessionKey, agent.id, result.sessionOps, result);
+        const authorized = await this.authorizePluginSessionOps(
+          outcome.definition,
+          outcome.executionSource,
+          result.sessionOps,
+          result,
+          principal,
+          sessionKey,
+          agent.id,
+        );
+        if (authorized) {
+          await this.applySessionOps(sessionKey, agent.id, result.sessionOps, result);
+        }
         if (result.newSessionId) {
           result.display = {
             type: 'text',

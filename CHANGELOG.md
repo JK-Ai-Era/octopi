@@ -112,6 +112,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 ---
 
 
+## v0.99.2 (2026-11-04)
+
+### feat(engine/gateway): Plugin Command 元数据、调用方准入与 Host SessionOp 授权
+
+- Plugin `control` / `prompt` Command 保留作者声明的 `kind/risk/invocableBy/args/preempt`；manifest 只声明 `name + sessionOps`，Host 按 Router 实际挂载的 pluginId 与 Command 名查询有效授权，不信任 handler 自报来源或操作集合。`client` 没有客户端效果消费者，v1 在类型和注册运行时均拒绝。
+- SessionOp 整批先授权后执行：任一未知或未声明 op 使全部操作为零副作用，结果改为 `denied`，并写入 `~/.octopi/audit/commands/YYYY-MM-DD.jsonl` 的 `command_denied`；审计写失败不放行，报告 `command.audit_failed` System Issue。该 JSONL 不是防篡改账本。合法声明仍走原有 Host 业务链，`risk` 不代表 HITL，`preempt` 只越过 busy 检查。
+- 调用方收敛为 `principal/agent/service`：host/user/timer 映射 principal，service/subsystem 映射 service，互不隐式继承；插件作为来源不是调用方类别。Plugin v1 的 `invocableBy` 不再接受旧 `plugin` 类别（无真实 Principal 消费者），有效值为空或含未知值均拒绝注册。
+- Router 候选身份按 `(source, ref, name)` 隔离，同一插件多个 Command 不再覆盖冲突候选或误注销；`newSessionId` 只能由 Host 在已授权 `new_session` 后生成，handler 伪造值不会到达客户端。SessionOp 与 Loop 输入不组合，`set_preferred_agent` 仍为保留操作名。
+- 验证：8 个真实 Gateway Command 用例覆盖授权、整批拒绝、相邻 Command 隔离、调用方、伪造会话 ID、审计失败、真实新会话与禁用；build、lint、全量 Vitest、`arch/check-sync.sh` 均通过。进程内插件仍受信任，OP-GATE 未关闭。
+
+---
+
 ## v0.99.1 (2026-11-04)
 
 ### fix(engine): 适配事件上 EventBus——子系统 trigger 事件名通路打通

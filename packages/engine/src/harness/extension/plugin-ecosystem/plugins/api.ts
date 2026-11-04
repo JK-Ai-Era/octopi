@@ -34,6 +34,8 @@ import type {
   ToolCallResult,
 } from './manager.js';
 import type { ArgSpec, CommandInvoker, CommandKind, CommandResult, CommandRisk } from '../commands/types.js';
+import { normalizeCommandName } from '../commands/parse.js';
+import { COMMAND_INVOKERS } from '../commands/types.js';
 
 export interface PluginCommandContext {
   sessionId: string;
@@ -46,7 +48,8 @@ export interface PluginCommandContext {
 export interface PluginCommandRegistration {
   name: string;
   description?: string;
-  kind?: CommandKind;
+  /** Client-side commands require a client contract and are not Plugin v1 contributions. */
+  kind?: Exclude<CommandKind, 'client'>;
   risk?: CommandRisk;
   invocableBy?: CommandInvoker[];
   args?: ArgSpec[];
@@ -216,10 +219,22 @@ export class PluginApi {
    * @param definition - Command metadata and handler
    */
   registerCommand(definition: PluginCommandRegistration): void {
-    if (readStaging(this).commands.some((entry) => entry.name === definition.name)) {
+    const name = normalizeCommandName(definition.name);
+    if (!name) throw new Error(`Plugin "${this.id}" registered invalid command name`);
+    if (definition.kind !== undefined && definition.kind !== 'control' && definition.kind !== 'prompt') {
+      throw new Error(`Plugin "${this.id}" registered unsupported kind for command "${name}"`);
+    }
+    if (definition.invocableBy && (
+      definition.invocableBy.length === 0 ||
+      new Set(definition.invocableBy).size !== definition.invocableBy.length ||
+      definition.invocableBy.some((invoker) => !COMMAND_INVOKERS.includes(invoker))
+    )) {
+      throw new Error(`Plugin "${this.id}" registered invalid invocableBy for command "${name}"`);
+    }
+    if (readStaging(this).commands.some((entry) => entry.name === name)) {
       throw new Error(`Plugin "${this.id}" registered duplicate command "${definition.name}"`);
     }
-    readStaging(this).commands.push(definition);
+    readStaging(this).commands.push({ ...definition, name });
   }
 
   /**

@@ -615,9 +615,31 @@ export class PluginManager {
     return this.loader.contributions.getTools().filter((tool) => includeOptional || !tool.optional);
   }
 
-  /** Effective Command contributions; complete Host authorization belongs to P3. */
+  /**
+   * Effective Command contributions. SessionOp grants come only from this
+   * published registry, never from a handler result or mutable Router state.
+   */
   getCommands(): PluginCommandRecord[] {
     return this.loader.contributions.getCommands();
+  }
+
+  /**
+   * Resolve the manifest-authorized SessionOps for a registered Command.
+   *
+   * @param pluginId - Effective registry identity, supplied by the Host
+   * @param name - Command name within that plugin
+   * @returns Declared operations, or undefined when the contribution is absent
+   */
+  getCommandSessionOps(pluginId: string, name: string): PluginCommandRecord['sessionOps'] | undefined {
+    const command = this.loader.contributions.getCommands().find(
+      (candidate) => candidate.pluginId === pluginId &&
+        candidate.name.replace(/^\/+/, '').toLowerCase() === name,
+    );
+    if (!command) return undefined;
+    const manifest = this.loader.contributions.getPlugin(pluginId)?.manifest;
+    const declared = manifest?.contributes?.commands?.find((candidate) => candidate.name === command.name);
+    if (!declared) return undefined;
+    return [...(declared.sessionOps ?? [])];
   }
 
   /** Fire the declared start hook. Background service support is deferred to P4. */

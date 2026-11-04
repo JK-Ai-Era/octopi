@@ -86,11 +86,32 @@ describe('CommandRouter 注册与冲突', () => {
     expect(router.get('pdf')).toBeNull();
   });
 
-  test('同 (source, ref) 重复注册 = upsert', () => {
+  test('同 (source, ref, name) 重复注册 = upsert', () => {
     expect(router.register(cmd({ name: 'pdf', source: 'skill', description: 'v1' }), 'skill:a').ok).toBe(true);
     const r = router.register(cmd({ name: 'pdf', source: 'skill', description: 'v2' }), 'skill:a');
     expect(r.ok).toBe(true);
     expect(router.get('pdf')?.description).toBe('v2');
+  });
+
+  test('同一 plugin ref 的多个 Command 不互相覆盖，冲突和注销按 name 隔离', () => {
+    expect(router.register(cmd({ name: 'alpha', source: 'plugin' }), 'acme').ok).toBe(true);
+    expect(router.register(cmd({ name: 'beta', source: 'plugin' }), 'acme').ok).toBe(true);
+    expect(router.get('alpha')?.source).toBe('plugin');
+    expect(router.get('beta')?.source).toBe('plugin');
+
+    const conflict = router.register(cmd({ name: 'alpha', source: 'user' }), 'user:alpha.md');
+    expect(conflict.ok).toBe(false);
+    expect(router.get('alpha')).toBeNull();
+    expect(router.get('beta')?.source).toBe('plugin');
+    expect(router.listConflicts().find((item) => item.name === 'alpha')?.candidates).toContainEqual({
+      source: 'plugin', ref: 'acme', action: 'rejected',
+    });
+
+    router.unregister('user', 'user:alpha.md', 'alpha');
+    expect(router.get('alpha')?.source).toBe('plugin');
+    router.unregister('plugin', 'acme', 'alpha');
+    expect(router.get('alpha')).toBeNull();
+    expect(router.get('beta')?.source).toBe('plugin');
   });
 
   test('跨源同名 reject-all 双方皆拒', () => {
@@ -202,6 +223,13 @@ describe('CommandRouter execute', () => {
       expect(out.result.enterLoop).toBe(true);
       expect(out.result.messages?.[0]?.content).toBe('review foo.ts');
     }
+  });
+
+  test('Plugin Command 的 Host 来源来自实际挂载 ref', async () => {
+    const router = new CommandRouter();
+    router.register(cmd({ name: 'plugin-prompt', source: 'plugin', kind: 'prompt' }), 'acme.commands');
+    const out = await router.execute({ content: '/plugin-prompt', sessionId: 's', agentId: 'a', view: view() });
+    expect(out.kind === 'command' && out.executionSource).toEqual({ source: 'plugin', ref: 'acme.commands' });
   });
 
   test('Run 在途：非 preempt 命令拒绝，/stop 可执行', async () => {

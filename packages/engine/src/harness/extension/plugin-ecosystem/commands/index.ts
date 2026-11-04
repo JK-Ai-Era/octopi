@@ -12,6 +12,7 @@ export type {
   CommandContext,
   CommandDefinition,
   CommandEffect,
+  CommandExecutionSource,
   CommandInvoker,
   CommandKind,
   CommandRegisterResult,
@@ -33,6 +34,7 @@ export {
 } from './parse.js';
 export type { ParsedCommand } from './parse.js';
 
+export { COMMAND_INVOKERS } from './types.js';
 export { CommandRouter } from './router.js';
 export type {
   CommandRouterOptions,
@@ -55,3 +57,4 @@ export {
 export { loadUserCommandDefs } from './user-source.js';
 
 export { pluginCommandsFromManager } from './plugin-bridge.js';
+export type { PluginCommandBridge } from './plugin-bridge.js';

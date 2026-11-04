@@ -8,7 +8,9 @@
 export type CommandKind = 'client' | 'control' | 'prompt';
 export type CommandSource = 'builtin' | 'plugin' | 'user' | 'skill';
 export type CommandRisk = 'low' | 'medium' | 'high';
-export type CommandInvoker = 'principal' | 'agent' | 'plugin';
+/** Invoker categories expressible by PrincipalRef; source="plugin" is not caller identity. */
+export const COMMAND_INVOKERS = ['principal', 'agent', 'service'] as const;
+export type CommandInvoker = (typeof COMMAND_INVOKERS)[number];
 
 export type SessionOp =
   | { op: 'abort_run'; reason?: string }
@@ -108,6 +110,12 @@ export interface CommandConflictCandidate {
   source: CommandSource;
   ref: string;
   action: 'registered' | 'rejected' | 'shadowed';
+}
+
+/** Host-assigned identity of the mounted definition; never accepted from a handler. */
+export interface CommandExecutionSource {
+  source: CommandSource;
+  ref: string;
 }
 
 export interface CommandConflict {

@@ -232,6 +232,21 @@ describe('PluginLoader v1 manifest-first behavior', () => {
     expect(loader.getDiagnostics()[0]?.reason).toContain('unknown or duplicate capabilities');
   });
 
+  it('rejects client Commands at registration and discards all staged contributions', async () => {
+    plugin('client-command', {
+      tools: ['echo'], commands: [{ name: 'local' }],
+      body: `
+        api.registerTool({ name: 'echo', description: 'Echo', parameters: {}, capabilities: ['egress'] }, async () => 'ok');
+        api.registerCommand({ name: 'local', kind: 'client', handler: async () => 'ok' });
+      `,
+    });
+    const loader = new PluginLoader({ loadPaths: [root], engineVersion: '0.98.18' });
+    expect(await loader.discover()).toEqual([]);
+    expect(loader.contributions.getTools()).toEqual([]);
+    expect(loader.contributions.getCommands()).toEqual([]);
+    expect(loader.getDiagnostics()[0]?.reason).toContain('unsupported kind');
+  });
+
   it('rejects duplicate ids, undeclared capabilities and incompatible engine ranges', async () => {
     plugin('one', { id: 'duplicate' });
     plugin('two', { id: 'duplicate' });

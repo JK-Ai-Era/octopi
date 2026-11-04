@@ -5,17 +5,31 @@
 import type { PluginManager } from '../plugins/manager.js';
 import type { CommandDefinition, CommandResult } from './types.js';
 
-export function pluginCommandsFromManager(pm: PluginManager): CommandDefinition[] {
+export interface PluginCommandBridge {
+  definition: CommandDefinition;
+  ref: string;
+}
+
+/**
+ * Mount effective plugin contributions without replacing author-declared metadata.
+ * The ref is Host-assigned plugin identity; it is not supplied by the handler.
+ *
+ * @param pm - Manager whose effective contribution registry has been published
+ * @returns Command definitions and stable plugin registration references
+ */
+export function pluginCommandsFromManager(pm: PluginManager): PluginCommandBridge[] {
   return pm.getCommands().map((cmd) => {
     const rawName = cmd.name.replace(/^\/+/, '');
-    return {
+    const definition: CommandDefinition = {
       name: rawName,
       description: cmd.description ?? rawName,
       usage: `/${rawName}`,
-      kind: 'control' as const,
-      source: 'plugin' as const,
-      risk: 'low' as const,
-      invocableBy: ['principal', 'plugin'] as const,
+      kind: cmd.kind ?? 'control',
+      source: 'plugin',
+      ...(cmd.risk === undefined ? {} : { risk: cmd.risk }),
+      ...(cmd.invocableBy === undefined ? {} : { invocableBy: cmd.invocableBy }),
+      ...(cmd.args === undefined ? {} : { args: cmd.args }),
+      ...(cmd.preempt === undefined ? {} : { preempt: cmd.preempt }),
       async execute(ctx): Promise<CommandResult> {
         try {
           const out = (await cmd.handler({
@@ -50,5 +64,6 @@ export function pluginCommandsFromManager(pm: PluginManager): CommandDefinition[
         }
       },
     };
+    return { definition, ref: cmd.pluginId };
   });
 }

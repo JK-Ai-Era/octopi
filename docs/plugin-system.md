@@ -17,7 +17,7 @@ This document describes the manifest-first loading foundation (P1) and the per-A
 | Staged registration and atomic effective-registry publication | Implemented |
 | Tool / Command contribution registration | Implemented |
 | Tool mounting, per-Agent allow/deny, execution, and source attribution | Implemented; empty `tools.allow` does not expose a plugin Tool |
-| Command metadata and Host `sessionOps` authorization | Next phase; existing bridge behavior is not a complete authorization model |
+| Command metadata, caller admission, and Host `sessionOps` authorization | Implemented; Plugin SessionOps require matching manifest declarations |
 | Hook execution semantics | Existing message/gateway-stop triggers remain; typed composition and remaining triggers are later work |
 | Provider / Channel / ContextEngine registration | Not part of the stable v1 author surface yet |
 | Untrusted-code isolation / hot unload | Not supported |
@@ -96,6 +96,9 @@ export default definePlugin({
     api.registerCommand({
       name: 'acme-status',
       description: 'Show Acme service status',
+      kind: 'control',
+      risk: 'low',
+      invocableBy: ['principal'],
       sessionOps: [],
       async handler() {
         return { status: 'ok', display: { type: 'text', text: 'Acme is ready' } };
@@ -116,6 +119,22 @@ export default definePlugin({
 - Tool `capabilities` are mandatory. A Tool with `fs-write` defaults to sequential execution unless explicitly configured otherwise.
 - `api.on` is typed against the 22 existing Hook names. A declaration does not imply that every event already has a production trigger; see the status table above.
 - Provider, Channel, ContextEngine, media-provider, and background-service registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
+
+## Plugin Commands and Session effects
+
+The manifest declares the complete set of SessionOps a Command may request. Repeat the same set in `registerCommand`; a mismatch fails registration before publication. An omitted or empty `sessionOps` declaration grants **no** Session effects. The supported operation names are `abort_run`, `new_session`, `set_model`, `compact`, and `set_preferred_agent`; the latter remains reserved and has no v1 effect implementation.
+
+```json
+{ "commands": [{ "name": "acme-status", "sessionOps": ["compact"] }] }
+```
+
+The Host obtains plugin identity from the mounted effective contribution, not from handler-returned fields. Before applying **any** SessionOp, it checks the effective manifest for that plugin and Command. An unknown or undeclared operation rejects the entire batch: no earlier operation is applied, the result becomes `denied`, and a `command_denied` record is appended to `~/.octopi/audit/commands/YYYY-MM-DD.jsonl`. The record includes Session, Agent, plugin, Principal, requested operations, and denied operations. An audit-write failure leaves the effects denied and raises a `command.audit_failed` System Issue. This daily JSONL journal is not a tamper-evident ledger.
+
+The manifest Command declaration contains `name` and `sessionOps`; the trusted `registerCommand` call supplies the other metadata. Supported `kind` values are `control` (the default) and `prompt`. `client` is rejected at registration because v1 has no client-effect contract. `kind`, `risk`, `args`, `preempt`, and `invocableBy` are preserved through mounting. `risk` is catalog metadata only; it does **not** imply HITL approval. `invocableBy` defaults to `['principal']` and is an invoker-category check, not a per-user or Session-role ACL. The only v1 categories are `principal`, `agent`, and `service`. Host/user/timer Principals map to `principal`; service/subsystem map to `service`. They do not implicitly inherit each other's access. A plugin contribution's source is not a caller category. `preempt` bypasses only the active-Run busy check and grants no SessionOp authorization.
+
+`newSessionId` is Host-generated only after an authorized `new_session`; a handler-supplied value is discarded. Router candidate identity includes the Command name, so multiple Commands from one plugin retain independent conflict and unregister behavior while authorization still uses their real pluginId.
+
+A `prompt` Command may return `enterLoop: true` with non-empty `messages`; it cannot combine those with SessionOps. `control` Commands do not enter the Loop. A declared effect still undergoes its normal Host operation validation and can fail for business reasons. Disabled plugins contribute no visible or executable Command.
 
 ## Configuration
 

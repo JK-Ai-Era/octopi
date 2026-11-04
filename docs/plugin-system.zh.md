@@ -17,7 +17,7 @@ Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过
 | 暂存注册与有效注册表原子发布 | 已实现 |
 | Tool / Command 贡献注册 | 已实现 |
 | Tool 挂载、per-Agent allow/deny、执行与来源归因 | 已实现；`tools.allow` 为空不会暴露插件 Tool |
-| Command 元数据与 Host `sessionOps` 授权 | 下一阶段；现有桥接行为不是完整授权模型 |
+| Command 元数据、调用方准入与 Host `sessionOps` 授权 | 已实现；插件 SessionOp 必须与 manifest 声明一致 |
 | Hook 执行语义 | 保留现有 message/gateway-stop 触发点；类型化组合和其余触发点后续实现 |
 | Provider / Channel / ContextEngine 注册 | 尚未进入稳定 v1 作者面 |
 | 不可信代码隔离 / 热卸载 | 不支持 |
@@ -96,6 +96,9 @@ export default definePlugin({
     api.registerCommand({
       name: 'acme-status',
       description: 'Show Acme service status',
+      kind: 'control',
+      risk: 'low',
+      invocableBy: ['principal'],
       sessionOps: [],
       async handler() {
         return { status: 'ok', display: { type: 'text', text: 'Acme is ready' } };
@@ -116,6 +119,22 @@ export default definePlugin({
 - Tool 的 `capabilities` 必填。含 `fs-write` 的 Tool 未显式声明时默认串行执行。
 - `api.on` 按 22 个既有 Hook 名提供类型。声明不代表所有事件都已有生产触发点，见上方状态表。
 - Provider、Channel、ContextEngine、媒体 Provider 与后台服务注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
+
+## 插件 Command 与 Session 效应
+
+manifest 声明一个 Command 可请求的完整 SessionOp 集合，并在 `registerCommand` 中重复相同集合；两者不一致会在发布前使注册失败。缺省或空的 `sessionOps` **不授予任何 Session 效应**。支持的操作名是 `abort_run`、`new_session`、`set_model`、`compact`、`set_preferred_agent`；最后一项仍为保留语义，v1 没有实际落地实现。
+
+```json
+{ "commands": [{ "name": "acme-status", "sessionOps": ["compact"] }] }
+```
+
+Host 从已挂载的有效贡献获得插件身份，不信任 handler 返回的字段。执行**任何** SessionOp 之前，Host 按该插件和 Command 核对有效 manifest。出现未知或未声明的操作时，整批拒绝：前面的操作也不执行，结果变为 `denied`，并向 `~/.octopi/audit/commands/YYYY-MM-DD.jsonl` 追加 `command_denied` 记录。记录包含 Session、Agent、插件、Principal、请求操作和被拒操作。审计写入失败时仍拒绝效应，并产生 `command.audit_failed` System Issue。该按日 JSONL 账本不是防篡改账本。
+
+manifest 的 Command 声明包含 `name` 与 `sessionOps`，其他元数据由受信任插件的 `registerCommand` 提供。支持的 `kind` 只有 `control`（默认）与 `prompt`；`client` 在注册时拒绝，因为 v1 没有客户端效应契约。`kind`、`risk`、`args`、`preempt`、`invocableBy` 会原样保留到挂载。`risk` 只是目录元数据，**不代表已经接入 HITL 审批**。`invocableBy` 默认为 `['principal']`，是调用方类别检查，不是具体用户或 Session 角色 ACL。v1 只有 `principal`、`agent`、`service` 三类。host/user/timer Principal 映射为 `principal`；service/subsystem 映射为 `service`，各类别不隐式互相继承。插件贡献的来源不是调用方类别。`preempt` 只跳过活跃 Run 的 busy 检查，不授予任何 SessionOp 权限。
+
+`newSessionId` 只能由 Host 在已授权的 `new_session` 后生成，handler 自报的值会被丢弃。Router 的候选身份包含 Command 名，因此同一插件的多个 Command 分别参与冲突裁决与注销，授权仍使用真实 pluginId。
+
+`prompt` Command 可以返回 `enterLoop: true` 和非空 `messages`，但不能同时携带 SessionOp。`control` Command 不进入 Loop。已声明的效应仍需通过 Host 原有业务校验，可能因业务原因失败。禁用插件不会贡献可见或可执行的 Command。
 
 ## 配置
 

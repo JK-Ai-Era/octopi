@@ -3,7 +3,7 @@
  *
  * 冲突策略（§6.0）：
  * - 保留名：非 builtin 不得占用（可选 allowReservedOverride + prefer-source 显式胜出）
- * - 同 (source, ref) 重复注册 = upsert（skill 热重载安全）
+ * - 同 (source, ref, name) 重复注册 = upsert；ref 可同时承载一个插件的多个 Command
  * - 同名多候选（≥2）= reject-all：无一 active，候选保留至收敛到 1
  * - 永不因 reject-all 删除已注册 builtin
  * - Run 在途：仅 preempt 命令立即执行（默认仅 /stop）
@@ -16,6 +16,7 @@ import type {
   CommandConflictCandidate,
   CommandContext,
   CommandDefinition,
+  CommandExecutionSource,
   CommandRegisterResult,
   CommandResult,
   CommandSource,
@@ -49,6 +50,7 @@ export type ExecuteCommandOutcome =
       kind: 'command';
       result: CommandResult;
       definition?: CommandDefinition;
+      executionSource?: CommandExecutionSource;
       conflict?: CommandConflict;
     };
 
@@ -60,8 +62,8 @@ interface Entry {
   name: string;
 }
 
-function candidateKey(source: CommandSource, ref: string): string {
-  return source + '\0' + ref;
+function candidateKey(source: CommandSource, ref: string, name: string): string {
+  return `${source}\0${ref}\0${name}`;
 }
 
 export class CommandRouter {
@@ -84,7 +86,7 @@ export class CommandRouter {
   }
 
   /**
-   * 注册命令。同 (source, ref) 为 upsert；按 name 候选数重算 active。
+   * 注册命令。同 (source, ref, name) 为 upsert；按 name 候选数重算 active。
    */
   register(definition: CommandDefinition, ref?: string): CommandRegisterResult {
     const name = normalizeCommandName(definition.name);
@@ -118,7 +120,7 @@ export class CommandRouter {
       return { ok: false, reason: 'conflict', conflict };
     }
 
-    this.candidates.set(candidateKey(definition.source, sourceRef), {
+    this.candidates.set(candidateKey(definition.source, sourceRef, name), {
       definition: normalized,
       ref: sourceRef,
       name,
@@ -126,9 +128,9 @@ export class CommandRouter {
     return this.recompute(name);
   }
 
-  /** 按 (source, ref) 注销候选并重算 */
+  /** 按 (source, ref, name) 注销候选并重算 */
   unregister(source: CommandSource, ref: string, name: string): void {
-    this.candidates.delete(candidateKey(source, ref));
+    this.candidates.delete(candidateKey(source, ref, normalizeCommandName(name) ?? name));
     this.recompute(normalizeCommandName(name) ?? name);
   }
 
@@ -208,10 +210,12 @@ export class CommandRouter {
     }
 
     const def = entry.definition;
+    const executionSource = { source: def.source, ref: entry.ref };
     if (!this.isInvokedBy(def, principal)) {
       return {
         kind: 'command',
         definition: def,
+        executionSource,
         result: {
           status: 'denied',
           display: textDisplay(`命令 /${def.name} 不允许当前调用方使用。`),
@@ -224,6 +228,7 @@ export class CommandRouter {
       return {
         kind: 'command',
         definition: def,
+        executionSource,
         result: {
           status: 'error',
           display: textDisplay('Agent 正在运行——可发送 /stop 中止后再试。'),
@@ -238,6 +243,7 @@ export class CommandRouter {
         return {
           kind: 'command',
           definition: def,
+          executionSource,
           result: {
             status: 'ok',
             display: textDisplay(`已展开 /${def.name}`),
@@ -248,11 +254,12 @@ export class CommandRouter {
         };
       }
       const result = await def.execute(ctx);
-      return { kind: 'command', definition: def, result };
+      return { kind: 'command', definition: def, executionSource, result };
     } catch (err) {
       return {
         kind: 'command',
         definition: def,
+        executionSource,
         result: {
           status: 'error',
           display: textDisplay(
@@ -374,12 +381,17 @@ export class CommandRouter {
 
   private isInvokedBy(def: CommandDefinition, principal: PrincipalRef): boolean {
     const allowed = def.invocableBy ?? ['principal'];
-    const actorType = principal.actorType ?? 'user';
-    if (actorType === 'agent') return allowed.includes('agent');
-    if (actorType === 'service' || actorType === 'subsystem') {
-      return allowed.includes('plugin') || allowed.includes('principal');
+    switch (principal.actorType ?? 'user') {
+      case 'host':
+      case 'user':
+      case 'timer':
+        return allowed.includes('principal');
+      case 'agent':
+        return allowed.includes('agent');
+      case 'service':
+      case 'subsystem':
+        return allowed.includes('service');
     }
-    return allowed.includes('principal');
   }
 
   private higherSource(a: CommandSource, b: CommandSource): boolean {
