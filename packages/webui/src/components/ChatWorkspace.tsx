@@ -1718,9 +1718,11 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const hiddenSessionCount = agentSessions.length - displayedSessions.length;
 
   const isReconnecting = connection === 'reconnecting';
-  // 只显示引擎真值（step.end usage / 持久化恢复）；无值时不猜（新会话/未对话显示 '~'）。
+  // 上下文用量三量纲（P0-C 单源分账）：实测只进主显示（step.end usage / 持久化恢复），
+  // 无实测不猜（新会话/未对话显示 '~'）；视图估算分行标注；rawTokens 只在 Run 页签。
   // 不用「已加载消息」估算——那只是末页 100 条，会把 400k 的会话显示成 21.6k 误导人。
-  const contextTokens = typeof inspector.contextTokens === 'number' ? inspector.contextTokens : undefined;
+  const promptTokensActual = typeof inspector.promptTokensActual === 'number' ? inspector.promptTokensActual : undefined;
+  const viewTokensEst = typeof inspector.viewTokensEst === 'number' ? inspector.viewTokensEst : undefined;
   // 预算展示：只读引擎下发的 snapshot（catalog / sessionModel.resolved），UI 不做策略
   const selectedModelMeta =
     (sessionModel?.resolved?.id === effectiveModelId ? sessionModel.resolved : undefined)
@@ -2037,8 +2039,13 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 </div>
                 {modelError && <div className="small status-error">{modelError}</div>}
                 <div className="small muted" style={{ marginTop: 2 }}>
-                  {`上下文: ${contextTokens !== undefined ? formatTokens(contextTokens) : '~'} / ${contextWindowLabel}`}
+                  {`上下文(上次实测): ${promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / ${contextWindowLabel}`}
                 </div>
+                {viewTokensEst !== undefined && (
+                  <div className="small muted" style={{ marginTop: 2 }}>
+                    {`视图估算: ${formatTokens(viewTokensEst)}`}
+                  </div>
+                )}
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>

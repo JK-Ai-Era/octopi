@@ -208,9 +208,23 @@ export function RunObservatoryPanel({
     }
   };
 
+  // rawTokens（全量原文估算）：大哥拍板「不删，放 Run 页签」——只在本页展示，
+  // 不进主显示/决策（原文 ≠ 请求视图，量纲不同，见 arch/context-size-accounting §4 R2/R3）
+  const rawTokensBlock =
+    inspector.rawTokens !== undefined ? (
+      <section className="panel sidebar-section">
+        <div className="sidebar-title">会话体量</div>
+        <div className="inspector-kv">
+          rawTokens（全量原文估算）: {formatTokens(inspector.rawTokens)}
+        </div>
+        <div className="small muted">会话仓库口径（原文 ≠ 请求视图），只作归档/清理参考</div>
+      </section>
+    ) : null;
+
   if (observerStatus && observerStatus.enabled === false) {
     return (
       <div className="ctx-runtime">
+        {rawTokensBlock}
         <section className="panel sidebar-section">
           <div className="sidebar-title">Run 观测 · Observer 已关闭</div>
           <div className="small muted">
@@ -226,6 +240,7 @@ export function RunObservatoryPanel({
 
   return (
     <div className="ctx-runtime">
+      {rawTokensBlock}
       <section className="ctx-panel">
         <div className="ctx-panel-header">
           <div>

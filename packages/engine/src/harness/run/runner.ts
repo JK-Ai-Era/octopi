@@ -1965,14 +1965,18 @@ export class SessionAwareRunner {
         }
       }
 
-      // Token 估算器（当 LLM 不返回 usage 时用于回退估算）
+      // Token 估算器（rawTokens = 全量原文估算；P0-C 起不再充当 contextTokens 回退）
       const estimator = new HeuristicTokenEstimator();
 
       // 10. 运行 Agent（Agent.run = reliability 包装；context/runScope 为本 Run 私有）
       let streamedContent = '';
       let lastUsage: import('@octopi-agent/core/types/step.js').TokenUsage | undefined = undefined;
-      /** 最近一次 step.end 的上下文用量（供收尾持久化；compact 视图值不进此账） */
-      let lastContextTokens: number | undefined = undefined;
+      /** 三量纲账（供收尾持久化；compact 视图值不进此账）：实测单源 + 两个分流估算 */
+      let lastPromptTokensActual: number | undefined = undefined;
+      /** 最近一次 promptTokensActual 写入的来源（收尾持久化审计：usage=本步实测 / stale=沿用旧实测） */
+      let lastPromptWriter: 'usage' | 'stale' = 'usage';
+      let lastViewTokensEst: number | undefined = undefined;
+      let lastRawTokens: number | undefined = undefined;
       let lastContextWindow: number | undefined = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
       /** 本轮起始消息下标（afterStep 只传增量） */
@@ -2097,14 +2101,40 @@ export class SessionAwareRunner {
             if (rawUsage) {
               lastUsage = rawUsage;
             }
-            const contextTokens =
-              lastUsage?.inputReportedTokens ??
-              (lastUsage
-                ? lastUsage.inputUncachedTokens + lastUsage.inputCachedTokens + lastUsage.inputCacheWriteTokens
-                : undefined) ??
-              estimator.estimateMessages(session.messages);
-            (adapted.data as Record<string, unknown>).contextTokens = contextTokens;
-            (adapted.data as Record<string, unknown>).contextWindow = effectiveRunConfig.contextWindow;
+            const eventData = adapted.data as Record<string, unknown>;
+            // contextTokens 单源（P0-C）：promptTokensActual 只记 provider 实测（本步 usage，
+            // 无则沿用最近实测并标记 stale）；无实测不更新、不猜——估算一律分流，不得冒充实测。
+            // 每次写入打 [ctx] 审计（估算分支零日志是 600k 误显排查的最大盲区）。
+            const promptActual: number | undefined = rawUsage
+              ? (rawUsage.inputReportedTokens ??
+                rawUsage.inputUncachedTokens + rawUsage.inputCachedTokens + rawUsage.inputCacheWriteTokens)
+              : lastPromptTokensActual;
+            // 0 不是实测：provider 未回报 usage 时适配层会把缺失字段补 0（usage.ts），
+            // 全零 usage 按「无实测」处理，不得写成实测（同样不更新、不猜）
+            if (promptActual !== undefined && promptActual > 0) {
+              const promptWriter: 'usage' | 'stale' = rawUsage ? 'usage' : 'stale';
+              eventData.promptTokensActual = promptActual;
+              lastPromptTokensActual = promptActual;
+              lastPromptWriter = promptWriter;
+              console.log(
+                `[ctx] session=${sessionId} writer=${promptWriter} field=promptTokensActual value=${promptActual}`,
+              );
+            }
+            // viewTokensEst = 本请求视图估算（校准后，assemble/pressure 口径）；
+            // rawTokens = 全量原文估算（只进 Run 页签，永不冒充上下文用量）
+            const pressure = this.harness.getContextPressure?.(sessionId);
+            if (typeof pressure?.estimatedTokens === 'number') {
+              eventData.viewTokensEst = pressure.estimatedTokens;
+              lastViewTokensEst = pressure.estimatedTokens;
+              console.log(
+                `[ctx] session=${sessionId} writer=estimate field=viewTokensEst value=${pressure.estimatedTokens}`,
+              );
+            }
+            const rawTokens = estimator.estimateMessages(session.messages);
+            eventData.rawTokens = rawTokens;
+            lastRawTokens = rawTokens;
+            console.log(`[ctx] session=${sessionId} writer=estimate field=rawTokens value=${rawTokens}`);
+            eventData.contextWindow = effectiveRunConfig.contextWindow;
             // cache 观测：user 轮首调用 vs 同轮后续（跨轮前缀是否命中）
             if (lastUsage) {
               const cached = lastUsage.inputCachedTokens ?? 0;
@@ -2123,8 +2153,7 @@ export class SessionAwareRunner {
                   ` ratio=${(ratio * 100).toFixed(1)}% cacheAware=${lastUsage.cacheAware}`,
               );
             }
-            // 记账供收尾持久化：UI 重开会话恢复显示（口径 = 实际 prompt / 全量估算）
-            lastContextTokens = contextTokens;
+            // 记账供收尾持久化：UI 重开会话恢复显示（三量纲分账，见上）
             lastContextWindow = effectiveRunConfig.contextWindow;
           }
 
@@ -2412,13 +2441,42 @@ export class SessionAwareRunner {
       const compactSnap = this.agent.getSessionCompactState(sessionId, _agentId);
       writeSessionCompact(session, _agentId, compactSnap);
       // 上下文用量随会话持久化：重开会话恢复显示（不靠 UI 用末页消息猜）。
-      // 只记 step.end 口径（实际 prompt / 全量估算）；compact 视图值不写入。
-      if (lastContextTokens !== undefined || lastContextWindow !== undefined) {
+      // 三量纲分账（P0-C）：promptTokensActual=实测单源（无实测不写、保留旧值不动）、
+      // viewTokensEst=请求视图估算、rawTokens=全量原文估算；compact 视图值不写入。
+      if (
+        lastPromptTokensActual !== undefined ||
+        lastViewTokensEst !== undefined ||
+        lastRawTokens !== undefined ||
+        lastContextWindow !== undefined
+      ) {
         session.metadata = {
           ...session.metadata,
-          ...(lastContextTokens !== undefined ? { contextTokens: lastContextTokens } : {}),
+          ...(lastPromptTokensActual !== undefined ? { promptTokensActual: lastPromptTokensActual } : {}),
+          ...(lastViewTokensEst !== undefined ? { viewTokensEst: lastViewTokensEst } : {}),
+          ...(lastRawTokens !== undefined ? { rawTokens: lastRawTokens } : {}),
           ...(lastContextWindow !== undefined ? { contextWindow: lastContextWindow } : {}),
         };
+        if (lastPromptTokensActual !== undefined) {
+          console.log(
+            `[ctx] session=${sessionId} writer=${lastPromptWriter} field=promptTokensActual value=${lastPromptTokensActual} (persist)`,
+          );
+        }
+        if (lastViewTokensEst !== undefined) {
+          console.log(
+            `[ctx] session=${sessionId} writer=estimate field=viewTokensEst value=${lastViewTokensEst} (persist)`,
+          );
+        }
+        if (lastRawTokens !== undefined) {
+          console.log(`[ctx] session=${sessionId} writer=estimate field=rawTokens value=${lastRawTokens} (persist)`);
+        }
+      }
+      // 存量校正（P0-C）：旧 metadata.contextTokens 混装实测/估算、来源不可区分，显式清除。
+      // save 浅合并删不掉键：先从对象移除，persist 后 updateMetadata 真删（同 abortedTurn）
+      let clearLegacyContextTokens = false;
+      if (session.metadata && 'contextTokens' in session.metadata) {
+        const { contextTokens: _legacyCtx, ...restMeta } = session.metadata;
+        session.metadata = restMeta;
+        clearLegacyContextTokens = true;
       }
       await this.store.save(sessionId, session);
       // 收尾权威写成功：剩余注入条目一并确认（此后 close 不再重投）
@@ -2431,6 +2489,11 @@ export class SessionAwareRunner {
       if (clearLastStop && this.store.updateMetadata) {
         await this.store.updateMetadata(sessionId, (meta) => {
           delete meta.lastStop;
+        });
+      }
+      if (clearLegacyContextTokens && this.store.updateMetadata) {
+        await this.store.updateMetadata(sessionId, (meta) => {
+          delete meta.contextTokens;
         });
       }
 

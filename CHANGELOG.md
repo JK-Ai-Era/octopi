@@ -111,6 +111,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.99.4 (2026-11-05)
+
+### fix(engine/gateway/webui): 上下文用量三量纲单源分账——实测不再被全量估算冒充
+
+- **背景**：顶栏「上下文」曾被三写入方混写同一数字——provider 实测、陈旧值、全量原文估算（与请求视图脱节 ~7×，937.5k 误显事故源），且估算分支零日志、来源不可追溯。
+- **单源**：`promptTokensActual` 只记 provider 实测（本步 usage；无新实测沿用最近实测并标记 stale；全无不写）——估算 fallback 删除，无实测不更新、不猜。估算分流为 `viewTokensEst`（请求视图估算，校准后）与 `rawTokens`（全量原文估算，**保留计算**、只进右栏 Run 页签「会话体量」，Observer 关闭也可见）。
+- **`[ctx]` 写入审计**：每笔展示/台账写入一行 `[ctx] session=… writer=usage|stale|estimate|compact field=… value=…`。usage=本步实测；stale=无新实测沿用旧实测；estimate=两个估算字段；compact=压缩触发的展示写入（清空 viewTokensEst 待下轮重算，不碰实测）。runner step.end/persist 与 gateway 恢复路径落 gateway.log，store 的 compact.end 落 web console。
+- **metadata 拆字段 + 存量校正**：`metadata.contextTokens`（混装实测/估算、来源不可区分）废除，拆为 `promptTokensActual`/`viewTokensEst`/`rawTokens`/`contextWindow`；存量键双路显式清除（runner 收尾 persist + gateway getSessionView，对象移除 + updateMetadata 真删），**不映射为实测**、下次 usage 补位。
+- **显示标注量纲**：顶栏 chip 改「上下文(上次实测)」单源 +「视图估算」分行；Context 面板按量纲分行标注；TUI 同步（无实测显示 '~'）。
+- **Breaking note**：① `step.end` 事件 data 字段改名——`contextTokens` 删除，改为 `promptTokensActual`/`viewTokensEst`/`rawTokens`，自定义 SDK/TUI 消费者需同步；② `SessionView`/`InspectorState` 同步拆字段；③ TUI 无实测显示 '~'（此前显示 0 或估算值）；④ `metadata.contextTokens` 不再写入且会被清除；⑤ **升级后存量会话实测显示 '~' 直到该会话下次运行**（旧混装值不可信，显式清除不迁移）；⑥ **压缩后「视图估算」置 '~' 待下轮装配重算**（此前直接显示压缩器 messages 口径的 tokensAfter，与校准后请求口径混写）。
+- **验证**：新增红线（无 usage 不猜 / stale 复报 / compact 清空估算不污染实测 / 存量键清除 / 跨 run 旧实测保留 / [ctx] 审计格式）；`npm test` 全绿，`npm run lint`（eslint + 类型检 + webui tsc）绿；独立对抗性评审（del-ca896720）闭环，评审 2 medium（viewTokensEst 跨 session 串号→按 session 键控；compact 混写口径→清空待重算）与 3 low 均已修复或核实拒回（rawTokens 滞后论据不成立：runContext.messages 与 session.messages 同数组引用，估算为活值）。
+
+---
+
 ## v0.99.3 (2026-11-05)
 
 ### fix(engine/core): 装配视图确定性与系统围栏——消除逐请求字节抖动与 system 前缀击穿

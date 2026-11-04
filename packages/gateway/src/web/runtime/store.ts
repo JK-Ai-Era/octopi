@@ -165,7 +165,12 @@ export interface ModelRetryInfo {
 }
 
 export interface InspectorState {
-  contextTokens?: number;
+  /** provider 实测 prompt（usage/stale 单源；无实测不更新、不猜） */
+  promptTokensActual?: number;
+  /** 请求视图估算（校准后，最近一次 assemble 口径；estimate 写入，压缩后清空待下轮重算） */
+  viewTokensEst?: number;
+  /** 全量原文估算（仅 Run 页签展示，不进主显示/决策） */
+  rawTokens?: number;
   contextWindow?: number;
   truncatedFrom?: number;
   truncatedTo?: number;
@@ -1133,7 +1138,9 @@ export class OctopiRuntimeStore extends EventTarget {
       clientStreamSamples: new Map(),
       inspector: {
         // 持久化的最近一次真值作底（重启/冷打开恢复显示）；运行时缓存（更新）优先
-        ...(typeof view.contextTokens === 'number' ? { contextTokens: view.contextTokens } : {}),
+        ...(typeof view.promptTokensActual === 'number' ? { promptTokensActual: view.promptTokensActual } : {}),
+        ...(typeof view.viewTokensEst === 'number' ? { viewTokensEst: view.viewTokensEst } : {}),
+        ...(typeof view.rawTokens === 'number' ? { rawTokens: view.rawTokens } : {}),
         ...(typeof view.contextWindow === 'number' ? { contextWindow: view.contextWindow } : {}),
         ...(cached?.inspector ?? {}),
       },
@@ -1904,9 +1911,16 @@ export class OctopiRuntimeStore extends EventTarget {
           cached?: boolean;
         } | undefined;
         const tokensAfter = typeof d?.tokensAfter === 'number' ? d.tokensAfter : undefined;
+        // P0-C 口径守护：tokensAfter 是压缩器 messages 口径（未校准、不含 system/tools），
+        // 不得写进 viewTokensEst（校准后请求视图估算）——压缩后旧估算已知失效，清空待
+        // 下轮 assemble 重算（writer=compact 语义=压缩触发的展示写入）。tokensBefore/
+        // tokensAfter 在 compact 状态块内保留自身口径展示（压缩前后对比）。
+        console.log(
+          `[ctx] session=${event.sessionId ?? this.chat.sessionId} writer=compact field=viewTokensEst value=cleared`,
+        );
         this.chat.inspector = {
           ...this.chat.inspector,
-          ...(tokensAfter !== undefined ? { contextTokens: tokensAfter } : {}),
+          viewTokensEst: undefined,
           compact: {
             active: false,
             reason: d?.reason,
@@ -2069,13 +2083,22 @@ export class OctopiRuntimeStore extends EventTarget {
       }
       case 'step.end': {
         const data = (event.data ?? {}) as Record<string, unknown>;
-        const contextTokens = typeof data.contextTokens === 'number' ? data.contextTokens : undefined;
+        const promptTokensActual = typeof data.promptTokensActual === 'number' ? data.promptTokensActual : undefined;
+        const viewTokensEst = typeof data.viewTokensEst === 'number' ? data.viewTokensEst : undefined;
+        const rawTokens = typeof data.rawTokens === 'number' ? data.rawTokens : undefined;
         const hasWindowKey = 'contextWindow' in data;
         const contextWindow = typeof data.contextWindow === 'number' ? data.contextWindow : undefined;
-        if (contextTokens !== undefined || hasWindowKey) {
+        if (
+          promptTokensActual !== undefined ||
+          viewTokensEst !== undefined ||
+          rawTokens !== undefined ||
+          hasWindowKey
+        ) {
           this.chat.inspector = {
             ...this.chat.inspector,
-            ...(contextTokens !== undefined ? { contextTokens } : {}),
+            ...(promptTokensActual !== undefined ? { promptTokensActual } : {}),
+            ...(viewTokensEst !== undefined ? { viewTokensEst } : {}),
+            ...(rawTokens !== undefined ? { rawTokens } : {}),
             // 未知窗口时清掉上一模型的旧值，避免 UI 显示假预算
             ...(hasWindowKey ? { contextWindow } : {}),
           };

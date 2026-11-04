@@ -46,7 +46,12 @@ export interface AgentEventMap {
     usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
     /** F3 LLM 计时摘要（loop turn_end 透传；Run 页签耗时区消费） */
     llmTiming?: import('@octopi-agent/core/loop/types.js').LoopLLMTiming;
-    contextTokens?: number;
+    /** 上下文用量三量纲（P0-C 单源分账）：provider 实测（usage/stale 写入）；无实测不写不猜 */
+    promptTokensActual?: number;
+    /** 请求视图估算（校准后，最近一次 assemble 口径；estimate 写入，压缩后清空待下轮重算） */
+    viewTokensEst?: number;
+    /** 全量原文估算（仅 Run 页签展示，不进决策/主显示） */
+    rawTokens?: number;
     contextWindow?: number;
   };
   'tool.exec.start': {
