@@ -132,8 +132,8 @@ export class TuiApp {
   private streamedContent = '';
   private exitResolve?: () => void;
 
-  // Context 信息
-  private contextTokens = 0;
+  // Context 信息（promptTokensActual = 实测单源；无实测显示 '~'，不猜）
+  private promptTokensActual: number | undefined = undefined;
   private contextWindow = 0;
 
   constructor(config: TuiAppConfig) {
@@ -414,16 +414,16 @@ export class TuiApp {
           this.setStatus('running tools…');
         }
 
-        // 更新 context 信息（来自 runner 在 step.end 事件中附带的 LLM usage）
-        const contextTokens = event.data?.contextTokens as number | undefined;
+        // 更新 context 信息（三量纲：主显示只吃实测单源；估算分流不进此值）
+        const promptTokensActual = event.data?.promptTokensActual as number | undefined;
         const contextWindow = event.data?.contextWindow as number | undefined;
-        if (contextTokens !== undefined) {
-          this.contextTokens = contextTokens;
+        if (promptTokensActual !== undefined) {
+          this.promptTokensActual = promptTokensActual;
         }
         if (contextWindow !== undefined) {
           this.contextWindow = contextWindow;
         }
-        if (contextTokens !== undefined || contextWindow !== undefined) {
+        if (promptTokensActual !== undefined || contextWindow !== undefined) {
           this.updateFooter();
         }
 
@@ -1022,7 +1022,7 @@ export class TuiApp {
       `agent ${this.config.agentId}`,
       this.currentModel ? `model ${this.currentModel}` : '',
       this.contextWindow > 0
-        ? `ctx ${this.formatTokens(this.contextTokens)} / ${this.formatTokens(this.contextWindow)}`
+        ? `ctx ${this.promptTokensActual !== undefined ? this.formatTokens(this.promptTokensActual) : '~'} / ${this.formatTokens(this.contextWindow)}`
         : '',
       `gateway ${this.config.gatewayUrl}`,
       'Ctrl+C exit | Ctrl+O tools | /help',

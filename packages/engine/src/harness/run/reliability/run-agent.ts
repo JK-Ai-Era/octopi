@@ -1181,9 +1181,9 @@ export async function* runAgentWithReliability(
       }
       budget?.recordStep();
 
-      // P5: 更新 context 压力信息
+      // P5: 更新 context 压力信息（传 sessionId：压力按 session 键控，不传兜底值并发下会串号）
       if (harness.getContextPressure) {
-        const pressure = harness.getContextPressure();
+        const pressure = harness.getContextPressure(getRunScope()?.sessionId);
         if (pressure) {
           ledger.updateContextPressure(pressure.estimatedTokens, pressure.contextWindow);
         }

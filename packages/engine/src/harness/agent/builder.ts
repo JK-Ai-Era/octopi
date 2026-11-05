@@ -533,7 +533,9 @@ export class AgentBuilder {
   private _toolBus = new DefaultToolBus();
   private _contextEngine?: ContextEngine;
   private _summarize?: SummarizeFunction;
-  /** 最新的 context 压力信息（由 convertToLlm 更新） */
+  /** 按 session 键控的 context 压力（由 convertToLlm 更新；共享 Agent 下并发会话不串号） */
+  private _contextPressureBySession = new Map<string, { estimatedTokens: number; contextWindow?: number }>();
+  /** 兜底：无 sessionId 的调用方（仅 advisory 用途；并发下可能串号，不得用于持久化） */
   private _lastContextPressure?: { estimatedTokens: number; contextWindow?: number };
   /** 为 true 时禁止自动挂默认 summarize（测试/特殊场景） */
   private _disableAutoSummarize = false;
@@ -1930,11 +1932,11 @@ export class AgentBuilder {
           },
         });
       }
-      // 保存最新的 context 压力信息（供 harness.getContextPressure 使用）
-      this._lastContextPressure = {
-        estimatedTokens: result.estimatedTokens,
-        contextWindow,
-      };
+      // 保存 context 压力（供 harness.getContextPressure(sessionId) 使用）：
+      // 按 session 键控——共享 Agent 单例下并发会话各取自己的估算，不串号
+      const pressure = { estimatedTokens: result.estimatedTokens, contextWindow };
+      this._contextPressureBySession.set(sessionId, pressure);
+      this._lastContextPressure = pressure;
 
       // droppedSummary 不得进 system（动态注记打穿前缀缓存）。
       // 本轮直接不投递；压缩语义由消息侧 contextSummary 承载。
@@ -2003,7 +2005,10 @@ export class AgentBuilder {
       runGuard,
       budget,
       // P5: Context 压力回调（从 ContextEngine assemble 获取）
-      getContextPressure: () => builderRef._lastContextPressure,
+      getContextPressure: (sessionId?: string) =>
+        sessionId !== undefined
+          ? builderRef._contextPressureBySession.get(sessionId)
+          : builderRef._lastContextPressure,
       // high 风险确认：有则走人工审批，无则 run-agent 回退 reject
       confirmHighRisk: this._confirmHighRisk,
     };

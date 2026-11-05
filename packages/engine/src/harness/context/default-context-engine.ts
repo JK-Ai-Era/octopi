@@ -710,7 +710,12 @@ export class DefaultContextEngine implements ContextEngine {
     const { headEnd, tailStart } = alignViewSplit(messages, protectFirstN, protectLastN);
     const head = messages.slice(0, headEnd);
     const tail = messages.slice(tailStart);
-    const middle = semanticHistory(messages.slice(headEnd, tailStart));
+    // 视图回装与摘要素材分离（口径纪律）：视图消息一律原样切片（全回放，append-only），
+    // 语义过滤（信封剥离 / turnEnd 丢弃）只允许出现在**摘要素材**入口——
+    // 被过滤的消息一旦回装进视图，相邻请求字节就会不一致（信封时隐时现、整体平移），
+    // 逐步击穿 provider 前缀缓存（context-size-accounting.md §10.3 M1）。
+    const middleRaw = messages.slice(headEnd, tailStart);
+    const middle = semanticHistory(middleRaw); // 仅供 summarize 素材，禁止回装进视图
 
     // F1-B3（尺子与作用域同源）：预算度量必须量**老化视图**（实际请求的保守上界）。
     // 尺子量原文的老化前体量，会把 aging 的稳态误判超线（双机制打架）。
@@ -735,6 +740,11 @@ export class DefaultContextEngine implements ContextEngine {
       if (messages.length <= protectFirstN + protectLastN) {
         return null;
       }
+      // 视图 = 单一连续切片的拼接（headEnd..tailStart + tailStart..len）。
+      // 切点 tailStart 对内容不可见（slice(a,f)+slice(f,len) ≡ slice(a,len)）——
+      // 字节稳定由「增量段原样、不跑 semanticHistory」保证（§10.3 M1 的真正根因）。
+      // 不要引入第二个边界/锚点：双边界必然造出重叠区间或内容空洞
+      //（对抗性审查 H1/H2 的实测教训：视图重复/丢尾、coverEnd 交叉重灌）。
       if (state?.previousSummary) {
         const summaryMsg: Message = this.contextSummaryMessage(
           state.previousSummary,
@@ -744,20 +754,21 @@ export class DefaultContextEngine implements ContextEngine {
         // 其后的消息是增量，必须保留
         const coverUpTo = state.lastProactiveCoverEnd ?? 0;
         const sinceIdx = Math.max(coverUpTo, headEnd);
-        const sinceCompact = semanticHistory(messages.slice(sinceIdx, tailStart));
-        // 增量原样保留（宁可胖，不可丢）：重建轮零 LLM 是产品红线，而机械降级
-        // 在此处会把「每请求滑动 1 条」的边界写成 history 改写 → 前缀缓存整段报废。
-        // 增量撑胖的后果由真正的守门人处理：MessageSelector 溢出 → overflow 摘要/
-        // 账本兜底。装配层不越界执行压缩。
+        // 增量原样保留（宁可胖，不可丢）：视图消息一律全回放原样，语义过滤
+        // 只进摘要素材（见 middleRaw/middle 分离处的口径纪律）。重建轮零 LLM 是
+        // 产品红线，而机械降级在此处会把「每请求滑动 1 条」的边界写成 history
+        // 改写 → 前缀缓存整段报废。增量撑胖的后果由真正的守门人处理：
+        // MessageSelector 溢出 → overflow 摘要/账本兜底。装配层不越界执行压缩。
+        const sinceCompact = messages.slice(sinceIdx, tailStart);
         return { messages: [...head, summaryMsg, ...sinceCompact, ...tail] };
       }
-      if (middle.length === 0) {
+      if (middleRaw.length === 0) {
         return null;
       }
       // 无摘要的粘滞重建：head + middle + tail 原样返回（不再做机械降级）。
       // 与增量分支同戒律——装配层的职责是「按压缩态重组视图」，不是执行压缩。
       // 早退条件（middle 已达标）也随之消失：既然不动 middle，就无需度量。
-      return { messages: [...head, ...middle, ...tail] };
+      return { messages: [...head, ...middleRaw, ...tail] };
     };
 
     // F1-B3：尺子量**老化视图**（实际请求的保守上界）——raw 估算会把 B2 稳态误判超线（双机制打架）。
@@ -935,7 +946,7 @@ export class DefaultContextEngine implements ContextEngine {
         summaryBudget: this.config.summaryBudget,
         foldRange: {
           // 视图口径（与 manual 的 tailStart - headEnd 一致）：被替换的是 headEnd..tailStart
-          // 整段；middle 是 semanticHistory 过滤后的条数，含 turn 元数据时会偏小
+          // 整段；summarize 素材是 semanticHistory 过滤后的条数，含 turn 元数据时会偏小
           replacedCount: tailStart - headEnd,
           total: messages.length,
           preservedTail: tail.length,
@@ -979,7 +990,9 @@ export class DefaultContextEngine implements ContextEngine {
       });
       return { messages, droppedSummary: outcome.reason };
     }
-    const body = Array.isArray(outcome.view) ? outcome.view : middle;
+    // 回装口径：summary 产出的 view 槽位缺失时回装**原样 middleRaw**（全回放），
+    // 禁止回装语义过滤后的 middle——过滤件进视图会造成相邻请求字节不一致（§10.3 M1）。
+    const body = Array.isArray(outcome.view) ? outcome.view : middleRaw;
     const reduced = [...head, ...body, ...tail];
     const reducedTokens = estimator.estimateMessages(reduced);
 
@@ -1442,7 +1455,15 @@ export class DefaultContextEngine implements ContextEngine {
       if (msg.metadata?.source === 'runStopped') {
         continue;
       }
-      result.push(...this.convertMessage(msg, aging));
+      // 反向围栏（B0）：非托管 system 一律降级为 engineHint 载体（user 形态，内容原样），
+      // 不丢弃（不静默失忆）也绝不进 provider system 字段——system 槽位只归托管
+      // systemPrompt 一条；外来 system 进字段会让前缀从第 0 字节失效
+      // （context-size-accounting.md §1），且 provider 适配层按「system ≤ 1」断言。
+      const llmMsg =
+        msg.role === 'system'
+          ? { ...msg, role: 'user' as const, metadata: { ...msg.metadata, source: 'engineHint' } }
+          : msg;
+      result.push(...this.convertMessage(llmMsg, aging));
     }
 
     return result;

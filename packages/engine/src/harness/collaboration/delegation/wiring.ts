@@ -219,8 +219,18 @@ export function createDelegationRuntime(
           const sessionId = getRunSessionId(agent.agent.contextSessionId);
           if (!sessionId) return [];
           const hint = service.renderStatusHint(sessionId);
+          // B0/引擎提示范式：engineHint 载体（user 形态），不进 provider system 字段——
+          // role:'system' 会被适配层拼进 system 前缀，状态翻转即整段重买（§1 烧缓存实锤）。
           return hint
-            ? [{ role: 'system' as const, content: hint, timestamp: Date.now(), ephemeral: true }]
+            ? [
+                {
+                  role: 'user' as const,
+                  content: hint,
+                  timestamp: Date.now(),
+                  ephemeral: true,
+                  metadata: { source: 'engineHint' },
+                },
+              ]
             : [];
         });
       }

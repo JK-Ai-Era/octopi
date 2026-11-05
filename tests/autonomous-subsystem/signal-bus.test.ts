@@ -102,7 +102,9 @@ describe('SignalBus', () => {
       bus.applyPendingContext(messages);
 
       expect(messages).toHaveLength(1);
-      expect(messages[0].role).toBe('system');
+      // P0-B 同范式：engineHint 载体（user 形态），不进 provider system 字段
+      expect(messages[0].role).toBe('user');
+      expect(messages[0].metadata).toEqual({ source: 'engineHint' });
       expect(messages[0].content).toContain('use TypeScript');
     });
 
@@ -129,6 +131,11 @@ describe('SignalBus', () => {
       bus.applyPendingContext(messages);
 
       expect(messages[0].metadata.compressed).toBe(true);
+      // 行为固化（审查 M5）：replace=状态快照 → ephemeral（run 内瞬态、同 run 只留
+      // 最新一份、不落库）+ engineHint 载体。若改成持久语义需先拍板。
+      expect(messages[0].ephemeral).toBe(true);
+      expect(messages[0].role).toBe('user');
+      expect(messages[0].metadata.source).toBe('engineHint');
     });
   });
 

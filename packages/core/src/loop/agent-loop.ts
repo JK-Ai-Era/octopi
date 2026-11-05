@@ -641,17 +641,32 @@ export async function* agentLoop(
     // 检查 steering 消息
     const steering = getSteeringMessages ? await getSteeringMessages() : [];
     if (steering.length > 0) {
-      // ephemeral 是「当前状态快照」：同 run 内只保留最新一条，避免每次工具调用后
-      // 累积一份过期快照（既重复占上下文，也让历史随调用次数线性膨胀）。
-      // 原地删除以保持数组引用（session/runContext 共享同一 messages 数组）。
-      if (steering.some((m) => m.ephemeral === true)) {
-        for (let i = currentContext.messages.length - 1; i >= 0; i--) {
-          if (currentContext.messages[i].ephemeral === true) {
-            currentContext.messages.splice(i, 1);
-          }
+      // ephemeral 是「当前状态快照」：同 run 内只保留最新一份，避免每次工具调用后
+      // 累积过期快照（既重复占上下文，也让历史随调用次数线性膨胀）。
+      // **原位替换**而非「删旧 + 尾插」：旧快照常已滑到历史中部，删除会让其后消息
+      // 整体平移（前缀缓存自删除点起整段失效）；同槽位替换只损失该槽位之后的尾部。
+      // 原地修改以保持数组引用（session/runContext 共享同一 messages 数组）。
+      const ephemeralSteering = steering.filter((m) => m.ephemeral === true);
+      const plainSteering = steering.filter((m) => m.ephemeral !== true);
+      if (ephemeralSteering.length > 0) {
+        const oldSlots: number[] = [];
+        for (let i = 0; i < currentContext.messages.length; i++) {
+          if (currentContext.messages[i].ephemeral === true) oldSlots.push(i);
+        }
+        let n = 0;
+        for (; n < ephemeralSteering.length && n < oldSlots.length; n++) {
+          currentContext.messages[oldSlots[n]!] = ephemeralSteering[n]!;
+        }
+        // 旧槽位多于新快照：从后往前删（保持下标有效）
+        for (let k = oldSlots.length - 1; k >= n; k--) {
+          currentContext.messages.splice(oldSlots[k]!, 1);
+        }
+        // 新快照多于旧槽位：尾部追加
+        for (; n < ephemeralSteering.length; n++) {
+          currentContext.messages.push(ephemeralSteering[n]!);
         }
       }
-      currentContext.messages.push(...steering);
+      currentContext.messages.push(...plainSteering);
     }
 
     // 继续循环

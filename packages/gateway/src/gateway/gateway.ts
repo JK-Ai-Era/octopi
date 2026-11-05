@@ -3063,8 +3063,12 @@ export class Gateway {
     stepCount: number;
     taskCount?: number;
     abortedTurn?: { userMessageIndex: number; at?: number };
-    /** 最近一次 LLM 调用的上下文用量（runner 持久化；UI 重开会话恢复显示） */
-    contextTokens?: number;
+    /** provider 实测 prompt（runner 持久化；usage/stale 单源，无实测不猜） */
+    promptTokensActual?: number;
+    /** 请求视图估算（校准后，最近一次 assemble 口径；压缩后清空待下轮重算） */
+    viewTokensEst?: number;
+    /** 全量原文估算（仅 Run 页签展示） */
+    rawTokens?: number;
     contextWindow?: number;
   } | null> {
     const session = await this.store.load(sessionId);
@@ -3095,16 +3099,50 @@ export class Gateway {
         abortedTurn = raw;
       }
     }
-    const metaContextTokens = session.metadata?.contextTokens;
-    const metaContextWindow = session.metadata?.contextWindow;
+    const metaNum = (key: string): number | undefined => {
+      const v = session.metadata?.[key];
+      return typeof v === 'number' ? v : undefined;
+    };
+    const promptTokensActual = metaNum('promptTokensActual');
+    const viewTokensEst = metaNum('viewTokensEst');
+    const rawTokens = metaNum('rawTokens');
+    const contextWindow = metaNum('contextWindow');
+    // 存量校正（P0-C）：旧 metadata.contextTokens 混装实测/估算、来源不可区分，
+    // 恢复路径显式清除、不再映射为实测（下次 run 由 runner 持久化新字段补位）。
+    // best-effort：读路径不得因清理失败打不开会话（runner 收尾路径会兜底再清）
+    if (session.metadata && 'contextTokens' in session.metadata && this.store.updateMetadata) {
+      try {
+        await this.store.updateMetadata(sessionId, (meta) => {
+          delete meta.contextTokens;
+        });
+      } catch (err) {
+        // 只吞清理失败：视图加载不受影响，残留旧键由下次 run 的收尾 persist 真删
+        console.warn(
+          `[ctx] session=${sessionId} legacy contextTokens cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (promptTokensActual !== undefined) {
+      console.log(
+        `[ctx] session=${sessionId} writer=stale field=promptTokensActual value=${promptTokensActual} (restore)`,
+      );
+    }
+    if (viewTokensEst !== undefined) {
+      console.log(`[ctx] session=${sessionId} writer=estimate field=viewTokensEst value=${viewTokensEst} (restore)`);
+    }
+    if (rawTokens !== undefined) {
+      console.log(`[ctx] session=${sessionId} writer=estimate field=rawTokens value=${rawTokens} (restore)`);
+    }
     return {
       meta: session.meta,
       messageCount: session.messages.length,
       stepCount: session.steps.length,
       taskCount: session.tasks?.length ?? 0,
       abortedTurn,
-      contextTokens: typeof metaContextTokens === 'number' ? metaContextTokens : undefined,
-      contextWindow: typeof metaContextWindow === 'number' ? metaContextWindow : undefined,
+      promptTokensActual,
+      viewTokensEst,
+      rawTokens,
+      contextWindow,
     };
   }
 

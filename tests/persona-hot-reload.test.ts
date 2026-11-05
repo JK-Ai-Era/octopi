@@ -507,8 +507,13 @@ describe('AgentBuilder + SessionAwareRunner 热更新', () => {
     const contents = sysMessages.map((m) => String(m.content ?? ''));
     // persona 必须在（托管 system 注入，不被首位外部 system 挡住）
     expect(contents.some((c) => c.includes('# Soul v1'))).toBe(true);
-    // 外部 system 保留
-    expect(contents.some((c) => c.includes('CUSTOM-SYSTEM-KEEP-ME'))).toBe(true);
+    // 外部 system 内容保留，但按 P0-B 反向围栏降级为 user 载体（不进 system 字段）
+    expect(
+      last?.messages.some(
+        (m) => m.role === 'user' && String(m.content ?? '').includes('CUSTOM-SYSTEM-KEEP-ME'),
+      ),
+    ).toBe(true);
+    expect(contents.some((c) => c.includes('CUSTOM-SYSTEM-KEEP-ME'))).toBe(false);
     // 托管 system 在最前
     expect(contents[0]).toContain('# Soul v1');
   });

@@ -89,7 +89,7 @@ export interface ReliabilityHarness {
   /** P4: Session 级账本（可选，用于累计同一 session 多 run 用量；类型由实现方定义） */
   sessionLedger?: unknown;
   /** P5: Context 压力回调（可选，用于 context wrap-up 判断） */
-  getContextPressure?: () => { estimatedTokens: number; contextWindow?: number } | undefined;
+  getContextPressure?: (sessionId?: string) => { estimatedTokens: number; contextWindow?: number } | undefined;
   /**
    * high 风险人工确认（可选，SEC-7 单模型）。
    * 返回 {@link HitlDecision}：`approve*` 放行（session/always 由引擎缓存）；`deny` / 抛错 = 拒绝。

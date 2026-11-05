@@ -395,6 +395,15 @@ export class AnthropicProvider implements ModelProvider {
    */
   private toAnthropicRequest(request: LLMRequest): Record<string, unknown> {
     const systemMessages = request.messages.filter((m) => m.role === 'system');
+    // 契约断言：system 至多一条（托管 systemPrompt）。多条 = 上游装配契约违约
+    //（非托管 system 漏过反向围栏）。库语境无可靠 NODE_ENV，生产 throw 会把可容错
+    // 情况升级成运行失败——故此处告警 + 按序拼接容错，开发期严格性由单测断言保证
+    //（测试红线：违约输入必须触发告警且请求可发）。
+    if (systemMessages.length > 1) {
+      console.warn(
+        `[octopi] anthropic adapter: contract violation — ${systemMessages.length} system messages in LLM view (expected at most 1); joining for compatibility`,
+      );
+    }
     const nonSystemMessages = request.messages.filter((m) => m.role !== 'system');
     const systemPrompt = systemMessages.map((m) => String(m.content ?? '')).join('\n\n');
 

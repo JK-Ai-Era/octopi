@@ -23,10 +23,18 @@ function mockClient(): OctopiClient {
 }
 
 describe('OctopiRuntimeStore context.compact', () => {
-  it('start → compact.active=true；end → false 且写 tokens', () => {
+  it('start → compact.active=true；end → false 写 compact tokens 且清空 viewTokensEst', () => {
     const client = mockClient();
     const store = new OctopiRuntimeStore(client);
     const emit = (client as unknown as { __emit(e: AgentEventEnvelope): void }).__emit.bind(client);
+
+    // 压缩前已有实测与视图估算（建立可观察的清空语义）
+    emit({
+      type: 'step.end',
+      timestamp: Date.now(),
+      sessionId: 's1',
+      data: { promptTokensActual: 54321, viewTokensEst: 9999, rawTokens: 777, contextWindow: 8000 },
+    } as AgentEventEnvelope);
 
     emit({
       type: 'context.compact.start',
@@ -49,7 +57,10 @@ describe('OctopiRuntimeStore context.compact', () => {
     compact = store.getState().chat.inspector.compact;
     expect(compact?.active).toBe(false);
     expect(compact?.tokensAfter).toBe(3000);
-    expect(store.getState().chat.inspector.contextTokens).toBe(3000);
+    // P0-C 口径守护：tokensAfter 是压缩器 messages 口径，不得混进 viewTokensEst（校准后请求口径）——
+    // 压缩后旧估算已知失效，清空待下轮 assemble 重算；实测单源不动
+    expect(store.getState().chat.inspector.viewTokensEst).toBeUndefined();
+    expect(store.getState().chat.inspector.promptTokensActual).toBe(54321);
   });
 
   it('error → active=false 且带 error', () => {

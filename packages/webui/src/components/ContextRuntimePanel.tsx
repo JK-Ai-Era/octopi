@@ -495,8 +495,12 @@ export function ContextRuntimePanel({
               <div className="v">{messageCount != null ? String(messageCount) : '—'}</div>
             </div>
             <div className="ctx-metric">
-              <div className="k">contextTokens</div>
-              <div className="v">{formatTokens(inspector.contextTokens)}</div>
+              <div className="k">promptTokensActual（上次实测）</div>
+              <div className="v">{formatTokens(inspector.promptTokensActual)}</div>
+            </div>
+            <div className="ctx-metric">
+              <div className="k">viewTokensEst（视图估算）</div>
+              <div className="v">{formatTokens(inspector.viewTokensEst)}</div>
             </div>
             <div className="ctx-metric">
               <div className="k">contextWindow</div>

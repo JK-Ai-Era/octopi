@@ -881,7 +881,31 @@
                   "timeouts": {
                     "type": "object",
                     "propertyNames": {
-                      "type": "string"
+                      "type": "string",
+                      "enum": [
+                        "before_model_resolve",
+                        "agent_turn_prepare",
+                        "before_prompt_build",
+                        "before_agent_run",
+                        "before_agent_reply",
+                        "before_agent_finalize",
+                        "agent_end",
+                        "before_tool_call",
+                        "after_tool_call",
+                        "message_received",
+                        "message_sending",
+                        "message_sent",
+                        "session_start",
+                        "session_end",
+                        "before_compaction",
+                        "after_compaction",
+                        "gateway_start",
+                        "gateway_stop",
+                        "before_install",
+                        "before_iteration",
+                        "after_iteration",
+                        "loop_end"
+                      ]
                     },
                     "additionalProperties": {
                       "type": "number",
