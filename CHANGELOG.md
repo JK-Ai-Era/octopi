@@ -110,6 +110,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.101.2 (2026-11-06)
+
+### fix(engine): knowledge grounding 装载预算换统一估算尺（一把尺审计收尾）
+
+- 全仓「第二把尺」审计（比率常量使用点/裸换算/调用点枚举）确认计数单源（`estimateSegments` + 分类查表）后，发现一处漏网：`knowledge/grounding.ts` 本地 `estimateTokens` 用 `ceil(length/4)` 裸换算——CJK 内容 4× 高估，knowledge 装载预算被保守压缩。已换统一分类查表（`estimateTextTokens`），调用点零改动。
+- 复核合格的三处：`layers.ts` 层自报值为占位符（assembler 统一尺覆写属实）；`summary/oversized.ts` 分块换算是统一尺下游消费（反推 chars/token 用于字符切块）；plugin 压缩钩子 fallback 计数同核心（compact 状态块自身口径）。
+
+---
+
 ## v0.101.1 (2026-11-06)
 
 ### fix(engine): 未知块类型告警与触发线语义注记（P2 收官）

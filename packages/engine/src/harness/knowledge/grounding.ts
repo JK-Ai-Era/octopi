@@ -49,6 +49,7 @@ export interface GroundingAssemblerOptions {
 
 /** 真实用户发言判定（载体插槽不是用户发言，query 不采信；谓词见 context/layer-types） */
 import { isHumanSpeech } from '../context/layer-types.js';
+import { estimateTextTokens } from '../context/token-estimate-fns.js';
 
 /**
  * v1 query：最近 user + 可选前 1–2 条 user；不用 assistant 长文
@@ -107,7 +108,8 @@ export function formatKnowledgeGroundingMessage(pack: GroundingPack): Message | 
 }
 
 function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  // P1-c 一把尺：走统一分类查表（旧 ceil(length/4) 对 CJK 高估 4×，装载预算被保守压缩）
+  return estimateTextTokens(text);
 }
 
 /** 最近一条真实用户发言的文本（skipIf 启发式只看本轮；载体插槽不计） */
