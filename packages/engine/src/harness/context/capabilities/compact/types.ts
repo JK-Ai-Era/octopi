@@ -47,6 +47,9 @@ export interface CompactOptions {
   protectTail?: number;
   targetTokens?: number;
   mode?: CompactMode;
+  /** Hook 归因身份：手动压缩不在 RunScope 内，调用方显式身份优先于 RunScope 回落 */
+  sessionId?: string;
+  agentId?: string;
   /** conversation 策略或显式 policy / id；经 buildSystemPrompt 产指令，要求 output:'text' 策略 */
   summarizePolicy?: SummaryPolicy | string;
   /** 注入的摘要执行函数（族 A；契约见 SummarizeFunction） */

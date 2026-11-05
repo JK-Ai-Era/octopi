@@ -86,7 +86,10 @@ export function resolveSecurityConfig(config: {
  * @param config - contextEngine 配置（可空）
  * @returns ContextEngine
  */
-export function resolveContextEngine(config: ContextEngineConfig | undefined): ContextEngine {
+export function resolveContextEngine(
+  config: ContextEngineConfig | undefined,
+  extension?: { hooks?: SessionAwareRunnerConfig['extensionHooks']; agentId: string },
+): ContextEngine {
   // 缺省 type = default：只给旋钮（如 proactiveCompactRatio）也必须落到默认引擎
   if (!config || config.type == null || config.type === 'default') {
     return new DefaultContextEngine({
@@ -98,6 +101,10 @@ export function resolveContextEngine(config: ContextEngineConfig | undefined): C
       historyAging: config?.historyAging,
       targetTokens: config?.targetTokens,
       compactFallbackRatio: config?.compactFallbackRatio,
+      ...(extension?.hooks === undefined ? {} : {
+        extensionHooks: extension.hooks,
+        extensionIdentity: { sessionId: 'default', agentId: extension.agentId },
+      }),
       budgetAllocator: new DefaultBudgetAllocator({
         outputRatio: config?.outputRatio ?? 0.20,
         minOutputReserve: config?.minOutputReserve ?? 2000,
@@ -350,7 +357,10 @@ export async function wireAgentBuilder(
   }
 
   // ── Context Engine（缺省也接线：配置面必须有唯一出口） ──
-  builder.contextEngine(resolveContextEngine(spec.contextEngineConfig));
+  builder.contextEngine(resolveContextEngine(spec.contextEngineConfig, {
+    hooks: spec.extraRunnerConfig?.extensionHooks,
+    agentId: spec.agentId,
+  }));
 
   // ── Context Assembler / Constitution / Memory policy ──
   if (spec.contextAssemblerConfig) {

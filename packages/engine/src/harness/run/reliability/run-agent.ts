@@ -52,6 +52,7 @@ import type { UsageLedgerSnapshot } from '../../governance/accounting/usage-ledg
 import { nominalTotalTokens } from '@octopi-agent/core/types/step.js';
 import { getRunScope } from '../run-scope.js';
 import { resolveHitlDecision } from '../../governance/human-in-the-loop/decision-cache.js';
+import { shouldAbortWithoutRetry } from '../../extension/plugin-ecosystem/hooks/policy-error.js';
 
 // ── 可靠性配置 ──
 
@@ -394,6 +395,11 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
  * - 无审批通道 / 异常 / deny：回退 reject（false），无人值守不放行
  * - `approve_session` / `approve_always` 由引擎缓存，同 session/进程免再问
  */
+/** True when transformed tool arguments are a plain record SecurityGuard can inspect. */
+function isPlainArgumentsRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 async function confirmHighRiskDecision(
   harness: CoreReliabilityHarness,
   toolCall: ToolCall,
@@ -605,6 +611,17 @@ export async function* runAgentWithReliability(
           return { block: true, reason, terminate: false };
         }
       }
+      // The execution contract is a plain record of arguments (the same shape the
+      // before_tool_call Transform contract enforces). Non-record payloads cannot be
+      // represented in ToolCall.arguments, so the SecurityGuard, the approval card
+      // and the ops audit would all inspect something other than what executes —
+      // fail closed instead of silently checking stale data.
+      if (!isPlainArgumentsRecord(ctx.args)) {
+        return { block: true, reason: 'tool arguments are not a plain record', terminate: false };
+      }
+      // Effective call = what the tool executes (post Transform). Every policy gate
+      // below and its audits inspect exactly this payload, never the raw model output.
+      const effectiveCall = { ...ctx.toolCall, arguments: ctx.args };
       // SEC-2: session toolRights ∩ agent ToolPolicy (narrow-only, deny wins).
       // Read from RunScope (per-run); harness is shared across concurrent sessions.
       {
@@ -629,8 +646,8 @@ export async function* runAgentWithReliability(
                 event: 'ops.escalation.denied',
                 data: {
                   argv: [
-                    String((ctx.toolCall.arguments as { cmd?: unknown } | undefined)?.cmd ?? ''),
-                    ...(((ctx.toolCall.arguments as { args?: unknown } | undefined)?.args as string[] | undefined) ?? []),
+                    String((effectiveCall.arguments as { cmd?: unknown } | undefined)?.cmd ?? ''),
+                    ...(((effectiveCall.arguments as { args?: unknown } | undefined)?.args as string[] | undefined) ?? []),
                   ],
                   why: 'not_authorized',
                   toolName: ctx.toolCall.name,
@@ -667,7 +684,7 @@ export async function* runAgentWithReliability(
         }
       }
       if (harness.security) {
-        const toolCheck = harness.security.checkToolCall(ctx.toolCall);
+        const toolCheck = harness.security.checkToolCall(effectiveCall);
         if (!toolCheck.isClean) {
           const worst = toolCheck.violations.reduce((worst, v) => {
             const order = { critical: 4, high: 3, medium: 2, low: 1 };
@@ -679,7 +696,7 @@ export async function* runAgentWithReliability(
             if (action === 'confirm') {
               const confirmed = await confirmHighRiskDecision(
                 harness,
-                ctx.toolCall,
+                effectiveCall,
                 worst.description,
                 worst.severity,
               );
@@ -785,6 +802,12 @@ export async function* runAgentWithReliability(
     onStepComplete: async (ctx) => {
       // 一轮成功走到这里：重置模型错误 attempt
       state.modelErrorAttempt = 0;
+
+      // 用户/扩展链先行（含 before_agent_finalize 定稿）：下面的空回复/planning/
+      // no-op 判定必须针对定稿后的真实回复，否则 Finalize 补空/改写会误触重试或漏检。
+      if (config.onStepComplete) {
+        await config.onStepComplete(ctx);
+      }
 
       const hasToolCalls = ctx.toolResults.length > 0;
       const contentText = getTextContent(ctx.message.content);
@@ -1027,11 +1050,6 @@ export async function* runAgentWithReliability(
       } else {
         state.checkpointStepCount++;
       }
-
-      // 调用用户的 onStepComplete（如果有）
-      if (config.onStepComplete) {
-        await config.onStepComplete(ctx);
-      }
     },
 
     // shouldStopAfterStep：停止决策
@@ -1062,6 +1080,7 @@ export async function* runAgentWithReliability(
     // onError：错误分类 + ErrorStrategy
     // Loop 契约：只允许 'retry' | 'abort'；业务错误永不 throw
     onError: async (error) => {
+      if (shouldAbortWithoutRetry(error)) return 'abort';
       const classified = classifyError(error);
       const attempt = state.modelErrorAttempt;
       state.modelErrorAttempt++;

@@ -12,6 +12,9 @@
 
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { Message } from '@octopi-agent/core/types.js';
+import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
+
+type EnvelopeContent = Message['content'] | LLMMessage['content'];
 
 /** turn_start 元素的 id 形态（会话内单调 t1,t2,…） */
 export function formatTurnId(seq: number): string {
@@ -19,9 +22,9 @@ export function formatTurnId(seq: number): string {
 }
 
 /** 归一化 Message.content → 纯文本（多模态取 text 块拼接；空 content → ''） */
-export function messageText(content: Message['content'] | undefined | null): string {
+export function messageText(content: EnvelopeContent | undefined): string {
   if (content == null) return '';
-  return getTextContent(content);
+  return getTextContent(content as Message['content']);
 }
 
 /** user 原文嵌入 XML 前的最小转义（防伪影标签截断信封） */
@@ -92,7 +95,7 @@ export function formatTurnContextXml(params: {
  * 非 turn_start 正文原样返回。
  * 取**最后一个** user_message 块（boilerplate 禁止再写该标签字面量）。
  */
-export function extractUserMessageText(content: string | Message['content'] | undefined | null): string {
+export function extractUserMessageText(content: EnvelopeContent | undefined): string {
   const raw = messageText(content);
   const re = /<user_message>\n?([\s\S]*?)\n?<\/user_message>/g;
   let last: string | undefined;
@@ -200,7 +203,7 @@ export function escapeSlotBody(tag: string, body: string): string {
  * @returns 信封解析结果；非 turn_start 正文返回 null
  */
 export function parseTurnEnvelope(
-  content: string | Message['content'] | undefined | null,
+  content: EnvelopeContent | undefined,
 ): TurnEnvelopeParts | null {
   const raw = messageText(content);
   if (!/^\s*<turn_start[\s>]/.test(raw)) return null;

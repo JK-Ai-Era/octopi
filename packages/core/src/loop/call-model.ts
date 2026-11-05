@@ -38,6 +38,7 @@ export async function* callModel(
   tools: LLMToolDefinition[],
   signal: AbortSignal | undefined,
   timeouts: {
+    thinkingLevel?: import('../core/types.js').ThinkingLevel;
     idleTimeoutMs: number;
     absoluteTimeoutMs: number;
     /**
@@ -48,7 +49,7 @@ export async function* callModel(
     onFirstChunk?: (ttftMs: number) => void;
   },
 ): AsyncGenerator<AgentLoopEvent, LLMResponse> {
-  const { idleTimeoutMs, absoluteTimeoutMs, onFirstChunk } = timeouts;
+  const { idleTimeoutMs, absoluteTimeoutMs, onFirstChunk, thinkingLevel } = timeouts;
   const requestStartTime = Date.now();
   let firstChunkFired = false;
   /** 首 chunk 计时（幂等）：流式首个任意 chunk 或 fallback 响应到位时触发 */
@@ -84,7 +85,7 @@ export async function* callModel(
       const onAbort = () => reject(new Error('Aborted'));
       signal?.addEventListener('abort', onAbort, { once: true });
 
-      model.chat({ messages, tools, signal, model: model.defaultModel }).then(
+      model.chat({ messages, tools, signal, model: model.defaultModel, ...(thinkingLevel === undefined ? {} : { thinkingLevel }) }).then(
         (response) => {
           clearTimeout(timer);
           signal?.removeEventListener('abort', onAbort);
@@ -146,6 +147,7 @@ export async function* callModel(
         tools,
         signal: streamAbort.signal,
         model: model.defaultModel,
+        ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
       });
       let idleTimer: ReturnType<typeof setTimeout> | null = null;
 

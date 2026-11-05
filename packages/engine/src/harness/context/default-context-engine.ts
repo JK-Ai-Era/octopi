@@ -48,6 +48,7 @@ import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { SmartRouter } from './smart-router.js';
 import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
+import { HookedCompactEngine } from '../extension/plugin-ecosystem/hooks/compaction-integration.js';
 import { isTurnAnchor, isScheduleNotice } from './layer-types.js';
 import { createCompactEngine } from './capabilities/compact/index.js';
 import type { CompactEngine, CompactOutcome } from './capabilities/compact/index.js';
@@ -108,6 +109,9 @@ export interface DefaultContextEngineConfig {
   compactFallbackRatio?: number;
   /** 公用能力 CompactEngine（缺省自动创建；算法委托，E4 状态仍在本引擎） */
   compactEngine?: CompactEngine;
+  /** Host extension boundary; absent preserves the existing engine exactly. */
+  extensionHooks?: import('../extension/plugin-ecosystem/hooks/types.js').ExtensionHookPort;
+  extensionIdentity?: { sessionId: string; agentId?: string };
 }
 
 // ── 内部状态 ──
@@ -149,7 +153,10 @@ export class DefaultContextEngine implements ContextEngine {
     name: 'Default Context Engine',
   };
 
-  private config: Required<Omit<DefaultContextEngineConfig, 'compactEngine' | 'historyAging'>> & {
+  private config: Required<Omit<
+    DefaultContextEngineConfig,
+    'compactEngine' | 'historyAging' | 'extensionHooks' | 'extensionIdentity'
+  >> & {
     compactEngine: CompactEngine;
     historyAging: ToolResultAgingOptions;
   };
@@ -176,16 +183,18 @@ export class DefaultContextEngine implements ContextEngine {
         config?.compactFallbackRatio != null && config.compactFallbackRatio >= 1
           ? config.compactFallbackRatio
           : 3,
-      compactEngine:
-        config?.compactEngine ??
-        createCompactEngine({
+      compactEngine: (() => {
+        const engine = config?.compactEngine ?? createCompactEngine({
           defaultProtectHead: config?.protectFirstN ?? 5,
           defaultProtectTail: config?.protectLastN ?? 20,
           estimator: {
             estimateMessages: (m) => tokenEstimator.estimateMessages(m),
             estimateText: (t) => tokenEstimator.estimateText(t),
           },
-        }),
+        });
+        if (!config?.extensionHooks) return engine;
+        return new HookedCompactEngine(engine, config.extensionHooks, config.extensionIdentity ?? { sessionId: 'default' });
+      })(),
     };
 
     this.router = new SmartRouter({
@@ -485,6 +494,23 @@ export class DefaultContextEngine implements ContextEngine {
                 }
               : undefined,
           });
+          if (outcome.reason?.startsWith('denied:')) {
+            const reason = outcome.reason;
+            // before_compaction 策略拒绝：摘要与状态提交被否，但 veto 不得强迫发出超窗
+            // 请求——与 summarize_failed 同姿势走机械截断兜底（after_compaction 不触发）。
+            emit?.({
+              type: 'context.compact.error', sessionId, reason: 'overflow', error: reason,
+              kind: 'denied',
+              durationMs: Date.now() - overflowStart,
+            });
+            compressedOverflow = ledgerTruncate(selection.overflow, {
+              targetTokens: overflowTargetTokens,
+              estimator,
+            }).result;
+            droppedSummary = `${reason}; fell back to truncation`;
+            overflowSummarizeAttempted = false;
+            break;
+          }
           overflowFresh =
             outcome.fresh === true &&
             Boolean(outcome.summary) &&
@@ -946,6 +972,13 @@ export class DefaultContextEngine implements ContextEngine {
       return sticky ? { messages: sticky.messages } : { messages };
     }
 
+    if (outcome.reason?.startsWith('denied:')) {
+      emit?.({
+        type: 'context.compact.error', sessionId, reason: 'proactive', error: outcome.reason,
+        kind: 'denied',
+      });
+      return { messages, droppedSummary: outcome.reason };
+    }
     const body = Array.isArray(outcome.view) ? outcome.view : middle;
     const reduced = [...head, ...body, ...tail];
     const reducedTokens = estimator.estimateMessages(reduced);
@@ -1095,6 +1128,7 @@ export class DefaultContextEngine implements ContextEngine {
    */
   private async structuralCompact(params: {
     sessionId: string;
+    agentId?: string;
     stateKey?: string;
     messages: Message[];
     summarize?: SummarizeFunction;
@@ -1157,6 +1191,8 @@ export class DefaultContextEngine implements ContextEngine {
     const outcome = await this.config.compactEngine.compactMessages(
       middle,
       {
+        sessionId: params.sessionId,
+        ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
         protectHead: 0,
         protectTail: 0,
         targetTokens: params.compactTargetTokens,
@@ -1206,7 +1242,7 @@ export class DefaultContextEngine implements ContextEngine {
         ok: true,
         summary: state?.previousSummary,
         compacted: false,
-        reason: outcome.reason?.startsWith('summarize_failed')
+        reason: outcome.reason?.startsWith('summarize_failed') || outcome.reason?.startsWith('denied:')
           ? outcome.reason
           : `summarize_failed:${outcome.reason ?? 'no_output'}`,
         tokensBefore,
@@ -1287,6 +1323,7 @@ export class DefaultContextEngine implements ContextEngine {
     const stateKey = compactStateKey(input.sessionId, input.agentId);
     const result = await this.structuralCompact({
       sessionId: input.sessionId,
+      ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
       stateKey,
       messages: input.messages,
       summarize: input.summarize,

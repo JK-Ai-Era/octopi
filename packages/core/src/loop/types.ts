@@ -8,7 +8,7 @@
  * 4. 工具系统支持并行/串行、参数预处理、流式更新
  */
 
-import type { Message, ToolCall, ToolResult, TokenUsage, ToolSource } from '../core/types.js';
+import type { Message, ThinkingLevel, ToolCall, ToolResult, TokenUsage, ToolSource } from '../core/types.js';
 import type {
   ModelProvider,
   LLMMessage,
@@ -112,6 +112,12 @@ export type { ErrorReason, ClassifiedError } from '../core/interfaces/error-stra
 // 4. 回调类型
 // ============================================================
 
+/** Raw tool-handler completion, including errors, independent of policy redaction. */
+export type ToolCallObserver = (
+  ctx: AfterToolCallContext & { durationMs?: number },
+  signal?: AbortSignal,
+) => Promise<void>;
+
 /** beforeToolCall 上下文 */
 export interface BeforeToolCallContext {
   toolCall: ToolCall;
@@ -168,6 +174,13 @@ export type ShouldStopAfterStepFn = (ctx: StepContext) => Promise<boolean>;
 export type OnStepCompleteFn = (ctx: StepContext) => Promise<void>;
 
 /** 轮次配置更新 */
+export interface BeforeStepContext extends StepContext {
+  /** Zero-based model iteration index, including retries. */
+  iteration: number;
+}
+
+export type BeforeStepFn = (ctx: BeforeStepContext) => Promise<StepUpdate | undefined>;
+
 export interface StepUpdate {
   /**
    * 下一轮上下文。若传入**新对象**，Loop 只会把字段合并回原 context 引用
@@ -175,6 +188,8 @@ export interface StepUpdate {
    */
   context?: AgentContext;
   model?: ModelProvider;
+  /** Provider-neutral reasoning depth; authorization is a Harness/Host policy. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 /** prepareNextStep 回调 */
@@ -246,10 +261,14 @@ export interface LoopObserver {
 
 /** 工具执行钩子配置 */
 export interface ToolHooksConfig {
-  /** 工具执行前：安全检查/拦截/参数修改。返回 { block: true } 阻止执行。 */
+  /** 原始 LLM 参数进入工具校验和安全回调前的纯准备阶段。 */
+  prepareToolArguments?: (ctx: BeforeToolCallContext, signal?: AbortSignal) => Promise<unknown>;
+  /** 工具执行前：安全检查/拦截。返回 { block: true } 阻止执行。 */
   beforeToolCall?: BeforeToolCallFn;
   /** 工具执行后：结果修改/日志/验证。 */
   afterToolCall?: AfterToolCallFn;
+  /** 已执行 raw ToolHandler 后的观察点；异常不改变工具结果。 */
+  onToolCallComplete?: ToolCallObserver;
   /**
    * 工具执行中：部分输出通知（展示通道副作用，不控制执行、不进对话历史）。
    * 经 `AgentTool.execute` 的 `onUpdate` 参数转发给工具；回调异常不中断工具。
@@ -265,6 +284,8 @@ export interface StepHooksConfig {
   shouldStopAfterStep?: ShouldStopAfterStepFn;
   /** 轮次完成通知（Harness 内部，做副作用，不控制停止） */
   onStepComplete?: OnStepCompleteFn;
+  /** 每次模型调用前：已授权的配置变换或终止请求。 */
+  beforeStep?: BeforeStepFn;
   /** 动态切换 model/context/thinkingLevel */
   prepareNextStep?: PrepareNextStepFn;
   /** 错误处理（接收已分类的错误） */
@@ -288,6 +309,8 @@ export interface AgentLoopConfig extends ToolHooksConfig, StepHooksConfig {
   // ── 消息格式边界 ──
   /** 内部消息格式 → LLM 消息格式。不传则直接透传。 */
   convertToLlm?: (messages: Message[]) => Promise<LLMMessage[]>;
+  /** Provider request-only projection; never assigned to the mutable message workspace. */
+  transformLlmMessages?: (messages: LLMMessage[]) => Promise<LLMMessage[]>;
 
   // ── 上下文变换 ──
   /** LLM 调用前：压缩/注入/修改消息。在 convertToLlm 之前执行。 */
@@ -345,6 +368,11 @@ export type AgentLoopEvent =
       llmTiming?: LoopLLMTiming;
       usage?: TokenUsage;
     }
+  /**
+   * 提交进历史的助手消息（每个模型响应恰好一条）。
+   * 时序不变量：带 toolCalls 的响应在工具事件之前发；纯文本响应在 onStepComplete
+   * （含 Harness Finalize 链）之后、step_end 之前发——事件面、持久化与 UI 携带同一份定稿。
+   */
   | { type: 'assistant_message'; message: Message; timestamp: number }
   | { type: 'llm_stream_delta'; timestamp: number; data: { delta: string } }
   | { type: 'llm_thinking_delta'; timestamp: number; data: { delta: string } }

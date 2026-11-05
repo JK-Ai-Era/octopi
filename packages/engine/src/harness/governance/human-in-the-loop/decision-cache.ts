@@ -14,7 +14,7 @@
 import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
 
 /** Which confirm surface produced the decision */
-export type HitlChannel = 'high_risk' | 'effect';
+export type HitlChannel = 'high_risk' | 'effect' | 'plugin_hook';
 
 /** Cached scope of a remembered approval */
 export type HitlCacheScope = 'session' | 'always';
@@ -91,7 +91,7 @@ export class HitlDecisionCache {
   /**
    * Look up a remembered approval.
    *
-   * @param channel - high_risk | effect
+   * @param channel - high_risk | effect | plugin_hook
    * @param key - tool name or effect kind
    * @param options - sessionId (session scope) and/or agentId (always scope)
    * @returns `'approve'` if cached, otherwise `null`
@@ -124,7 +124,7 @@ export class HitlDecisionCache {
    * Missing scope id → silently one-shot (fail-safe, never over-grant).
    *
    * @param decision - host decision
-   * @param channel - high_risk | effect
+   * @param channel - high_risk | effect | plugin_hook
    * @param key - tool name or effect kind
    * @param options - sessionId and/or agentId
    */

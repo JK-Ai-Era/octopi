@@ -79,6 +79,8 @@ export interface ContextCompactEvent {
   /** summarize_fallback：cache-miss 旁路原因（no_prefix | window_guard | window_exhausted，F22） */
   fallback?: string;
   error?: string;
+  /** error 的性质：denied = before_compaction 策略拒绝（不是故障）；failed = 压缩失败 */
+  kind?: 'denied' | 'failed';
 }
 
 /** 事件回调（Builder 注入 → EventBus） */

@@ -22,6 +22,8 @@ import type { ReliabilityHarness } from '../reliability/run-agent.js';
 import { runAgentWithReliability } from '../reliability/run-agent.js';
 import { withResolvedModel } from '../model/run-scope.js';
 import { withRunScope } from '../run-scope.js';
+import { integrateAgentHooks, voteAgentToolCall, withAgentRunHooks } from '../../extension/plugin-ecosystem/hooks/run-integration.js';
+import type { ExtensionHookPort } from '../../extension/plugin-ecosystem/hooks/types.js';
 import type { ResolvedModel } from '../model/types.js';
 import type { HarnessLoopEvent } from '../reliability/harness-events.js';
 import { compactStateKey } from '../../context/compact-key.js';
@@ -56,7 +58,10 @@ export interface AgentOptions {
   // ── 轮次控制回调 ──
   shouldStopAfterStep?: AgentLoopConfig['shouldStopAfterStep'];
   onStepComplete?: AgentLoopConfig['onStepComplete'];
+  beforeStep?: AgentLoopConfig['beforeStep'];
   prepareNextStep?: AgentLoopConfig['prepareNextStep'];
+  /** Host injection: a narrow extension boundary, not a plugin registry. */
+  extensionHooks?: ExtensionHookPort;
   onToolUpdate?: AgentLoopConfig['onToolUpdate'];
   onError?: AgentLoopConfig['onError'];
 
@@ -78,6 +83,7 @@ export class Agent {
   private _context: AgentContext;
   private _config: AgentLoopConfig;
   private _harness: ReliabilityHarness | undefined;
+  private readonly _extensionHooks?: ExtensionHookPort;
   /**
    * ContextEngine 按 session 维护 CompactState。
    * SessionAwareRunner 在 handle() 开始时注入真实 sessionId，避免多会话串味。
@@ -101,6 +107,7 @@ export class Agent {
       tools: options.tools ?? [],
     };
     this._harness = options.harness;
+    this._extensionHooks = options.extensionHooks;
     this._config = {
       model: options.model,
       convertToLlm: options.convertToLlm,
@@ -110,6 +117,7 @@ export class Agent {
       onToolUpdate: options.onToolUpdate,
       shouldStopAfterStep: options.shouldStopAfterStep,
       onStepComplete: options.onStepComplete,
+      beforeStep: options.beforeStep,
       prepareNextStep: options.prepareNextStep,
       onError: options.onError,
       observer: options.observer,
@@ -329,7 +337,7 @@ export class Agent {
     }
     const resolved = options?.resolvedModel;
     const loopModel = resolved?.provider ?? options?.model;
-    const config = {
+    const config: AgentLoopConfig = {
       ...this._config,
       ...(loopModel ? { model: loopModel } : {}),
       ...(options?.onToolUpdate ? { onToolUpdate: options.onToolUpdate } : {}),
@@ -356,6 +364,13 @@ export class Agent {
       sessionId: options?.runScope?.sessionId ?? this._contextSessionId,
       agentId: options?.runScope?.agentId ?? harness.agentId ?? 'default',
       runId: options?.runScope?.runId,
+      principal: options?.runScope?.principal,
+      prompt: options?.runScope?.prompt,
+      resolvedModel: resolved,
+      resolveConfiguredModel: options?.runScope?.resolveConfiguredModel,
+      thinkingLevel: options?.runScope?.thinkingLevel,
+      extensionSnapshotBudgetTokens: options?.runScope?.extensionSnapshotBudgetTokens,
+      iteration: options?.runScope?.iteration,
       systemPrompt: options?.runScope?.systemPrompt ?? context.systemPrompt,
       grounding: options?.runScope?.grounding,
       toolRuntime: options?.runScope?.toolRuntime,
@@ -363,10 +378,30 @@ export class Agent {
       taskSnapshot: options?.runScope?.taskSnapshot,
     };
 
+    const hookState = integrateAgentHooks(this._extensionHooks, config, () => runScope);
+    if (hookState) {
+      const existingBeforeToolCall = config.beforeToolCall;
+      config.prepareToolArguments = hookState.callbacks().prepareToolArguments;
+      config.onToolCallComplete = hookState.callbacks().onToolCallComplete;
+      config.beforeToolCall = async (ctx, toolSignal) => {
+        const existing = await existingBeforeToolCall?.(ctx, toolSignal);
+        if (existing?.block) return existing;
+        return voteAgentToolCall(
+          this._extensionHooks,
+          ctx,
+          hookState.originalToolParams,
+          toolSignal,
+        );
+      };
+      config.beforeStep = hookState.callbacks().beforeStep;
+      config.onStepComplete = hookState.callbacks().onStepComplete;
+      config.transformLlmMessages = hookState.transformLlmMessages.bind(hookState);
+    }
     let gen = runAgentWithReliability(context, config, harness, signal, {
       toolRuntime: runScope.toolRuntime,
     });
     gen = withRunScope(runScope, gen);
+    gen = withAgentRunHooks(this._extensionHooks, runScope, context, signal, gen);
     if (resolved) {
       return withResolvedModel(resolved, gen);
     }

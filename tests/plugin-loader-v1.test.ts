@@ -22,6 +22,7 @@ interface FixtureOptions {
   tools?: string[];
   commands?: Array<{ name: string; sessionOps?: string[] }>;
   hooks?: string[];
+  services?: string[];
   requiresPlugins?: string[];
   legacyPluginIds?: string[];
   body?: string;
@@ -46,6 +47,7 @@ function plugin(directory: string, options: FixtureOptions = {}): void {
       tools: options.tools,
       commands: options.commands,
       hooks: options.hooks,
+      services: options.services,
     },
     requiresPlugins: options.requiresPlugins,
     legacyPluginIds: options.legacyPluginIds,
@@ -116,7 +118,7 @@ describe('PluginLoader v1 manifest-first behavior', () => {
     expect(await manager.discover()).toHaveLength(1);
     expect(manager.getTools().map((tool) => tool.pluginId)).toEqual(['complete']);
     expect(manager.getCommands().map((command) => command.pluginId)).toEqual(['complete']);
-    await manager.runAllHooks('message_received', {});
+    await manager.getHookPort().observe('message_received', { sessionId: 's', agentId: 'a', message: {} as never });
     expect(effects()).toEqual(['complete:import', 'complete:register']);
   });
 
@@ -132,7 +134,7 @@ describe('PluginLoader v1 manifest-first behavior', () => {
     const manager = new PluginManager({ loadPaths: [root], engineVersion: '0.98.18' });
     expect(await manager.discover()).toEqual([]);
     expect(manager.getTools()).toEqual([]);
-    await manager.runAllHooks('message_received', {});
+    await manager.getHookPort().observe('message_received', { sessionId: 's', agentId: 'a', message: {} as never });
     expect(manager.getDiagnostics()[0]?.status).toBe('failed');
   });
 
@@ -258,6 +260,23 @@ describe('PluginLoader v1 manifest-first behavior', () => {
     expect(loader.getDiagnostics().some((item) => item.reason.includes('Duplicate plugin id'))).toBe(true);
     expect(loader.getDiagnostics().some((item) => item.reason.includes('not declared'))).toBe(true);
     expect(loader.getDiagnostics().some((item) => item.reason.includes('Requires Octopi'))).toBe(true);
+  });
+
+  it('rejects declared services that are not actually registered', async () => {
+    plugin('missing-service', { services: ['expected'], body: '' });
+    const loader = new PluginLoader({ loadPaths: [root], engineVersion: '0.98.18' });
+    expect(await loader.discover()).toEqual([]);
+    expect(loader.contributions.getServices()).toEqual([]);
+    expect(loader.getDiagnostics()[0]?.reason).toContain('Declared service "expected" was not registered');
+  });
+
+  it('rejects cross-plugin service conflicts before importing plugin code', async () => {
+    plugin('one', { services: ['shared'], body: `api.registerService({ serviceId: 'shared', start() {} });` });
+    plugin('two', { services: ['shared'], body: `api.registerService({ serviceId: 'shared', start() {} });` });
+    const loader = new PluginLoader({ loadPaths: [root], engineVersion: '0.98.18' });
+    expect(await loader.discover()).toEqual([]);
+    expect(effects()).toEqual([]);
+    expect(loader.getDiagnostics().some((item) => item.reason.includes('Declared service:shared conflicts'))).toBe(true);
   });
 
   it('rejects an entry whose realpath escapes the plugin root before import', async () => {

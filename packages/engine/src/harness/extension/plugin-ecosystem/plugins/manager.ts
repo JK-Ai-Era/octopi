@@ -1,635 +1,60 @@
-/**
- * Plugin Manager
- *
- * 这是 plugin 系统的顶层管理器，负责：
- * - 加载和管理所有 plugins
- * - 运行 hooks（支持 priority、timeout、拦截语义）
- * - 能力注册和查询
- *
- * Hook 分类：
- * - 拦截语义：返回值改变执行流程
- * - 观察语义：所有 plugin 都执行
- * - 上下文注入：返回 prependContext / systemPrompt 等
- */
-
-import type {
-  Message,
-  ToolCall,
-  ToolResult,
-  ThinkingLevel,
-} from '@octopi-agent/core/types.js';
-import type { ChannelMessage, ChannelReply } from '../channel-types.js';
-import type { HookContext } from '../../../shared/types/hook-context.js';
-import type { LoadedPlugin, PluginLoaderConfig, PluginEntryConfig, PluginDiagnostic } from './loader.js';
+import { getOctopiHome } from '../../../../paths.js';
+import type { PluginLoaderConfig, LoadedPlugin, PluginDiagnostic, PluginEntryConfig } from './loader.js';
 import { PluginLoader } from './loader.js';
-import type { PluginHookName } from './manifest.js';
-import type { PluginCommandRecord, PluginToolRecord } from './contribution-registry.js';
+import type { PluginCommandRecord, PluginToolRecord, PluginServiceRecord } from './contribution-registry.js';
+import { PluginHookAdapter, type HookExecutionHost } from '../hooks/adapter.js';
+import { HookAuditJournal } from '../hooks/journal.js';
+import { resolveHitlOutcome, type HitlAskResult, type HitlOutcome } from '../../../governance/human-in-the-loop/decision-cache.js';
+import type {
+  ExtensionHookPort,
+  HookAuditRecord,
+  HookToolApproval,
+  HookToolEvent,
+} from '../hooks/types.js';
 
-// ================================================================
-// Hook Event Types
-// ================================================================
-
-// ── Hook 事件定义 ──
-
-/**
- * before_model_resolve 事件
- */
-export interface BeforeModelResolveEvent {
-  /** 当前 prompt */
-  prompt: string;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * agent_turn_prepare 事件
- */
-export interface AgentTurnPrepareEvent {
-  /** 当前 prompt */
-  prompt: string;
-  /** Session 消息 */
-  messages: Message[];
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * before_prompt_build 事件
- */
-export interface BeforePromptBuildEvent {
-  /** 当前 prompt */
-  prompt: string;
-  /** Session 消息 */
-  messages: Message[];
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * before_agent_run 事件
- */
-export interface BeforeAgentRunEvent {
-  /** 当前 prompt */
-  prompt: string;
-  /** 最终消息列表 */
-  messages: Message[];
-  /** System prompt */
-  systemPrompt?: string;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * before_agent_reply 事件
- */
-export interface BeforeAgentReplyEvent {
-  /** Session 消息 */
-  messages: Message[];
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * before_agent_finalize 事件
- */
-export interface BeforeAgentFinalizeEvent {
-  /** Agent 的自然回复 */
-  reply: Message;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * agent_end 事件
- */
-export interface AgentEndEvent {
-  /** 最终消息 */
-  messages: Message[];
-  /** 是否成功 */
-  success: boolean;
-  /** 执行耗时 */
-  durationMs: number;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * before_tool_call 事件
- */
-export interface BeforeToolCallEvent {
-  /** Tool 名称 */
-  toolName: string;
-  /** Tool 参数 */
-  params: Record<string, unknown>;
-  /** Tool 调用信息 */
-  call: ToolCall;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * after_tool_call 事件
- */
-export interface AfterToolCallEvent {
-  /** Tool 调用信息 */
-  call: ToolCall;
-  /** Tool 结果 */
-  result: ToolResult;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * message_received 事件
- */
-export interface MessageReceivedEvent {
-  /** 渠道消息 */
-  message: ChannelMessage;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * message_sending 事件
- */
-export interface MessageSendingEvent {
-  /** 回复内容 */
-  reply: ChannelReply;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * message_sent 事件
- */
-export interface MessageSentEvent {
-  /** 回复内容 */
-  reply: ChannelReply;
-  /** 是否成功 */
-  success: boolean;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * session_start / session_end 事件
- */
-export interface SessionLifecycleEvent {
-  /** Session ID */
-  sessionId: string;
-  /** Agent ID */
-  agentId: string;
-  /** 原因 */
-  reason?: string;
-}
-
-/**
- * before_compaction / after_compaction 事件
- */
-export interface CompactionEvent {
-  /** Session ID */
-  sessionId: string;
-  /** 是否实际执行了压缩 */
-  compacted: boolean;
-}
-
-/**
- * gateway_start / gateway_stop 事件
- */
-export interface GatewayLifecycleEvent extends Record<string, unknown> {
-  /** 配置 */
-  config?: Record<string, unknown>;
-  /** 工作区目录 */
-  workspaceDir?: string;
-}
-
-/**
- * before_install 事件
- */
-export interface BeforeInstallEvent {
-  /** 安装类型 */
-  type: 'skill' | 'plugin';
-  /** 安装源 */
-  source: string;
-  /** 安装目标 */
-  target: string;
-}
-
-// ── Octopi 扩展 hooks（迭代级生命周期） ──
-
-/**
- * before_iteration 事件
- *
- * 每次 LLM 调用前触发（per-iteration）。
- * 这是 Octopi 独有的迭代级 hook。
- */
-export interface BeforeIterationEvent {
-  /** 当前迭代索引（从 0 开始） */
-  iteration: number;
-  /** 当前消息历史 */
-  messages: Message[];
-  /** 当前模型 */
-  model: string;
-  /** 当前 thinking 级别 */
-  thinking?: ThinkingLevel;
-  /** Session ID */
-  sessionId: string;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * before_iteration 结果
- *
- * 返回 null/undefined 表示不干预，
- * 返回对象可以覆盖本轮配置或停止循环。
- */
-export interface BeforeIterationResult {
-  /** 覆盖本轮模型 */
-  model?: string;
-  /** 覆盖本轮 thinking 级别 */
-  thinking?: ThinkingLevel;
-  /** 注入到本轮 system prompt 的上下文 */
-  prependContext?: string;
-  /** 停止循环 */
-  stop?: boolean;
-  /** 停止原因 */
-  stopReason?: string;
-}
-
-/**
- * after_iteration 事件
- *
- * 每次 LLM 调用 + 工具执行完成后触发（per-iteration）。
- * 这是 Octopi 独有的迭代级 hook。
- */
-export interface AfterIterationEvent {
-  /** 当前迭代索引 */
-  iteration: number;
-  /** Assistant 回复 */
-  assistantMessage: Message;
-  /** 本轮工具调用 */
-  toolCalls: ToolCall[];
-  /** 本轮工具结果 */
-  toolResults: ToolResult[];
-  /** Token 用量 */
-  usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
-  /** Session ID */
-  sessionId: string;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-/**
- * loop_end 事件
- *
- * 循环结束时触发（per-message）。
- */
-export interface LoopEndEvent {
-  /** 总迭代数 */
-  iterations: number;
-  /** 最终消息历史 */
-  messages: Message[];
-  /** 结束原因 */
-  reason: string;
-  /** 最终响应 */
-  response?: string;
-  /** 是否成功 */
-  success: boolean;
-  /** Session ID */
-  sessionId: string;
-  /** 上下文 */
-  ctx: HookContext;
-}
-
-// ================================================================
-// Hook Result Types — 拦截语义
-// ================================================================
-
-/**
- * before_model_resolve 结果
- */
-export interface ModelResolveResult {
-  /** 覆盖 provider */
-  provider?: string;
-  /** 覆盖 model */
-  model?: string;
-}
-
-/**
- * before_prompt_build 结果
- */
-export interface PromptBuildResult {
-  /** 在消息前插入的上下文 */
-  prependContext?: string;
-  /** 在消息后追加的上下文 */
-  appendContext?: string;
-  /** 覆盖 system prompt */
-  systemPrompt?: string;
-  /** System prompt 前置追加 */
-  prependSystemContext?: string;
-  /** System prompt 后置追加 */
-  appendSystemContext?: string;
-}
-
-/**
- * before_agent_run 结果
- */
-export interface AgentRunResult {
-  /** 结果类型 */
-  outcome: 'pass' | 'block';
-  /** 阻止原因（内部） */
-  reason?: string;
-  /** 用户可见的替换消息 */
-  message?: string;
-}
-
-/**
- * before_agent_reply 结果
- */
-export type AgentReplyResult = Message | null;
-
-/**
- * before_agent_finalize 结果
- */
-export interface AgentFinalizeResult {
-  /** 动作 */
-  action: 'revise' | 'finalize';
-  /** 修订原因 */
-  reason?: string;
-}
-
-/**
- * before_tool_call 结果
- */
-export interface ToolCallResult {
-  /** 覆盖参数 */
-  params?: Record<string, unknown>;
-  /** 是否阻止执行 */
-  block?: boolean;
-  /** 阻止原因 */
-  blockReason?: string;
-  /** 需要用户审批 */
-  requireApproval?: {
-    title: string;
-    description: string;
-    severity?: 'info' | 'warning' | 'critical';
-    timeoutMs?: number;
-    timeoutBehavior?: 'allow' | 'deny';
-  };
-}
-
-/**
- * message_sending 结果
- */
-export interface MessageSendingResult {
-  /** 是否取消发送 */
-  cancel: boolean;
-  /** 取消原因 */
-  cancelReason?: string;
-}
-
-/**
- * before_install 结果
- */
-export interface InstallResult {
-  /** 是否阻止安装 */
-  block: boolean;
-  /** 阻止原因 */
-  blockReason?: string;
-}
-
-// ================================================================
-// Plugin Manager
-// ================================================================
-
-/**
- * Plugin Manager
- *
- * 负责加载 plugins、运行 hooks、管理能力注册。
- */
+/** Host-owned manager; the author SDK never receives this object. */
 export class PluginManager {
-  /** Plugin Loader */
   private loader: PluginLoader;
+  private readonly hookJournal: HookAuditJournal;
+  private readonly hookPort: ExtensionHookPort;
+  private approvalSink?: (event: HookToolEvent, request: Readonly<HookToolApproval>) => Promise<HitlAskResult>;
 
   constructor(config?: PluginLoaderConfig) {
     this.loader = new PluginLoader(config ?? { loadPaths: [] });
+    this.hookJournal = new HookAuditJournal(() => `${getOctopiHome()}/audit`);
+    const host: HookExecutionHost = {
+      getHooks: () => this.loader.contributions.getHooks(),
+      getPluginConfig: (pluginId) => this.getHookConfig(pluginId),
+      recordHook: (record) => this.recordHook(record),
+      approveToolCall: (event, request, pluginId) => this.approveToolCall(event, request, pluginId),
+    };
+    this.hookPort = new PluginHookAdapter(host);
   }
 
-  /** Structured discovery states, separate from the effective registered set. */
-  getDiagnostics(): PluginDiagnostic[] {
-    return this.loader.getDiagnostics();
+  getDiagnostics(): PluginDiagnostic[] { return this.loader.getDiagnostics(); }
+  async discover(): Promise<LoadedPlugin[]> { return this.loader.discover(); }
+  getAllPlugins(): LoadedPlugin[] { return this.loader.getAllPlugins(); }
+  getRegisteredIds(): string[] { return this.loader.getRegisteredIds(); }
+  getPlugin(id: string): LoadedPlugin | undefined { return this.loader.getPlugin(id); }
+
+  /** Narrow interception Port for Harness/Gateway consumers, not the whole Manager. */
+  getHookPort(): ExtensionHookPort { return this.hookPort; }
+
+  /** Shared append-only audit sink for Host service lifecycle records. */
+  getHookAudit(): HookAuditJournal { return this.hookJournal; }
+
+  /** Install the Host's existing high-risk HITL channel; no channel fails closed. */
+  setToolApprovalSink(sink: (event: HookToolEvent, request: Readonly<HookToolApproval>) => Promise<HitlAskResult>): void {
+    this.approvalSink = sink;
   }
 
-  // ================================================================
-  // Plugin Loading
-  // ================================================================
-
-  /**
-   * 发现并加载所有 plugins
-   */
-  async discover(): Promise<LoadedPlugin[]> {
-    return this.loader.discover();
-  }
-
-  /**
-   * 获取所有已加载的 plugins
-   */
-  getAllPlugins(): LoadedPlugin[] {
-    return this.loader.getAllPlugins();
-  }
-
-  /**
-   * 获取已注册的 plugin IDs
-   */
-  getRegisteredIds(): string[] {
-    return this.loader.getRegisteredIds();
-  }
-
-  /**
-   * 获取指定 plugin
-   */
-  getPlugin(id: string): LoadedPlugin | undefined {
-    return this.loader.getPlugin(id);
-  }
-
-  // ================================================================
-  // Hook Execution
-  // ================================================================
-
-  /**
-   * 运行指定 hook
-   *
-   * 语义：
-   * - 按 priority 降序执行
-   * - 支持 per-handler timeout
-   * - 拦截语义：返回非 null/undefined 的结果时中断后续 handlers
-   * - block: true 是 terminal，跳过后续 handlers
-   *
-   * @param hookName - Hook 名称
-   * @param event - 事件对象
-   * @param defaultResult - 默认结果（无 handler 返回时使用）
-   * @param config - plugin 配置（用于 timeout 覆盖）
-   * @returns 最终结果
-   */
-  async runHook<T>(
-    hookName: string,
-    event: Record<string, unknown>,
-    defaultResult: T,
-    config?: PluginEntryConfig,
-  ): Promise<T> {
-    const entries = this.collectHookEntries(hookName);
-
-    if (entries.length === 0) {
-      return defaultResult;
-    }
-
-    let result: T = defaultResult;
-
-    for (const entry of entries) {
-      // 计算 timeout：plugin config > handler 注册时 > 默认
-      const timeoutMs =
-        config?.hooks?.timeouts?.[hookName] ??
-        config?.hooks?.timeoutMs ??
-        entry.timeoutMs ??
-        30_000;
-
-      try {
-        const handlerResult = await this.runWithTimeout(
-          () => entry.handler(event),
-          timeoutMs,
-        );
-
-        // 拦截语义：非 null/undefined 结果中断链
-        if (handlerResult !== null && handlerResult !== undefined) {
-          result = handlerResult as T;
-
-          // block: true 是 terminal
-          if (typeof handlerResult === 'object' && 'block' in handlerResult && handlerResult.block) {
-            break;
-          }
-          // cancel: true 是 terminal
-          if (typeof handlerResult === 'object' && 'cancel' in handlerResult && handlerResult.cancel) {
-            break;
-          }
-          // outcome: 'block' 是 terminal
-          if (typeof handlerResult === 'object' && 'outcome' in handlerResult && handlerResult.outcome === 'block') {
-            break;
-          }
-        }
-      } catch (err) {
-        // 超时错误：默认跳过并继续，除非配置 abortOnTimeout
-        if (err instanceof Error && err.message.includes('timed out')) {
-          const shouldAbort = config?.hooks?.abortOnTimeout?.[hookName] ?? false;
-          console.error(
-            `[PluginManager] Hook "${hookName}" handler from plugin "${entry.pluginId}" timed out after ${timeoutMs}ms${shouldAbort ? ', aborting hook chain' : ', skipping'}`,
-          );
-          if (shouldAbort) break;
-          continue;
-        }
-        // 其他错误：记录并继续下一个 handler
-        console.error(
-          `[PluginManager] Hook "${hookName}" handler from plugin "${entry.pluginId}" failed:`,
-          err,
-        );
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * 执行观察语义的 hook（所有 plugin 都执行，不拦截）
-   */
-  async runAllHooks(
-    hookName: string,
-    event: Record<string, unknown>,
-  ): Promise<void> {
-    const entries = this.collectHookEntries(hookName);
-    for (const entry of entries) {
-      try {
-        await entry.handler(event);
-      } catch (error) {
-        console.error(`[PluginManager] Hook "${hookName}" from "${entry.pluginId}" error:`, error);
-      }
-    }
-  }
-
-  /**
-   * 收集指定 hook 的所有 handler entries
-   */
-  private collectHookEntries(hookName: string): Array<{
-    pluginId: string;
-    handler: (event: unknown) => Promise<unknown>;
-    priority: number;
-    timeoutMs?: number;
-  }> {
-    const entries: Array<{
-      pluginId: string;
-      handler: (event: unknown) => Promise<unknown>;
-      priority: number;
-      timeoutMs?: number;
-    }> = [];
-
-    for (const entry of this.loader.contributions.getHooks()) {
-      if (entry.hookName !== hookName) continue;
-      entries.push({
-        pluginId: entry.pluginId,
-        handler: entry.handler as (event: unknown) => Promise<unknown>,
-        priority: entry.priority,
-        timeoutMs: entry.timeoutMs,
-      });
-    }
-
-    entries.sort((a, b) => b.priority - a.priority);
-    return entries;
-  }
-
-  /**
-   * 带超时执行
-   */
-  private async runWithTimeout<T>(
-    fn: () => Promise<T>,
-    timeoutMs: number,
-  ): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Hook handler timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      fn().then(
-        (result) => {
-          clearTimeout(timer);
-          resolve(result);
-        },
-        (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      );
-    });
-  }
-
-  /** Effective Tool contributions; mounting and Agent visibility belong to P2. */
   getTools(includeOptional = false): PluginToolRecord[] {
     return this.loader.contributions.getTools().filter((tool) => includeOptional || !tool.optional);
   }
 
-  /**
-   * Effective Command contributions. SessionOp grants come only from this
-   * published registry, never from a handler result or mutable Router state.
-   */
-  getCommands(): PluginCommandRecord[] {
-    return this.loader.contributions.getCommands();
-  }
+  getCommands(): PluginCommandRecord[] { return this.loader.contributions.getCommands(); }
+  getServices(): PluginServiceRecord[] { return this.loader.contributions.getServices(); }
 
-  /**
-   * Resolve the manifest-authorized SessionOps for a registered Command.
-   *
-   * @param pluginId - Effective registry identity, supplied by the Host
-   * @param name - Command name within that plugin
-   * @returns Declared operations, or undefined when the contribution is absent
-   */
   getCommandSessionOps(pluginId: string, name: string): PluginCommandRecord['sessionOps'] | undefined {
     const command = this.loader.contributions.getCommands().find(
       (candidate) => candidate.pluginId === pluginId &&
@@ -642,14 +67,53 @@ export class PluginManager {
     return [...(declared.sessionOps ?? [])];
   }
 
-  /** Fire the declared start hook. Background service support is deferred to P4. */
-  async onGatewayStart(config?: Record<string, unknown>, workspaceDir?: string): Promise<void> {
-    const event: GatewayLifecycleEvent = { config, workspaceDir };
-    await this.runAllHooks('gateway_start', event);
+  private getHookConfig(pluginId: string): PluginEntryConfig | undefined {
+    return this.loader.getPluginConfig(pluginId);
   }
 
-  /** Fire the declared stop hook, preserving the existing production trigger. */
-  async onGatewayStop(): Promise<void> {
-    await this.runAllHooks('gateway_stop', {});
+  private async recordHook(record: HookAuditRecord): Promise<void> {
+    await this.hookJournal.append(record);
+  }
+
+  private async approveToolCall(
+    event: HookToolEvent,
+    request: Readonly<HookToolApproval>,
+    pluginId: string,
+  ): Promise<HitlOutcome> {
+    if (!this.approvalSink) {
+      return {
+        allowed: false,
+        decision: 'deny',
+        timedOut: false,
+        denyReason: 'no_channel',
+        denyDetail: 'No Host approval channel is configured for before_tool_call',
+      };
+    }
+    const sink = this.approvalSink;
+    // SEC-7 single model: the engine remembers approve_session / approve_always
+    // (the Host must not cache), so the scope the human chose is actually honored.
+    return resolveHitlOutcome({
+      channel: 'plugin_hook',
+      // Key = asking policy identity + tool name: a session/always grant must never
+      // silently satisfy another plugin's approval question for the same tool.
+      // Accepted residual semantics: the grant is tool-level, not argument-level —
+      // later parameter variants of the same tool+plugin ride the same decision
+      // (same contract as the builtin high_risk channel's tool-name key).
+      key: `${pluginId}:${event.toolName}`,
+      sessionId: event.sessionId,
+      agentId: event.agentId,
+      ask: async () => {
+        try {
+          return await sink(event, request);
+        } catch (error) {
+          // Channel failure is a denial source, never a human rejection and never an allow.
+          return {
+            decision: 'deny',
+            denyReason: 'channel_error',
+            denyDetail: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+    });
   }
 }

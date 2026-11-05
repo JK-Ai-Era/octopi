@@ -870,6 +870,26 @@
                   "type": "string"
                 },
                 "additionalProperties": {}
+              },
+              "hooks": {
+                "type": "object",
+                "properties": {
+                  "timeoutMs": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "timeouts": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "additionalProperties": false

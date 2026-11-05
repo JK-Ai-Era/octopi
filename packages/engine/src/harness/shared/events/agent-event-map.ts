@@ -182,10 +182,11 @@ export interface AgentEventMap {
     durationMs?: number;
     cached?: boolean;
   };
-  /** 上下文压缩失败（引擎已回退截断，本轮继续） */
+  /** 上下文压缩受阻（failed=压缩失败已回退截断；denied=before_compaction 策略拒绝，非故障） */
   'context.compact.error': {
     reason?: 'proactive' | 'overflow';
     error: string;
+    kind?: 'denied' | 'failed';
     durationMs?: number;
   };
   /** 摘要请求 cache-miss 旁路/穷尽可观测（F22）：no_prefix=无同形前缀，window_guard=前缀放不下改文本化旁路，window_exhausted=最终失败 */

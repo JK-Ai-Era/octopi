@@ -20,10 +20,10 @@ import { readStaging } from './staging.js';
 export interface PluginEntryConfig {
   enabled?: boolean;
   config?: Record<string, unknown>;
+  /** Per-plugin hook timeout policy; consumed by the Hook adapter (timeouts keyed by hook name). */
   hooks?: {
     timeoutMs?: number;
     timeouts?: Record<string, number>;
-    abortOnTimeout?: Record<string, boolean>;
   };
 }
 
@@ -77,6 +77,14 @@ export class PluginLoader {
 
   constructor(config: PluginLoaderConfig) {
     this.config = config;
+  }
+
+  /** Resolve a loaded plugin's configured hook policy, including legacy aliases. */
+  getPluginConfig(id: string): PluginEntryConfig | undefined {
+    const plugin = this.plugins.get(id);
+    if (!plugin) return undefined;
+    const ids = [plugin.id, ...(plugin.manifest.legacyPluginIds ?? [])];
+    return ids.map((key) => this.config.entries?.[key]).find((entry) => entry !== undefined);
   }
 
   /** Discover, validate and atomically publish the successful plugin set. */
@@ -293,6 +301,7 @@ export class PluginLoader {
       const entries = [
         ...(candidate.manifest.contributes?.tools ?? []).map((name) => `tool:${name}`),
         ...(candidate.manifest.contributes?.commands ?? []).map((command) => `command:${command.name}`),
+        ...(candidate.manifest.contributes?.services ?? []).map((name) => `service:${name}`),
       ];
       for (const claim of entries) {
         const owner = claims.get(claim);
@@ -384,6 +393,14 @@ export class PluginLoader {
     }
     for (const hook of declaredHooks) {
       if (!staged.hooks.has(hook)) throw new Error(`Declared hook "${hook}" was not registered`);
+    }
+    const declaredServices = new Set(manifest.contributes?.services ?? []);
+    const actualServices = new Set(staged.services.map((service) => service.serviceId));
+    for (const service of actualServices) {
+      if (!declaredServices.has(service)) throw new Error(`Service "${service}" is not declared in manifest`);
+    }
+    for (const service of declaredServices) {
+      if (!actualServices.has(service)) throw new Error(`Declared service "${service}" was not registered`);
     }
   }
 

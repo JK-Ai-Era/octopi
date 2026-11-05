@@ -202,6 +202,10 @@ export interface SessionAwareRunnerConfig {
     intentTimeoutMs?: number;
     emptyMessagePrompt?: string;
   };
+  /** Budget for plugin Runtime snapshot contributions; never part of systemPrompt. */
+  extensionSnapshotBudgetTokens?: number;
+  /** Host-owned narrow extension boundary; no plugin registry enters Runner. */
+  extensionHooks?: import('../extension/plugin-ecosystem/hooks/types.js').ExtensionHookPort;
   /**
    * 事件旁路（Telemetry）。每条适配后事件调用（含 llm_stream_delta），
    * 不改变 yield 语义。由 Builder 注入 RunTelemetry.onEvent。
@@ -237,6 +241,8 @@ export interface RunConfig {
   cwd?: string;
   /** 本次 Run 的工具隔离覆盖（缺省用 Runner 配置 / DEFAULT_TOOL_ISOLATION） */
   toolIsolation?: ToolIsolationMode;
+  /** Caller identity forwarded from the real RunRequest; not a plugin-provided claim. */
+  principal?: import('../extension/plugin-ecosystem/hooks/types.js').ExtensionHookContext['principal'];
   /** Agent 模板 revision 绑 Run（Reserved：AgentRevision）；写入 RunScope / 审计 */
   agentRevision?: string;
   contextWindow?: number;
@@ -1072,7 +1078,15 @@ export class SessionAwareRunner {
       // 3. 加载或创建 session
       let session = await this.store.load(sessionId);
       if (!session) {
-        session = this.createSession(sessionId, runConfig.agentId ?? 'default');
+        session = this.createSession(sessionId, _agentId);
+        await this.store.save(sessionId, session);
+        await this.config.extensionHooks?.observe('session_start', {
+          sessionId,
+          agentId: _agentId,
+          ...(runConfig.principal === undefined ? {} : { principal: runConfig.principal }),
+          ...(signal === undefined ? {} : { signal }),
+          reason: 'created',
+        });
       }
       /** 上下文租约点之前的 Discourse 前缀（写回时并回，不进默认 LLM 窗口） */
       let contextLeasePrefix: Message[] = [];
@@ -1156,6 +1170,28 @@ export class SessionAwareRunner {
         await this.persistTurnSeq(sessionId, seq);
         return formatTurnId(seq);
       };
+
+      const extensionHooks = this.config.extensionHooks;
+      if (extensionHooks) {
+        const originalPrompt = getTextContent(input.content);
+        const prepared = await extensionHooks.transform('agent_turn_prepare', {
+          sessionId,
+          agentId: _agentId,
+          ...(runConfig.principal === undefined ? {} : { principal: runConfig.principal }),
+          ...(signal === undefined ? {} : { signal }),
+          prompt: originalPrompt,
+          messages: session.messages,
+        }, originalPrompt);
+        if (typeof prepared.value !== 'string') {
+          throw new Error('agent_turn_prepare must produce a prompt string');
+        }
+        if (typeof input.content === 'string') input.content = prepared.value;
+        else if (Array.isArray(input.content)) {
+          input.content = input.content.map((block) => block.type === 'text'
+            ? { ...block, text: prepared.value as string }
+            : block);
+        }
+      }
 
       // 5. 追加用户消息（正文稍后一次定形为 <turn_start>）
       session.messages.push(input);
@@ -1510,18 +1546,65 @@ export class SessionAwareRunner {
 
       // ── Run 级模型快照：每 run 只 resolve 一次（必须在 system assembler 之前）──
       const modelRef = this.readRunModelRef(session, effectiveRunConfig);
-      const resolvedModel = this.resolveModelOverride
+      let resolvedModel = this.resolveModelOverride
         ? this.resolveModelOverride({
             modelRef,
             defaultProvider: effectiveRunConfig.modelProvider,
           })
         : null;
+      if (extensionHooks && resolvedModel) {
+        const transformed = await extensionHooks.transform('before_model_resolve', {
+          sessionId,
+          agentId: _agentId,
+          ...(effectiveRunConfig.principal === undefined ? {} : { principal: effectiveRunConfig.principal }),
+          ...(signal === undefined ? {} : { signal }),
+          current: { provider: resolvedModel.providerName, model: resolvedModel.modelName },
+          prompt: getTextContent(input.content),
+        }, { provider: resolvedModel.providerName, model: resolvedModel.modelName });
+        const selection = transformed.value as { provider: string; model: string };
+        if (!this.resolveModelOverride) throw new Error('before_model_resolve has no Host model resolver');
+        const transformedModel = this.resolveModelOverride({
+          modelRef: `${selection.provider}/${selection.model}`,
+        });
+        if (!transformedModel) {
+          throw new Error(`before_model_resolve selected an unconfigured model: ${selection.provider}/${selection.model}`);
+        }
+        resolvedModel = transformedModel;
+      }
       if (resolvedModel) {
         effectiveRunConfig = {
           ...effectiveRunConfig,
           contextWindow: resolvedModel.contextWindow,
           model: resolvedModel.modelName,
         };
+      }
+
+      const runId = createRunId(sessionId, _agentId);
+      let pluginRuntimeSnapshot = '';
+      if (extensionHooks) {
+        const collected = await extensionHooks.collect('before_prompt_build', {
+          sessionId,
+          agentId: _agentId,
+          runId,
+          ...(effectiveRunConfig.principal === undefined ? {} : { principal: effectiveRunConfig.principal }),
+          ...(signal === undefined ? {} : { signal }),
+          prompt: getTextContent(input.content),
+          messages: session.messages,
+        });
+        if (collected.contributions.length > 0) {
+          const { PluginRuntimeSnapshotLayer } = await import('../context/layers.js');
+          const layer = new PluginRuntimeSnapshotLayer(collected.contributions);
+          const content = await layer.assemble({
+            sessionId,
+            agentId: _agentId,
+            messages: session.messages,
+            query: getTextContent(input.content),
+            tokenBudget: Math.max(1, Math.min(this.config.extensionSnapshotBudgetTokens ?? 4096, Math.floor((effectiveRunConfig.contextWindow ?? 8192) * 0.1))),
+            systemBudget: Math.floor((effectiveRunConfig.contextWindow ?? 8192) * 0.6),
+            ...(signal === undefined ? {} : { signal }),
+          });
+          pluginRuntimeSnapshot = content?.text ?? '';
+        }
       }
 
       // system prompt 终装：Assembler（层契约）优先，否则退回字符串拼接
@@ -1679,8 +1762,7 @@ export class SessionAwareRunner {
         }
       }
 
-      // Run 身份与 RunScope 对齐（Observer/审计共用，不另造第二套 ID）
-      const runId = createRunId(sessionId, _agentId);
+      // Run 身份已在 Prompt Collect 前生成；Observer/审计复用同一 ID。
       const attachmentRoots = this.config.sessionsDir
         ? [join(this.config.sessionsDir, toSessionFileName(sessionId), 'attachments')]
         : undefined;
@@ -1718,6 +1800,13 @@ export class SessionAwareRunner {
         sessionId,
         agentId: _agentId,
         runId,
+        principal: effectiveRunConfig.principal,
+        prompt: getTextContent(input.content),
+        resolvedModel: resolvedModel ?? undefined,
+        extensionSnapshotBudgetTokens: this.config.extensionSnapshotBudgetTokens,
+        resolveConfiguredModel: this.resolveModelOverride
+          ? (selection) => this.resolveModelOverride!({ modelRef: `${selection.provider}/${selection.model}` })
+          : undefined,
         systemPrompt: runContext.systemPrompt,
         agentRevision: effectiveRunConfig.agentRevision,
         // 交接式摘要素材（F8R-05）：每次装配现取活任务快照（attachSession 同对象）
@@ -1868,7 +1957,7 @@ export class SessionAwareRunner {
         const slotsXml = joinSlotXml([
           {
             tag: 'runtime_snapshot',
-            body: runtimeSnapshotText ? runtimeSnapshotText : '',
+            body: [runtimeSnapshotText, pluginRuntimeSnapshot].filter(Boolean).join('\n\n'),
           },
           {
             tag: 'session_attachments',
@@ -2625,6 +2714,10 @@ export class SessionAwareRunner {
         };
       }
 
+      // Compaction Hooks fire exactly once inside the compact engine
+      // (HookedCompactEngine) with the real session identity. Orchestrating a
+      // second vote/observe here double-fired every manual compaction and
+      // observed denials as if they were outcomes.
       const result = await options.compactStructural({
         sessionId,
         agentId,
@@ -2634,7 +2727,6 @@ export class SessionAwareRunner {
         // 交接式摘要素材：task 快照（裸状态块，不含对话引导语）随指令尾部注入
         taskSnapshot: renderSessionTasksInjection(session.tasks ?? [], { includeGuidance: false }),
       });
-
       if (result.ok && result.summary && result.compacted) {
         const snap: ContextCompactSnapshot = {
           summary: result.summary,

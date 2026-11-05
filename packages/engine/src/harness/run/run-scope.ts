@@ -108,6 +108,17 @@ export interface RunScope {
    * 由 Runner 在组装 RunScope 时生成；Observer/审计共用，不另造第二套 ID。
    */
   runId?: string;
+  /** Read-only Host Principal; supplied by the caller, never by a plugin. */
+  principal?: { actorId?: string; actorType?: string; tenantId?: string };
+  /** Current effective input, used by extension attribution and collection. */
+  prompt?: string;
+  /** Host-owned per-Run model snapshot; plugin transforms must use the Host resolver. */
+  resolvedModel?: import('./model/types.js').ResolvedModel;
+  /** Host-only allowlist resolver for iteration model transforms. */
+  resolveConfiguredModel?: (selection: { provider: string; model: string }) => import('./model/types.js').ResolvedModel | null;
+  thinkingLevel?: import('@octopi-agent/core/types.js').ThinkingLevel;
+  extensionSnapshotBudgetTokens?: number;
+  iteration?: number;
   /** 本轮 systemPrompt 装配结果；供 convertToLlm / 层装配 */
   systemPrompt?: string;
   /**

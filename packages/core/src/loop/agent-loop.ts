@@ -81,11 +81,15 @@ export async function* agentLoop(
     model,
     convertToLlm,
     transformContext,
+    transformLlmMessages,
     beforeToolCall,
+    prepareToolArguments,
     afterToolCall,
+    onToolCallComplete,
     onToolUpdate,
     shouldStopAfterStep,
     onStepComplete,
+    beforeStep,
     prepareNextStep,
     onError,
     observer,
@@ -147,6 +151,9 @@ export async function* agentLoop(
   // 当前上下文（循环内直接修改 messages 引用）
   let currentContext = context;
   let currentModel = model;
+  let iteration = 0;
+  let currentThinkingLevel: import('../core/types.js').ThinkingLevel | undefined;
+  let lastAssistantMessage: Message | undefined;
   // 最近一次 LLM 调用的 usage。每次调用发送完整上下文，所以最新值即为当前上下文大小。
   // 注意：不应累加 reported prompt（那会变成输入 token 总消耗，而非上下文大小）。
   let lastResponseUsage: TokenUsage | undefined;
@@ -166,7 +173,26 @@ export async function* agentLoop(
       return;
     }
 
+    if (beforeStep) {
+      try {
+        const update = await beforeStep({
+          message: lastAssistantMessage ?? { role: 'user', content: '', timestamp: Date.now() },
+          toolResults: [],
+          context: currentContext,
+          iteration,
+        });
+        if (update?.model) currentModel = update.model;
+        if (update?.thinkingLevel !== undefined) currentThinkingLevel = update.thinkingLevel;
+        if (update?.context && update.context !== currentContext) {
+          Object.assign(currentContext, update.context);
+        }
+      } catch (error) {
+        yield { type: 'agent_end', reason: 'error', timestamp: Date.now(), error };
+        return;
+      }
+    }
     yield { type: 'step_start', timestamp: Date.now() };
+    iteration += 1;
 
     // ── 1. 上下文变换（可选） ──
     if (transformContext) {
@@ -175,9 +201,12 @@ export async function* agentLoop(
 
     // ── 2. 消息格式转换（内部格式 → LLM 格式） ──
     const toolDefs = buildToolDefinitions(currentContext.tools);
-    const llmMessages: LLMMessage[] = convertToLlm
+    const normalizedLlmMessages: LLMMessage[] = convertToLlm
       ? await convertToLlm(currentContext.messages)
       : normalizeMessagesForLlm(currentContext.messages);
+    const llmMessages = transformLlmMessages
+      ? await transformLlmMessages(normalizedLlmMessages)
+      : normalizedLlmMessages;
 
     // ── 3. 调用 LLM（带超时保护 + 流式输出） ──
     // callId 无模块状态（时间 + 随机）：同 agent 并发 run 的计时隔离键
@@ -206,6 +235,7 @@ export async function* agentLoop(
         toolDefs,
         signal,
         {
+          ...(currentThinkingLevel === undefined ? {} : { thinkingLevel: currentThinkingLevel }),
           idleTimeoutMs,
           absoluteTimeoutMs,
           // TTFT 计时点在 call-model 流消费处（首个任意类型 chunk，含 tool_call——与旧探针口径一致）
@@ -292,7 +322,12 @@ export async function* agentLoop(
       ...(response.reasoning ? { metadata: { reasoning: response.reasoning } } : {}),
     };
     currentContext.messages.push(assistantMessage);
-    yield { type: 'assistant_message', message: assistantMessage, timestamp: Date.now() };
+    // Tool-call responses announce the assistant message before tool events. A
+    // text-only reply is announced after onStepComplete (see step 6): the hook
+    // chain may finalize the reply content and events must match persistence.
+    if (response.toolCalls?.length) {
+      yield { type: 'assistant_message', message: assistantMessage, timestamp: Date.now() };
+    }
 
     // ── 5. finishReason 校验（LLM 协议层，非策略） ──
     if (response.finishReason === 'length') {
@@ -364,10 +399,13 @@ export async function* agentLoop(
 
     if (toolCalls.length === 0) {
       // 纯文本回复 → 检查 followUp 消息队列
-      // 通知 onStepComplete
+      // 通知 onStepComplete（Hook 链可能 Finalize 回复内容）
       if (onStepComplete) {
         await onStepComplete({ message: assistantMessage, toolResults: [], context: currentContext });
       }
+      // onStepComplete 之后才发事件：assistant_message 携带已定稿消息，
+      // 事件面、step.end 与持久化历史三者一致
+      yield { type: 'assistant_message', message: assistantMessage, timestamp: Date.now() };
 
       // 检查用户停止条件
       if (shouldStopAfterStep) {
@@ -423,7 +461,7 @@ export async function* agentLoop(
             durationMs: 0,
           };
         } else {
-          result = await executeOneTool(tc, currentContext, beforeToolCall, afterToolCall, observer, signal, onToolUpdate);
+          result = await executeOneTool(tc, currentContext, prepareToolArguments, beforeToolCall, afterToolCall, onToolCallComplete, observer, signal, onToolUpdate);
         }
         toolResults.push(result);
         yield { type: 'tool_end', toolCall: tc, result, timestamp: Date.now() };
@@ -437,7 +475,7 @@ export async function* agentLoop(
         | { kind: 'immediate'; toolCall: ToolCall; result: LoopToolResult }
       > = [];
       for (const tc of toolCalls) {
-        const prep = await prepareToolCall(tc, currentContext, beforeToolCall, signal);
+        const prep = await prepareToolCall(tc, currentContext, prepareToolArguments, beforeToolCall, signal);
         if (prep.kind === 'immediate') {
           prepared.push({ kind: 'immediate', toolCall: tc, result: prep.result });
         } else {
@@ -488,6 +526,20 @@ export async function* agentLoop(
         // 事件面（WS/UI/EventBus）必须拿到脱敏后的结果，与串行路径契约一致。
         // afterToolCall 抛异常时降级为错误结果，不中断收割循环（保证 agent_end 契约）。
         let result = rawResult;
+        const preparedEntry = prepared.find((entry) => entry.toolCall.id === id);
+        if (onToolCallComplete && preparedEntry?.kind === 'prepared') {
+          try {
+            await onToolCallComplete({
+              toolCall: preparedEntry.toolCall,
+              args: preparedEntry.args,
+              result,
+              context: currentContext,
+              durationMs: result.durationMs,
+            }, signal);
+          } catch {
+            // Observation never mutates or rejects a completed tool call.
+          }
+        }
         if (afterToolCall && !result.isError) {
           const prepEntry = prepared.find(p => p.toolCall.id === id);
           try {
@@ -633,14 +685,16 @@ function makeToolUpdateForwarder(
 async function executeOneTool(
   toolCall: ToolCall,
   context: AgentContext,
+  prepareToolArguments: AgentLoopConfig['prepareToolArguments'],
   beforeToolCall: AgentLoopConfig['beforeToolCall'],
   afterToolCall: AgentLoopConfig['afterToolCall'],
+  onToolCallComplete: AgentLoopConfig['onToolCallComplete'],
   observer: AgentLoopConfig['observer'],
   signal?: AbortSignal,
   onToolUpdate?: AgentLoopConfig['onToolUpdate'],
 ): Promise<LoopToolResult> {
   // Prepare
-  const prepared = await prepareToolCall(toolCall, context, beforeToolCall, signal);
+  const prepared = await prepareToolCall(toolCall, context, prepareToolArguments, beforeToolCall, signal);
   if (prepared.kind === 'immediate') return prepared.result;
 
   // Execute
@@ -664,6 +718,14 @@ async function executeOneTool(
       isError: true,
       durationMs: Date.now() - startTime,
     };
+  }
+
+  if (onToolCallComplete) {
+    try {
+      await onToolCallComplete({ toolCall, args: prepared.args, result, context, durationMs: result.durationMs }, signal);
+    } catch {
+      // Observation never mutates or rejects a completed tool call.
+    }
   }
 
   // afterToolCall 抛异常时降级为错误结果，不中断循环
@@ -702,6 +764,7 @@ async function executeOneTool(
 async function prepareToolCall(
   toolCall: ToolCall,
   context: AgentContext,
+  prepareToolArguments: AgentLoopConfig['prepareToolArguments'],
   beforeToolCall: AgentLoopConfig['beforeToolCall'],
   signal?: AbortSignal,
 ): Promise<
@@ -740,10 +803,24 @@ async function prepareToolCall(
     };
   }
 
-  // 参数预处理
-  const args = tool.prepareArguments
-    ? tool.prepareArguments(toolCall.arguments)
-    : toolCall.arguments;
+  // 参数变换在工具校验和安全准入之前；原始/最终值由 Harness 独立归因。
+  let args: unknown = toolCall.arguments;
+  if (prepareToolArguments) {
+    try {
+      args = await prepareToolArguments({ toolCall, args, context }, signal);
+    } catch (error) {
+      return {
+        kind: 'immediate',
+        result: {
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          content: `Error preparing tool arguments: ${error instanceof Error ? error.message : String(error)}`,
+          isError: true,
+        },
+      };
+    }
+  }
+  args = tool.prepareArguments ? tool.prepareArguments(args) : args;
 
   // 参数校验
   if (tool.validate) {

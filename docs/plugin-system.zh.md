@@ -1,12 +1,12 @@
 # 插件系统
 
-Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过统一的版本化契约贡献 Tool、Command 和已声明 Hook；宿主在执行插件代码之前先完成包校验。
+Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过统一的版本化契约贡献 Tool、Command、后台 Service 和已声明 Hook；宿主在执行插件代码之前先完成包校验。
 
 > **信任边界**：manifest 声明、`allowList` 和 `blockList` 用于安装决策与诊断，**不是沙箱**。进程内插件可以直接使用 Node.js API。ToolPolicy 和 EffectPolicy 约束经 Tool 接口发生的调用与效应，不能约束插件进程中的任意代码。不要安装不可信代码。
 
 ## 当前实现状态
 
-本文描述插件 v1 P1 的 manifest-first 加载基础与 P2 的 per-Agent Plugin Tool 执行链。
+本文描述插件 v1 契约：manifest-first 加载（P1）、per-Agent Plugin Tool 执行链（P2）、Plugin Command（P3）与类型化 Hook 执行面（P4）。
 
 | 能力面 | 状态 |
 |---|---|
@@ -15,10 +15,16 @@ Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过
 | JSON Schema 配置校验 | 已实现 |
 | 依赖、身份与贡献声明一致性校验 | 已实现 |
 | 暂存注册与有效注册表原子发布 | 已实现 |
-| Tool / Command 贡献注册 | 已实现 |
+| Tool / Command / Service 贡献注册 | 已实现；声明集合与实际注册集合必须一致 |
 | Tool 挂载、per-Agent allow/deny、执行与来源归因 | 已实现；`tools.allow` 为空不会暴露插件 Tool |
 | Command 元数据、调用方准入与 Host `sessionOps` 授权 | 已实现；插件 SessionOp 必须与 manifest 声明一致 |
-| Hook 执行语义 | 保留现有 message/gateway-stop 触发点；类型化组合和其余触发点后续实现 |
+| Hook 执行语义 | 22 个 Hook 名已实现：类型化 Observe / Collect / Transform / Vote / Override 组合、Tool 与 Iteration 双阶段、协作式超时、逐调用审计 |
+| Run / Tool / Iteration / Message / Compact / Session 归档 / Gateway 触发点 | 已接入真实生产路径 |
+| Tool 审批投票（`before_tool_call` 的 `require_approval`） | 已接入 Host HITL 通道；`approve` / `approve_session` / `approve_always` 由引擎决策缓存记账；无审批通道时拒绝执行 |
+| 后台服务 | 已实现：manifest 声明的 `registerService`，宿主负责启停、required 失败回滚、optional 失败产生 System Issue、逆序停止、协作式超时 |
+| `before_install` Hook | 已声明但休眠——仓库尚无真实 Skill/Plugin 安装流程，没有接线任何触发点，也绝不伪造 |
+| `session_end` Hook | 仅在真实归档导出并从热库删除后触发（需配置归档管理器）；普通删除或压缩不会冒充它 |
+| `before_prompt_build` / `before_iteration` 快照 | 已实现；带预算和 pluginId 归因的快照随 turn envelope 的 `runtime_snapshot` 槽位（`before_prompt_build`）或当次请求视图（`before_iteration`）携带；绝不写入 system prompt |
 | Provider / Channel / ContextEngine 注册 | 尚未进入稳定 v1 作者面 |
 | 不可信代码隔离 / 热卸载 | 不支持 |
 
@@ -54,6 +60,7 @@ Loader 扫描每个配置路径。路径可以是插件目录，也可以是包�
   "contributes": {
     "tools": ["acme_search"],
     "commands": [{ "name": "acme-status", "sessionOps": [] }],
+    "services": ["acme-watcher"],
     "hooks": ["message_received"]
   },
   "requiresPlugins": [],
@@ -64,7 +71,7 @@ Loader 扫描每个配置路径。路径可以是插件目录，也可以是包�
 - `apiVersion` 是插件契约版本；`engine.octopi` 是与已安装 engine 核对的 semver 范围。
 - `entry` 必填。解析后的 realpath 必须仍在插件根目录内，包括符号链接解析之后。这是包校验，不是安全沙箱。
 - manifest 是安装前的声明权威。`definePlugin` 只重复入口 `id`，用于身份一致性校验。
-- `contributes` 声明入口必须实际注册的内容。未声明或缺失的 Tool、Command、Hook 都会使该插件注册失败。
+- `contributes` 声明入口必须实际注册的内容。未声明或缺失的 Tool、Command、Hook、Service 都会使该插件注册失败。
 - `legacyPluginIds` 将旧配置 ID 映射到当前身份。新旧 ID 同时配置会报错。
 - 未知 manifest 字段会被拒绝。旧草案中只有声明、没有消费者的字段不会成为静默功能开关。
 
@@ -117,8 +124,9 @@ export default definePlugin({
 - `api.pluginConfig` 是已通过校验的业务配置。
 - `api.resolvePath(relativePath)` 在 ESM 中相对于插件根目录解析路径。
 - Tool 的 `capabilities` 必填。含 `fs-write` 的 Tool 未显式声明时默认串行执行。
-- `api.on` 按 22 个既有 Hook 名提供类型。声明不代表所有事件都已有生产触发点，见上方状态表。
-- Provider、Channel、ContextEngine、媒体 Provider 与后台服务注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
+- `api.on` 按 22 个既有 Hook 名提供类型。`before_tool_call` 与 `before_iteration` 是双阶段事件，必须传 `{ phase: 'transform' | 'vote' }`（或使用 `api.onBeforeToolCall` / `api.onBeforeIteration` 辅助方法）；其余事件不得传 `phase`。声明不代表所有事件都已有生产触发点，见上方状态表（`before_install` 处于休眠）。
+- `api.registerService` 暂存后台服务，且必须同时在 `contributes.services` 声明；启停生命周期由宿主管理（见「后台服务」）。
+- Provider、Channel、ContextEngine 与媒体 Provider 注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
 
 ## 插件 Command 与 Session 效应
 
@@ -135,6 +143,56 @@ manifest 的 Command 声明包含 `name` 与 `sessionOps`，其他元数据由�
 `newSessionId` 只能由 Host 在已授权的 `new_session` 后生成，handler 自报的值会被丢弃。Router 的候选身份包含 Command 名，因此同一插件的多个 Command 分别参与冲突裁决与注销，授权仍使用真实 pluginId。
 
 `prompt` Command 可以返回 `enterLoop: true` 和非空 `messages`，但不能同时携带 SessionOp。`control` Command 不进入 Loop。已声明的效应仍需通过 Host 原有业务校验，可能因业务原因失败。禁用插件不会贡献可见或可执行的 Command。
+
+## Hook 执行语义
+
+每个 Hook 名属于一种组合类别，失败、取消和审计语义明确。handler 按 priority 顺序执行（同优先级按注册顺序）；`priority` 只决定执行顺序，永远不能推翻拒绝。
+
+| 类别 | Hooks | 失败语义 |
+|---|---|---|
+| Observe | `agent_end`、`after_tool_call`、`message_received`、`message_sent`、`session_start`、`session_end`、`after_compaction`、`gateway_start`、`gateway_stop`、`after_iteration`、`loop_end` | fail-open：handler 抛错只记录，操作继续 |
+| Collect | `before_prompt_build` | 逐贡献 fail-open：失败的收集器跳过并记录，有效贡献照常生效 |
+| Transform | `before_model_resolve`、`agent_turn_prepare`、`before_agent_finalize` | fail-closed：handler 抛错中止 Run（工具级 `before_tool_call` Transform 抛错则拒绝该次调用、不执行任何内容）；不发布部分变换结果 |
+| Vote | `before_agent_run`、`message_sending`、`before_compaction`、`before_install`，以及 `before_tool_call` / `before_iteration` 的 `vote` 阶段 | fail-closed：任一 `deny` 获胜；handler 抛错计为 `deny`；`before_tool_call` 之外的 `require_approval` 视为拒绝 |
+| Override | `before_agent_reply` | 只允许一个所有者；多个所有者或失败都拒绝 Run |
+
+- 双阶段事件先执行 `transform`，再以变换后的值执行 `vote`。对 `before_tool_call`，变换后的参数会重新经过工具自身校验和宿主安全检查才进入 Vote；审计同时保留原始参数、最终参数和修改者。被拒的工具调用不执行 handler，也不伪造 `after_tool_call`。
+- 每次 handler 执行都有协作式超时（默认 30 秒，可通过 `timeoutMs` 或插件配置 `hooks.timeouts` 逐 Hook 覆盖）。handler 收到 `AbortSignal`；进程内代码无法被强制终止。
+- 每次执行都会向按日审计（`~/.octopi/audit/hooks/YYYY-MM-DD.jsonl`）追加记录：pluginId、hook、阶段、结果、run/session/agent 身份和 Principal。该账本是诊断用途，不是防篡改账本；审计写入失败不改变操作结果。
+- Run 级观察报告精确终态事实：`reason` 为 `completed | should_stop | aborted | error | denied`，`success` 仅在干净终态（`completed` 或 `should_stop`）为 true。策略拒绝在 Hook 观察中呈现为 `reason: 'denied'`，Core `agent_end` 事件仍保留兼容的 `error` 原因。
+- `before_agent_reply`（Override）真正替代本次 Run 的模型回复；`before_agent_finalize` 只变换无工具调用的最终回复。两者都不得添加 `toolCalls`（不会有对应工具结果）。事件与持久化携带定稿后的回复；已流式推送到客户端的文本无法追回——需要完全控制回复的插件应使用 `before_agent_reply`。
+- Iteration 的 model/thinking 变换只能选择宿主已配置的值——未知模型直接失败，不静默回退。选中的 thinking 级别进入 LLMRequest；向 Provider API 参数的映射随 P5 Provider 工作落地。
+- `before_prompt_build` 贡献随 turn envelope 的 `runtime_snapshot` 槽位与其他易变块一同携带：用户消息 write-once（原始文本永不改写、后续轮次永不重写，发给模型的内容即存储内容）。`before_iteration` 快照只投影到当次 LLM 请求视图。system prompt 永不受影响。
+
+## 工具调用审批
+
+`before_tool_call` 的 Vote 可以返回 `require_approval` 并携带 `approval` 请求。宿主展示既有的高风险审批卡片，审批结果直接裁决该 Vote：
+
+- `approve` 只放行本次调用；`approve_session` 与 `approve_always` 由引擎决策缓存记账（分别按 Session、按 Agent 在进程生命周期内），同一工具在相应范围内不再重复询问。
+- 超时、取消和人工拒绝是不同的拒绝来源，均如实保留在审计记录和拦截原因中；超时绝不会被记录成人工拒绝。
+- 记账键是（通道，pluginId，工具名，会话/agent），不含参数。因此 `approve_session` 与 `approve_always` 会覆盖同插件策略下同一工具的后续参数变形（内置 `high_risk` 通道保持既有的工具名键）；参数敏感的工具应使用一次性批准。
+- 未配置宿主审批通道时，`require_approval` 拒绝执行（fail-closed）。
+
+## 后台服务
+
+```jsonc
+{ "contributes": { "services": ["acme-watcher"] } }
+```
+
+```ts
+api.registerService({
+  serviceId: 'acme-watcher',
+  required: false,
+  timeoutMs: 5000,
+  start: async (signal) => { /* 绑定资源 */ },
+  stop: async (signal) => { /* 释放资源 */ },
+});
+```
+
+- 每个服务必须在 `contributes.services` 声明且只注册一次。跨插件 ID 冲突在 import 前拒绝；未声明或缺失的贡献在注册时被检出，插件进入有效注册表之前发布失败。
+- `registerService` 只暂存服务，不产生副作用。宿主在开放 Channel 之前启动服务，并在关闭时按注册的逆序停止。
+- `required: true` 的服务启动失败会回滚并阻止 Gateway 启动；`optional: true` 的失败产生 System Issue，Gateway 继续运行。
+- `start`/`stop` 收到 `AbortSignal` 并受 `timeoutMs` 约束（协作式；进程内代码无法被强制杀死）。生命周期结果写入 Hook 审计账本。
 
 ## 配置
 
@@ -226,7 +284,7 @@ ToolPolicy / EffectPolicy 仍约束经 Tool 接口发生的调用与效应。`tr
 → 在各自实现阶段挂载到消费者
 ```
 
-插件失败后不会留下有效 Tool、Command 或 Hook；其下游依赖也会拒绝。无关的有效插件仍可加载。宿主级注册表不等于 per-Agent ToolBus：注册表发布不代表每个 Agent 已挂载该 Tool。同理，已挂载也不代表已对模型暴露；Agent 的 `tools.allow` 决定最终发给 LLM 的工具定义和是否允许执行。
+插件失败后不会留下有效 Tool、Command、Service 或 Hook；其下游依赖也会拒绝。无关的有效插件仍可加载。宿主级注册表不等于 per-Agent ToolBus：注册表发布不代表每个 Agent 已挂载该 Tool。同理，已挂载也不代表已对模型暴露；Agent 的 `tools.allow` 决定最终发给 LLM 的工具定义和是否允许执行。
 
 使用 `PluginManager.getDiagnostics()` 区分 `disabled`、`failed` 和 `registered`，并查看失败阶段与原因。默认 Gateway 启动时会输出未注册状态的诊断。
 

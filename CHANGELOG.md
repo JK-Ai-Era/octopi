@@ -8,7 +8,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.99 | this file (current) |
+| v0.100 | this file (current) |
+| v0.99 | [changelog/v0.99.md](./changelog/v0.99.md) |
 | v0.98 | [changelog/v0.98.md](./changelog/v0.98.md) |
 | v0.97 | [changelog/v0.97.md](./changelog/v0.97.md) |
 | v0.96 | [changelog/v0.96.md](./changelog/v0.96.md) |
@@ -109,48 +110,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
----
+## v0.100.0 (2026-11-05)
 
+### feat(plugin-system): P4 执行扩展点——五类 Hook 组合语义、真实触发面与 HITL 工具审批
 
-## v0.99.2 (2026-11-04)
-
-### feat(engine/gateway): Plugin Command 元数据、调用方准入与 Host SessionOp 授权
-
-- Plugin `control` / `prompt` Command 保留作者声明的 `kind/risk/invocableBy/args/preempt`；manifest 只声明 `name + sessionOps`，Host 按 Router 实际挂载的 pluginId 与 Command 名查询有效授权，不信任 handler 自报来源或操作集合。`client` 没有客户端效果消费者，v1 在类型和注册运行时均拒绝。
-- SessionOp 整批先授权后执行：任一未知或未声明 op 使全部操作为零副作用，结果改为 `denied`，并写入 `~/.octopi/audit/commands/YYYY-MM-DD.jsonl` 的 `command_denied`；审计写失败不放行，报告 `command.audit_failed` System Issue。该 JSONL 不是防篡改账本。合法声明仍走原有 Host 业务链，`risk` 不代表 HITL，`preempt` 只越过 busy 检查。
-- 调用方收敛为 `principal/agent/service`：host/user/timer 映射 principal，service/subsystem 映射 service，互不隐式继承；插件作为来源不是调用方类别。Plugin v1 的 `invocableBy` 不再接受旧 `plugin` 类别（无真实 Principal 消费者），有效值为空或含未知值均拒绝注册。
-- Router 候选身份按 `(source, ref, name)` 隔离，同一插件多个 Command 不再覆盖冲突候选或误注销；`newSessionId` 只能由 Host 在已授权 `new_session` 后生成，handler 伪造值不会到达客户端。SessionOp 与 Loop 输入不组合，`set_preferred_agent` 仍为保留操作名。
-- 验证：8 个真实 Gateway Command 用例覆盖授权、整批拒绝、相邻 Command 隔离、调用方、伪造会话 ID、审计失败、真实新会话与禁用；build、lint、全量 Vitest、`arch/check-sync.sh` 均通过。进程内插件仍受信任，OP-GATE 未关闭。
-
----
-
-## v0.99.1 (2026-11-04)
-
-### fix(engine): 适配事件上 EventBus——子系统 trigger 事件名通路打通
-
-- 此前 runner 适配事件只走 onEvent/observer 通道、**不上 EventBus**：子系统 trigger（`filter.events` 按事件名挂总线监听）命名的任何事件都永远不触发。现 builder `eventSink` 统一把适配事件转发到 EventBus（`llm_stream_delta` 高频流片除外），telemetry/旁路语义不变。回归测试：`tests/harness/runner-events-on-bus.test.ts`。
-
-### refactor(*): 词汇收尾两口子
-
-- **子系统 trigger 死词 `iteration.end` 对齐真实事件 `step.end`**（设计稿示例、boundary-validator fixture；配套 `condition: 'step.count % 10 === 0'`）。
-- **`steered` → `continued`**（activation 续接回执与 `ChannelMessageDelivery`）：原 `steered` 语义是「刺激被活跃 Run 续接」，与 steer 引导注入家族（队列模式 `'steer'` / `steering` 信号 / steering 消息）撞名且语义异类。steer 家族保留本义；宪法 Confusables 新增「steer vs continued」词义裁决（英中）。
-
----
-
-## v0.99.0 (2026-11-04)
-
-### refactor(core/engine/gateway): Run / Turn / Step 词汇定案——模型轮由 turn 正名为 step（breaking）
-
-- **背景**：`turn` 一词双记——既指「用户回合」（`<turn_start id>`…`<turn_end id/>` 话语边界），又指「模型轮」（一次 LLM 调用：loop 事件 `turn_start`/`turn_end`、`Turn` 账本、`SessionData.turns`）。宪法禁止一词多义；业界主流（Claude Code / dsh / OpenClaw）亦以 turn 指用户回合、模型轮称 step。
-- **强制分词（宪法 §1.0 概念表 + Confusables + §10 变更日志，英中同步）**：**Turn** = 一次话语回合（Session 级话语边界，经其 Run 归属到 Agent）；**Step** = 一个模型轮（一次 LLM 调用 + 其产出）。映射：**1 Run = 1..N Turn**（信号在消息边界续接扩展同一 Run），**1 Turn = 1..N Step**，1 Step = 0..N ToolCall。
-- **代码直改、无别名（breaking）**：loop 事件 `turn_start`/`turn_end` → `step_start`/`step_end`；适配事件 `iteration.start`/`turn.end` 统一为 `step.start`/`step.end`；`Turn` → `Step`、`core/types/turn.ts` → `core/types/step.ts`、`SessionData.turns` → `steps`；hook/类型收口（`onStepComplete` / `shouldStopAfterStep` / `prepareNextStep` / `AfterStepParams` / `StepContext` 等）；iteration 词位收口（`recordStep` / `maxSteps` / `wrapUpSteps` / guard `steps` / trace 行 `step_N` / 指标键 `step.count` / `stepsTotal`）；网关会话详情 `turnCount` → `stepCount`；delegation 预算 `maxTurns` → `maxSteps`。
-- **保留不动（命名本就正确）**：transcript 信封 `<turn_start>/<turn_end>/<turn_context>` 与 `turnEnd` 载体（话语回合）；`isTurnAnchor` / `isMidTurn` / `minUserTurns` 等用户回合口径；插件 hook `before_iteration`/`after_iteration` 及 payload（批三 v1 拍板：22 个 hook 名全保留）。
-- **breaking note**：事件名/类型名/配置字段直接改名无过渡别名（`budgetPolicy.maxIterations`→`maxSteps`、`budgetPolicy.wrapUpTurns`→`wrapUpSteps`、`agents[].delegation.budget.maxTurns`→`maxSteps`）；`octopi.schema.json` 同步再生成；旧 state.json 的 `turns` 账本读入 `steps`（读取即剥先例的 legacy 回退），首 save 迁移为新形状。
-- **验证**：全量测试 4031 通过 0 失败；`npm run lint`（eslint + typecheck:tests + webui tsc）全绿；`bash arch/check-sync.sh` 全绿。
-
-### feat(engine): schedule notify 便签 LLM 视图包 `<schedule_notice>` 机器信封
-
-- notify 便签（`delivery:'notify'`）不开 Turn、不跑 Run，但此前以裸 user 文本进 LLM 视图，模型无法区分「定时便签」与用户发言（机器内容冒充人话）。现视图级包 `<schedule_notice>` 信封（`convertMessage` 纯函数变换；持久层/UI 保原文；回放逐字节稳定，不破 E8 前缀缓存）。
-- 新增单源谓词 `isScheduleNotice`（`layer-types.ts`），`isTurnAnchor` 内联判定收敛至该谓词；宪法 Confusables 立规「Machine content vs human speech」。
-- 行为测试 4 例：信封包裹、真人不包、两次装配字节一致、不回写持久层。
-- **防伪造硬化**：便签正文中的 `</schedule_notice` 转义为 `&lt;/schedule_notice`（防合成留言伪造闭标签突破信封、在 LLM 视图冒充用户发言）；空便签不包信封。追加行为测试 2 例。
+- 22 个既有 Hook 名落地 Observe / Collect / Transform / Vote / Override 五类组合语义，Tool 与 Iteration 显式双阶段（原始参数检查 → Transform → 工具校验 + SecurityGuard 重验 → Vote → 执行 → raw Observe，原始/最终参数与修改者入审计）。`before_install` 无真实安装入口保持休眠，`session_end` 只认真实归档导出 + 热库删除——触发点不伪造。
+- Run / Tool / Iteration / Message / Compact / Session 归档 / Gateway 服务全部接真实生产路径。后台服务 manifest 声明 + 注册一致性校验 + required 回滚 / optional System Issue + 逆序停止 + 协作超时（失败服务自回收）；Gateway 先服务后 Channel、失败回收幂等。压缩 Hook 唯一触发点是 HookedCompactEngine（denied 不发 after_compaction；overflow 被拒走机械截断兜底——veto 不得逼出超窗请求）。
+- Tool `require_approval` 接 Host HITL：`approve` / `approve_session` / `approve_always` 经引擎 HitlDecisionCache（`plugin_hook` 通道，键含 pluginId）真实记账；timeout / cancelled / 人工拒绝来源可区分；无审批通道 fail-closed。记账键为工具级（不含参数变形），参数敏感工具应使用一次性批准——已写入文档。
+- Context：`before_prompt_build` / `before_iteration` 快照带预算与 pluginId 归因，随 turn envelope `runtime_snapshot` 槽位 / 请求临时视图携带，绝不写 system prompt（B0 缓存不变量保持）；快照文本 XML 转义，防插件伪造归因或破坏槽位结构。
+- 事件契约（时序不变量已入协议文档）：文本回复的 `assistant_message` 在 Finalize 链之后发，事件 / step.end / 持久化同稿且对象身份唯一；`config.onStepComplete` 先于可靠性检测，空回复 / planning 判定看定稿内容。SecurityGuard、提权审计与审批卡一致检查 Transform 后有效参数；非 plain-record 参数 fail-closed。
+- 配置与归因：`plugins.entries[id].hooks.timeouts` 通过 schema（键名限定 22 个 Hook 名）；删除无消费方的 `abortOnTimeout` 字段；Channel senderId 进 Run principal，Hook 审计归因不再为空。
+- 质量：两轮 fresh-eyes 独立评审，findings 逐条对码核实属实并全部修复（含审批通过反而阻断、approve_session 从未记账、Run 终态 success 双公式、Finalize 对象身份分裂、审批缓存跨插件 TOCTOU 等），处置记录留档。验证：build、lint（类型门 0 新增）、全量 Vitest 406 文件 4102 用例、`arch/check-sync.sh` 全绿。v1 仍为受信任进程内插件（无沙箱/热卸载），OP-GATE 未关闭。

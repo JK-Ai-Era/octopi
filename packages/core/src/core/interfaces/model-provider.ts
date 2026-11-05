@@ -60,6 +60,8 @@ export interface LLMRequest {
   temperature?: number;
   maxTokens?: number;
   model?: string;
+  /** Provider-neutral reasoning depth; an unsupported Provider may reject it. */
+  thinkingLevel?: import('../types/thinking-level.js').ThinkingLevel;
   signal?: AbortSignal;
 }
 

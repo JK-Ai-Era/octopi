@@ -51,6 +51,13 @@ export function getResolvedModel(): ResolvedModel | undefined {
   return runModelStorage.getStore()?.snapshot;
 }
 
+/** Host-internal: synchronize a Core-authorized model with the full snapshot. */
+export function updateResolvedModel(snapshot: ResolvedModel): void {
+  const store = runModelStorage.getStore();
+  if (!store) throw new Error('Cannot update the model outside a resolved Run scope');
+  store.snapshot = snapshot;
+}
+
 /**
  * 读取当前 run 的 provider（无覆盖时回退）
  *

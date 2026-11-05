@@ -426,9 +426,17 @@ export class AgentRuntime {
 
     // I6：schedule 点火以 timer 主体入审计（arch/session-schedules.md）
     const isScheduleWake = triggers.some((t) => t.type === 'schedule');
+    // Channel/user triggers carry their real sender as the Run principal so Hook
+    // audit attribution reflects who actually asked; host-internal triggers keep
+    // no actor rather than inventing one.
+    const senderId = isScheduleWake
+      ? undefined
+      : triggers
+          .map((t) => ('source' in t.payload ? t.payload.source?.senderId : undefined))
+          .find((id): id is string => typeof id === 'string' && id.length > 0);
     const request = buildRunRequest(agent, triggers, sessionId, {
-      actorType: isScheduleWake ? 'timer' : undefined,
-      actorId: isScheduleWake ? (triggers[0]?.metadata?.reason ?? triggers[0]?.id) : undefined,
+      actorType: isScheduleWake ? 'timer' : senderId ? 'user' : undefined,
+      actorId: isScheduleWake ? (triggers[0]?.metadata?.reason ?? triggers[0]?.id) : senderId,
       intent: isScheduleWake ? 'schedule_wake' : undefined,
     });
     const controller = new AbortController();

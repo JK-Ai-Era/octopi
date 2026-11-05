@@ -1,6 +1,11 @@
 /** Host-level effective contribution registry; per-Agent buses are mount projections. */
 
 import type { PluginManifest } from './manifest.js';
+import type { HookServiceRegistration } from '../hooks/types.js';
+
+export interface PluginServiceRecord extends HookServiceRegistration {
+  pluginId: string;
+}
 import type { PluginApi } from './api.js';
 import type { PluginCommandRegistration, PluginToolContribution, OrderedHookEntry } from './api.js';
 import { readStaging } from './staging.js';
@@ -26,6 +31,7 @@ export class PluginContributionRegistry {
   private tools: PluginToolRecord[] = [];
   private commands: PluginCommandRecord[] = [];
   private hooks: OrderedHookEntry[] = [];
+  private services: PluginServiceRecord[] = [];
   private owners = new Map<string, string>();
 
   /** Replace the effective set only after all staged registrations validate. */
@@ -43,11 +49,20 @@ export class PluginContributionRegistry {
         next.commands.push({ pluginId: plugin.manifest.id, ...command });
       }
       for (const entries of staged.hooks.values()) next.hooks.push(...entries);
+      for (const service of staged.services) {
+        next.addOwner('service', service.serviceId, plugin.manifest.id);
+        next.services.push({ pluginId: plugin.manifest.id, ...service });
+      }
+    }
+    const replyOwners = next.hooks.filter((entry) => entry.hookName === 'before_agent_reply');
+    if (replyOwners.length > 1) {
+      throw new Error(`Override hook before_agent_reply has multiple owners: ${replyOwners.map((entry) => entry.pluginId).join(', ')}`);
     }
     this.plugins = next.plugins;
     this.tools = next.tools;
     this.commands = next.commands;
     this.hooks = next.hooks;
+    this.services = next.services;
     this.owners = next.owners;
   }
 
@@ -70,4 +85,5 @@ export class PluginContributionRegistry {
   getTools(): PluginToolRecord[] { return [...this.tools]; }
   getCommands(): PluginCommandRecord[] { return [...this.commands]; }
   getHooks(): OrderedHookEntry[] { return [...this.hooks]; }
+  getServices(): PluginServiceRecord[] { return [...this.services]; }
 }

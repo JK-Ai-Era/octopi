@@ -3,18 +3,20 @@
 import type { PluginApi } from './api.js';
 import type { OrderedHookEntry, PluginCommandRegistration, PluginToolContribution } from './api.js';
 import type { PluginHookName } from './manifest.js';
+import type { HookServiceRegistration } from '../hooks/types.js';
 
 export interface StagedContributions {
   tools: PluginToolContribution[];
   commands: PluginCommandRegistration[];
   hooks: Map<PluginHookName, OrderedHookEntry[]>;
+  services: HookServiceRegistration[];
 }
 
 const staged = new WeakMap<PluginApi, StagedContributions>();
 
 /** Called only by the host when constructing an author API. */
 export function createStaging(api: PluginApi): StagedContributions {
-  const value: StagedContributions = { tools: [], commands: [], hooks: new Map() };
+  const value: StagedContributions = { tools: [], commands: [], hooks: new Map(), services: [] };
   staged.set(api, value);
   return value;
 }

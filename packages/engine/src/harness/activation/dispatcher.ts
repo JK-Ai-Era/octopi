@@ -48,6 +48,13 @@ export class SessionRunnerDispatcher implements RunDispatcher {
       sessionId: req.sessionId,
       model: req.modelOverride,
       modelProvider: req.modelProvider,
+      ...(req.actorId === undefined && req.actorType === undefined && req.tenantId === undefined ? {} : {
+        principal: {
+          ...(req.actorId === undefined ? {} : { actorId: req.actorId }),
+          ...(req.actorType === undefined ? {} : { actorType: req.actorType }),
+          ...(req.tenantId === undefined ? {} : { tenantId: req.tenantId }),
+        },
+      }),
     };
     const entries: SessionInboxEntry[] = req.triggers.map((trigger, index) => ({
       id: trigger.id,

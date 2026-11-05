@@ -77,6 +77,8 @@ import {
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/commands/index.js';
 import type { CommandCatalogItem, CommandDefinition, CommandResult, PrincipalRef, SessionOp, SessionReadView } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/commands/types.js';
 import { CommandAuditJournal } from './command-audit.js';
+import { PluginServiceSupervisor } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/hooks/services.js';
+import type { PluginServiceRecord } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/contribution-registry.js';
 import { IssueRegistry } from '@octopi-agent/engine/harness/observability/diagnostics/registry.js';
 import type { SystemIssue } from '@octopi-agent/engine/harness/observability/diagnostics/types.js';
 
@@ -434,8 +436,12 @@ export class Gateway {
   private config: GatewayConfig;
   /** DM 作用域 */
   private dmScope: string;
-  /** 是否已启动 */
+  /** Ready is true only after all required plugin services have started. */
   private started = false;
+  private starting = false;
+  private stopping = false;
+  private pluginServices!: PluginServiceSupervisor;
+  private readonly activeChannels = new Set<ChannelAdapter>();
   /** 事件监听器 */
   private listeners: Array<(event: AgentEvent) => void> = [];
   /** Provider */
@@ -540,6 +546,43 @@ export class Gateway {
       ...(config.plugins?.blockList === undefined ? {} : { blockList: config.plugins.blockList }),
       ...(config.plugins?.entries === undefined ? {} : { entries: config.plugins.entries }),
     });
+    this.pluginManager.setToolApprovalSink(async (event, request) => {
+      const outcome = await this.requestApproval({
+        sessionId: event.sessionId,
+        agentId: event.agentId,
+        request: {
+          kind: 'high_risk',
+          toolName: event.toolName,
+          arguments: event.params,
+          riskLevel: request.severity === 'critical' ? 'critical' : request.severity === 'info' ? 'low' : 'high',
+          riskDescription: request.description,
+          actionDescription: request.title,
+        },
+        ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+      });
+      // Express the raw HitlDecision (scopes included) so the engine cache can honor
+      // approve_session / approve_always; the Host never caches (SEC-7 single model).
+      const decision = typeof outcome === 'string' ? outcome : outcome.decision;
+      const attribution = typeof outcome === 'object'
+        ? {
+            ...(outcome.approver === undefined ? {} : { approver: outcome.approver }),
+            ...(outcome.channel === undefined ? {} : { channel: outcome.channel }),
+          }
+        : {};
+      if (decision !== 'deny') return { decision, ...attribution };
+      // deny: preserve the real source — timeout / cancelled / late ≠ human rejection.
+      const source = typeof outcome === 'object' ? outcome.reason : 'late';
+      return {
+        decision: 'deny',
+        ...(source === 'timeout' || source === 'late' ? { timedOut: true } : {}),
+        ...(source === 'cancelled' ? { denyReason: 'cancelled' as const } : {}),
+        denyDetail: `Host approval was not granted: ${source ?? decision}`,
+        ...attribution,
+      };
+    });
+    this.pluginServices = new PluginServiceSupervisor((service, error) => {
+      this.reportPluginServiceFailure(service, error);
+    }, this.pluginManager.getHookAudit());
     this.sessionAcl = new SessionAclService(config.sessionAcl);
     this.sessionLease = new InProcessSessionLock();
     this.issueRegistry = new IssueRegistry();
@@ -840,11 +883,51 @@ export class Gateway {
   async start(): Promise<void> {
     await this.ensureStore();
 
-    if (this.started) {
-      console.warn('[Gateway] Already started');
-      return;
+    if (this.started || this.starting) return;
+    if (this.stopping) throw new Error('Gateway is stopping');
+    this.starting = true;
+    try {
+      await this.startLifecycle();
+    } catch (error) {
+      await this.rollbackFailedStart();
+      throw error;
+    } finally {
+      this.starting = false;
     }
+  }
 
+  private async rollbackFailedStart(): Promise<void> {
+    this.started = false;
+    for (const adapter of [...this.activeChannels].reverse()) {
+      this.activeChannels.delete(adapter);
+      try {
+        await adapter.stop();
+      } catch {
+        // A failed adapter may not own an active listener; retain the original startup error.
+      }
+    }
+    await this.pluginServices.stop(this.pluginManager.getServices());
+    this.sessionSchedules?.dispose();
+    this.sessionSchedules = undefined;
+    try {
+      await this.runtime.stop();
+    } catch {
+      // Runtime.stop is idempotent; do not hide the startup failure behind cleanup errors.
+    }
+    try {
+      this.knowledgeProgressForward?.();
+      this.knowledgeProgressForward = undefined;
+      const knowledge = await this.knowledgeRuntimePromise?.catch(() => undefined);
+      await knowledge?.stop();
+    } catch {
+      // Preserve the original startup error; optional Knowledge failures are already observable.
+    }
+    this.knowledgeRuntimePromise = undefined;
+    this.knowledgeRuntimeRef = undefined;
+    this.knowledgeBootState = 'idle';
+  }
+
+  private async startLifecycle(): Promise<void> {
     // 模型超时口径自检（2026-10-27 事故）：配置写 900s 却因 undici 默认 300s 从未生效。
     // 只告警不改行为——把隐含的优先级关系摊到启动日志里。
     {
@@ -981,15 +1064,7 @@ export class Gateway {
       console.warn(`[Gateway] WARNING ${w}`);
     }
 
-    // Knowledge 与 channel 并行拉起：HTTP 就绪时 /health 不必再读到启动窗口
     const knowledgeBoot = this.bootKnowledgeRuntime();
-
-    for (const [name, adapter] of this.channels) {
-      console.log(`[Gateway] Starting channel: ${name}`);
-      await adapter.start(async (msg) => {
-        await this.handleInboundMessage(msg);
-      });
-    }
 
     // Plugin 已注册命令合入 + user/skill 命令装载（必须在收消息前）
     try {
@@ -1009,6 +1084,32 @@ export class Gateway {
           'all new runs will be refused until it recovers (restart the gateway to retry boot)',
       );
     }
+    await this.pluginServices.start(this.pluginManager.getServices());
+    const startedChannels: ChannelAdapter[] = [];
+    try {
+      for (const [name, adapter] of this.channels) {
+        console.log(`[Gateway] Starting channel: ${name}`);
+        await adapter.start(async (msg) => {
+          await this.handleInboundMessage(msg);
+        });
+        startedChannels.push(adapter);
+        this.activeChannels.add(adapter);
+      }
+    } catch (error) {
+      for (const adapter of startedChannels.reverse()) {
+        this.activeChannels.delete(adapter);
+        try {
+          await adapter.stop();
+        } catch {
+          // Preserve the startup failure; the failing adapter owns its partial-start rollback.
+        }
+      }
+      await this.pluginServices.stop(this.pluginManager.getServices());
+      throw error;
+    }
+    await this.pluginManager.getHookPort().observe('gateway_start', {
+      sessionId: 'system', agentId: 'host', phase: 'started',
+    });
     this.started = true;
     console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
   }
@@ -1437,7 +1538,20 @@ export class Gateway {
   }
 
   async stop(): Promise<void> {
-    if (!this.started) return;
+    if (!this.started || this.stopping) return;
+    this.stopping = true;
+    this.started = false;
+    try {
+      await this.stopLifecycle();
+    } finally {
+      this.stopping = false;
+    }
+  }
+
+  private async stopLifecycle(): Promise<void> {
+    await this.pluginManager.getHookPort().observe('gateway_stop', {
+      sessionId: 'system', agentId: 'host', phase: 'stopping',
+    });
     this.cancelAllPendingHitl();
     this.gitStatusCache.clear();
     this.gitStatusInflight.clear();
@@ -1504,8 +1618,20 @@ export class Gateway {
       );
     }
     for (const [name, adapter] of this.channels) {
+      if (!this.activeChannels.delete(adapter)) continue;
       console.log(`[Gateway] Stopping channel: ${name}`);
-      await adapter.stop();
+      try {
+        await adapter.stop();
+      } catch (error) {
+        this.issueRegistry.report({
+          id: `other:channel.stop.failed:${name}`,
+          domain: 'other',
+          code: 'channel.stop.failed',
+          severity: 'error',
+          title: `Channel ${name} failed to stop`,
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）
@@ -1538,8 +1664,7 @@ export class Gateway {
     this.providers.clear();
 
     await this.runtime.stop();
-    await this.pluginManager.onGatewayStop();
-    this.started = false;
+    await this.pluginServices.stop(this.pluginManager.getServices());
     console.log('[Gateway] Stopped.');
   }
 
@@ -1808,6 +1933,18 @@ export class Gateway {
 
   getPluginManager(): PluginManager {
     return this.pluginManager;
+  }
+
+  private reportPluginServiceFailure(service: PluginServiceRecord, error: unknown): void {
+    this.issueRegistry.report({
+      id: `plugins:service.failed:${service.pluginId}:${service.serviceId}`,
+      domain: 'plugins',
+      code: 'plugin.service.failed',
+      severity: 'error',
+      title: `Plugin service ${service.pluginId}/${service.serviceId} failed`,
+      detail: error instanceof Error ? error.message : String(error),
+      refs: [{ label: `plugin: ${service.pluginId}`, pluginId: service.pluginId }],
+    });
   }
 
   /**
@@ -2731,16 +2868,24 @@ export class Gateway {
         content,
         replyToId: msg.id,
       };
-      const hookCtx: HookContext = { sessionId: sessionKey, agentId };
-      const sendBlock = await this.pluginManager.runHook<{ cancel?: boolean } | null>(
-        'message_sending',
-        { ...hookCtx, reply: channelReply },
-        null,
-      );
-      if (sendBlock?.cancel) return;
+      const vote = await this.pluginManager.getHookPort().vote('message_sending', {
+        sessionId: sessionKey, agentId, reply: channelReply,
+      });
+      if (vote.decision !== 'allow') return;
       const adapter = this.channels.get(msg.channel);
       if (adapter && channelReply.content) {
-        await adapter.send(channelReply);
+        try {
+          await adapter.send(channelReply);
+          await this.pluginManager.getHookPort().observe('message_sent', {
+            sessionId: sessionKey, agentId, reply: channelReply, success: true,
+          });
+        } catch (error) {
+          await this.pluginManager.getHookPort().observe('message_sent', {
+            sessionId: sessionKey, agentId, reply: channelReply, success: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
       }
     } catch (err) {
       console.warn(
@@ -2844,6 +2989,19 @@ export class Gateway {
     }
   }
 
+  /** Create a real archive manager with Host observation; no background schedule is invented. */
+  async createSessionArchiveManager(
+    options: Omit<import('@octopi-agent/engine/integration/storage/archive-manager.js').ArchiveManagerOptions, 'onSessionArchived'>,
+  ): Promise<import('@octopi-agent/engine/integration/storage/archive-manager.js').SessionArchiveManager> {
+    const { SessionArchiveManager } = await import('@octopi-agent/engine/integration/storage/archive-manager.js');
+    return new SessionArchiveManager(this.store, {
+      ...options,
+      onSessionArchived: ({ sessionId, agentId }) => this.pluginManager.getHookPort().observe('session_end', {
+        sessionId, agentId, reason: 'archived',
+      }),
+    });
+  }
+
   async createSession(options: { agentId: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionMeta> {
     const agent = this.agents.get(options.agentId);
     if (!agent) {
@@ -2874,6 +3032,11 @@ export class Gateway {
     };
 
     await this.store.save(sessionId, session);
+    await this.pluginManager.getHookPort().observe('session_start', {
+      sessionId,
+      agentId: options.agentId,
+      reason: 'created',
+    });
     return session.meta;
   }
 
@@ -4949,6 +5112,9 @@ export class Gateway {
   // ================================================================
 
   private async handleInboundMessage(msg: ChannelMessage): Promise<void> {
+    if (!this.started || this.stopping) {
+      throw new Error('gateway_not_ready: channel messages are not accepted');
+    }
     console.log(`[Gateway] Inbound message from ${msg.channel}:${msg.senderId} ?"${msg.content.substring(0, 50)}..."`);
 
     // 1. 找到 agent
@@ -4960,10 +5126,12 @@ export class Gateway {
 
     // 2. Plugin: message_received
     const sessionKey = this.buildSessionKey(agent, msg);
-    await this.pluginManager.runAllHooks(
-      'message_received',
-      { sessionId: sessionKey, agentId: agent.id, message: msg },
-    );
+    await this.pluginManager.getHookPort().observe('message_received', {
+      sessionId: sessionKey,
+      agentId: agent.id,
+      principal: { actorId: msg.senderId, actorType: 'user' },
+      message: msg,
+    });
 
     // 2b. 对话内 /xxx 命令（Intent Ingress）：先于 dispatch；/stop 可抢占
     // 确保 user/skill 命令已装载（热路径兜底；start() 已装载）
@@ -5144,8 +5312,7 @@ export class Gateway {
       this.scheduleSessionTitleUpdate(sessionKey);
     }
 
-    // 6. Plugin: message_sending
-    const hookCtx: HookContext = { sessionId: sessionKey, agentId: agent.id };
+    // 6. Plugin: message_sending Vote; no content mutation channel.
     const channelReply: ChannelReply = {
       channel: msg.channel,
       conversationId: msg.conversationId,
@@ -5153,22 +5320,33 @@ export class Gateway {
       replyToId: msg.id,
     };
 
-    const sendBlock = await this.pluginManager.runHook<{ cancel?: boolean } | null>(
-      'message_sending',
-      { ...hookCtx, reply: channelReply },
-      null,
-    );
+    const sendVote = await this.pluginManager.getHookPort().vote('message_sending', {
+      sessionId: sessionKey,
+      agentId: agent.id,
+      principal: { actorId: msg.senderId, actorType: 'user' },
+      reply: channelReply,
+    });
 
-    if (sendBlock?.cancel) {
-      console.log(`[Gateway] Reply cancelled by plugin`);
+    if (sendVote.decision !== 'allow') {
+      console.log(`[Gateway] Reply cancelled by plugin: ${sendVote.reason ?? 'denied'}`);
       return;
     }
 
     // 7. 发送回复（continued 的回复由晚到通道恰好发一次，这里不重复）
     const adapter = this.channels.get(msg.channel);
     if (!continuedDelivery && adapter && channelReply.content) {
-      await adapter.send(channelReply);
-      await this.pluginManager.runAllHooks('message_sent', { ...hookCtx, reply: channelReply });
+      try {
+        await adapter.send(channelReply);
+        await this.pluginManager.getHookPort().observe('message_sent', {
+          sessionId: sessionKey, agentId: agent.id, reply: channelReply, success: true,
+        });
+      } catch (error) {
+        await this.pluginManager.getHookPort().observe('message_sent', {
+          sessionId: sessionKey, agentId: agent.id, reply: channelReply, success: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     }
   }
 
@@ -5494,6 +5672,7 @@ export class Gateway {
         requireCredentialBindings: this.config.credentials?.requireBindings === true,
         observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,
         sessionsDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
+        extensionHooks: this.pluginManager.getHookPort(),
         sessionAttachmentInject: {
           fullTextMaxChars: this.config.knowledge?.attachments?.inject?.fullTextMaxChars,
           recallTopK: this.config.knowledge?.attachments?.inject?.recallTopK,

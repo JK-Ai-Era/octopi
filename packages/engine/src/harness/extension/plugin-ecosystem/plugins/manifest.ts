@@ -107,6 +107,7 @@ const manifestSchema = z
           )
           .optional(),
         hooks: z.array(z.enum(PLUGIN_HOOK_NAMES)).optional(),
+        services: z.array(contributionName).optional(),
       })
       .strict()
       .optional(),
@@ -124,6 +125,8 @@ export interface PluginContributions {
   tools?: string[];
   commands?: PluginCommandContribution[];
   hooks?: PluginHookName[];
+  /** Stable service ids; required/timeout are trusted Host execution policy. */
+  services?: string[];
 }
 
 export interface PluginManifest {
@@ -160,6 +163,7 @@ export function validateManifest(raw: unknown): PluginManifest {
   }
   assertUnique(manifest.contributes?.tools ?? [], 'contributes.tools');
   assertUnique(manifest.contributes?.hooks ?? [], 'contributes.hooks');
+  assertUnique(manifest.contributes?.services ?? [], 'contributes.services');
   const commands = manifest.contributes?.commands ?? [];
   assertUnique(commands.map((command) => command.name), 'contributes.commands');
   for (const command of commands) {

@@ -1,12 +1,12 @@
 # Plugin System
 
-Octopi plugins are **trusted, in-process extensions**. A plugin can contribute Tools, Commands, and declared Hooks through one versioned contract. The host validates the package before executing its code.
+Octopi plugins are **trusted, in-process extensions**. A plugin can contribute Tools, Commands, background Services, and declared Hooks through one versioned contract. The host validates the package before executing its code.
 
 > **Trust boundary:** manifest declarations, `allowList`, and `blockList` support installation decisions and diagnostics; they are not a sandbox. In-process plugin code can use Node.js APIs directly. ToolPolicy and EffectPolicy govern effects made through the Tool interface, not arbitrary code in the plugin process. Do not install untrusted code.
 
 ## Current implementation status
 
-This document describes the manifest-first loading foundation (P1) and the per-Agent Plugin Tool execution chain (P2).
+This document describes the v1 contract: manifest-first loading (P1), the per-Agent Plugin Tool chain (P2), Plugin Commands (P3), and the typed Hook execution surface (P4).
 
 | Surface | Status |
 |---|---|
@@ -15,10 +15,16 @@ This document describes the manifest-first loading foundation (P1) and the per-A
 | JSON Schema config validation | Implemented |
 | Dependency, identity, and contribution validation | Implemented |
 | Staged registration and atomic effective-registry publication | Implemented |
-| Tool / Command contribution registration | Implemented |
+| Tool / Command / Service contribution registration | Implemented; declared and registered sets must match |
 | Tool mounting, per-Agent allow/deny, execution, and source attribution | Implemented; empty `tools.allow` does not expose a plugin Tool |
 | Command metadata, caller admission, and Host `sessionOps` authorization | Implemented; Plugin SessionOps require matching manifest declarations |
-| Hook execution semantics | Existing message/gateway-stop triggers remain; typed composition and remaining triggers are later work |
+| Hook execution semantics | Implemented for the 22 hook names: typed Observe / Collect / Transform / Vote / Override composition, dual-phase Tool and Iteration hooks, cooperative timeout, per-call audit |
+| Run / Tool / Iteration / Message / Compact / Session-archive / Gateway triggers | Implemented on real production paths |
+| Tool approval votes (`before_tool_call` `require_approval`) | Implemented through the Host HITL channel; `approve` / `approve_session` / `approve_always` are honored by the engine decision cache; no channel fails closed |
+| Background services | Implemented: manifest-declared `registerService` with Host start/stop, required rollback, optional failure issues, reverse-order stop, cooperative timeout |
+| `before_install` hook | Declared but dormant — the repository has no real Skill/Plugin install flow yet, so no trigger is wired and none is faked |
+| `session_end` hook | Fires only after a real archive export and hot-store deletion (when an archive manager is configured); plain deletion or compaction never emulates it |
+| `before_prompt_build` / `before_iteration` snapshots | Implemented; budgeted, pluginId-attributed snapshots ride the turn envelope's `runtime_snapshot` slot (`before_prompt_build`) or the per-request LLM view (`before_iteration`); never the system prompt |
 | Provider / Channel / ContextEngine registration | Not part of the stable v1 author surface yet |
 | Untrusted-code isolation / hot unload | Not supported |
 
@@ -54,6 +60,7 @@ The loader scans each configured path. A path can be one plugin directory or a p
   "contributes": {
     "tools": ["acme_search"],
     "commands": [{ "name": "acme-status", "sessionOps": [] }],
+    "services": ["acme-watcher"],
     "hooks": ["message_received"]
   },
   "requiresPlugins": [],
@@ -64,7 +71,7 @@ The loader scans each configured path. A path can be one plugin directory or a p
 - `apiVersion` is the plugin contract version. `engine.octopi` is a semver range checked against the installed engine.
 - `entry` is mandatory. Its resolved realpath must stay inside the plugin root, including after symbolic-link resolution. This is package validation, not a security sandbox.
 - The manifest is the installation-time declaration authority. `definePlugin` only repeats the entry `id` for identity checking.
-- `contributes` declares what the entry must actually register. Undeclared or missing Tools, Commands, and Hooks fail that plugin's registration.
+- `contributes` declares what the entry must actually register. Undeclared or missing Tools, Commands, Hooks, and Services fail that plugin's registration.
 - `legacyPluginIds` maps old configuration IDs to this canonical identity. Configuring both old and new IDs is an error.
 - Unknown manifest fields are rejected. Unsupported declaration-only fields from older drafts are not silent feature switches.
 
@@ -117,8 +124,9 @@ export default definePlugin({
 - `api.pluginConfig` contains the validated business config.
 - `api.resolvePath(relativePath)` resolves against the plugin root in ESM.
 - Tool `capabilities` are mandatory. A Tool with `fs-write` defaults to sequential execution unless explicitly configured otherwise.
-- `api.on` is typed against the 22 existing Hook names. A declaration does not imply that every event already has a production trigger; see the status table above.
-- Provider, Channel, ContextEngine, media-provider, and background-service registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
+- `api.on` is typed against the 22 existing Hook names. `before_tool_call` and `before_iteration` are dual-phase and must pass `{ phase: 'transform' | 'vote' }` (or use the `api.onBeforeToolCall` / `api.onBeforeIteration` helpers); every other event must omit `phase`. A declaration does not imply that every event already has a production trigger; see the status table above (`before_install` is dormant).
+- `api.registerService` stages a background service that must also be declared in `contributes.services`; the Host owns its start/stop lifecycle (see Background services).
+- Provider, Channel, ContextEngine, and media-provider registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
 
 ## Plugin Commands and Session effects
 
@@ -135,6 +143,56 @@ The manifest Command declaration contains `name` and `sessionOps`; the trusted `
 `newSessionId` is Host-generated only after an authorized `new_session`; a handler-supplied value is discarded. Router candidate identity includes the Command name, so multiple Commands from one plugin retain independent conflict and unregister behavior while authorization still uses their real pluginId.
 
 A `prompt` Command may return `enterLoop: true` with non-empty `messages`; it cannot combine those with SessionOps. `control` Commands do not enter the Loop. A declared effect still undergoes its normal Host operation validation and can fail for business reasons. Disabled plugins contribute no visible or executable Command.
+
+## Hook execution semantics
+
+Each hook name has one composition class with explicit failure, cancellation, and audit semantics. Handlers run in priority order (registration order breaks ties); `priority` orders execution only and never overrides a denial.
+
+| Class | Hooks | Failure semantics |
+|---|---|---|
+| Observe | `agent_end`, `after_tool_call`, `message_received`, `message_sent`, `session_start`, `session_end`, `after_compaction`, `gateway_start`, `gateway_stop`, `after_iteration`, `loop_end` | Fail-open: a throwing handler is recorded and the operation continues |
+| Collect | `before_prompt_build` | Fail-open per contribution: a failing collector is skipped and recorded; valid contributions still apply |
+| Transform | `before_model_resolve`, `agent_turn_prepare`, `before_agent_finalize` | Fail-closed: a throwing handler aborts the Run (the tool-scoped `before_tool_call` transform rejects that one call instead — nothing executes); no partial transform is published |
+| Vote | `before_agent_run`, `message_sending`, `before_compaction`, `before_install`, and the `vote` phase of `before_tool_call` / `before_iteration` | Fail-closed: any `deny` wins; a throwing handler counts as `deny`; `require_approval` outside `before_tool_call` is a denial |
+| Override | `before_agent_reply` | Exactly one owner allowed; multiple owners or a failure reject the Run |
+
+- Dual-phase events run `transform` first, then `vote` on the transformed values. For `before_tool_call` the tool's own validation and the Host security checks re-run on transformed parameters before the Vote, and the audit keeps both raw and final parameters with the plugin that changed them. A denied tool call never executes and never fabricates `after_tool_call`.
+- Every handler execution is bounded by a cooperative timeout (default 30 s; override per hook with `timeoutMs` or plugin config `hooks.timeouts`). The handler receives an `AbortSignal`; in-process code cannot be forcibly terminated.
+- Every execution appends a per-day audit record (`~/.octopi/audit/hooks/YYYY-MM-DD.jsonl`) with pluginId, hook, phase, outcome, run/session/agent identity, and the Principal. The journal is diagnostic, not a tamper-evident ledger; a failed audit write never changes an operation's outcome.
+- Run-level observations report exact terminal facts: `reason` is `completed | should_stop | aborted | error | denied` and `success` is true only for clean terminal ends (`completed` or `should_stop`). A policy denial surfaces to hook observations as `reason: 'denied'` while the Core `agent_end` event keeps the compatible `error` reason.
+- `before_agent_reply` (Override) replaces the model reply for that Run; `before_agent_finalize` transforms only the final reply of a step without tool calls. Neither may add `toolCalls` (no tool results would follow). Events and persistence carry the finalized reply; text already streamed to the client cannot be recalled — a plugin that must fully control the reply uses `before_agent_reply`.
+- Iteration model/thinking transforms may only select values the Host configured — an unknown model fails the Run instead of silently falling back. The selected thinking level enters the LLMRequest; provider parameter mapping follows with the P5 provider work.
+- `before_prompt_build` contributions ride the turn envelope's `runtime_snapshot` slot alongside the other volatile blocks: the user message is write-once (raw user text is never altered, later turns are never rewritten, and what was sent to the model is what is stored). `before_iteration` snapshots project into the per-request LLM request view only. The system prompt is never affected.
+
+## Tool call approval
+
+A `before_tool_call` Vote may return `require_approval` together with an `approval` request. The Host presents its existing high-risk approval card, and the outcome resolves that Vote:
+
+- `approve` allows this call only. `approve_session` and `approve_always` are remembered by the engine decision cache (per Session, or per Agent for the process lifetime) for the same tool, so the same approval is not requested again within that scope.
+- Timeout, cancellation, and human rejection are distinct denial sources. Each is preserved in the audit record and in the block reason; a timeout is never recorded as a human rejection.
+- A remembered grant is keyed by (channel, pluginId, tool name, session/agent) — not by arguments. `approve_session` and `approve_always` therefore cover later parameter variants of the same tool under the same plugin's policy (the builtin `high_risk` channel keeps the established tool-name key); use one-shot approvals for argument-sensitive tools.
+- With no Host approval channel configured, `require_approval` fails closed.
+
+## Background services
+
+```jsonc
+{ "contributes": { "services": ["acme-watcher"] } }
+```
+
+```ts
+api.registerService({
+  serviceId: 'acme-watcher',
+  required: false,
+  timeoutMs: 5000,
+  start: async (signal) => { /* bind resources */ },
+  stop: async (signal) => { /* release resources */ },
+});
+```
+
+- Every service must be declared in `contributes.services` and registered exactly once. Cross-plugin id conflicts fail before import; undeclared or missing contributions are detected at registration and fail publication before the plugin reaches the effective registry.
+- `registerService` only stages the service; it starts no side effects. The Host starts services before opening Channels and stops them in reverse registration order on shutdown.
+- `required: true` failure rolls back startup and blocks the Gateway; `optional: true` failure opens a System Issue and the Gateway continues.
+- `start`/`stop` receive an `AbortSignal` and are bounded by `timeoutMs` (cooperative; in-process code cannot be forcibly killed). Lifecycle outcomes are recorded in the hook audit journal.
 
 ## Configuration
 
@@ -226,7 +284,7 @@ Read manifests
 → Mount to consumers in their respective implementation phases
 ```
 
-A failed plugin leaves no effective Tool, Command, or Hook behind. Its dependents are also rejected. An unrelated valid plugin can still load. A host-level registry is not the same as a per-Agent ToolBus: registry publication does not claim that every Agent has already mounted the Tool. Likewise, a mounted Tool is not automatically exposed to the model; the Agent's `tools.allow` policy controls the final LLM tool definitions and execution.
+A failed plugin leaves no effective Tool, Command, Service, or Hook behind. Its dependents are also rejected. An unrelated valid plugin can still load. A host-level registry is not the same as a per-Agent ToolBus: registry publication does not claim that every Agent has already mounted the Tool. Likewise, a mounted Tool is not automatically exposed to the model; the Agent's `tools.allow` policy controls the final LLM tool definitions and execution.
 
 Use `PluginManager.getDiagnostics()` to distinguish `disabled`, `failed`, and `registered`, with a failure stage and reason. The default Gateway logs non-registered diagnostics at startup.
 

@@ -158,6 +158,33 @@ export class RuntimeLayer extends BaseLayer {
   }
 }
 
+/** Plugin Collect is a budgeted Runtime snapshot, never a systemPrompt override. */
+export class PluginRuntimeSnapshotLayer extends BaseLayer {
+  constructor(private readonly contributions: readonly { pluginId: string; value: { text: string } }[]) {
+    super('runtime', { placement: 'snapshot', order: 75 });
+  }
+
+  async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
+    const body = this.contributions
+      .map(({ pluginId, value }) => `<plugin-contribution plugin="${escapeXmlAttribute(pluginId)}">\n${escapeXmlText(value.text)}\n</plugin-contribution>`)
+      .join('\n\n');
+    const { text, dropped } = this.truncateToBudget(body, ctx.tokenBudget);
+    return this.content(text, {
+      dropped,
+      sources: this.contributions.map(({ pluginId }) => `plugin:${pluginId}`),
+    });
+  }
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+}
+
+/** Contribution text is data, not markup: escape it so a plugin cannot forge sibling tags or close the slot. */
+function escapeXmlText(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
 // ── Knowledge（Tier 0 catalog；内容命中不进 system） ──
 
 function resolveCatalogList(

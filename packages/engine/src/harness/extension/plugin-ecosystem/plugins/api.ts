@@ -5,34 +5,14 @@ import { TOOL_CAPABILITIES, type ToolDefinition, type ToolHandler } from '@octop
 import type { PluginHookName, PluginSessionOpName } from './manifest.js';
 import { createStaging, readStaging } from './staging.js';
 import type {
-  AgentFinalizeResult,
-  AgentReplyResult,
-  AgentRunResult,
-  AgentTurnPrepareEvent,
-  AfterIterationEvent,
-  AfterToolCallEvent,
-  BeforeAgentFinalizeEvent,
-  BeforeAgentReplyEvent,
-  BeforeAgentRunEvent,
-  BeforeInstallEvent,
-  BeforeIterationEvent,
-  BeforeIterationResult,
-  BeforeModelResolveEvent,
-  BeforePromptBuildEvent,
-  BeforeToolCallEvent,
-  CompactionEvent,
-  GatewayLifecycleEvent,
-  InstallResult,
-  LoopEndEvent,
-  MessageReceivedEvent,
-  MessageSendingEvent,
-  MessageSendingResult,
-  MessageSentEvent,
-  ModelResolveResult,
-  PromptBuildResult,
-  SessionLifecycleEvent,
-  ToolCallResult,
-} from './manager.js';
+  ExtensionHookHandler,
+  HookEvent,
+  HookResult,
+  HookServiceRegistration,
+  HookModelSelection,
+  HookIterationTransform,
+  HookVote,
+} from '../hooks/types.js';
 import type { ArgSpec, CommandInvoker, CommandKind, CommandResult, CommandRisk } from '../commands/types.js';
 import { normalizeCommandName } from '../commands/parse.js';
 import { COMMAND_INVOKERS } from '../commands/types.js';
@@ -58,43 +38,24 @@ export interface PluginCommandRegistration {
   handler: (context: PluginCommandContext) => Promise<CommandResult | string | void | unknown>;
 }
 
-export interface PluginHookMap {
-  before_model_resolve: [BeforeModelResolveEvent, ModelResolveResult | void];
-  agent_turn_prepare: [AgentTurnPrepareEvent, string | void];
-  before_prompt_build: [BeforePromptBuildEvent, PromptBuildResult | void];
-  before_agent_run: [BeforeAgentRunEvent, AgentRunResult | void];
-  before_agent_reply: [BeforeAgentReplyEvent, AgentReplyResult | void];
-  before_agent_finalize: [BeforeAgentFinalizeEvent, AgentFinalizeResult | void];
-  agent_end: [import('./manager.js').AgentEndEvent, void];
-  before_tool_call: [BeforeToolCallEvent, ToolCallResult | void];
-  after_tool_call: [AfterToolCallEvent, void];
-  message_received: [MessageReceivedEvent, void];
-  message_sending: [MessageSendingEvent, MessageSendingResult | void];
-  message_sent: [MessageSentEvent, void];
-  session_start: [SessionLifecycleEvent, void];
-  session_end: [SessionLifecycleEvent, void];
-  before_compaction: [CompactionEvent, void];
-  after_compaction: [CompactionEvent, void];
-  gateway_start: [GatewayLifecycleEvent, void];
-  gateway_stop: [GatewayLifecycleEvent, void];
-  before_install: [BeforeInstallEvent, InstallResult | void];
-  before_iteration: [BeforeIterationEvent, BeforeIterationResult | void];
-  after_iteration: [AfterIterationEvent, void];
-  loop_end: [LoopEndEvent, void];
-}
+export type PluginHookMap = {
+  [K in PluginHookName]: [HookEvent<K>, HookResult<K>];
+};
 
-export type HookHandler<K extends PluginHookName = PluginHookName> = (
-  event: PluginHookMap[K][0],
-) => Promise<PluginHookMap[K][1]>;
+export type HookHandler<K extends PluginHookName = PluginHookName> = ExtensionHookHandler<K>;
 
-type AnyHookHandler = {
-  [K in PluginHookName]: (event: PluginHookMap[K][0]) => Promise<PluginHookMap[K][1]>;
-}[PluginHookName];
+export type HookResultFor<K extends PluginHookName, P extends 'transform' | 'vote'> =
+  K extends 'before_tool_call'
+    ? P extends 'transform' ? Record<string, unknown> | void : HookVote | void
+    : K extends 'before_iteration'
+      ? P extends 'transform' ? HookIterationTransform | void : HookVote | void
+      : never;
 
-export interface OrderedHookEntry<K extends PluginHookName = PluginHookName> {
+export interface OrderedHookEntry {
   pluginId: string;
-  hookName: K;
-  handler: AnyHookHandler;
+  hookName: PluginHookName;
+  handler: (event: never) => unknown;
+  phase: 'single' | 'transform' | 'vote';
   priority: number;
   timeoutMs?: number;
 }
@@ -113,6 +74,14 @@ export interface ToolRegistrationOptions {
 }
 
 export interface HookRegistrationOptions {
+  /** Required for the two dual-phase events; ordinary events must not set it. */
+  phase?: 'transform' | 'vote';
+  priority?: number;
+  timeoutMs?: number;
+}
+
+export interface DualPhaseHookOptions {
+  phase: 'transform' | 'vote';
   priority?: number;
   timeoutMs?: number;
 }
@@ -201,16 +170,58 @@ export class PluginApi {
     handler: HookHandler<K>,
     opts?: HookRegistrationOptions,
   ): void {
-    const entry = {
+    const dualPhase = hookName === 'before_tool_call' || hookName === 'before_iteration';
+    if (dualPhase !== (opts?.phase !== undefined)) {
+      throw new Error(`Plugin "${this.id}" must ${dualPhase ? 'declare' : 'omit'} phase for hook "${hookName}"`);
+    }
+    if (opts?.priority !== undefined && !Number.isFinite(opts.priority)) {
+      throw new Error(`Plugin "${this.id}" registered invalid hook priority`);
+    }
+    if (opts?.timeoutMs !== undefined && (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0)) {
+      throw new Error(`Plugin "${this.id}" registered invalid hook timeout`);
+    }
+    const entry: OrderedHookEntry = {
       pluginId: this.id,
       hookName,
-      handler: handler as AnyHookHandler,
+      handler: handler as (event: never) => unknown,
+      phase: opts?.phase ?? 'single',
       priority: opts?.priority ?? 0,
       ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
-    } as OrderedHookEntry;
-    const entries = [...(readStaging(this).hooks.get(hookName) ?? []), entry];
+    };
+    const entries: OrderedHookEntry[] = [...(readStaging(this).hooks.get(hookName) ?? []), entry];
     entries.sort((a, b) => b.priority - a.priority);
     readStaging(this).hooks.set(hookName, entries);
+  }
+
+  /** Register a parameter Transform or admission Vote for before_tool_call. */
+  onBeforeToolCall<P extends 'transform' | 'vote'>(
+    phase: P,
+    handler: (event: HookEvent<'before_tool_call'>) =>
+      HookResultFor<'before_tool_call', P> | Promise<HookResultFor<'before_tool_call', P>>,
+    opts?: Omit<DualPhaseHookOptions, 'phase'>,
+  ): void {
+    this.on('before_tool_call', handler as HookHandler<'before_tool_call'>, { ...opts, phase });
+  }
+
+  /** Register a controlled Iteration Transform or admission Vote. */
+  onBeforeIteration<P extends 'transform' | 'vote'>(
+    phase: P,
+    handler: (event: HookEvent<'before_iteration'>) =>
+      HookResultFor<'before_iteration', P> | Promise<HookResultFor<'before_iteration', P>>,
+    opts?: Omit<DualPhaseHookOptions, 'phase'>,
+  ): void {
+    this.on('before_iteration', handler as HookHandler<'before_iteration'>, { ...opts, phase });
+  }
+
+  /** Stage a Host-owned background service; start/stop is driven by Gateway. */
+  registerService(registration: HookServiceRegistration): void {
+    if (!registration.serviceId.trim() || readStaging(this).services.some((item) => item.serviceId === registration.serviceId)) {
+      throw new Error(`Plugin "${this.id}" registered an empty or duplicate service id`);
+    }
+    if (registration.timeoutMs !== undefined && (!Number.isFinite(registration.timeoutMs) || registration.timeoutMs <= 0)) {
+      throw new Error(`Plugin "${this.id}" registered an invalid service timeout`);
+    }
+    readStaging(this).services.push({ ...registration });
   }
 
   /**

@@ -1806,6 +1806,7 @@ export class AgentBuilder {
       model: this._model,
       systemPrompt,
       tools: agentTools,
+      extensionHooks: this._runnerConfig?.extensionHooks,
       observer: loopObserver ?? (this._observer ? {
         onLLMStart: (p) => this._observer?.log('info', 'llm.start', p as unknown as Record<string, unknown>),
         onLLMEnd: (p) => this._observer?.log('info', 'llm.end', p as unknown as Record<string, unknown>),
@@ -1817,7 +1818,12 @@ export class AgentBuilder {
 
     // ContextEngine 接线：经 convertToLlm 调用 assemble
     // 模型快照只读 ALS（Runner 每 run resolve 一次）；无 snapshot 时才回退 agent.model
-    const contextEngine = this._contextEngine ?? new DefaultContextEngine();
+    const contextEngine = this._contextEngine ?? new DefaultContextEngine({
+      ...(this._runnerConfig?.extensionHooks === undefined ? {} : {
+        extensionHooks: this._runnerConfig.extensionHooks,
+        extensionIdentity: { sessionId: 'default', agentId: busAgentId },
+      }),
+    });
     const { getResolvedModel } = await import('../run/model/run-scope.js');
     const summarizeFn =
       this._summarize ??

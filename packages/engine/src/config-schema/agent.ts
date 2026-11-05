@@ -13,6 +13,7 @@ import {
   ToolPolicySchema,
 } from './shared.js';
 import { EffectPolicyConfigSchema } from './governance.js';
+import { PLUGIN_HOOK_NAMES } from '../harness/extension/plugin-ecosystem/plugins/manifest.js';
 
 export const AgentConfigSchema = z.object({
   id: z.string({ error: 'Agent must have an id' }).min(1, 'Agent id cannot be empty'),
@@ -130,6 +131,13 @@ export const PluginConfigSchema = z
           .object({
             enabled: z.boolean().optional(),
             config: z.record(z.string(), z.unknown()).optional(),
+            hooks: z
+              .object({
+                timeoutMs: z.number().positive().optional(),
+                timeouts: z.partialRecord(z.enum(PLUGIN_HOOK_NAMES), z.number().positive()).optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict(),
       )

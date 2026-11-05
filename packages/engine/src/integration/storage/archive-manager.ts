@@ -32,6 +32,8 @@ export interface ArchiveManagerOptions {
   forceArchiveDays?: number;
   /** 可选 EventBus：归档成功后 emit session.ended */
   events?: EventBus;
+  /** Optional Host observation after archive export and hot-store deletion. */
+  onSessionArchived?: (event: { sessionId: string; agentId: string }) => void | Promise<void>;
 }
 
 interface ArchiveEntry {
@@ -47,6 +49,7 @@ export class SessionArchiveManager {
   private archiveRetentionMs: number;
   private forceArchiveMs: number;
   private events?: EventBus;
+  private onSessionArchived?: ArchiveManagerOptions['onSessionArchived'];
 
   /**
    * @param store - SessionStore（契约级；不绑具体后端）
@@ -59,6 +62,7 @@ export class SessionArchiveManager {
     this.archiveRetentionMs = (options.archiveRetentionDays ?? 180) * 24 * 60 * 60 * 1000;
     this.forceArchiveMs = (options.forceArchiveDays ?? 90) * 24 * 60 * 60 * 1000;
     this.events = options.events;
+    this.onSessionArchived = options.onSessionArchived;
   }
 
   /**
@@ -125,6 +129,13 @@ export class SessionArchiveManager {
       sessionId: session.id,
       data: { reason: 'archived' },
     });
+    if (this.onSessionArchived) {
+      try {
+        await this.onSessionArchived({ sessionId: session.id, agentId: session.agentId });
+      } catch {
+        // Observation cannot undo a completed archive; its adapter records the failure.
+      }
+    }
   }
 
   /**

@@ -1074,6 +1074,52 @@ describe('Q2 B′ 连线', () => {
   });
 });
 
+describe('before_compaction deny 的 overflow 下游语义', () => {
+  it('拒绝压缩不逼出超窗请求：机械截断兜底 + kind:denied + start/end 配对', async () => {
+    const messages: Message[] = [createMessage('user', 'go')];
+    for (let i = 0; i < 6; i++) {
+      messages.push(createToolCallMessage('read_file', { path: `/f${i}` }));
+      messages.push(createToolResultMessage(`call_${i}`, 'read_file', 'R'.repeat(3000)));
+    }
+    messages.push(createMessage('user', 'wrap up'));
+    const events: Array<{ type: string; kind?: string }> = [];
+    const summarize = vi.fn();
+    const engine = new DefaultContextEngine({
+      protectFirstN: 1,
+      protectLastN: 1,
+      targetTokens: 0,
+      proactiveCompactRatio: 0,
+      compactEngine: {
+        compactMessages: async () => ({
+          ok: true, compacted: false, fresh: false, summarizeAttempted: false,
+          reason: 'denied:before_compaction', tokensBefore: 0, view: [],
+        }),
+        compactText: async () => ({
+          ok: true, compacted: false, fresh: false, summarizeAttempted: false,
+          reason: 'denied:before_compaction', tokensBefore: 0, view: '',
+        }),
+      },
+    });
+    const result = await engine.assemble({
+      sessionId: 'deny-overflow', messages, systemPrompt: 'sys', tools: [],
+      tokenBudget: 4000, contextWindow: 32000, summarize,
+      emit: (event) => { events.push(event); },
+    });
+    // deny 阻止摘要与状态提交，但不得把超窗请求原样发给 Provider：机械截断兜底
+    expect(summarize).not.toHaveBeenCalled();
+    expect(result.messages.length).toBeLessThan(messages.length);
+    expect(String(result.droppedSummary)).toContain('denied:');
+    expect(String(result.droppedSummary)).toContain('truncation');
+    // deny 是策略拒绝不是故障
+    expect(events.find((event) => event.type === 'context.compact.error')).toMatchObject({
+      type: 'context.compact.error', kind: 'denied',
+    });
+    // start/end 配对闭合
+    expect(events.filter((event) => event.type === 'context.compact.start')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'context.compact.end')).toHaveLength(1);
+  });
+});
+
 describe('SmartRouter', () => {
   let router: SmartRouter;
   let estimator: HeuristicTokenEstimator;
