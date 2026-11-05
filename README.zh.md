@@ -112,7 +112,7 @@ Information ──蒸馏──► Memory ──织网──► Cognition ──�
   *收益：provider 前缀缓存轮轮命中——延迟热、输入按缓存价计费。*
 - **三条所有权带**——Agent 基质（跨会话持久）/ Run（易失，绝不回写模板）/ Session（一等连续性）。它*解释了*为什么多个 agent 可以共用一条对话线，却永不共享人格与记忆。
 - **形成 ≠ 装配。** 分馏链（知识怎么形成）与装配序（模型看到什么）是正交的两根轴——这一点，业界还没人把它说出口。
-- **带校准的 Token 计量**——三层估算（LLM 实测 → tokenizer → 启发式，中文约 1.5 token/字），再用实测平滑出 `calibrationRatio`。
+- **带校准的 Token 计量**——三层估算（LLM 实测 → tokenizer → 启发式；分类查表：中文 1 token/字），实测经按 model 分键的校准台账（`ContextSizeLedger`）作用到所有决策读数。
 - **逐层预算竞争 + manifest**——每层的入选或裁撤都有理由、可检视。*"这一轮的 prompt 为什么长这样"是一个有答案的问题。*
 - **Compact 键 = `(sessionId, agentId)`**——摘要跟着"会话 × 智能体"走，永不污染模板。
 

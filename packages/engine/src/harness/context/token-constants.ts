@@ -16,6 +16,12 @@ export const TOOL_RESULT_CHARS_PER_TOKEN = 2;
 /** JSON 负载：结构符号多，约 3 chars/token */
 export const JSON_CHARS_PER_TOKEN = 3;
 
+/** 中文等 CJK：1 token/字 */
+export const TEXT_CJK_CHARS_PER_TOKEN = 1;
+
+/** 代码 / 标识符：约 3 chars/token */
+export const CODE_CHARS_PER_TOKEN = 3;
+
 /** 消息结构开销（role + 分隔符 + 边界标记） */
 export const MESSAGE_OVERHEAD_TOKENS = 12;
 
@@ -32,8 +38,3 @@ export const AUDIO_TOKEN_ESTIMATE = 30;
 
 /** 视频 token 估算（抽帧处理，假设 10 帧 × 85 token） */
 export const VIDEO_TOKEN_ESTIMATE = 850;
-
-// ── 采样策略 ──
-
-/** 超长文本采样阈值（字符数） */
-export const SAMPLE_THRESHOLD = 2000;

@@ -60,11 +60,12 @@ export class SmartRouter {
    *
    * @param messages - 消息历史
    * @param messagesBudget - 消息 token 预算
+   * @param estimator - 读数估算器（调用方注入校准读数，R1；缺省用构造时的原始估算器）
    * @returns 路由决策
    */
-  evaluate(messages: Message[], messagesBudget: number): RoutingDecision {
+  evaluate(messages: Message[], messagesBudget: number, estimator?: TokenEstimator): RoutingDecision {
     // 估算当前 token 数（含安全余量）
-    const rawEstimatedTokens = this.estimator.estimateMessages(messages);
+    const rawEstimatedTokens = (estimator ?? this.estimator).estimateMessages(messages);
     const estimatedTokens = Math.ceil(rawEstimatedTokens * SAFETY_MARGIN);
 
     // 计算溢出

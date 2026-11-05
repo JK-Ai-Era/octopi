@@ -91,6 +91,8 @@ export interface AssembleParams {
   sessionId: string;
   /** Agent ID（E4 compact 键分量；缺省时引擎状态退化为纯 sessionId） */
   agentId?: string;
+  /** provider/model 标识（P1-a 校准 ratio 分键，如 `mock/m`；缺省时校准归入 'unknown'） */
+  modelKey?: string;
   /** 当前消息历史 */
   messages: Message[];
   /** 系统提示词 */
@@ -113,7 +115,8 @@ export interface AssembleParams {
   compactTargetTokens?: number;
   /** 中止信号 */
   signal?: AbortSignal;
-  /** Token 估算器（可选，未提供时使用默认实现） */
+  /** Token 估算器（可选，未提供时使用默认实现）。**必须是未校准的原始估算器**——
+   *  校准由引擎 ContextSizeLedger 统一施加，传入已校准包装会造成双重校准 */
   tokenEstimator?: TokenEstimator;
   /** LLM 摘要调用函数（可选，用于压缩阶段） */
   summarize?: SummarizeFunction;

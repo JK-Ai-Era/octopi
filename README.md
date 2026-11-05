@@ -160,8 +160,9 @@ owned, budgeted pipeline**:
   assembly order (what the model sees) are orthogonal axes — a distinction the
   rest of the industry has yet to put into words.
 - **Token accounting with calibration** — three estimation tiers (LLM-reported →
-  tokenizer → heuristic, ~1.5 tokens/char for CJK), then a smoothed
-  `calibrationRatio` from actuals.
+  tokenizer → heuristic; segmented classification: 1 token/char for CJK), with a
+  per-model calibration ledger (`ContextSizeLedger`) feeding measured actuals
+  into every decision reading.
 - **Per-layer budget competition and a manifest** — every layer's inclusion or
   drop is reasoned and inspectable. *Why this turn's prompt looks the way it
   does* is a question with an answer.

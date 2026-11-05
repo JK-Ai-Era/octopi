@@ -53,7 +53,6 @@ export {
   IMAGE_TOKEN_ESTIMATE,
   AUDIO_TOKEN_ESTIMATE,
   VIDEO_TOKEN_ESTIMATE,
-  SAMPLE_THRESHOLD,
 } from './token-constants.js';
 
 // ── 七层内容契约与装配 ──

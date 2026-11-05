@@ -32,6 +32,7 @@ import type {
   ContextCompactSnapshot,
 } from './types.js';
 import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.js';
+import { ContextSizeLedger } from './context-size-ledger.js';
 import { toolResultBody } from './tool-result-body.js';
 import {
   agedToolResultPointer,
@@ -119,14 +120,12 @@ export interface DefaultContextEngineConfig {
 interface CompactState {
   /** 上次摘要正文（用于迭代更新，不是 dropped 描述） */
   previousSummary?: string;
-  /** 上次实际 token 数（来自 LLM usage） */
-  lastActualTokens?: number;
-  /** 上次估算 token 数 */
+  /** 上次估算 token 数（**恒为「system+tools+视图」请求口径的未校准估算**——P1-a 校准
+   *  分母；只允许请求口径写点写入（assemble 的三个出口），compact 路径的 messages-only
+   *  值不得写入，否则 calibrationRatio 被口径错位结构性抬高） */
   lastEstimatedTokens?: number;
-  /** 上次 usage 对应的消息数量快照（用于增量估算） */
-  lastUsageMessageCount?: number;
-  /** 估算校准比率 = actual / estimated（用于修正后续估算） */
-  calibrationRatio?: number;
+  /** 上次 assemble 的 provider/model 标识（P1-a 校准 ratio 分键，与 lastEstimatedTokens 同槽配对） */
+  modelKey?: string;
   /**
    * 上次主动压缩时的全量条数（再压缩增长门 newSinceLast）。
    * 摘要覆盖终点见 lastProactiveCoverEnd。
@@ -162,6 +161,8 @@ export class DefaultContextEngine implements ContextEngine {
   };
   private router: SmartRouter;
   private states: Map<string, CompactState> = new Map();
+  /** P1-a 校准台账：ratio 按 model 分键，observe/calibrate 唯一出入口 */
+  private sizeLedger = new ContextSizeLedger();
 
   constructor(config?: DefaultContextEngineConfig) {
     const tokenEstimator = config?.tokenEstimator ?? new HeuristicTokenEstimator();
@@ -242,7 +243,12 @@ export class DefaultContextEngine implements ContextEngine {
     const windowKnown = contextWindow != null && contextWindow > 0;
     const targetKnown = compactTargetTokens != null && compactTargetTokens > 0;
 
-    const estimator = tokenEstimator ?? this.config.tokenEstimator;
+    // P1-a（R1）：决策读数一律校准——estimator 参数流（smart-router / message-selector /
+    // compact / budget-allocator 的33 个决策点）读到的都是校准值；原始估算只供校准分母
+    // （state.lastEstimatedTokens，「system+tools+视图」请求口径）。
+    const rawEstimator = tokenEstimator ?? this.config.tokenEstimator;
+    const modelKey = params.modelKey ?? 'unknown';
+    const estimator = this.sizeLedger.calibratedEstimator(modelKey, rawEstimator);
 
     // 进程重启后从持久层恢复压缩状态（仅当内存态完全没有压缩态时）。
     // 「有计数无摘要」（机械降级轮后）也是压缩态：若只看 previousSummary，降级轮之后
@@ -293,14 +299,15 @@ export class DefaultContextEngine implements ContextEngine {
           ? { messages: proactive.messages, droppedSummary: proactive.droppedSummary }
           : this.buildStructuralView(sessionId, messages, emit, stateKey);
       const llmMessages = this.buildLlmMessages(view.messages, systemPrompt, tools, agingPlan);
-      const rawEstimatedTokens = estimateLLMMessages(llmMessages);
+      const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       this.states.set(stateKey, {
         ...this.states.get(stateKey),
         lastEstimatedTokens: rawEstimatedTokens,
+        modelKey,
       });
       return {
         messages: llmMessages,
-        estimatedTokens: this.calibrateTokens(sessionId, rawEstimatedTokens, stateKey),
+        estimatedTokens: this.sizeLedger.calibrate(modelKey, rawEstimatedTokens),
         systemPrompt,
         droppedSummary: view.droppedSummary,
         summary: this.states.get(stateKey)?.previousSummary,
@@ -372,12 +379,13 @@ export class DefaultContextEngine implements ContextEngine {
     // 3. 如果没有溢出，不需要压缩
     if (selection.overflow.length === 0) {
       const llmMessages = this.buildLlmMessages(selection.kept, systemPrompt, tools, agingPlan);
-      const rawEstimatedTokens = estimateLLMMessages(llmMessages);
-      const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens, stateKey);
+      const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
+      const estimatedTokens = this.sizeLedger.calibrate(modelKey, rawEstimatedTokens);
 
       this.states.set(stateKey, {
         ...this.states.get(stateKey),
         lastEstimatedTokens: rawEstimatedTokens,
+        modelKey,
       });
 
       return {
@@ -395,7 +403,7 @@ export class DefaultContextEngine implements ContextEngine {
     //    SmartRouter 只负责 fits/compact 判定，不负责判断是否需要压缩；
     //    摘要 vs 机械由 compact 能力按「有 summarize 就出真摘要」决定（B′）
     const overflowTokens = estimator.estimateMessages(selection.overflow);
-    const routing = this.router.evaluate(selection.overflow, 0);
+    const routing = this.router.evaluate(selection.overflow, 0, estimator);
 
     // 5. 压缩溢出消息
     const state = this.states.get(stateKey);
@@ -610,12 +618,13 @@ export class DefaultContextEngine implements ContextEngine {
     // 8. 构建 LLM 消息（校准基 = 老化后 LLM 视图估算——尺子必须量实际请求，
     //    不能像旧代码存 raw Message 估算，否则 calibrationRatio 系统性漂移）
     const llmMessages = this.buildLlmMessages(reassembled, systemPrompt, tools, agingPlan);
-    const rawEstimatedTokens = estimateLLMMessages(llmMessages);
+    const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
     this.states.set(stateKey, {
       ...this.states.get(stateKey),
       lastEstimatedTokens: rawEstimatedTokens,
+      modelKey,
     });
-    const estimatedTokens = this.calibrateTokens(sessionId, rawEstimatedTokens, stateKey);
+    const estimatedTokens = this.sizeLedger.calibrate(modelKey, rawEstimatedTokens);
 
     return {
       messages: llmMessages,
@@ -798,7 +807,6 @@ export class DefaultContextEngine implements ContextEngine {
       this.states.set(stateKey, {
         ...state,
         lastProactiveTokens: reducedTokens,
-        lastEstimatedTokens: reducedTokens,
       });
       return { messages: sticky.messages };
     }
@@ -834,7 +842,6 @@ export class DefaultContextEngine implements ContextEngine {
       this.states.set(stateKey, {
         ...state,
         lastProactiveTokens: reducedTokens,
-        lastEstimatedTokens: reducedTokens,
       });
       return { messages: sticky.messages };
     }
@@ -883,7 +890,6 @@ export class DefaultContextEngine implements ContextEngine {
         this.states.set(stateKey, {
           ...state,
           lastProactiveTokens: reducedTokens,
-          lastEstimatedTokens: reducedTokens,
         });
         emit?.({
           type: 'context.compact.start',
@@ -1007,7 +1013,6 @@ export class DefaultContextEngine implements ContextEngine {
     this.states.set(stateKey, {
       ...state,
       previousSummary: fresh ? outcome.summary : state?.previousSummary,
-      lastEstimatedTokens: reducedTokens,
       // 增长门计数随任何**完成的压缩轮**推进（含机械降级）——它是「自上次压缩新增条数」的
       // 基数与压缩态粘滞标记；若只随 fresh 推进，无摘要会话每轮被判全量新增、复用分支
       // 永远进不去（每 turn 重打 LLM）。「有计数无摘要」是生产状态形状（重启恢复快照
@@ -1332,8 +1337,13 @@ export class DefaultContextEngine implements ContextEngine {
     /** F22：cache-miss 旁路事件出口（manual 路可观测性，与 proactive/overflow 对称） */
     emit?: ContextEmitFn;
   }): Promise<CompactOutcome> {
-    const estimator = this.config.tokenEstimator;
     const stateKey = compactStateKey(input.sessionId, input.agentId);
+    // R1（评审 #5）：manual 压缩同样是决策路径（目标裁剪 / tokensBefore|After 读数），
+    // 须与 assemble 同走校准口径；modelKey 复用会话最近一次 assemble 的分键。
+    const estimator = this.sizeLedger.calibratedEstimator(
+      this.states.get(stateKey)?.modelKey ?? 'unknown',
+      this.config.tokenEstimator,
+    );
     const result = await this.structuralCompact({
       sessionId: input.sessionId,
       ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
@@ -1363,38 +1373,30 @@ export class DefaultContextEngine implements ContextEngine {
   /**
    * 每轮结束后更新状态
    *
-   * 使用 LLM 返回的真实 usage 校准 token 估算：
-   * 1. 存储真实 reported prompt tokens
-   * 2. 记录当前消息数量快照（用于增量估算）
-   * 3. 计算校准比率 = actual / estimated
+   * 使用 LLM 返回的真实 usage 校准 token 估算：把（实测 prompt, 请求口径估算）样本
+   * 送入 ContextSizeLedger（P1-a，ratio 按 model 分键）。
    */
   async afterStep(params: AfterStepParams): Promise<void> {
-    const { sessionId, agentId, usage, step } = params;
+    const { sessionId, agentId, usage } = params;
 
     if (!usage) return;
 
     const stateKey = compactStateKey(sessionId, agentId);
     const state = this.states.get(stateKey) ?? {};
 
-    // 存储真实 token 数（provider 报告 prompt ≈ 当前上下文）
+    // 真实 prompt tokens（provider 报告优先，分项和兜底——与展示口径同源）
     const promptActual =
       usage.inputReportedTokens ??
       usage.inputUncachedTokens + usage.inputCachedTokens + usage.inputCacheWriteTokens;
-    state.lastActualTokens = promptActual;
 
-    // 记录消息数量快照（step 包含本步消息，估算时用 messages.length - step.length 得到之前的消息数）
-    state.lastUsageMessageCount = step?.length ?? 0;
-
-    // 计算校准比率：如果上次有估算值，用 actual/estimated 修正后续估算
+    // P1-a：校准样本入台账——分母 = state.lastEstimatedTokens（「system+tools+视图」请求
+    // 口径的未校准估算，与 modelKey 同槽配对），分子 = provider 实测。ratio 按 model 分键
+    // 跨 session 共享；旧「逐 session calibrationRatio」由 ContextSizeLedger 取代。
     if (state.lastEstimatedTokens && state.lastEstimatedTokens > 0 && promptActual > 0) {
-      const ratio = promptActual / state.lastEstimatedTokens;
-      // 平滑处理：与历史比率加权平均（70% 新值 + 30% 旧值），避免单次异常值过度影响
-      state.calibrationRatio = state.calibrationRatio
-        ? ratio * 0.7 + state.calibrationRatio * 0.3
-        : ratio;
+      this.sizeLedger.observe(state.modelKey ?? 'unknown', promptActual, state.lastEstimatedTokens, {
+        sessionId,
+      });
     }
-
-    this.states.set(stateKey, state);
   }
 
   /**
@@ -1412,22 +1414,6 @@ export class DefaultContextEngine implements ContextEngine {
    *
    * 将内部 Message 格式转换为 LLM Message 格式。
    */
-  /**
-   * 使用校准比率修正 token 估算
-   *
-   * 当有真实 usage 数据时，用 calibrationRatio 修正启发式估算值。
-   * 优先用真实值，估算只做兜底，校准比率平滑修正偏差。
-   */
-  private calibrateTokens(sessionId: string, rawEstimated: number, stateKey?: string): number {
-    const state = this.states.get(stateKey ?? sessionId);
-    if (!state?.calibrationRatio) {
-      return rawEstimated;
-    }
-    // 应用校准比率，限制在 [0.5, 2.0] 范围内防止异常值
-    const clampedRatio = Math.max(0.5, Math.min(2.0, state.calibrationRatio));
-    return Math.ceil(rawEstimated * clampedRatio);
-  }
-
   private buildLlmMessages(
     messages: Message[],
     systemPrompt: string,

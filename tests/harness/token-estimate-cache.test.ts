@@ -38,14 +38,11 @@ describe('HeuristicTokenEstimator message cache', () => {
     };
     const estimator = new HeuristicTokenEstimator();
 
-    // 手算（独立路径，不经过缓存）：overhead + Σ ceil(adjustedChars(body) / 2)
-    const expected =
-      12 +
-      Math.ceil(
-        // estimateAdjustedChars 的语义对纯 ASCII = 长度
-        JSON.stringify({ content: 'x'.repeat(500) }).length / 2,
-      ) +
-      Math.ceil(JSON.stringify({ error: 'failed' }).length / 2);
+    // 手算（独立路径，不经过缓存）：新口径 = 每条 toolResult 一条开销（wire 对齐）+
+    // Σ 结果体分类计数（纯 ASCII → chars / TOOL_RESULT_CHARS_PER_TOKEN=2），总量一次取整
+    const body1 = JSON.stringify({ content: 'x'.repeat(500) }).length; // 514
+    const body2 = JSON.stringify({ error: 'failed' }).length; // 18
+    const expected = Math.ceil(2 * 12 + body1 / 2 + body2 / 2);
 
     const first = estimator.estimateMessage(message);
     const second = estimator.estimateMessage(message);

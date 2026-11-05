@@ -20,6 +20,7 @@ import type {
   SummarizeFunction,
 } from '@octopi-agent/engine/harness/context/types.js';
 import { HeuristicTokenEstimator, estimateTextTokens, estimateLLMMessages } from '@octopi-agent/engine/harness/context/token-estimator.js';
+import { ContextSizeLedger } from '@octopi-agent/engine/harness/context/context-size-ledger.js';
 import {
   estimateContentBlock,
   estimateToolCallTokens,
@@ -219,14 +220,19 @@ describe('estimateContentBlock', () => {
     expect(estimateContentBlock({ type: 'video' })).toBe(VIDEO_TOKEN_ESTIMATE);
   });
 
-  it('should fall back to 10 for unknown or file blocks', () => {
-    expect(estimateContentBlock({ type: 'file' })).toBe(10);
-    expect(estimateContentBlock({ type: 'unknown_xyz' })).toBe(10);
-    expect(estimateContentBlock({})).toBe(10);
+  it('counts unknown or file blocks by length (R4: no constant fallback)', () => {
+    // 旧「return 10」常数兜底已废除（P1-c）：未知块按正文长度计
+    expect(estimateContentBlock({ type: 'file' })).toBe(0);
+    expect(estimateContentBlock({ type: 'unknown_xyz' })).toBe(0);
+    expect(estimateContentBlock({})).toBe(0);
+    const short = estimateContentBlock({ type: 'unknown_xyz', text: 'x'.repeat(30) });
+    const long = estimateContentBlock({ type: 'unknown_xyz', text: 'x'.repeat(300) });
+    expect(short).toBeGreaterThan(0);
+    expect(long).toBeGreaterThan(short);
   });
 
-  it('should treat text block without text as unknown', () => {
-    expect(estimateContentBlock({ type: 'text' })).toBe(10);
+  it('treats text block without text as zero-length (no constant)', () => {
+    expect(estimateContentBlock({ type: 'text' })).toBe(0);
   });
 });
 
@@ -987,11 +993,11 @@ describe('DefaultContextEngine', () => {
       });
 
       // Calibrated estimate should be higher than raw estimate
-      // (ratio should be ~1.4 after first calibration with 2x, due to 70/30 smoothing)
+      // （首个样本：0.7×2 + 0.3×1 = 1.7×，EMA 新旧权重 0.7/0.3）
       expect(result2.estimatedTokens).toBeGreaterThan(firstEstimate);
     });
 
-    it('should clamp calibration ratio to safe range', async () => {
+    it('clamps calibration ratio at 4.0 with out-of-bounds warn (no silent 2.0 cap)', async () => {
       // Assemble to create state
       await engine.assemble({
         sessionId: 'clamp-test',
@@ -1017,10 +1023,54 @@ describe('DefaultContextEngine', () => {
         tokenBudget: 100000,
       });
 
-      // Should be clamped: ratio capped at 2.0x
+      // P1-a：clamp 放宽至 [0.25, 4.0] 且越界告警不再静默——100× 样本夹到 4.0 入平滑
+      // （首样本 0.7*4.0 + 0.3*1.0 = 3.1），读数不再被旧 2.0 封顶
       const rawEstimate = estimator.estimateMessages([createMessage('user', 'Test')])
         + estimator.estimateText('Test') + 12; // message overhead
-      expect(result.estimatedTokens).toBeLessThanOrEqual(rawEstimate * 2.1); // some slack for rounding
+      expect(result.estimatedTokens).toBeGreaterThan(rawEstimate * 2.5);
+      expect(result.estimatedTokens).toBeLessThanOrEqual(rawEstimate * 3.2); // EMA 3.1 + rounding slack
+    });
+
+    it('decision readings shift with learned ratio (selector overflow boundary, R1)', () => {
+      const ledger = new ContextSizeLedger(() => {});
+      const raw = new HeuristicTokenEstimator();
+      const selector = new DefaultMessageSelector();
+      const messages = Array.from({ length: 10 }, (_, i) => createMessage('user', `Message content ${i}`));
+      const opts = { maxTokens: 200, protectFirstN: 0, protectLastN: 0 };
+      const base = selector.select(messages, opts, raw);
+      // 学到 1.7× 后同一预算下溢出面必须变大（决策读数随校准移动，而非只动展示）
+      ledger.observe('mock/m', 200, 100);
+      const calibrated = selector.select(messages, opts, ledger.calibratedEstimator('mock/m', raw));
+      expect(calibrated.overflow.length).toBeGreaterThan(base.overflow.length);
+    });
+
+    it('compact-only rounds never write lastEstimatedTokens (single-writer invariant)', async () => {
+      const engine2 = new DefaultContextEngine();
+      await engine2.assemble({
+        sessionId: 'sw-test',
+        modelKey: 'mock/m',
+        messages: [createMessage('user', 'hello world')],
+        systemPrompt: 'Test',
+        tools: [],
+        tokenBudget: 100000,
+      });
+      const states = (
+        engine2 as unknown as { states: Map<string, { lastEstimatedTokens?: number; modelKey?: string }> }
+      ).states;
+      const stateKey = [...states.keys()][0];
+      const before = states.get(stateKey)!.lastEstimatedTokens;
+      expect(before).toBeGreaterThan(0);
+
+      // manual 压缩轮（无 summarize → 机械路径）：只动压缩态，不得触碰校准基 / modelKey
+      await (
+        engine2 as unknown as { compactStructural: (i: Record<string, unknown>) => Promise<unknown> }
+      ).compactStructural({
+        sessionId: 'sw-test',
+        messages: [createMessage('user', 'hello world'), createMessage('user', 'more content here')],
+      });
+      const after = states.get(stateKey)!;
+      expect(after.lastEstimatedTokens).toBe(before);
+      expect(after.modelKey).toBe('mock/m');
     });
   });
 

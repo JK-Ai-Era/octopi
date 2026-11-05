@@ -1869,6 +1869,7 @@ export class AgentBuilder {
       const result = await contextEngine.assemble({
         sessionId,
         agentId,
+        modelKey: snapshot?.ref,
         messages,
         systemPrompt,
         tools,

@@ -110,6 +110,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.101.0 (2026-11-06)
+
+### fix(engine): 估算器统一与校准入决策（P1：尺子归一 + 实测校准作用到决策）
+
+- **P1-c 估算器统一**：计数收敛为「单实现 + 两 adapter」（`token-segments.ts`，Segment 分类查表：text_cjk 1 / text_ascii 4 / tool_result 2 / json 3 / code 3）；旧 `estimateAdjustedChars`（nonLatin×3 膨胀 hack）删除。顺修三处旧口径缺陷：① LLM 口径把 `tool_use`/`tool_result` 块落「常数 10」兜底（R4 违约，工具密集会话严重低计）；② 膨胀 hack 挪到 2 比率误乘（全 CJK 工具结果 2 token/字高倍）；③ CJK 扩展 B 计成 ASCII。红线：同内容两入口读数差 <1%。
+- **P1-a 校准入决策**：`ContextSizeLedger`——ratio 按 model 分键（EMA 0.7/0.3）、clamp [0.25,4.0]、越界告警限频 1 条/h/(session,model)（不静默夹取）；决策读数全部经校准（smart-router / message-selector / compact / budget-allocator 等 33 决策点经 estimator 参数流自动获得校准值，R1）。校准分母单源「system+tools+视图」请求口径：`lastEstimatedTokens` 只准 assemble 三个请求口径出口写入，删 compact 路径 messages-only 污染写点（其使 ratio 结构性偏高 ~1.12×）。旧「逐 session calibrationRatio + 静默 [0.5,2.0] 夹取」删除。
+- **行为变更**：① 决策读数变为**校准值**——压缩触发线、预算裁剪等在「校准 token」单位下比较（此前用未校准估算，实测双向各偏 ~2× 的病源）；② 估算读数整体迁移（分类查表取代膨胀 hack），触发/裁剪时机随之移动；③ 未知内容块按载荷长度计（旧「常数 10」废除）；图像识别补 `image_url`/`input_image` 同价（此前引擎转换形态按 0 计）；逐消息取整改总量一次取整；并列工具结果的开销对齐 wire 形态（N 结果 N 条消息）。
+- **验收**（真实请求体回放 200×2 对、两个生产会话）：校准后 δ 前 20% 2.9%/1.3% → 后 20% **0.1%/0.3%**（门槛 ±15% 且递减）；两会话终态 ratio 收敛同值 1.545（model 分键实证）。`npm test` 4128 passed、`npm run lint` 绿。
+
+---
+
 ## v0.100.0 (2026-11-05)
 
 ### feat(plugin-system): P4 执行扩展点——五类 Hook 组合语义、真实触发面与 HITL 工具审批
