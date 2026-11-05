@@ -9,7 +9,7 @@
  * 4. 旧缺陷回归：tool_use / tool_result 块不得塌到常数（LLM 口径）；
  *    CJK 工具结果不得按「2 token/字」高倍（领域口径膨胀 hack 误乘）。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
 import {
@@ -187,6 +187,47 @@ describe('P1-c estimator unification (single core, two adapters)', () => {
       expect(cjk).toBe(1);
     }
     expect(CHARS_PER_TOKEN_BY_KIND.text_cjk).toBe(1);
+  });
+
+  it('unknown block types warn once per type per hour (P2: category gaps stay visible)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // 已知类型：静默
+      estimateContentBlock({ type: 'text', text: 'hello' });
+      estimateContentBlock({ type: 'image' });
+      expect(warn).not.toHaveBeenCalled();
+
+      // 未知类型：告警一条（含 type 与载荷长度，指向补分类表）。
+      // type 用全新名——模块级限频表跨测试存续，前序用例的 type 已被记账
+      estimateContentBlock({ type: 'custom_widget', text: 'payload' });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain('type="custom_widget"');
+      expect(String(warn.mock.calls[0][0])).toContain('add a category');
+
+      // 同 type 限频：静默（高频估算路径不刷屏）
+      estimateContentBlock({ type: 'custom_widget', text: 'more' });
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // core 声明的 file 块走显式分类（指针计数），永不告警
+      estimateContentBlock({ type: 'file', name: 'a.pdf', url: 'https://x/a.pdf' });
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // 不同 type：各告一条
+      estimateContentBlock({ type: 'server_tool_use', text: 'x' });
+      expect(warn).toHaveBeenCalledTimes(2);
+
+      // 限频窗口过期：同 type 重新告警（1 条/h/type 的"h"分支）
+      vi.useFakeTimers();
+      try {
+        vi.advanceTimersByTime(3_600_001);
+        estimateContentBlock({ type: 'custom_widget', text: 'again' });
+        expect(warn).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

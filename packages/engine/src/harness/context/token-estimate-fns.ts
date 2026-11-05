@@ -5,7 +5,8 @@
  * 计数逻辑全部委托 {@link estimateSegments}（P1-c：单实现 + 两 adapter）；
  * 本模块是「松散形状」adapter，领域/LLM 两入口的形状归一在 `token-estimator.ts`。
  *
- * R4 红线：不得返回常数兜底——未知内容块按长度计（告警半项归 P2-a）。
+ * R4 红线：不得返回常数兜底——未知内容块按载荷长度计，且**告警**（分类表缺失必须可见，
+ * 每 type 限频 1 条/小时，防高频估算路径刷屏）。
  */
 
 import {
@@ -24,6 +25,32 @@ import { estimateSegments, textSegment, type Segment } from './token-segments.js
  */
 export function estimateTextTokens(text: string): number {
   return estimateSegments([textSegment(text)]);
+}
+
+/** 未知块告警限频：每 type 每小时至多 1 条（估算在热路径高频调用，防刷屏） */
+const UNKNOWN_BLOCK_WARN_INTERVAL_MS = 3_600_000;
+/** 记账上限：超出后新 type 不再告警（64 种未分类形状已足够说明分类表崩了） */
+const UNKNOWN_BLOCK_WARN_MAX_TYPES = 64;
+const unknownBlockWarnedAt = new Map<string, number>();
+
+/**
+ * 未分类内容块告警：分类表缺失必须可见（R4 后半），但计数不阻塞（按载荷长度计）。
+ * 覆盖两种形态：真正未知的 type，以及已知 type 的畸形载荷（如 text 缺正文）——
+ * 后者同样说明分类表没接住，文案用 unclassified 不断言 type 本身未知。
+ *
+ * @param type 未被分类表接住的块类型
+ * @param chars 该块被计入估算的载荷字符数
+ */
+function warnUnknownBlock(type: string | undefined, chars: number): void {
+  const key = type ?? '(undefined)';
+  const now = Date.now();
+  const last = unknownBlockWarnedAt.get(key);
+  if (last !== undefined && now - last < UNKNOWN_BLOCK_WARN_INTERVAL_MS) return;
+  if (last === undefined && unknownBlockWarnedAt.size >= UNKNOWN_BLOCK_WARN_MAX_TYPES) return;
+  unknownBlockWarnedAt.set(key, now);
+  console.warn(
+    `[token-est] unclassified content block type=${JSON.stringify(key)} counted by payload length (chars=${chars}) — add a category in contentBlockSegment if this is a legitimate shape`,
+  );
 }
 
 /**
@@ -46,6 +73,7 @@ export function contentBlockSegment(block: {
   src?: string;
   path?: string;
   filename?: string;
+  mimeType?: string;
 }): Segment {
   if (block.type === 'text' && typeof block.text === 'string') {
     return textSegment(block.text);
@@ -55,12 +83,18 @@ export function contentBlockSegment(block: {
   }
   if (block.type === 'audio' || block.type === 'input_audio') return { kind: 'audio', fixed: AUDIO_TOKEN_ESTIMATE };
   if (block.type === 'video') return { kind: 'video', fixed: VIDEO_TOKEN_ESTIMATE };
+  if (block.type === 'file') {
+    // FileBlock（core 声明类型）：按指针字段计数——`data` 是 base64 内嵌载荷，
+    // 不序列化（会虚高）；`sizeBytes` 不作估算输入（保持"长度计"单一口径）
+    return textSegment([block.name, block.url, block.mimeType].filter((v): v is string => typeof v === 'string').join(' '));
+  }
   const body =
     typeof block.text === 'string'
       ? block.text
       : [block.name, block.url, block.src, block.path, block.filename]
           .filter((v): v is string => typeof v === 'string')
           .join(' ');
+  warnUnknownBlock(block.type, body.length);
   return textSegment(body);
 }
 

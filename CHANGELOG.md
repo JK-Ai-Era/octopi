@@ -110,6 +110,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.101.1 (2026-11-06)
+
+### fix(engine): 未知块类型告警与触发线语义注记（P2 收官）
+
+- **未知块告警（R4 后半）**：估算器遇到未分类内容块时按 type 限频告警（每 type 1 条/小时，`[token-est] unclassified content block type=…`），分类表缺失保持可见；计数行为不变（按载荷长度计），core 声明的 `file` 块已显式分类（指针字段计数，不告警）。「按长度计」半项已随 v0.101.0 落地。
+- **触发线语义注记**：压缩触发线 `threshold = min(targetLine, windowRatioLine)` 的比较双方自 v0.101.0 起均为**校准后** token 读数（此前用未校准估算比较，同一条线实际等效实测约一半）。注记写明三件事：单位（分子只量视图消息、预算侧已扣 system+tools）、数值（1M 窗口下 ratio 线绑定，实际触发点 ≈542k 而非 600k target 线）、范围（老化视图——工具型增长由 aging 吸收不推高此线，只有文本型增长走到这条线）。
+- **存量校正收口**：`metadata.contextTokens`（旧混装字段）清除已实证生效（观察项关闭）；至此上下文口径专线（P0-A/B/C → P1 → P2）全部落库。
+
+---
+
 ## v0.101.0 (2026-11-06)
 
 ### fix(engine): 估算器统一与校准入决策（P1：尺子归一 + 实测校准作用到决策）

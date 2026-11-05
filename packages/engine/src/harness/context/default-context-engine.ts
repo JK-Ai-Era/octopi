@@ -813,6 +813,17 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 触发线：目标线与窗口比例线取 min——小窗口走有门槛/冷却的温和 A，
     // 不被挤成死代码后交给无门槛的溢出路径每 turn 压缩（双机制打架换位置，评审 H1）。
+    //
+    // 触发线语义（P2 注记）：
+    // - 单位：比较双方都是**校准后** token 读数——currentTokens = calibrate(老化视图)，
+    //   分子只量视图消息；threshold 侧 messagesBudget = contextWindow − outputReserve −
+    //   calibrated(system+tools) + envelope（预算已扣 system+tools），标量校准保证单位一致。
+    // - 数值：threshold = min(targetLine, windowRatioLine)——1M 窗口下 ratio 线绑定：
+    //   min(600,000, 903,479×0.6) = 542,087（arch/context-size-accounting.md §5.2 复现），
+    //   600k target 线在该窗口下不会生效，勿把 600k 当实际触发点。
+    // - 范围：此线量的是**老化视图**——工具型增长由 aging 吸收、不推高此口径，
+    //   只有文本型增长会走到这条线（同上注记出处）。
+    // - P1 之前比较的是未校准估算，同一条线实际等效实测约一半（ratio≈0.5 时），勿混淆。
     const threshold =
       this.config.targetTokens > 0 ? Math.min(targetLine, windowRatioLine) : windowRatioLine;
 
