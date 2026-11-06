@@ -997,7 +997,7 @@ describe('DefaultContextEngine', () => {
       expect(result2.estimatedTokens).toBeGreaterThan(firstEstimate);
     });
 
-    it('clamps calibration ratio at 4.0 with out-of-bounds warn (no silent 2.0 cap)', async () => {
+    it('extreme sample cannot drive decisions (F1 cold anchors to measured)', async () => {
       // Assemble to create state
       await engine.assemble({
         sessionId: 'clamp-test',
@@ -1023,12 +1023,10 @@ describe('DefaultContextEngine', () => {
         tokenBudget: 100000,
       });
 
-      // P1-a：clamp 放宽至 [0.25, 4.0] 且越界告警不再静默——100× 样本夹到 4.0 入平滑
-      // （首样本 0.7*4.0 + 0.3*1.0 = 3.1），读数不再被旧 2.0 封顶
-      const rawEstimate = estimator.estimateMessages([createMessage('user', 'Test')])
-        + estimator.estimateText('Test') + 12; // message overhead
-      expect(result.estimatedTokens).toBeGreaterThan(rawEstimate * 2.5);
-      expect(result.estimatedTokens).toBeLessThanOrEqual(rawEstimate * 3.2); // EMA 3.1 + rounding slack
+      // F1（v0.101.4）：单样本（cold）ratio 不进决策——极端样本后第二请求走实测锚定
+      // （= 100000 真值），而非 3.1×EMA 猜测；clamp 语义由 ledger 级测试钉
+      // （context-size-ledger.test.ts 'clamp [0.25, 4.0] as admission band'）
+      expect(result.estimatedTokens).toBe(100000);
     });
 
     it('decision readings shift with learned ratio (selector overflow boundary, R1)', () => {

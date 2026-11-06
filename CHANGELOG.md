@@ -110,6 +110,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.101.4 (2026-11-06)
+
+### fix(engine): honest compact-event gauges and calibration fail-safe (option B)
+
+2026-11-06 事故批次第二段（对抗性评审 del-1d1bc11f F1–F9 全处置）：
+
+- **compact 事件诚实化**：计量对回归 P0-C M2 口径——messages-only 未校准、同集合前后对。此前 before 量溢出子集、after 量全视图，且两数都乘事件期间漂移中的校准 ratio（「142371 → 1243157」的来源）；复用重建分支对齐结构回放语义（0/0 + cached，不入会话流）。
+- **校准降级 fail-safe（方案 B）**：校准不可信（样本被拒 / 预测带外 / 冷启动单样本）时，决策读数锚定「最近实测 prompt × 未校准估算增长比」；≥2 个已入账样本且未降级才走校准（R1 原语义）。覆盖 wrap-up / 85% 压力 / viewTokensEst 三个停跑决策面。
+- **样本门加固**：被拒滑窗重锚（不一致垃圾不再永久废掉逃逸）；锚冻结为 {actual, raw, modelKey} 原子对（失败步不拆对、跨 model 无效）。
+- **可观测**：校准降级进入/退出 warn（degrade/recover 分类限频）。
+- Breaking notes：`context.compact.*` 计量对口径变更（未校准 messages-only、同集合）；复用重建事件 tokens 为 0/0；冷启动首个请求决策读数 = 实测锚定（此前 = raw × 未校准 ratio 猜测）；`CompactState` 新增内部锚字段（不入持久化快照）。
+
 ## v0.101.3 (2026-11-06)
 
 ### fix(engine): pair calibration samples with fresh usage and gate mispairing poison

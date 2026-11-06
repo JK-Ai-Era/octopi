@@ -126,6 +126,8 @@ interface CompactState {
   lastEstimatedTokens?: number;
   /** 上次 assemble 的 provider/model 标识（P1-a 校准 ratio 分键，与 lastEstimatedTokens 同槽配对） */
   modelKey?: string;
+  /** 降级 B 锚（arch §10.16，评审 F3 原子对）：{实测 prompt, 同请求未校准估算, modelKey} 冻结写入 */
+  lastUsageAnchor?: { actual: number; raw: number; modelKey: string };
   /**
    * 上次主动压缩时的全量条数（再压缩增长门 newSinceLast）。
    * 摘要覆盖终点见 lastProactiveCoverEnd。
@@ -287,6 +289,7 @@ export class DefaultContextEngine implements ContextEngine {
               summarize,
               taskSnapshot,
               estimator,
+              rawEstimator,
               emit,
               systemPrompt,
               tools,
@@ -300,6 +303,11 @@ export class DefaultContextEngine implements ContextEngine {
           : this.buildStructuralView(sessionId, messages, emit, stateKey);
       const llmMessages = this.buildLlmMessages(view.messages, systemPrompt, tools, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
+      const estimatedTokens = this.sizeLedger.decisionTokens(
+        modelKey,
+        rawEstimatedTokens,
+        this.states.get(stateKey)?.lastUsageAnchor,
+      );
       this.states.set(stateKey, {
         ...this.states.get(stateKey),
         lastEstimatedTokens: rawEstimatedTokens,
@@ -307,7 +315,7 @@ export class DefaultContextEngine implements ContextEngine {
       });
       return {
         messages: llmMessages,
-        estimatedTokens: this.sizeLedger.calibrate(modelKey, rawEstimatedTokens),
+        estimatedTokens,
         systemPrompt,
         droppedSummary: view.droppedSummary,
         summary: this.states.get(stateKey)?.previousSummary,
@@ -344,6 +352,7 @@ export class DefaultContextEngine implements ContextEngine {
       summarize,
       taskSnapshot,
       estimator,
+      rawEstimator,
       emit,
       systemPrompt,
       tools,
@@ -380,7 +389,11 @@ export class DefaultContextEngine implements ContextEngine {
     if (selection.overflow.length === 0) {
       const llmMessages = this.buildLlmMessages(selection.kept, systemPrompt, tools, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
-      const estimatedTokens = this.sizeLedger.calibrate(modelKey, rawEstimatedTokens);
+      const estimatedTokens = this.sizeLedger.decisionTokens(
+        modelKey,
+        rawEstimatedTokens,
+        this.states.get(stateKey)?.lastUsageAnchor,
+      );
 
       this.states.set(stateKey, {
         ...this.states.get(stateKey),
@@ -402,7 +415,6 @@ export class DefaultContextEngine implements ContextEngine {
     //    传入 messagesBudget=0，因为 MessageSelector 已确认这些消息是溢出部分
     //    SmartRouter 只负责 fits/compact 判定，不负责判断是否需要压缩；
     //    摘要 vs 机械由 compact 能力按「有 summarize 就出真摘要」决定（B′）
-    const overflowTokens = estimator.estimateMessages(selection.overflow);
     const routing = this.router.evaluate(selection.overflow, 0, estimator);
 
     // 5. 压缩溢出消息
@@ -446,12 +458,15 @@ export class DefaultContextEngine implements ContextEngine {
     const skipLlmCompaction =
       compactionCannotHelp || overflowInCooldown || overflowNewSinceLast < overflowMinNew;
     const overflowStart = Date.now();
-    const overflowTokensBefore = overflowTokens;
+    // 事件计量口径（P0-C M2）：compact 对 = messages-only 未校准、同一集合（全视图前后）。
+    // 2026-11-06 事故：before 量溢出子集、after 量全视图，且都乘了漂移中的校准 ratio，
+    // 产出「142371 → 1243157」类荒谬显示——事件对不得混 ratio、不得跨集合。
+    const compactTokensBefore = rawEstimator.estimateMessages(workingMessages);
     emit?.({
       type: 'context.compact.start',
       sessionId,
       reason: 'overflow',
-      tokensBefore: overflowTokensBefore,
+      tokensBefore: compactTokensBefore,
     });
 
     try {
@@ -573,13 +588,12 @@ export class DefaultContextEngine implements ContextEngine {
     ];
 
     // 7. 更新状态
-    const compressedTokens = estimator.estimateMessages(reassembled);
     emit?.({
       type: 'context.compact.end',
       sessionId,
       reason: 'overflow',
-      tokensBefore: overflowTokensBefore,
-      tokensAfter: compressedTokens,
+      tokensBefore: compactTokensBefore,
+      tokensAfter: rawEstimator.estimateMessages(reassembled),
       durationMs: Date.now() - overflowStart,
       cached: false,
     });
@@ -619,12 +633,16 @@ export class DefaultContextEngine implements ContextEngine {
     //    不能像旧代码存 raw Message 估算，否则 calibrationRatio 系统性漂移）
     const llmMessages = this.buildLlmMessages(reassembled, systemPrompt, tools, agingPlan);
     const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
+    const estimatedTokens = this.sizeLedger.decisionTokens(
+      modelKey,
+      rawEstimatedTokens,
+      this.states.get(stateKey)?.lastUsageAnchor,
+    );
     this.states.set(stateKey, {
       ...this.states.get(stateKey),
       lastEstimatedTokens: rawEstimatedTokens,
       modelKey,
     });
-    const estimatedTokens = this.sizeLedger.calibrate(modelKey, rawEstimatedTokens);
 
     return {
       messages: llmMessages,
@@ -680,6 +698,8 @@ export class DefaultContextEngine implements ContextEngine {
     /** 交接式摘要素材（F8R-05）：自动路径随摘要请求透传，不再依赖历史里的旧快照副本 */
     taskSnapshot?: string;
     estimator: TokenEstimator;
+    /** 事件计量用原始估算器（compact 对 = messages-only 未校准口径，P0-C M2） */
+    rawEstimator: TokenEstimator;
     emit?: ContextEmitFn;
     /** 缓存前缀原料：与会话请求同形（system+tools+完整历史） */
     systemPrompt: string;
@@ -696,6 +716,7 @@ export class DefaultContextEngine implements ContextEngine {
       agingPlan,
       summarize,
       estimator,
+      rawEstimator,
       emit,
       systemPrompt,
       tools,
@@ -902,19 +923,20 @@ export class DefaultContextEngine implements ContextEngine {
           ...state,
           lastProactiveTokens: reducedTokens,
         });
+        // 复用重建 ≠ 压缩（2026-11-06 事故的 1ms「compacted」误报家族）：cached=true
+        // 使 adapter 不入会话流（既有语义）；计量对与结构回放一致 0/0（无新压缩计量）
         emit?.({
           type: 'context.compact.start',
           sessionId,
           reason: 'proactive',
-          tokensBefore: currentTokens,
           threshold,
         });
         emit?.({
           type: 'context.compact.end',
           sessionId,
           reason: 'proactive',
-          tokensBefore: currentTokens,
-          tokensAfter: reducedTokens,
+          tokensBefore: 0,
+          tokensAfter: 0,
           durationMs: 0,
           cached: true,
         });
@@ -936,11 +958,13 @@ export class DefaultContextEngine implements ContextEngine {
     }
 
     const proactiveStart = Date.now();
+    // 事件计量口径同 overflow（P0-C M2）：messages-only 未校准、同集合前后对
+    const compactTokensBefore = rawEstimator.estimateMessages(messages);
     emit?.({
       type: 'context.compact.start',
       sessionId,
       reason: 'proactive',
-      tokensBefore: currentTokens,
+      tokensBefore: compactTokensBefore,
       threshold,
     });
 
@@ -1041,8 +1065,8 @@ export class DefaultContextEngine implements ContextEngine {
       type: 'context.compact.end',
       sessionId,
       reason: 'proactive',
-      tokensBefore: currentTokens,
-      tokensAfter: reducedTokens,
+      tokensBefore: compactTokensBefore,
+      tokensAfter: rawEstimator.estimateMessages(reduced),
       durationMs: Date.now() - proactiveStart,
       cached: false,
     });
@@ -1406,6 +1430,18 @@ export class DefaultContextEngine implements ContextEngine {
     if (state.lastEstimatedTokens && state.lastEstimatedTokens > 0 && promptActual > 0) {
       this.sizeLedger.observe(state.modelKey ?? 'unknown', promptActual, state.lastEstimatedTokens, {
         sessionId,
+      });
+    }
+    // 降级 B 锚（arch §10.16，评审 F3）：{actual, raw} 同请求同源冻结成对写入——
+    // 两字段分开读写会让失败步后的 actual 与下一轮 raw 错位配对（除数漂移）
+    if (promptActual > 0 && state.lastEstimatedTokens && state.lastEstimatedTokens > 0) {
+      this.states.set(stateKey, {
+        ...this.states.get(stateKey),
+        lastUsageAnchor: {
+          actual: promptActual,
+          raw: state.lastEstimatedTokens,
+          modelKey: state.modelKey ?? 'unknown',
+        },
       });
     }
   }

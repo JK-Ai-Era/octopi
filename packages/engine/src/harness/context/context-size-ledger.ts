@@ -18,7 +18,9 @@
  * - 逃逸重锚（评审 F1）：连续 RATIO_ESCAPE_STREAK 个同向且内部一致的被拒样本 = regime shift
  *   证据，以簇中心重锚——拒绝零状态变化会把真值永久锁在门外（毒化 bootstrap 后 50 个真样本
  *   全拒的实测锁死）；交替垃圾内部永不一致、永远进不来；
- * - 告警按 (session, model, 事件类) 限频 1 条/小时（拒绝告警不被夹取告警吞掉）。
+ * - 告警按 (session, model, 事件类) 限频 1 条/小时（拒绝告警不被夹取告警吞掉）；
+ * - 决策出口 decisionTokens（方案 B，arch §10.16）：≥2 已入账样本且未降级才走 calibrate（R1）；
+ *   否则实测锚定（actual × raw/anchor.raw）或裸 raw。
  *
  * 状态为进程内存（ratio 冷启动 1.0，2–3 个样本内收敛）；不落盘。
  */
@@ -40,6 +42,9 @@ export const RATIO_ESCAPE_STREAK = 3;
 /** 逃逸簇内部一致性：max/min ≤ 该值才算「同向一致」（交替垃圾永不一致） */
 export const RATIO_ESCAPE_CONSISTENCY = 2.0;
 
+/** 预测带：入账样本偏离已学 ratio 超该倍数 = 校准预测失准 → 降级（方案 B 门，arch §10.16） */
+export const RATIO_PREDICTION_BAND = 1.5;
+
 /** 越界告警限频：每 (session, model) 每小时 1 条 */
 export const RATIO_WARN_INTERVAL_MS = 3_600_000;
 
@@ -54,7 +59,8 @@ export class ContextSizeLedger {
   private ratioByModel = new Map<string, number>();
   private samplesByModel = new Map<string, number>();
   private rejectedByModel = new Map<string, number>();
-  private rejectStreaks = new Map<string, { count: number; min: number; max: number }>();
+  private rejectStreaks = new Map<string, number[]>();
+  private degradedByModel = new Map<string, boolean>();
   private lastWarnAt = new Map<string, number>();
 
   constructor(private readonly warn: SizeLedgerWarn = (m) => console.warn(m)) {}
@@ -77,22 +83,29 @@ export class ContextSizeLedger {
       (raw > prev * RATIO_SAMPLE_MAX_DEVIATION || raw < prev / RATIO_SAMPLE_MAX_DEVIATION);
     if (outsideGate) {
       this.rejectedByModel.set(modelKey, (this.rejectedByModel.get(modelKey) ?? 0) + 1);
-      const streak = this.rejectStreaks.get(modelKey) ?? { count: 0, min: Number.POSITIVE_INFINITY, max: 0 };
-      streak.count += 1;
-      streak.min = Math.min(streak.min, raw);
-      streak.max = Math.max(streak.max, raw);
-      this.rejectStreaks.set(modelKey, streak);
-      // 逃逸重锚（评审 F1）：连续同向且内部一致的被拒簇 = regime shift 证据（真实换挡或
-      // 新错配源），以簇中心重锚。拒绝零状态变化会把真值永久锁在门外；交替垃圾（0.088↔11.014）
-      // 簇内 max/min 巨大、永不满足一致性，进不来。
-      if (streak.count >= RATIO_ESCAPE_STREAK && streak.max / streak.min <= RATIO_ESCAPE_CONSISTENCY) {
-        const rebase = Math.min(RATIO_CLAMP_MAX, Math.max(RATIO_CLAMP_MIN, (streak.min + streak.max) / 2));
-        this.ratioByModel.set(modelKey, rebase);
-        this.samplesByModel.set(modelKey, (this.samplesByModel.get(modelKey) ?? 0) + 1);
-        this.rejectStreaks.set(modelKey, { count: 0, min: Number.POSITIVE_INFINITY, max: 0 });
-        this.warnOnce(opts?.sessionId, modelKey, raw, opts?.now, 'rebase', `regime shift: rebase learned=${rebase.toFixed(3)}`);
-        return;
+      // 滑窗（评审 F2）：只保留最近 RATIO_ESCAPE_STREAK 个被拒样本——全史 min/max 一旦被
+      // 一对不一致垃圾拉开就永不收敛，逃逸随之永久失效（实测：0.05+11.0 后 20 个真样本全拒）。
+      const recent = this.rejectStreaks.get(modelKey) ?? [];
+      recent.push(raw);
+      if (recent.length > RATIO_ESCAPE_STREAK) recent.shift();
+      this.rejectStreaks.set(modelKey, recent);
+      // 逃逸重锚（评审 F1）：窗口内同向且内部一致的被拒样本 = regime shift 证据（真实换挡或
+      // 新错配源），以窗心重锚。拒绝零状态变化会把真值永久锁在门外；交替垃圾（0.088↔11.014）
+      // 任意 RATIO_ESCAPE_STREAK 连窗 max/min 巨大、永不满足一致性，进不来。
+      if (recent.length >= RATIO_ESCAPE_STREAK) {
+        const min = Math.min(...recent);
+        const max = Math.max(...recent);
+        if (max / min <= RATIO_ESCAPE_CONSISTENCY) {
+          const rebase = Math.min(RATIO_CLAMP_MAX, Math.max(RATIO_CLAMP_MIN, (min + max) / 2));
+          this.ratioByModel.set(modelKey, rebase);
+          this.samplesByModel.set(modelKey, (this.samplesByModel.get(modelKey) ?? 0) + 1);
+          this.rejectStreaks.set(modelKey, []);
+          this.setDegraded(modelKey, false, opts, raw); // 重锚基于新鲜证据窗，预测恢复可信
+          this.warnOnce(opts?.sessionId, modelKey, raw, opts?.now, 'rebase', `regime shift: rebase learned=${rebase.toFixed(3)}`);
+          return;
+        }
       }
+      this.setDegraded(modelKey, true, opts, raw); // 证据流敌对 → 校准降级（方案 B）
       this.warnOnce(
         opts?.sessionId,
         modelKey,
@@ -103,13 +116,42 @@ export class ContextSizeLedger {
       );
       return;
     }
-    this.rejectStreaks.set(modelKey, { count: 0, min: Number.POSITIVE_INFINITY, max: 0 });
+    this.rejectStreaks.set(modelKey, []);
     if (raw < RATIO_CLAMP_MIN || raw > RATIO_CLAMP_MAX) {
       this.warnOnce(opts?.sessionId, modelKey, raw, opts?.now, 'clamp', `out of clamp（已夹取入账） clamp=[${RATIO_CLAMP_MIN}, ${RATIO_CLAMP_MAX}]`);
     }
+    // 预测带（方案 B 门）：入账样本偏离已学 ratio 超 RATIO_PREDICTION_BAND 倍 = 乘数
+    // 预测失准（如毒化 ratio 尚未被门拦住的窗口期）→ 降级，直到样本回到带内
+    this.setDegraded(
+      modelKey,
+      hasSamples && (raw > prev * RATIO_PREDICTION_BAND || raw < prev / RATIO_PREDICTION_BAND),
+      opts,
+      raw,
+    );
     const clamped = Math.min(RATIO_CLAMP_MAX, Math.max(RATIO_CLAMP_MIN, raw));
     this.ratioByModel.set(modelKey, EMA_NEW_WEIGHT * clamped + (1 - EMA_NEW_WEIGHT) * prev);
     this.samplesByModel.set(modelKey, (this.samplesByModel.get(modelKey) ?? 0) + 1);
+  }
+
+  /** 降级状态写入 + 进入/退出可见（评审 F5）：生产须能从日志判定决策读数是校准还是实测锚定 */
+  private setDegraded(
+    modelKey: string,
+    value: boolean,
+    opts: { sessionId?: string; now?: number } | undefined,
+    raw: number,
+  ): void {
+    const was = this.degradedByModel.get(modelKey) ?? false;
+    this.degradedByModel.set(modelKey, value);
+    if (was !== value) {
+      this.warnOnce(
+        opts?.sessionId,
+        modelKey,
+        raw,
+        opts?.now,
+        value ? 'degrade' : 'recover',
+        value ? 'calibration degraded（决策改实测锚定）' : 'calibration recovered（决策回校准）',
+      );
+    }
   }
 
   /**
@@ -136,6 +178,38 @@ export class ContextSizeLedger {
   /** 被样本门拒绝的样本数（校准停学/锁死观测与 fail-safe 判定用） */
   rejectedCount(modelKey: string): number {
     return this.rejectedByModel.get(modelKey) ?? 0;
+  }
+
+  /** 校准是否降级（证据流敌对/预测带外；方案 B 触发位） */
+  isDegraded(modelKey: string): boolean {
+    return this.degradedByModel.get(modelKey) ?? false;
+  }
+
+  /**
+   * 决策读数出口（R1 + 降级 B，arch §10.16）。
+   *
+   * - 校准可信（≥2 个已入账样本且未降级）：ceil(raw × ratio)（R1 原语义）；
+   * - 不可信（冷启动单样本 / 降级，评审 F1）且有实测锚：ceil(actual × raw / anchor.raw)
+   *   ——实测是滞后一个请求的硬真值，乘 raw 增长比外推本步增量（拍板方案 B）；
+   *   锚为 {actual, raw, modelKey} 冻结对（同请求同源，评审 F3），跨 model 无效；
+   * - 不可信无锚：raw（诚实估算，不乘可疑 ratio）。
+   *
+   * @param modelKey provider/model 标识
+   * @param rawTokens 本次请求口径的未校准估算
+   * @param anchor 实测锚（冻结对：actual=该请求实测 prompt，raw=同请求未校准估算）
+   * @returns 决策用 token 读数
+   */
+  decisionTokens(
+    modelKey: string,
+    rawTokens: number,
+    anchor?: { actual: number; raw: number; modelKey: string },
+  ): number {
+    const trusted = (this.samplesByModel.get(modelKey) ?? 0) >= 2 && !this.isDegraded(modelKey);
+    if (trusted) return this.calibrate(modelKey, rawTokens);
+    if (anchor && anchor.modelKey === modelKey && anchor.actual > 0 && anchor.raw > 0) {
+      return Math.ceil((anchor.actual * rawTokens) / anchor.raw);
+    }
+    return rawTokens;
   }
 
   /**
@@ -166,7 +240,7 @@ export class ContextSizeLedger {
     modelKey: string,
     raw: number,
     now: number | undefined,
-    cls: 'reject' | 'clamp' | 'rebase',
+    cls: 'reject' | 'clamp' | 'rebase' | 'degrade' | 'recover',
     detail: string,
   ): void {
     const key = `${sessionId ?? '—'}|${modelKey}|${cls}`;
