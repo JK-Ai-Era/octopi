@@ -52,6 +52,9 @@ export interface AnthropicProviderConfig {
   defaultModel?: string;
 }
 
+/** thinkingLevel → extended thinking 预算档位（适配器语义；自定义预算走方言插件 options） */
+const THINKING_BUDGET_TOKENS: Record<'low' | 'medium' | 'high', number> = { low: 2048, medium: 8192, high: 24576 };
+
 /**
  * Anthropic Messages Provider
  *
@@ -427,9 +430,30 @@ export class AnthropicProvider implements ModelProvider {
     if (systemPrompt) {
       anthropicRequest.system = systemPrompt;
     }
+    // thinkingLevel → extended thinking（P5 参数映射）；off/undefined 不发送。
+    // 档位→budget_tokens 为适配器语义；自定义预算走方言插件 options。
+    // extended thinking 要求 temperature=1（可省略）
+    let thinkingBudget: number | undefined;
+    if (request.thinkingLevel !== undefined && request.thinkingLevel !== 'off') {
+      if (modelInfo?.reasoning === false) {
+        throw new Error(`Model "${modelName}" declares no reasoning support; cannot honor thinkingLevel "${request.thinkingLevel}"`);
+      }
+      thinkingBudget = THINKING_BUDGET_TOKENS[request.thinkingLevel];
+      if (maxTokens <= thinkingBudget) {
+        const limitedByCap = modelInfo?.maxOutputTokens !== undefined && modelInfo.maxOutputTokens <= thinkingBudget;
+        throw new Error(
+          `thinkingLevel "${request.thinkingLevel}" budgets ${thinkingBudget} tokens but max_tokens is ${maxTokens}` +
+          (limitedByCap ? `; model cap ${modelInfo.maxOutputTokens} is too low for this level` : '; raise maxTokens'),
+        );
+      }
+      anthropicRequest.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+    }
     if (request.temperature !== undefined) {
+      if (thinkingBudget !== undefined && request.temperature !== 1) {
+        throw new Error('Anthropic extended thinking requires temperature 1');
+      }
       anthropicRequest.temperature = request.temperature;
-    } else if (modelInfo?.temperature !== undefined) {
+    } else if (thinkingBudget === undefined && modelInfo?.temperature !== undefined) {
       // 请求未指定时采用模型级配置；两者都未配置则不发送该参数（交给服务端默认）
       anthropicRequest.temperature = modelInfo.temperature;
     }

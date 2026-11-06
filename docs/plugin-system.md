@@ -15,17 +15,18 @@ This document describes the v1 contract: manifest-first loading (P1), the per-Ag
 | JSON Schema config validation | Implemented |
 | Dependency, identity, and contribution validation | Implemented |
 | Staged registration and atomic effective-registry publication | Implemented |
-| Tool / Command / Service contribution registration | Implemented; declared and registered sets must match |
+| Tool / Command / Service / Provider contribution registration | Implemented; declared and registered sets must match |
 | Tool mounting, per-Agent allow/deny, execution, and source attribution | Implemented; empty `tools.allow` does not expose a plugin Tool |
 | Command metadata, caller admission, and Host `sessionOps` authorization | Implemented; Plugin SessionOps require matching manifest declarations |
 | Hook execution semantics | Implemented for the 22 hook names: typed Observe / Collect / Transform / Vote / Override composition, dual-phase Tool and Iteration hooks, cooperative timeout, per-call audit |
 | Run / Tool / Iteration / Message / Compact / Session-archive / Gateway triggers | Implemented on real production paths |
 | Tool approval votes (`before_tool_call` `require_approval`) | Implemented through the Host HITL channel; `approve` / `approve_session` / `approve_always` are honored by the engine decision cache; no channel fails closed |
 | Background services | Implemented: manifest-declared `registerService` with Host start/stop, required rollback, optional failure issues, reverse-order stop, cooperative timeout |
+| Provider contributions (P5) | Implemented: `contributes.providers` + `registerProvider` factories referenced by `models.providers[].plugin`; real example plugin `examples/plugins/openai-compat-dialect` |
 | `before_install` hook | Declared but dormant — the repository has no real Skill/Plugin install flow yet, so no trigger is wired and none is faked |
 | `session_end` hook | Fires only after a real archive export and hot-store deletion (when an archive manager is configured); plain deletion or compaction never emulates it |
 | `before_prompt_build` / `before_iteration` snapshots | Implemented; budgeted, pluginId-attributed snapshots ride the turn envelope's `runtime_snapshot` slot (`before_prompt_build`) or the per-request LLM view (`before_iteration`); never the system prompt |
-| Provider / Channel / ContextEngine registration | Not part of the stable v1 author surface yet |
+| Channel / ContextEngine registration | Not part of the stable v1 author surface yet |
 | Untrusted-code isolation / hot unload | Not supported |
 
 ## Package layout
@@ -61,6 +62,7 @@ The loader scans each configured path. A path can be one plugin directory or a p
     "tools": ["acme_search"],
     "commands": [{ "name": "acme-status", "sessionOps": [] }],
     "services": ["acme-watcher"],
+    "providers": ["acme-llm-gateway"],
     "hooks": ["message_received"]
   },
   "requiresPlugins": [],
@@ -126,7 +128,8 @@ export default definePlugin({
 - Tool `capabilities` are mandatory. A Tool with `fs-write` defaults to sequential execution unless explicitly configured otherwise.
 - `api.on` is typed against the 22 existing Hook names. `before_tool_call` and `before_iteration` are dual-phase and must pass `{ phase: 'transform' | 'vote' }` (or use the `api.onBeforeToolCall` / `api.onBeforeIteration` helpers); every other event must omit `phase`. A declaration does not imply that every event already has a production trigger; see the status table above (`before_install` is dormant).
 - `api.registerService` stages a background service that must also be declared in `contributes.services`; the Host owns its start/stop lifecycle (see Background services).
-- Provider, Channel, ContextEngine, and media-provider registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
+- `api.registerProvider` stages a Provider factory that must also be declared in `contributes.providers`; the Host instantiates it per `models.providers[].plugin` reference (see Provider contributions (P5)).
+- Channel, ContextEngine, and media-provider registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
 
 ## Plugin Commands and Session effects
 
@@ -161,7 +164,7 @@ Each hook name has one composition class with explicit failure, cancellation, an
 - Every execution appends a per-day audit record (`~/.octopi/audit/hooks/YYYY-MM-DD.jsonl`) with pluginId, hook, phase, outcome, run/session/agent identity, and the Principal. The journal is diagnostic, not a tamper-evident ledger; a failed audit write never changes an operation's outcome.
 - Run-level observations report exact terminal facts: `reason` is `completed | should_stop | aborted | error | denied` and `success` is true only for clean terminal ends (`completed` or `should_stop`). A policy denial surfaces to hook observations as `reason: 'denied'` while the Core `agent_end` event keeps the compatible `error` reason.
 - `before_agent_reply` (Override) replaces the model reply for that Run; `before_agent_finalize` transforms only the final reply of a step without tool calls. Neither may add `toolCalls` (no tool results would follow). Events and persistence carry the finalized reply; text already streamed to the client cannot be recalled — a plugin that must fully control the reply uses `before_agent_reply`.
-- Iteration model/thinking transforms may only select values the Host configured — an unknown model fails the Run instead of silently falling back. The selected thinking level enters the LLMRequest; provider parameter mapping follows with the P5 provider work.
+- Iteration model/thinking transforms may only select values the Host configured — an unknown model fails the Run instead of silently falling back. The selected thinking level enters the LLMRequest and the built-in adapters map it to their native parameters (`reasoning_effort` / `thinking.budget_tokens`); plugin providers decide their own mapping (see Provider contributions (P5)).
 - `before_prompt_build` contributions ride the turn envelope's `runtime_snapshot` slot alongside the other volatile blocks: the user message is write-once (raw user text is never altered, later turns are never rewritten, and what was sent to the model is what is stored). `before_iteration` snapshots project into the per-request LLM request view only. The system prompt is never affected.
 
 ## Tool call approval
@@ -193,6 +196,74 @@ api.registerService({
 - `registerService` only stages the service; it starts no side effects. The Host starts services before opening Channels and stops them in reverse registration order on shutdown.
 - `required: true` failure rolls back startup and blocks the Gateway; `optional: true` failure opens a System Issue and the Gateway continues.
 - `start`/`stop` receive an `AbortSignal` and are bounded by `timeoutMs` (cooperative; in-process code cannot be forcibly killed). Lifecycle outcomes are recorded in the hook audit journal.
+
+## Provider contributions (P5)
+
+A plugin can contribute a **Provider factory** — a named builder the Host calls to
+construct a Core `ModelProvider` for one `models.providers` entry.
+
+```jsonc
+// octopi.plugin.json
+{ "contributes": { "providers": ["acme-llm-gateway"] } }
+```
+
+```ts
+api.registerProvider('acme-llm-gateway', (context) => {
+  // context: { providerName, baseUrl, apiKey, models, defaultModel?, timeoutMs?, options }
+  return myModelProvider;
+});
+```
+
+```jsonc
+// octopi.json — reference the contribution via `plugin` (mutually exclusive with `api`)
+{
+  "models": {
+    "providers": {
+      "my-gateway": {
+        "baseUrl": "https://llm-gateway.internal/v1",
+        "apiKey": "${MY_GATEWAY_KEY}",
+        "plugin": "acme-llm-gateway",
+        "models": [{ "id": "kimi-k2", "reasoning": true, "contextWindow": 131072 }],
+        "options": { "thinking": { "field": "enable_thinking", "mode": "boolean" } }
+      }
+    }
+  }
+}
+```
+
+- `plugin` and `api` are mutually exclusive — exactly one must be set. An unknown
+  or disabled contribution id fails provider creation loudly (fail closed).
+- The factory is called per config instance at startup and on config hot-replace
+  (never at registration time). Contribution ids are globally unique across
+  plugins, like services; declared and registered sets must match.
+- The API key always arrives through the credential channel (`apiKey`,
+  `${ENV_VAR}` recommended; `""` = keyless). `options` carries **non-secret**
+  tuning knobs only and is passed through verbatim for the plugin to validate.
+- `options` is echoed verbatim to the Web console (`/config/models`) and written
+  to disk as-is. **Never put credentials in `options`** (custom auth headers that
+  carry secrets belong in `apiKey`); secret-aware option schemas are a future
+  extension.
+- The Host owns provider lifecycle: a retired instance (config hot-replace or
+  removal) keeps serving during a fixed **grace window** (30 min, logged
+  force-disposal after it) — the window is not a per-request drain (the
+  `ModelProvider` contract has no in-flight counting). The process shutdown path
+  disposes everything. `dispose()` should release transports and abort in-flight
+  requests, including streaming bodies.
+- Built-in `api: "openai-completions"` / `"anthropic-messages"` adapters already
+  cover strict OpenAI-compatible / Anthropic endpoints (custom `baseUrl`,
+  keyless). Use a Provider contribution only for dialects the built-ins do not
+  cover — see the maintained example `examples/plugins/openai-compat-dialect`
+  (custom auth headers, extra body fields, thinking-parameter dialects).
+- `thinkingLevel` from `LLMRequest` maps to `reasoning_effort` (openai) and
+  `thinking.budget_tokens` (anthropic) in the built-in adapters; plugin providers
+  decide their own mapping. The built-in openai adapter does not probe whether
+  the endpoint understands `reasoning_effort` — it is only sent when
+  `thinkingLevel` is set; endpoints that reject it should use a Provider
+  contribution.
+- Plugin providers do not participate in wire dumps
+  (`observability.llmRequestDump`) unless they implement
+  `wireBodyFor(request, mode)`; the decoration chain forwards `dispose` so
+  lifecycle guarantees hold with dumps enabled.
 
 ## Configuration
 

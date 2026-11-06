@@ -189,14 +189,30 @@ export async function healthCommand(args: CliArgs): Promise<void> {
   const config = loadConfig(configPath);
 
   console.log('\n🏥 Health Check\n');
+  // 插件 Provider（models.providers[].plugin）也需要真实工厂才能体检：
+  // 临时发现一次插件（与 daemon 同一 loadPaths 语义），失败不阻断内置 provider 体检
+  let resolvePluginProvider: ((ref: string) => import('@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/contribution-registry.js').PluginProviderRecord | undefined) | undefined;
+  if (Object.values(config.models?.providers ?? {}).some((pc) => pc.plugin !== undefined)) {
+    try {
+      // 与 Gateway 同语义：loadPaths + allowList/blockList/entries 启停全部生效
+      const { resolvePluginProviderOption } = await import('../config.js');
+      resolvePluginProvider = (await resolvePluginProviderOption(config)).resolvePluginProvider;
+    } catch (err) {
+      console.warn(`  plugin discovery failed (plugin providers will FAIL): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
     try {
       // 构造（含动态 import）与体检同置 try：单个 provider 失败只打 FAIL，不中断整轮体检
-      const provider = await createProviderFromConfig(providerName, providerCfg);
+      const provider = await createProviderFromConfig(providerName, providerCfg, {
+        ...(resolvePluginProvider === undefined ? {} : { resolvePluginProvider }),
+      });
       const available = await provider.isAvailable();
+      await provider.dispose?.();
       console.log(`  ${providerName}: ${available ? '✅ OK' : '❌ FAIL'}`);
-    } catch {
+    } catch (err) {
       console.log(`  ${providerName}: ❌ FAIL`);
+      console.log(`    reason: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   console.log();

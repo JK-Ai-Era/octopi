@@ -8,7 +8,9 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.100 | this file (current) |
+| v0.102 | this file (current) |
+| v0.101 | [changelog/v0.101.md](./changelog/v0.101.md) |
+| v0.100 | [changelog/v0.100.md](./changelog/v0.100.md) |
 | v0.99 | [changelog/v0.99.md](./changelog/v0.99.md) |
 | v0.98 | [changelog/v0.98.md](./changelog/v0.98.md) |
 | v0.97 | [changelog/v0.97.md](./changelog/v0.97.md) |
@@ -110,44 +112,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.101.2 (2026-11-06)
+## v0.102.0 (2026-11-06)
 
-### fix(engine): knowledge grounding 装载预算换统一估算尺（一把尺审计收尾）
+### feat(plugin): Provider 贡献扩展点（P5a）——插件 Provider 工厂 + 真实插件全链路
 
-- 全仓「第二把尺」审计（比率常量使用点/裸换算/调用点枚举）确认计数单源（`estimateSegments` + 分类查表）后，发现一处漏网：`knowledge/grounding.ts` 本地 `estimateTokens` 用 `ceil(length/4)` 裸换算——CJK 内容 4× 高估，knowledge 装载预算被保守压缩。已换统一分类查表（`estimateTextTokens`），调用点零改动。
-- 复核合格的三处：`layers.ts` 层自报值为占位符（assembler 统一尺覆写属实）；`summary/oversized.ts` 分块换算是统一尺下游消费（反推 chars/token 用于字符切块）；plugin 压缩钩子 fallback 计数同核心（compact 状态块自身口径）。
+- **插件可贡献 Provider 工厂**：manifest `contributes.providers`（全局唯一 id，与 services 同语义）+ `PluginApi.registerProvider(id, factory)`（暂存 → manifest↔register 双向一致性 → 有效注册表原子发布）。工厂按每个 `models.providers` 配置实例调用（启动与配置热更时，绝不在注册时）；上下文 `{ providerName, baseUrl, apiKey, models, defaultModel?, timeoutMs?, options }`。工厂返回值做最小契约校验（chat/stream/isAvailable）并**硬绑定 name=配置键**（不一致 fail-loud）。
+- **配置契约**：`models.providers[]` 新增 `plugin` / `options` 字段；`plugin` 与 `api` **二选一恰好其一**（Zod superRefine 覆盖启动与写盘校验，工厂路由为第二道闸）。apiKey 只走凭证通道（`${ENV_VAR}` 推荐）；`options` 为非密钥旋钮、原样透传由插件校验——**禁止放凭据**（会回显 Web 控制台并原样落盘，文档已警示；secret 感知 options schema 记 P6 候选）。
+- **装配三入口**：daemon 提前 `discoverPlugins()`（provider 创建先于 `gateway.start()`）；根包 `buildFromConfigFile` 与 `octopi health` 经共享 `resolvePluginProviderOption()` 注入解析器（loadPaths + allowList/blockList/entries 与 Gateway 同语义）；插件 provider 创建失败 **fail-closed** 保留真实原因（不再吞成误导性 unknown provider）。
+- **生命周期**：热更退役实例进 30 分钟宽限窗口后强制回收（显式常量、到期 warn——窗口语义，非逐请求排空）；`stop()` 全量 dispose。修复 `withWireDump` 装饰器丢 `dispose` 导致 dump 开启时退役/停机回收静默失效（Blocker）。daemon SummaryPort 复用已注册实例（消除双工厂构造与泄漏）。
+- **thinkingLevel 参数映射**（收掉 P4 延期项）：内置 openai 适配器映射 `reasoning_effort`、anthropic 映射 `thinking.budget_tokens`（extended-thinking 温度=1 / 预算<max_tokens 校验；`reasoning: false` 模型显式拒绝）。默认请求体逐字段不变（回归锁钉住）。
+- **WebUI/redact 透传修复**：`plugin`/`options`/`models[].temperature` 全链保留——修「编辑保存把插件 provider 改写成 openai-completions」与温度字段丢失；`testProvider` 对插件 provider fail-loud 且判别对齐 upsert 整段替换语义。
+- **真实插件** `examples/plugins/openai-compat-dialect`（维护中的参考实现）：自定义鉴权头/前缀（大小写不敏感）、extraHeaders、extraBody 压在标准字段之下、thinking 三模式方言映射（value/boolean/object + per-level values 构造期校验）、reasoningField、SSE 流（tool_call 分片按 id/index 键控、无尾随换行残行、usage chunk）；未知 `finish_reason` 视为 `error`；cache usage 账目与内置 `tokenUsageFromOpenAi` 一致；`dispose()` 中止在途请求含流式 body。
+- **测试**：`tests/plugin-provider.test.ts` 30 条（loader 契约 5 态 / api|plugin 路由 / thinking 映射 wire 级 / 真实插件 mock server / Gateway 发现链路 / 评审回归锁）。独立评审（del-9ffb1f3a：2 blocker / 8 major / 11 minor / 9 nit）逐条对码核实后全部处置，含 wire-dump dispose 转发、schema 恰好其一、退役窗口语义、usage 账目、finish_reason fail-closed 等；处置记录见工作区 `p5a-review-disposition.md`。
+- **openclaw 错标叙事正式关闭**（遗留①归口）：全仓无兼容叙事残留（risk-evaluator 敏感路径清单有意保留）。
 
----
-
-## v0.101.1 (2026-11-06)
-
-### fix(engine): 未知块类型告警与触发线语义注记（P2 收官）
-
-- **未知块告警（R4 后半）**：估算器遇到未分类内容块时按 type 限频告警（每 type 1 条/小时，`[token-est] unclassified content block type=…`），分类表缺失保持可见；计数行为不变（按载荷长度计），core 声明的 `file` 块已显式分类（指针字段计数，不告警）。「按长度计」半项已随 v0.101.0 落地。
-- **触发线语义注记**：压缩触发线 `threshold = min(targetLine, windowRatioLine)` 的比较双方自 v0.101.0 起均为**校准后** token 读数（此前用未校准估算比较，同一条线实际等效实测约一半）。注记写明三件事：单位（分子只量视图消息、预算侧已扣 system+tools）、数值（1M 窗口下 ratio 线绑定，实际触发点 ≈542k 而非 600k target 线）、范围（老化视图——工具型增长由 aging 吸收不推高此线，只有文本型增长走到这条线）。
-- **存量校正收口**：`metadata.contextTokens`（旧混装字段）清除已实证生效（观察项关闭）；至此上下文口径专线（P0-A/B/C → P1 → P2）全部落库。
-
----
-
-## v0.101.0 (2026-11-06)
-
-### fix(engine): 估算器统一与校准入决策（P1：尺子归一 + 实测校准作用到决策）
-
-- **P1-c 估算器统一**：计数收敛为「单实现 + 两 adapter」（`token-segments.ts`，Segment 分类查表：text_cjk 1 / text_ascii 4 / tool_result 2 / json 3 / code 3）；旧 `estimateAdjustedChars`（nonLatin×3 膨胀 hack）删除。顺修三处旧口径缺陷：① LLM 口径把 `tool_use`/`tool_result` 块落「常数 10」兜底（R4 违约，工具密集会话严重低计）；② 膨胀 hack 挪到 2 比率误乘（全 CJK 工具结果 2 token/字高倍）；③ CJK 扩展 B 计成 ASCII。红线：同内容两入口读数差 <1%。
-- **P1-a 校准入决策**：`ContextSizeLedger`——ratio 按 model 分键（EMA 0.7/0.3）、clamp [0.25,4.0]、越界告警限频 1 条/h/(session,model)（不静默夹取）；决策读数全部经校准（smart-router / message-selector / compact / budget-allocator 等 33 决策点经 estimator 参数流自动获得校准值，R1）。校准分母单源「system+tools+视图」请求口径：`lastEstimatedTokens` 只准 assemble 三个请求口径出口写入，删 compact 路径 messages-only 污染写点（其使 ratio 结构性偏高 ~1.12×）。旧「逐 session calibrationRatio + 静默 [0.5,2.0] 夹取」删除。
-- **行为变更**：① 决策读数变为**校准值**——压缩触发线、预算裁剪等在「校准 token」单位下比较（此前用未校准估算，实测双向各偏 ~2× 的病源）；② 估算读数整体迁移（分类查表取代膨胀 hack），触发/裁剪时机随之移动；③ 未知内容块按载荷长度计（旧「常数 10」废除）；图像识别补 `image_url`/`input_image` 同价（此前引擎转换形态按 0 计）；逐消息取整改总量一次取整；并列工具结果的开销对齐 wire 形态（N 结果 N 条消息）。
-- **验收**（真实请求体回放 200×2 对、两个生产会话）：校准后 δ 前 20% 2.9%/1.3% → 后 20% **0.1%/0.3%**（门槛 ±15% 且递减）；两会话终态 ratio 收敛同值 1.545（model 分键实证）。`npm test` 4128 passed、`npm run lint` 绿。
-
----
-
-## v0.100.0 (2026-11-05)
-
-### feat(plugin-system): P4 执行扩展点——五类 Hook 组合语义、真实触发面与 HITL 工具审批
-
-- 22 个既有 Hook 名落地 Observe / Collect / Transform / Vote / Override 五类组合语义，Tool 与 Iteration 显式双阶段（原始参数检查 → Transform → 工具校验 + SecurityGuard 重验 → Vote → 执行 → raw Observe，原始/最终参数与修改者入审计）。`before_install` 无真实安装入口保持休眠，`session_end` 只认真实归档导出 + 热库删除——触发点不伪造。
-- Run / Tool / Iteration / Message / Compact / Session 归档 / Gateway 服务全部接真实生产路径。后台服务 manifest 声明 + 注册一致性校验 + required 回滚 / optional System Issue + 逆序停止 + 协作超时（失败服务自回收）；Gateway 先服务后 Channel、失败回收幂等。压缩 Hook 唯一触发点是 HookedCompactEngine（denied 不发 after_compaction；overflow 被拒走机械截断兜底——veto 不得逼出超窗请求）。
-- Tool `require_approval` 接 Host HITL：`approve` / `approve_session` / `approve_always` 经引擎 HitlDecisionCache（`plugin_hook` 通道，键含 pluginId）真实记账；timeout / cancelled / 人工拒绝来源可区分；无审批通道 fail-closed。记账键为工具级（不含参数变形），参数敏感工具应使用一次性批准——已写入文档。
-- Context：`before_prompt_build` / `before_iteration` 快照带预算与 pluginId 归因，随 turn envelope `runtime_snapshot` 槽位 / 请求临时视图携带，绝不写 system prompt（B0 缓存不变量保持）；快照文本 XML 转义，防插件伪造归因或破坏槽位结构。
-- 事件契约（时序不变量已入协议文档）：文本回复的 `assistant_message` 在 Finalize 链之后发，事件 / step.end / 持久化同稿且对象身份唯一；`config.onStepComplete` 先于可靠性检测，空回复 / planning 判定看定稿内容。SecurityGuard、提权审计与审批卡一致检查 Transform 后有效参数；非 plain-record 参数 fail-closed。
-- 配置与归因：`plugins.entries[id].hooks.timeouts` 通过 schema（键名限定 22 个 Hook 名）；删除无消费方的 `abortOnTimeout` 字段；Channel senderId 进 Run principal，Hook 审计归因不再为空。
-- 质量：两轮 fresh-eyes 独立评审，findings 逐条对码核实属实并全部修复（含审批通过反而阻断、approve_session 从未记账、Run 终态 success 双公式、Finalize 对象身份分裂、审批缓存跨插件 TOCTOU 等），处置记录留档。验证：build、lint（类型门 0 新增）、全量 Vitest 406 文件 4102 用例、`arch/check-sync.sh` 全绿。v1 仍为受信任进程内插件（无沙箱/热卸载），OP-GATE 未关闭。

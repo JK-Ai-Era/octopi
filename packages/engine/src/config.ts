@@ -6,6 +6,7 @@ import type { ToolPolicy } from '@octopi-agent/core/types.js';
 import type { ModelConfig as _ModelConfig } from './harness/shared/types/agent-definition.js';
 import { getRunScope } from './harness/run/run-scope.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { PluginProviderModelEntry } from './harness/extension/plugin-ecosystem/plugins/api.js';
 import { DEFAULT_CONTEXT_WINDOW } from '@octopi-agent/core/types/model-info.js';
 
 /** 产品默认上下文窗口（与 core/types/model-info 一致，未声明能力时按此预算） */
@@ -732,12 +733,19 @@ export interface ModelProviderConfig {
   baseUrl: string;
   /** API Key（支持 ${ENV_VAR} 语法）；省略/空 = 不发鉴权（keyless） */
   apiKey?: string;
-  /** API 协议类型 */
-  api: 'openai-completions' | 'anthropic-messages';
+  /** API 协议类型；与 plugin 二选一（恰好设置其一） */
+  api?: 'openai-completions' | 'anthropic-messages';
+  /** 插件 Provider 贡献 id（manifest contributes.providers）；与 api 二选一 */
+  plugin?: string;
   /** 此 provider 下的模型列表 */
   models: ModelCapability[];
   /** 请求超时（秒） */
   timeoutSeconds?: number;
+  /**
+   * 插件自定义旋钮（按 contributes.providers 契约由插件自行校验）。
+   * 仅放非密钥配置；密钥只走 apiKey（credential 通道），出现在此处视为配置错误。
+   */
+  options?: Record<string, unknown>;
 }
 
 
@@ -1318,28 +1326,37 @@ export async function createWireDumpSinkFromConfig(
 /**
  * 从 ModelProviderConfig 创建 ModelProvider 实例
  *
- * 根据 type 字段自动选择 OpenAI 或 Anthropic provider。
- * 使用动态 import 以支持 ESM。
+ * `api` 选择内置适配器（OpenAI / Anthropic）；`plugin` 路由到插件 Provider 工厂。
+ * 两者恰好设置其一。使用动态 import 以支持 ESM。
  *
  * @param name - provider 名称
  * @param pc - provider 配置
- * @param options - 可选：wire dump sink（诊断用，见 `observability.llmRequestDump`）
+ * @param options - 可选：wire dump sink（诊断用，见 `observability.llmRequestDump`）；
+ *   `resolvePluginProvider` 解析插件 Provider 工厂（`pc.plugin` 必需）
  * @returns provider 实例（wire dump → 原生 provider 的装饰链；LLM 计时已 observability 化进 model.call.*）
  */
 export async function createProviderFromConfig(
   name: string,
   pc: ModelProviderConfig,
-  options?: { wireDump?: import('./integration/providers/wire-dump.js').WireDumpSink },
+  options?: {
+    wireDump?: import('./integration/providers/wire-dump.js').WireDumpSink;
+    resolvePluginProvider?: (
+      ref: string,
+    ) => import('./harness/extension/plugin-ecosystem/plugins/contribution-registry.js').PluginProviderRecord | undefined;
+  },
 ): Promise<ModelProvider> {
-  const apiType = pc.api === 'anthropic-messages' ? 'anthropic' : 'openai';
-  const models = pc.models.map(m => ({
-    name: m.name ?? m.id,
-    contextWindow: m.contextWindow,
-    maxOutputTokens: m.maxTokens,
-    temperature: m.temperature,
-    reasoning: m.reasoning,
-    input: m.input,
-  }));
+  if ((pc.api === undefined) === (pc.plugin === undefined)) {
+    throw new Error(`Provider "${name}": exactly one of api | plugin must be set`);
+  }
+  const models: PluginProviderModelEntry[] = pc.models.map((m) => {
+    const entry: PluginProviderModelEntry = { name: m.name ?? m.id };
+    if (m.contextWindow !== undefined) entry.contextWindow = m.contextWindow;
+    if (m.maxTokens !== undefined) entry.maxOutputTokens = m.maxTokens;
+    if (m.temperature !== undefined) entry.temperature = m.temperature;
+    if (m.reasoning !== undefined) entry.reasoning = m.reasoning;
+    if (m.input !== undefined) entry.input = m.input;
+    return entry;
+  });
   const defaultModel = pc.models[0]?.name ?? pc.models[0]?.id;
 
   let decorate: (inner: ModelProvider) => ModelProvider = (inner) => inner;
@@ -1350,6 +1367,37 @@ export async function createProviderFromConfig(
     const sink = options.wireDump;
     decorate = (inner: ModelProvider) => withWireDump(inner, sink);
   }
+
+  if (pc.plugin !== undefined) {
+    const record = options?.resolvePluginProvider?.(pc.plugin);
+    if (!record) {
+      throw new Error(
+        `Provider "${name}": plugin provider "${pc.plugin}" is not registered (plugin disabled, failed, or not discovered)`,
+      );
+    }
+    const built = await record.factory({
+      providerName: name,
+      baseUrl: pc.baseUrl,
+      apiKey: pc.apiKey ?? '',
+      models,
+      ...(defaultModel === undefined ? {} : { defaultModel }),
+      ...(pc.timeoutSeconds === undefined ? {} : { timeoutMs: pc.timeoutSeconds * 1000 }),
+      options: pc.options ?? {},
+    });
+    // 最小契约校验 + name 绑定：工厂结果必须挂在配置键下，
+    // 否则 gateway 按 provider.name 注册会挂到错误的名字上
+    for (const method of ['chat', 'stream', 'isAvailable'] as const) {
+      if (typeof built?.[method] !== 'function') {
+        throw new Error(`Provider "${name}": plugin provider "${pc.plugin}" factory returned an invalid ModelProvider (missing ${method})`);
+      }
+    }
+    if (built.name !== name) {
+      throw new Error(`Provider "${name}": plugin provider "${pc.plugin}" factory returned provider.name "${built.name}"; it must equal the config key "${name}"`);
+    }
+    return decorate(built);
+  }
+
+  const apiType = pc.api === 'anthropic-messages' ? 'anthropic' : 'openai';
 
   if (apiType === 'anthropic') {
     const { AnthropicProvider } = await import('./integration/providers/anthropic.js');

@@ -20,6 +20,7 @@ interface ModelRow {
   reasoning: boolean;
   contextWindow: string;
   maxTokens: string;
+  temperature: string;
   /** 输入模态：UI 不编辑但透传保留（防保存丢数据） */
   input?: Array<'text' | 'image' | 'audio' | 'video'>;
 }
@@ -27,7 +28,12 @@ interface ModelRow {
 interface ProviderForm {
   name: string;
   baseUrl: string;
-  api: 'openai-completions' | 'anthropic-messages';
+  /** 内置协议（插件 provider 无 api；与 plugin 二选一） */
+  api?: 'openai-completions' | 'anthropic-messages';
+  /** 插件 Provider 贡献 id（UI 不编辑、透传保留防保存丢数据） */
+  plugin?: string;
+  /** 插件旋钮（UI 不编辑、透传保留） */
+  options?: Record<string, unknown>;
   apiKey: string;
   timeoutSeconds: string;
   models: ModelRow[];
@@ -55,6 +61,7 @@ function modelRowFromPreset(m: ModelPresetDto['models'][number]): ModelRow {
     reasoning: m.reasoning ?? false,
     contextWindow: m.contextWindow != null ? String(m.contextWindow) : '',
     maxTokens: m.maxTokens != null ? String(m.maxTokens) : '',
+    temperature: '',
     input: m.input ? [...m.input] : undefined,
   };
 }
@@ -66,6 +73,7 @@ function modelRowFromUnknown(m: Record<string, unknown>): ModelRow {
     reasoning: Boolean(m.reasoning),
     contextWindow: m.contextWindow != null ? String(m.contextWindow) : '',
     maxTokens: m.maxTokens != null ? String(m.maxTokens) : '',
+    temperature: m.temperature != null ? String(m.temperature) : '',
     input: Array.isArray(m.input)
       ? [...(m.input as Array<'text' | 'image' | 'audio' | 'video'>)]
       : undefined,
@@ -92,14 +100,22 @@ function formToProviderConfig(form: ProviderForm): Record<string, unknown> {
       if (contextWindow != null) entry.contextWindow = contextWindow;
       const maxTokens = parseNumberField(m.maxTokens, 'maxTokens');
       if (maxTokens != null) entry.maxTokens = maxTokens;
+      const temperature = parseNumberField(m.temperature, 'temperature');
+      if (temperature != null) entry.temperature = temperature;
       if (m.input && m.input.length > 0) entry.input = [...m.input];
       return entry;
     });
   const cfg: Record<string, unknown> = {
     baseUrl: form.baseUrl.trim(),
-    api: form.api,
     models,
   };
+  if (form.plugin !== undefined) {
+    // 插件 provider：只透传 plugin/options，不写 api（二选一契约）；UI 不编辑其旋钮
+    cfg.plugin = form.plugin;
+    if (form.options !== undefined) cfg.options = form.options;
+  } else {
+    cfg.api = form.api ?? 'openai-completions';
+  }
   if (form.apiKey.trim()) cfg.apiKey = form.apiKey.trim();
   if (form.timeoutSeconds.trim()) cfg.timeoutSeconds = parseNumberField(form.timeoutSeconds, 'timeoutSeconds');
   return cfg;
@@ -172,7 +188,9 @@ export function ModelSettingsPanel() {
     setForm({
       name: provider.name,
       baseUrl: provider.baseUrl,
-      api: provider.api === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions',
+      api: provider.api === 'anthropic-messages' ? 'anthropic-messages' : provider.api === 'openai-completions' ? 'openai-completions' : undefined,
+      plugin: provider.plugin,
+      options: provider.options,
       apiKey: '', // 不回显明文；留空 = 保留现有值
       timeoutSeconds: provider.timeoutSeconds != null ? String(provider.timeoutSeconds) : '',
       models: provider.models.map(modelRowFromUnknown),
@@ -276,7 +294,7 @@ export function ModelSettingsPanel() {
             ...prev.models,
             ...result.models
               .filter((m) => !known.has(m.id))
-              .map((m) => ({ id: m.id, name: m.name ?? m.id, reasoning: false, contextWindow: '', maxTokens: '' })),
+              .map((m) => ({ id: m.id, name: m.name ?? m.id, reasoning: false, contextWindow: '', maxTokens: '', temperature: '' })),
           ];
           return { ...prev, models: merged };
         });
@@ -398,16 +416,21 @@ export function ModelSettingsPanel() {
               </label>
               <label className="set-field">
                 <span>API 协议</span>
-                <select
-                  className="set-input"
-                  value={form.api}
-                  onChange={(e) =>
-                    setForm((p) => ({ ...p, api: e.target.value as ProviderForm['api'] }))
-                  }
-                >
-                  <option value="openai-completions">openai-completions</option>
-                  <option value="anthropic-messages">anthropic-messages</option>
-                </select>
+                {form.plugin !== undefined ? (
+                  // 插件 provider：协议由贡献决定，UI 不编辑；只读展示防误改
+                  <input className="set-input mono" value={`plugin:${form.plugin}`} readOnly />
+                ) : (
+                  <select
+                    className="set-input"
+                    value={form.api ?? 'openai-completions'}
+                    onChange={(e) =>
+                      setForm((p) => ({ ...p, api: e.target.value as ProviderForm['api'] }))
+                    }
+                  >
+                    <option value="openai-completions">openai-completions</option>
+                    <option value="anthropic-messages">anthropic-messages</option>
+                  </select>
+                )}
               </label>
               <label className="set-field">
                 <span>API Key</span>
@@ -493,7 +516,7 @@ export function ModelSettingsPanel() {
                   onClick={() =>
                     setForm((p) => ({
                       ...p,
-                      models: [...p.models, { id: '', name: '', reasoning: false, contextWindow: '', maxTokens: '' }],
+                      models: [...p.models, { id: '', name: '', reasoning: false, contextWindow: '', maxTokens: '', temperature: '' }],
                     }))
                   }
                 >

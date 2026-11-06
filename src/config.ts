@@ -162,7 +162,36 @@ export async function buildFromConfigFile(configPath?: string): Promise<Map<stri
     runnerConfig: {
       securityIntegrity: createSecurityIntegrityGuard({ configPath: filePath }),
     },
+    // 插件 provider：与 daemon 同语义——按配置发现插件后注入工厂解析器
+    ...(await resolvePluginProviderOption(config)),
   });
+}
+
+/**
+ * 按配置发现插件，产出 `resolvePluginProvider` 注入项（daemon / buildFromConfigFile / health 共用）。
+ *
+ * 发现遵守 plugins.allowList / blockList / entries 启停（与 Gateway 同一语义）。
+ * 无 loadPaths 时跳过发现，返回空对象。
+ *
+ * @param config - 归一化配置（读取 plugins 段）
+ * @returns 可展开进 BuildFromConfigOptions 的对象
+ */
+export async function resolvePluginProviderOption(
+  config: NormalizedHarnessConfig,
+): Promise<{ resolvePluginProvider?: (ref: string) => import('@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/contribution-registry.js').PluginProviderRecord | undefined }> {
+  const loadPaths = config.plugins?.loadPaths ?? [];
+  if (loadPaths.length === 0) return {};
+  const { PluginManager } = await import(
+    '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js'
+  );
+  const manager = new PluginManager({
+    loadPaths,
+    ...(config.plugins?.allowList === undefined ? {} : { allowList: config.plugins.allowList }),
+    ...(config.plugins?.blockList === undefined ? {} : { blockList: config.plugins.blockList }),
+    ...(config.plugins?.entries === undefined ? {} : { entries: config.plugins.entries }),
+  });
+  await manager.discover();
+  return { resolvePluginProvider: (ref: string) => manager.resolveProviderFactory(ref) };
 }
 
 

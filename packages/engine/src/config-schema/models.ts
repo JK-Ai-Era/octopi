@@ -23,9 +23,22 @@ const ModelProviderConfigSchema = z.object({
   baseUrl: z.string().min(1),
   /** API Key；省略 = upsert 时保留现有值；'' = 明确无鉴权（keyless，如 Ollama）；推荐 `${ENV_VAR}` 引用 */
   apiKey: z.string().optional(),
-  api: z.enum(['openai-completions', 'anthropic-messages']),
+  /** API 协议类型；与 plugin 二选一（恰好设置其一，工厂处 fail-loud） */
+  api: z.enum(['openai-completions', 'anthropic-messages']).optional(),
+  /** 插件 Provider 贡献 id（manifest contributes.providers）；与 api 二选一 */
+  plugin: z.string().min(1).optional(),
   models: z.array(ModelCapabilitySchema).min(1),
   timeoutSeconds: z.number().positive().optional(),
+  /** 插件自定义旋钮（非密钥；密钥只走 apiKey） */
+  options: z.record(z.string(), z.unknown()).optional(),
+}).superRefine((v, ctx) => {
+  // api | plugin 恰好其一：schema/写盘校验与工厂路由同闸（工厂是第二道闸）
+  if ((v.api === undefined) === (v.plugin === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'exactly one of api | plugin must be set',
+    });
+  }
 });
 
 const LevelConfigSchema = z.object({

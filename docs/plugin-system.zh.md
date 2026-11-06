@@ -15,17 +15,18 @@ Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过
 | JSON Schema 配置校验 | 已实现 |
 | 依赖、身份与贡献声明一致性校验 | 已实现 |
 | 暂存注册与有效注册表原子发布 | 已实现 |
-| Tool / Command / Service 贡献注册 | 已实现；声明集合与实际注册集合必须一致 |
+| Tool / Command / Service / Provider 贡献注册 | 已实现；声明集合与实际注册集合必须一致 |
 | Tool 挂载、per-Agent allow/deny、执行与来源归因 | 已实现；`tools.allow` 为空不会暴露插件 Tool |
 | Command 元数据、调用方准入与 Host `sessionOps` 授权 | 已实现；插件 SessionOp 必须与 manifest 声明一致 |
 | Hook 执行语义 | 22 个 Hook 名已实现：类型化 Observe / Collect / Transform / Vote / Override 组合、Tool 与 Iteration 双阶段、协作式超时、逐调用审计 |
 | Run / Tool / Iteration / Message / Compact / Session 归档 / Gateway 触发点 | 已接入真实生产路径 |
 | Tool 审批投票（`before_tool_call` 的 `require_approval`） | 已接入 Host HITL 通道；`approve` / `approve_session` / `approve_always` 由引擎决策缓存记账；无审批通道时拒绝执行 |
 | 后台服务 | 已实现：manifest 声明的 `registerService`，宿主负责启停、required 失败回滚、optional 失败产生 System Issue、逆序停止、协作式超时 |
+| Provider 贡献（P5） | 已实现：`contributes.providers` + `registerProvider` 工厂，由 `models.providers[].plugin` 引用；维护中的真实示例插件 `examples/plugins/openai-compat-dialect` |
 | `before_install` Hook | 已声明但休眠——仓库尚无真实 Skill/Plugin 安装流程，没有接线任何触发点，也绝不伪造 |
 | `session_end` Hook | 仅在真实归档导出并从热库删除后触发（需配置归档管理器）；普通删除或压缩不会冒充它 |
 | `before_prompt_build` / `before_iteration` 快照 | 已实现；带预算和 pluginId 归因的快照随 turn envelope 的 `runtime_snapshot` 槽位（`before_prompt_build`）或当次请求视图（`before_iteration`）携带；绝不写入 system prompt |
-| Provider / Channel / ContextEngine 注册 | 尚未进入稳定 v1 作者面 |
+| Channel / ContextEngine 注册 | 尚未进入稳定 v1 作者面 |
 | 不可信代码隔离 / 热卸载 | 不支持 |
 
 ## 包结构
@@ -61,6 +62,7 @@ Loader 扫描每个配置路径。路径可以是插件目录，也可以是包�
     "tools": ["acme_search"],
     "commands": [{ "name": "acme-status", "sessionOps": [] }],
     "services": ["acme-watcher"],
+    "providers": ["acme-llm-gateway"],
     "hooks": ["message_received"]
   },
   "requiresPlugins": [],
@@ -126,7 +128,8 @@ export default definePlugin({
 - Tool 的 `capabilities` 必填。含 `fs-write` 的 Tool 未显式声明时默认串行执行。
 - `api.on` 按 22 个既有 Hook 名提供类型。`before_tool_call` 与 `before_iteration` 是双阶段事件，必须传 `{ phase: 'transform' | 'vote' }`（或使用 `api.onBeforeToolCall` / `api.onBeforeIteration` 辅助方法）；其余事件不得传 `phase`。声明不代表所有事件都已有生产触发点，见上方状态表（`before_install` 处于休眠）。
 - `api.registerService` 暂存后台服务，且必须同时在 `contributes.services` 声明；启停生命周期由宿主管理（见「后台服务」）。
-- Provider、Channel、ContextEngine 与媒体 Provider 注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
+- `api.registerProvider` 暂存 Provider 工厂，且必须同时在 `contributes.providers` 声明；宿主按 `models.providers[].plugin` 引用逐实例化（见「Provider 贡献（P5）」）。
+- Channel、ContextEngine 与媒体 Provider 注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
 
 ## 插件 Command 与 Session 效应
 
@@ -161,7 +164,7 @@ manifest 的 Command 声明包含 `name` 与 `sessionOps`，其他元数据由�
 - 每次执行都会向按日审计（`~/.octopi/audit/hooks/YYYY-MM-DD.jsonl`）追加记录：pluginId、hook、阶段、结果、run/session/agent 身份和 Principal。该账本是诊断用途，不是防篡改账本；审计写入失败不改变操作结果。
 - Run 级观察报告精确终态事实：`reason` 为 `completed | should_stop | aborted | error | denied`，`success` 仅在干净终态（`completed` 或 `should_stop`）为 true。策略拒绝在 Hook 观察中呈现为 `reason: 'denied'`，Core `agent_end` 事件仍保留兼容的 `error` 原因。
 - `before_agent_reply`（Override）真正替代本次 Run 的模型回复；`before_agent_finalize` 只变换无工具调用的最终回复。两者都不得添加 `toolCalls`（不会有对应工具结果）。事件与持久化携带定稿后的回复；已流式推送到客户端的文本无法追回——需要完全控制回复的插件应使用 `before_agent_reply`。
-- Iteration 的 model/thinking 变换只能选择宿主已配置的值——未知模型直接失败，不静默回退。选中的 thinking 级别进入 LLMRequest；向 Provider API 参数的映射随 P5 Provider 工作落地。
+- Iteration 的 model/thinking 变换只能选择宿主已配置的值——未知模型直接失败，不静默回退。选中的 thinking 级别进入 LLMRequest，内置适配器映射到各自原生参数（`reasoning_effort` / `thinking.budget_tokens`）；插件 Provider 自行决定映射（见「Provider 贡献（P5）」）。
 - `before_prompt_build` 贡献随 turn envelope 的 `runtime_snapshot` 槽位与其他易变块一同携带：用户消息 write-once（原始文本永不改写、后续轮次永不重写，发给模型的内容即存储内容）。`before_iteration` 快照只投影到当次 LLM 请求视图。system prompt 永不受影响。
 
 ## 工具调用审批
@@ -193,6 +196,48 @@ api.registerService({
 - `registerService` 只暂存服务，不产生副作用。宿主在开放 Channel 之前启动服务，并在关闭时按注册的逆序停止。
 - `required: true` 的服务启动失败会回滚并阻止 Gateway 启动；`optional: true` 的失败产生 System Issue，Gateway 继续运行。
 - `start`/`stop` 收到 `AbortSignal` 并受 `timeoutMs` 约束（协作式；进程内代码无法被强制杀死）。生命周期结果写入 Hook 审计账本。
+
+## Provider 贡献（P5）
+
+插件可以贡献 **Provider 工厂**——一个命名的构建器，宿主为每个 `models.providers` 条目调用它构造 Core `ModelProvider`。
+
+```jsonc
+// octopi.plugin.json
+{ "contributes": { "providers": ["acme-llm-gateway"] } }
+```
+
+```ts
+api.registerProvider('acme-llm-gateway', (context) => {
+  // context: { providerName, baseUrl, apiKey, models, defaultModel?, timeoutMs?, options }
+  return myModelProvider;
+});
+```
+
+```jsonc
+// octopi.json — 用 `plugin` 引用贡献（与 `api` 二选一）
+{
+  "models": {
+    "providers": {
+      "my-gateway": {
+        "baseUrl": "https://llm-gateway.internal/v1",
+        "apiKey": "${MY_GATEWAY_KEY}",
+        "plugin": "acme-llm-gateway",
+        "models": [{ "id": "kimi-k2", "reasoning": true, "contextWindow": 131072 }],
+        "options": { "thinking": { "field": "enable_thinking", "mode": "boolean" } }
+      }
+    }
+  }
+}
+```
+
+- `plugin` 与 `api` 二选一——必须恰好设置其一。引用未知或已禁用的贡献 id 会让 provider 创建明确失败（fail closed）。
+- 工厂在启动时和配置热替换时按配置实例调用（绝不在注册时调用）。贡献 id 跨插件全局唯一（同 services）；声明集合与实际注册集合必须一致。
+- API Key 始终走凭证通道（`apiKey`，推荐 `${ENV_VAR}`；`""` = 无鉴权）。`options` 只放**非密钥**旋钮，原样透传由插件自行校验。
+- `options` 会原样回显到 Web 控制台（`/config/models`）并原样落盘。**禁止在 `options` 里放任何凭据**（承载密钥的自定义鉴权头也应走 `apiKey`）；secret 感知的 options schema 作为后续扩展。
+- Provider 生命周期由宿主管理：退役实例（配置热替换或删除）在固定**宽限窗口**（30 分钟，到期强制回收并告警）内继续服务——窗口不是逐请求排空（`ModelProvider` 契约没有 in-flight 计数）。进程关闭路径全量 dispose。`dispose()` 应释放 transport 并中止在途请求（含流式 body）。
+- 内置 `api: "openai-completions"` / `"anthropic-messages"` 适配器已覆盖严格 OpenAI 兼容 / Anthropic 端点（自定义 `baseUrl`、可无鉴权）。只有内置覆盖不了的方言才需要 Provider 贡献——参见维护中的真实示例 `examples/plugins/openai-compat-dialect`（自定义鉴权头、extra body 字段、thinking 参数方言）。
+- `LLMRequest.thinkingLevel` 在内置适配器映射为 `reasoning_effort`（openai）与 `thinking.budget_tokens`（anthropic）；插件 Provider 自行决定映射。内置 openai 适配器不探测端点是否认识 `reasoning_effort`——仅在设置了 `thinkingLevel` 时发送；不接受该参数的方言端点应使用 Provider 贡献。
+- 插件 Provider 默认不参与 wire dump（`observability.llmRequestDump`），除非自行实现 `wireBodyFor(request, mode)`；装饰链会转发 `dispose`，生命周期保证在 dump 开启时同样成立。
 
 ## 配置
 

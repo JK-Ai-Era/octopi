@@ -52,6 +52,7 @@ import { isTurnAnchor } from '@octopi-agent/engine/harness/context/layer-types.j
 import { wrapProviderWithCircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/provider-wrapper.js';
 import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '@octopi-agent/engine/harness/run/model/index.js';
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
+import type { PluginProviderRecord } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/contribution-registry.js';
 import {
   ClientToolRegistry,
   ClientStreamTransport,
@@ -446,6 +447,8 @@ export class Gateway {
   private listeners: Array<(event: AgentEvent) => void> = [];
   /** Provider */
   private providers = new Map<string, ModelProvider>();
+  /** 热更退役 provider（延迟回收；stop 兜底排空） */
+  private retiredProviders: ModelProvider[] = [];
   /** 工具 */
   private tools: RegisteredTool[] = [];
   /** 每 agent 记忆逆放器（L3 P2） */
@@ -952,31 +955,9 @@ export class Gateway {
       );
     }
 
-    // 插件发现（docs/plugin-system.md）：扫描 plugins.loadPaths，注册 hooks / 命令。
+    // 插件发现（docs/plugin-system.md）：扫描 plugins.loadPaths，注册 hooks / 命令 / provider 工厂。
     // 幂等：PluginLoader.discover 不做去重，stop→start 重复 discover 会双注册 hooks/命令
-    if (!this.pluginsDiscovered) {
-      try {
-        const loaded = await this.pluginManager.discover();
-        this.pluginsDiscovered = true;
-        console.log(
-          loaded.length > 0
-            ? `[Gateway] plugins loaded: ${loaded.map((p) => p.id).join(', ')}`
-            : '[Gateway] plugins loaded: (none)',
-        );
-        for (const diagnostic of this.pluginManager.getDiagnostics()) {
-          if (diagnostic.status === 'registered') continue;
-          console.warn(
-            `[Gateway] plugin ${diagnostic.id} ${diagnostic.status} at ${diagnostic.stage}: ${diagnostic.reason}`,
-          );
-        }
-      } catch (err) {
-        // 吞掉发现期错误（单个插件坏包不阻断网关启动）；保留 warn 与插件名定位，
-        // pluginsDiscovered 不置位，下次 start 可重试
-        console.warn(
-          `[Gateway] plugin discovery failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
+    await this.discoverPlugins();
 
     // 会话日程：Service open() 惰性建库；wakeup 接 AgentRuntime（arch/session-schedules.md）
     {
@@ -1662,6 +1643,13 @@ export class Gateway {
       }
     }
     this.providers.clear();
+    for (const provider of this.retiredProviders.splice(0)) {
+      try {
+        await Promise.resolve().then(() => provider.dispose?.());
+      } catch {
+        // stop 路径 fail-open，不阻断关闭
+      }
+    }
 
     await this.runtime.stop();
     await this.pluginServices.stop(this.pluginManager.getServices());
@@ -1813,7 +1801,9 @@ export class Gateway {
     providerConfig: Record<string, unknown>,
     referencedAgentIds: string[],
   ): Promise<void> {
+    const previous = this.providers.get(provider.name);
     this.providers.set(provider.name, provider);
+    if (previous && previous !== provider) this.retireProvider(previous);
     if (this.config.modelProviders) {
       this.config.modelProviders[provider.name] =
         providerConfig as unknown as import('@octopi-agent/engine/config.js').ModelProviderConfig;
@@ -1832,7 +1822,9 @@ export class Gateway {
    * @param referencedAgentIds - 引用该 provider 的 agent id
    */
   async removeProvider(name: string, referencedAgentIds: string[]): Promise<void> {
+    const previous = this.providers.get(name);
     this.providers.delete(name);
+    if (previous) this.retireProvider(previous);
     if (this.config.modelProviders) {
       delete this.config.modelProviders[name];
     }
@@ -1919,12 +1911,72 @@ export class Gateway {
   }
 
   registerProvider(provider: ModelProvider): void {
-    // 热更替换（arch/config-hot-reload.md L2）不在此收口旧 provider：在跑 run 仍要
-    // 用旧配置跑完（拍板），立即关 dispatcher 会让旧 run 的下一次模型调用伪失败；
-    // 推迟回收属 config 热应用的退役协调（对齐 disposeRetiredRunner 的 in-flight 计数），
-    // 进程级收口由 stop() 兜底。
+    // 本收口不退役旧实例：热更走 replaceProvider/removeProvider（那里的旧实例进
+    // retireProvider() 延迟窗口回收），进程级收口由 stop() 兜底。
+    if (this.providers.has(provider.name)) {
+      console.warn(`[Gateway] provider "${provider.name}" replaced without retirement (hot-replace should use replaceProvider)`);
+    }
     this.providers.set(provider.name, provider);
     console.log(`[Gateway] Registered provider: ${provider.name}`);
+  }
+
+  /** 插件 Provider 工厂解析（models.providers[].plugin → 命名贡献）。 */
+  resolvePluginProviderFactory(ref: string): PluginProviderRecord | undefined {
+    return this.pluginManager.resolveProviderFactory(ref);
+  }
+
+  /**
+   * 插件发现（幂等）。provider 创建等启动早期步骤可提前调用；
+   * start() 内部亦会调用，重复调用安全。
+   */
+  async discoverPlugins(): Promise<void> {
+    if (this.pluginsDiscovered) return;
+    try {
+      const loaded = await this.pluginManager.discover();
+      this.pluginsDiscovered = true;
+      console.log(
+        loaded.length > 0
+          ? `[Gateway] plugins loaded: ${loaded.map((p) => p.id).join(', ')}`
+          : '[Gateway] plugins loaded: (none)',
+      );
+      for (const diagnostic of this.pluginManager.getDiagnostics()) {
+        if (diagnostic.status === 'registered') continue;
+        console.warn(
+          `[Gateway] plugin ${diagnostic.id} ${diagnostic.status} at ${diagnostic.stage}: ${diagnostic.reason}`,
+        );
+      }
+    } catch (err) {
+      // 吞掉发现期错误（单个插件坏包不阻断网关启动）；保留 warn 与插件名定位，
+      // pluginsDiscovered 不置位，下次 start 可重试
+      console.warn(
+        `[Gateway] plugin discovery failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** 退役 provider 的延迟回收窗口（毫秒）。语义是"给在跑 run 的宽限"，不是逐请求排空。 */
+  private static readonly PROVIDER_RETIRE_DISPOSE_DELAY_MS = 30 * 60_000;
+
+  /**
+   * 退役 provider：固定宽限窗口后 dispose。ModelProvider 契约没有 in-flight 计数，
+   * 因此这里是窗口语义（不是 drain 保证）；窗口内旧实例继续服务，窗口外强制回收并告警。
+   * 进程级收口由 stop() 全量排空。
+   */
+  private retireProvider(provider: ModelProvider): void {
+    this.retiredProviders.push(provider);
+    const timer = setTimeout(() => {
+      const idx = this.retiredProviders.indexOf(provider);
+      if (idx < 0) return;
+      this.retiredProviders.splice(idx, 1);
+      console.warn(`[Gateway] retired provider "${provider.name}" force-disposed after ${Gateway.PROVIDER_RETIRE_DISPOSE_DELAY_MS / 60_000}min grace window (runs still using it will be interrupted)`);
+      Promise.resolve()
+        .then(() => provider.dispose?.())
+        .catch((err) => {
+          // 退役回收 fail-open：dispose 失败不阻断热更；进程级收口由 stop() 兜底
+          console.warn(`[Gateway] retired provider "${provider.name}" dispose failed:`, err);
+        });
+    }, Gateway.PROVIDER_RETIRE_DISPOSE_DELAY_MS);
+    timer.unref?.();
   }
 
   on(listener: (event: AgentEvent) => void): void {

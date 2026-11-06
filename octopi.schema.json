@@ -622,6 +622,10 @@
                   "anthropic-messages"
                 ]
               },
+              "plugin": {
+                "type": "string",
+                "minLength": 1
+              },
               "models": {
                 "minItems": 1,
                 "type": "array",
@@ -672,11 +676,17 @@
               "timeoutSeconds": {
                 "type": "number",
                 "exclusiveMinimum": 0
+              },
+              "options": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
               }
             },
             "required": [
               "baseUrl",
-              "api",
               "models"
             ]
           }

@@ -79,7 +79,8 @@ export type PluginHookName = (typeof PLUGIN_HOOK_NAMES)[number];
 export const PLUGIN_SESSION_OP_NAMES = ['abort_run', 'new_session', 'set_model', 'compact', 'set_preferred_agent'] as const;
 export type PluginSessionOpName = (typeof PLUGIN_SESSION_OP_NAMES)[number];
 
-const contributionName = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_.-]*$/, 'must be a stable capability name');
+export const CONTRIBUTION_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_.-]*$/;
+const contributionName = z.string().regex(CONTRIBUTION_NAME_RE, 'must be a stable capability name');
 const pluginId = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/, 'must be a lowercase stable plugin id');
 
 const manifestSchema = z
@@ -108,6 +109,7 @@ const manifestSchema = z
           .optional(),
         hooks: z.array(z.enum(PLUGIN_HOOK_NAMES)).optional(),
         services: z.array(contributionName).optional(),
+        providers: z.array(contributionName).optional(),
       })
       .strict()
       .optional(),
@@ -127,6 +129,8 @@ export interface PluginContributions {
   hooks?: PluginHookName[];
   /** Stable service ids; required/timeout are trusted Host execution policy. */
   services?: string[];
+  /** Stable provider factory ids; referenced by models.providers entries via their `plugin` field. */
+  providers?: string[];
 }
 
 export interface PluginManifest {
@@ -164,6 +168,7 @@ export function validateManifest(raw: unknown): PluginManifest {
   assertUnique(manifest.contributes?.tools ?? [], 'contributes.tools');
   assertUnique(manifest.contributes?.hooks ?? [], 'contributes.hooks');
   assertUnique(manifest.contributes?.services ?? [], 'contributes.services');
+  assertUnique(manifest.contributes?.providers ?? [], 'contributes.providers');
   const commands = manifest.contributes?.commands ?? [];
   assertUnique(commands.map((command) => command.name), 'contributes.commands');
   for (const command of commands) {

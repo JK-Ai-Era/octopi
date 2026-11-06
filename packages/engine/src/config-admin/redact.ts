@@ -23,6 +23,10 @@ export interface RedactedProvider {
   models: Array<Record<string, unknown>>;
   timeoutSeconds?: number;
   apiKey: RedactedSecret;
+  /** 插件 Provider 贡献 id（与 api 二选一） */
+  plugin?: string;
+  /** 插件自定义旋钮（非密钥；原样透传） */
+  options?: Record<string, unknown>;
 }
 
 const ENV_REF_PATTERN = /^\$\{(\w+)(?::-.*?)?\}$/;
@@ -56,5 +60,9 @@ export function redactProvider(name: string, pc: Record<string, unknown>): Redac
     apiKey: redactSecret(typeof pc.apiKey === 'string' ? pc.apiKey : undefined),
   };
   if (typeof pc.timeoutSeconds === 'number') out.timeoutSeconds = pc.timeoutSeconds;
+  if (typeof pc.plugin === 'string') out.plugin = pc.plugin;
+  if (pc.options !== undefined && pc.options !== null && typeof pc.options === 'object' && !Array.isArray(pc.options)) {
+    out.options = pc.options as Record<string, unknown>;
+  }
   return out;
 }

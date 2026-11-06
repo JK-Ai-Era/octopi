@@ -701,5 +701,7 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
         });
       }
     },
+    // 转发 dispose：否则 wire dump 开启时，退役/停机回收会对装饰实例静默失效
+    ...(typeof inner.dispose === 'function' ? { dispose: () => inner.dispose?.() } : {}),
   };
 }

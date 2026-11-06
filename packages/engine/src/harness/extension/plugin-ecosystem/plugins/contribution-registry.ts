@@ -6,7 +6,7 @@ import type { HookServiceRegistration } from '../hooks/types.js';
 export interface PluginServiceRecord extends HookServiceRegistration {
   pluginId: string;
 }
-import type { PluginApi } from './api.js';
+import type { PluginApi, PluginProviderFactory } from './api.js';
 import type { PluginCommandRegistration, PluginToolContribution, OrderedHookEntry } from './api.js';
 import { readStaging } from './staging.js';
 
@@ -25,6 +25,13 @@ export interface PluginCommandRecord extends PluginCommandRegistration {
   pluginId: string;
 }
 
+/** A published provider factory contribution; globally unique id, like services. */
+export interface PluginProviderRecord {
+  pluginId: string;
+  id: string;
+  factory: PluginProviderFactory;
+}
+
 /** An immutable published contribution set. Mutations are staged by PluginLoader. */
 export class PluginContributionRegistry {
   private plugins = new Map<string, RegisteredPlugin>();
@@ -32,6 +39,7 @@ export class PluginContributionRegistry {
   private commands: PluginCommandRecord[] = [];
   private hooks: OrderedHookEntry[] = [];
   private services: PluginServiceRecord[] = [];
+  private providers: PluginProviderRecord[] = [];
   private owners = new Map<string, string>();
 
   /** Replace the effective set only after all staged registrations validate. */
@@ -53,6 +61,10 @@ export class PluginContributionRegistry {
         next.addOwner('service', service.serviceId, plugin.manifest.id);
         next.services.push({ pluginId: plugin.manifest.id, ...service });
       }
+      for (const provider of staged.providers) {
+        next.addOwner('provider', provider.id, plugin.manifest.id);
+        next.providers.push({ pluginId: plugin.manifest.id, ...provider });
+      }
     }
     const replyOwners = next.hooks.filter((entry) => entry.hookName === 'before_agent_reply');
     if (replyOwners.length > 1) {
@@ -63,6 +75,7 @@ export class PluginContributionRegistry {
     this.commands = next.commands;
     this.hooks = next.hooks;
     this.services = next.services;
+    this.providers = next.providers;
     this.owners = next.owners;
   }
 
@@ -86,4 +99,5 @@ export class PluginContributionRegistry {
   getCommands(): PluginCommandRecord[] { return [...this.commands]; }
   getHooks(): OrderedHookEntry[] { return [...this.hooks]; }
   getServices(): PluginServiceRecord[] { return [...this.services]; }
+  getProviders(): PluginProviderRecord[] { return [...this.providers]; }
 }

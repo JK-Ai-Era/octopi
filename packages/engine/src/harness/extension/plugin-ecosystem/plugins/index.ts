@@ -11,6 +11,10 @@ export type {
   HookHandler,
   HookRegistrationOptions,
   ToolRegistrationOptions,
+  PluginProviderFactory,
+  PluginProviderFactoryContext,
+  PluginProviderModelEntry,
+  PluginProviderRegistration,
 } from './api.js';
 export {
   PLUGIN_API_VERSION,

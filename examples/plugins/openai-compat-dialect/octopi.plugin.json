@@ -1,0 +1,11 @@
+{
+  "id": "openai-compat-dialect",
+  "apiVersion": "1",
+  "version": "0.1.0",
+  "name": "OpenAI-Compatible Dialect Adapter",
+  "description": "Provider contribution for OpenAI-compatible endpoints that need dialect tuning: custom auth headers, extra body fields, and thinking-parameter mapping. Built-in api=openai-completions already covers strict OpenAI-compatible servers; use this plugin only when the endpoint deviates.",
+  "entry": "index.mjs",
+  "engine": { "octopi": ">=0.101.0" },
+  "configSchema": { "type": "object" },
+  "contributes": { "providers": ["openai-compat"] }
+}

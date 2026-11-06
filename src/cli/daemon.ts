@@ -1036,10 +1036,19 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   // LLM wire dump（observability.llmRequestDump）：所有 provider 共享同一 sink（单一写队列 + 单一环形计数）
   const wireDump = await createWireDumpFromConfig(config);
 
+  // 插件 Provider 工厂（models.providers[].plugin）：provider 创建早于 gateway.start()，
+  // 必须在此提前完成插件发现（幂等，start() 会跳过）
+  await gateway.discoverPlugins();
+  const resolvePluginProvider = (ref: string) => gateway.resolvePluginProviderFactory(ref);
+
+  // 注册进 Gateway 的同一批实例（SummaryPort 等下游复用，不二次构造——
+  // 工厂/transport 单实例，dispose 归 Gateway 收口）
+  const registeredProviders = new Map<string, import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider>();
   for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
-    const provider = await createProviderFromConfig(providerName, providerCfg, { wireDump });
+    const provider = await createProviderFromConfig(providerName, providerCfg, { wireDump, resolvePluginProvider });
     gateway.registerProvider(provider);
-    console.log(`[CLI] Registered provider: ${providerName} (${providerCfg.api})`);
+    registeredProviders.set(providerName, provider);
+    console.log(`[CLI] Registered provider: ${providerName} (${providerCfg.api ?? `plugin:${providerCfg.plugin}`})`);
   }
 
   // memory 工具不在 Gateway 全局注册：AgentBuilder.build() 按各 agent 的 MemoryStore
@@ -1069,13 +1078,9 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const { createSummaryPort, createToolSummarySupport, createMemorySummaryCache } = await import(
       '@octopi-agent/engine/harness/context/capabilities/summary/index.js'
     );
-    const providerMap = new Map<string, import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider>();
-    let fallback: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider | undefined;
-    for (const [providerName, providerCfg] of Object.entries(config.models?.providers ?? {})) {
-      const provider = await createProviderFromConfig(providerName, providerCfg, { wireDump });
-      providerMap.set(providerName, provider);
-      fallback = fallback ?? provider;
-    }
+    // 复用已注册实例（与首循环同一批）：禁止二次构造插件工厂/transport
+    const providerMap = registeredProviders;
+    const fallback = [...providerMap.values()][0];
     if (fallback) {
       const summaryCfg = config.summary;
       const toolsCfg = summaryCfg?.tools as
@@ -1243,7 +1248,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         createProviderFromConfig(
           name,
           pc as unknown as import('@octopi-agent/engine/config.js').ModelProviderConfig,
-          { wireDump },
+          { wireDump, resolvePluginProvider },
         ),
       agentFiles: new AgentFileAdmin(),
       auditSink: createConfigAuditSink(),

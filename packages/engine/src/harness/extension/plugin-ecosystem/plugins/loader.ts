@@ -302,6 +302,7 @@ export class PluginLoader {
         ...(candidate.manifest.contributes?.tools ?? []).map((name) => `tool:${name}`),
         ...(candidate.manifest.contributes?.commands ?? []).map((command) => `command:${command.name}`),
         ...(candidate.manifest.contributes?.services ?? []).map((name) => `service:${name}`),
+        ...(candidate.manifest.contributes?.providers ?? []).map((name) => `provider:${name}`),
       ];
       for (const claim of entries) {
         const owner = claims.get(claim);
@@ -401,6 +402,14 @@ export class PluginLoader {
     }
     for (const service of declaredServices) {
       if (!actualServices.has(service)) throw new Error(`Declared service "${service}" was not registered`);
+    }
+    const declaredProviders = new Set(manifest.contributes?.providers ?? []);
+    const actualProviders = new Set(staged.providers.map((provider) => provider.id));
+    for (const provider of actualProviders) {
+      if (!declaredProviders.has(provider)) throw new Error(`Provider "${provider}" is not declared in manifest`);
+    }
+    for (const provider of declaredProviders) {
+      if (!actualProviders.has(provider)) throw new Error(`Declared provider "${provider}" was not registered`);
     }
   }
 

@@ -61,17 +61,33 @@ export interface BuiltAgent {
  * 从配置中创建所有 Provider 实例
  *
  * 返回 provider name → ModelProvider 的映射。
+ *
+ * @param config - 归一化 Harness 配置
+ * @param options - resolvePluginProvider 解析插件 Provider 工厂（models.providers[].plugin）
  */
-export async function resolveProviders(config: NormalizedHarnessConfig): Promise<Map<string, ModelProvider>> {
+export async function resolveProviders(
+  config: NormalizedHarnessConfig,
+  options?: {
+    resolvePluginProvider?: (
+      ref: string,
+    ) => import('../extension/plugin-ecosystem/plugins/contribution-registry.js').PluginProviderRecord | undefined;
+  },
+): Promise<Map<string, ModelProvider>> {
   const providers = new Map<string, ModelProvider>();
   // wire dump 是纯观测：未启用时 undefined，启用后 sink 在该层共享（单一写队列 + 单一环形计数）
   const wireDump = await createWireDumpSinkFromConfig(config.observability?.llmRequestDump);
 
   for (const [name, pc] of Object.entries(config.models?.providers ?? {})) {
     try {
-      const provider = await createProviderFromConfig(name, pc as ModelProviderConfig, { wireDump });
+      const provider = await createProviderFromConfig(name, pc as ModelProviderConfig, {
+        wireDump,
+        ...(options?.resolvePluginProvider === undefined ? {} : { resolvePluginProvider: options.resolvePluginProvider }),
+      });
       providers.set(name, provider);
     } catch (err) {
+      // 插件 provider 的失败必须 fail-closed：吞掉会让 buildAgent 报误导性的 "unknown provider"，
+      // 真实原因（插件未发现/被禁用/注册失败）不能丢
+      if (providerConfig.plugin !== undefined) throw err;
       console.warn(`[ConfigBridge] Failed to create provider "${name}":`, err);
     }
   }
@@ -142,7 +158,9 @@ export async function buildFromConfig(
 ): Promise<Map<string, BuiltAgent>> {
   const flatModels: NormalizedModelInfo[] = config.flatModels ?? [];
   // 1. 解析共享资源
-  const providers = await resolveProviders(config);
+  const providers = await resolveProviders(config, {
+    ...(options?.resolvePluginProvider === undefined ? {} : { resolvePluginProvider: options.resolvePluginProvider }),
+  });
   const securityConfig = resolveSecurityConfig(config);
   const budgetConfig = config.budgetPolicy;
   const runGuardConfig = config.runGuard;
@@ -359,4 +377,10 @@ export interface BuildFromConfigOptions {
    * ops P2：`securityIntegrity`（安全配置漂移守卫）与 `opsAuditPath` 走此通道。
    */
   runnerConfig?: import('../run/runner.js').SessionAwareRunnerConfig;
+  /**
+   * 插件 Provider 工厂解析（`models.providers[].plugin`）；未注入时插件 provider 创建 fail-loud。
+   */
+  resolvePluginProvider?: (
+    ref: string,
+  ) => import('../extension/plugin-ecosystem/plugins/contribution-registry.js').PluginProviderRecord | undefined;
 }

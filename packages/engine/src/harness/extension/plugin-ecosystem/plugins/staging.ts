@@ -1,7 +1,12 @@
 /** Host-private staging storage. Not exported through the author SDK. */
 
 import type { PluginApi } from './api.js';
-import type { OrderedHookEntry, PluginCommandRegistration, PluginToolContribution } from './api.js';
+import type {
+  OrderedHookEntry,
+  PluginCommandRegistration,
+  PluginProviderRegistration,
+  PluginToolContribution,
+} from './api.js';
 import type { PluginHookName } from './manifest.js';
 import type { HookServiceRegistration } from '../hooks/types.js';
 
@@ -10,13 +15,14 @@ export interface StagedContributions {
   commands: PluginCommandRegistration[];
   hooks: Map<PluginHookName, OrderedHookEntry[]>;
   services: HookServiceRegistration[];
+  providers: PluginProviderRegistration[];
 }
 
 const staged = new WeakMap<PluginApi, StagedContributions>();
 
 /** Called only by the host when constructing an author API. */
 export function createStaging(api: PluginApi): StagedContributions {
-  const value: StagedContributions = { tools: [], commands: [], hooks: new Map(), services: [] };
+  const value: StagedContributions = { tools: [], commands: [], hooks: new Map(), services: [], providers: [] };
   staged.set(api, value);
   return value;
 }

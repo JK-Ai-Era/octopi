@@ -397,6 +397,19 @@ export class ConfigApplyService {
       | Record<string, unknown>
       | undefined;
     const merged = { ...(stored ?? {}), ...providerConfig };
+    // 插件 Provider（plugin 贡献）不走内置 /v1/models 发现协议：
+    // fail-loud 返回原因，禁止把 plugin 条目错发成 openai-completions 探测。
+    // 判别用「这次提交后生效的 api/plugin」（posted 显式字段优先，双缺省才回落 stored），
+    // 与 upsertProvider 的整段替换语义一致
+    const effectiveApi = providerConfig.api ?? (providerConfig.plugin === undefined ? stored?.api : undefined);
+    const effectivePlugin = providerConfig.plugin ?? (providerConfig.api === undefined ? stored?.plugin : undefined);
+    if (effectiveApi === undefined && typeof effectivePlugin === 'string' && effectivePlugin.length > 0) {
+      return {
+        ok: false,
+        models: [],
+        error: `模型发现不支持插件 Provider（plugin=${merged.plugin}）；请手动填写模型清单`,
+      };
+    }
     const rawKey = typeof merged.apiKey === 'string' ? merged.apiKey : '';
     return discoverProviderModels({
       baseUrl: expandEnvPlaceholders(String(merged.baseUrl ?? '')),

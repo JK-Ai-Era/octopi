@@ -762,6 +762,10 @@ export interface RedactedProviderDto {
   models: Array<Record<string, unknown>>;
   timeoutSeconds?: number;
   apiKey: RedactedSecretDto;
+  /** 插件 Provider 贡献 id（与 api 二选一） */
+  plugin?: string;
+  /** 插件自定义旋钮（非密钥；原样透传） */
+  options?: Record<string, unknown>;
 }
 
 /** 模型配置视图 */

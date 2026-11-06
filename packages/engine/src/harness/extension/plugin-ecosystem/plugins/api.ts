@@ -2,7 +2,7 @@
 
 import { resolve } from 'node:path';
 import { TOOL_CAPABILITIES, type ToolDefinition, type ToolHandler } from '@octopi-agent/core/types.js';
-import type { PluginHookName, PluginSessionOpName } from './manifest.js';
+import { CONTRIBUTION_NAME_RE, type PluginHookName, type PluginSessionOpName } from './manifest.js';
 import { createStaging, readStaging } from './staging.js';
 import type {
   ExtensionHookHandler,
@@ -14,6 +14,7 @@ import type {
   HookVote,
 } from '../hooks/types.js';
 import type { ArgSpec, CommandInvoker, CommandKind, CommandResult, CommandRisk } from '../commands/types.js';
+import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import { normalizeCommandName } from '../commands/parse.js';
 import { COMMAND_INVOKERS } from '../commands/types.js';
 
@@ -71,6 +72,50 @@ export interface ToolRegistrationOptions {
   /** Visibility is separately controlled by the Agent's tools allow/deny policy. */
   optional?: boolean;
   executionMode?: 'parallel' | 'sequential';
+}
+
+/** Normalized model entry handed to plugin provider factories (mirrors built-in adapters). */
+export interface PluginProviderModelEntry {
+  name: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  temperature?: number;
+  reasoning?: boolean;
+  input?: Array<'text' | 'image' | 'audio' | 'video'>;
+}
+
+/**
+ * Factory context: everything a plugin needs to build a Core ModelProvider for
+ * one `models.providers` config instance.
+ */
+export interface PluginProviderFactoryContext {
+  /** The `models.providers` key being instantiated. */
+  providerName: string;
+  baseUrl: string;
+  /** `${ENV_VAR}` placeholders already expanded; empty string means keyless. */
+  apiKey: string;
+  models: PluginProviderModelEntry[];
+  defaultModel?: string;
+  timeoutMs?: number;
+  /**
+   * `models.providers[key].options` passed through verbatim. Non-secret tuning
+   * knobs only — secrets belong in `apiKey` (credential channel), never here.
+   */
+  options: Record<string, unknown>;
+}
+
+/**
+ * Provider factory staged by registerProvider. The Host calls it when a
+ * `models.providers` entry references this contribution via its `plugin` field
+ * (startup or config hot-reload), never at registration time.
+ */
+export type PluginProviderFactory = (
+  context: PluginProviderFactoryContext,
+) => ModelProvider | Promise<ModelProvider>;
+
+export interface PluginProviderRegistration {
+  id: string;
+  factory: PluginProviderFactory;
 }
 
 export interface HookRegistrationOptions {
@@ -222,6 +267,24 @@ export class PluginApi {
       throw new Error(`Plugin "${this.id}" registered an invalid service timeout`);
     }
     readStaging(this).services.push({ ...registration });
+  }
+
+  /**
+   * Stage a model Provider factory. The Host instantiates it when a
+   * `models.providers` entry references this id via its `plugin` field.
+   *
+   * @param id - Stable provider id (globally unique across plugins, like services)
+   * @param factory - Builds a Core ModelProvider for one config instance
+   */
+  registerProvider(id: string, factory: PluginProviderFactory): void {
+    const normalized = id.trim();
+    if (!CONTRIBUTION_NAME_RE.test(normalized) || typeof factory !== 'function') {
+      throw new Error(`Plugin "${this.id}" registered an invalid provider contribution "${id}"`);
+    }
+    if (readStaging(this).providers.some((entry) => entry.id === normalized)) {
+      throw new Error(`Plugin "${this.id}" registered duplicate provider "${normalized}"`);
+    }
+    readStaging(this).providers.push({ id: normalized, factory });
   }
 
   /**

@@ -365,6 +365,14 @@ export class OpenAIProvider implements ModelProvider {
     } else if (cap) {
       body.max_tokens = cap;
     }
+    // thinkingLevel → reasoning_effort（P5 参数映射）；off/undefined 不发送。
+    // 模型明确声明 reasoning:false 时拒绝显式思考请求；未声明不猜测，交服务端裁决
+    if (request.thinkingLevel !== undefined && request.thinkingLevel !== 'off') {
+      if (modelInfo?.reasoning === false) {
+        throw new Error(`Model "${String(body.model)}" declares no reasoning support; cannot honor thinkingLevel "${request.thinkingLevel}"`);
+      }
+      body.reasoning_effort = request.thinkingLevel;
+    }
     if (request.tools && request.tools.length > 0) {
       // 兼容接口可能拒绝 maxLength 等未知 schema 关键字
       body.tools = request.tools.map((tool) => {
