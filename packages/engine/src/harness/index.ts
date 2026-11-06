@@ -551,6 +551,28 @@ export type { SessionSwitchRecord } from './session/types.js';
 export type { RunAuditRecord } from './activation/types.js';
 export { readSessionCompact, writeSessionCompact } from './session/compact.js';
 export { compactStateKey } from './context/compact-key.js';
+export {
+  JsonlTransformStore,
+  InMemoryTransformStore,
+  resolveSessionTransformPaths,
+  copySessionTransformDir,
+  removeSessionTransformDir,
+  scanOrphanSessionTransform,
+} from './session/transform-store.js';
+export { foldTransformView } from './context/transform/fold.js';
+export { anchorFor, anchorRange, resolveAnchor, resolveRun, canonicalMessageHash } from './context/transform/anchors.js';
+export { legacySnapshotToRecords } from './context/transform/migrate.js';
+export type {
+  TransformRecord,
+  TransformRun,
+  TransformLedger,
+  TransformStore,
+  NewTransformRecord,
+  MessageAnchor,
+  TransformRecordType,
+  TransformPlaceholder,
+  TransformRecordMeta,
+} from './context/transform/types.js';
 
 // ── Config Bridge ──
 // (exported from agent-building above)

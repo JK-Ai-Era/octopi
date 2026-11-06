@@ -174,7 +174,7 @@ describe('方案 E：turn 内禁 LLM 摘要', () => {
 });
 
 describe('审查修复：粘滞增量 / isMidTurn 注入 / 空丢弃', () => {
-  it('粘滞重建保留摘要覆盖点之后的增量（不丢 tail 窗外新消息）', async () => {
+  it('记录覆盖点之后的增量逐字保留（不丢 tail 窗外新消息）', async () => {
     const { DefaultContextEngine: Eng } = await import(
       '@octopi-agent/engine/harness/context/default-context-engine.js'
     );
@@ -204,6 +204,7 @@ describe('审查修复：粘滞增量 / isMidTurn 注入 / 空丢弃', () => {
       loadCompactState: async () => ({
         summary: '[Conversation Summary]\n### Done\n- prefix work',
         lastProactiveMessageCount: coverCount,
+        lastProactiveCoverEnd: coverCount,
         lastProactiveTokens: 50,
       }),
     });
@@ -211,10 +212,51 @@ describe('审查修复：粘滞增量 / isMidTurn 注入 / 空丢弃', () => {
     const text = after.messages.map((m) =>
       typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? (m as { toolResults?: unknown }).toolResults),
     ).join('\n');
-    // 粘滞视图必须含摘要 + 增量痕迹（不得退回「只有 head+旧摘要+tail」）
+    // 记录视图必须含摘要 + 增量痕迹（不得退回「只有 head+旧摘要+tail」）
     expect(text).toContain('Conversation Summary');
     expect(text).toMatch(/inc-\d+-/);
     // 覆盖点之后的近期增量应可核验
+    expect(text).toContain('inc-19-');
+  });
+
+  it('快照缺 coverEnd（覆盖未知）：不虚报覆盖，全部原文可见（宁胖不丢）', async () => {
+    const { DefaultContextEngine: Eng } = await import(
+      '@octopi-agent/engine/harness/context/default-context-engine.js'
+    );
+    const engine = new Eng({
+      proactiveCompactRatio: 0,
+      proactiveCooldownMs: 0,
+      targetTokens: 1_000,
+      compactFallbackRatio: 1.5,
+      protectFirstN: 2,
+      protectLastN: 4,
+    });
+
+    const prefix: Message[] = [userMsg('job')];
+    for (let i = 0; i < 5; i++) prefix.push(...toolTurn(i, bigBody(i)));
+    const coverCount = prefix.length;
+    const increments: Message[] = [];
+    for (let i = 10; i < 20; i++) increments.push(...toolTurn(i, `inc-${i}-` + 'y'.repeat(100)));
+
+    const after = await engine.assemble({
+      sessionId: 's-inc2',
+      messages: [...prefix, ...increments],
+      systemPrompt: 'sys',
+      tools: [],
+      summarize: async () => 'should-not-run',
+      contextWindow: 1_000_000,
+      loadCompactState: async () => ({
+        summary: '[Conversation Summary]\n### Done\n- prefix work',
+        lastProactiveMessageCount: coverCount,
+        lastProactiveTokens: 50,
+      }),
+    });
+
+    const text = after.messages.map((m) =>
+      typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+    ).join('\n');
+    // 覆盖未知 = 不得声称任何区间已覆盖：原文全量可见（含 prefix 正文与增量）
+    expect(text).toContain('export const v0');
     expect(text).toContain('inc-19-');
   });
 

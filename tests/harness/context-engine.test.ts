@@ -141,9 +141,11 @@ describe('DefaultContextEngine', () => {
     });
 
     it('should reassemble: head + compressed overflow + tail', async () => {
+      // 身份契约：MessageSelector 返回的必须是输入数组的同引用对象（产品翻译按身份定锚）
       const headMsgs = makeMessages(2, 'head');
       const overflowMsgs = makeMessages(5, 'overflow');
       const tailMsgs = makeMessages(2, 'tail');
+      const messages = [...headMsgs, ...overflowMsgs, ...tailMsgs];
       const compressedMsg = makeMessages(1, 'compressed')[0];
 
       const mockSelector: MessageSelector = {
@@ -173,10 +175,10 @@ describe('DefaultContextEngine', () => {
         compactEngine: mockCompact,
       });
 
-      const params = makeAssembleParams();
+      const params = makeAssembleParams({ messages });
       const result = await engine.assemble(params);
 
-      // 结果应该包含 system prompt + head + compressed + tail
+      // 结果 = fold 视图：head + 覆盖占位（产物文本）+ tail
       const messageContents = result.messages
         .filter(m => m.role !== 'system')
         .map(m => m.content);
@@ -184,7 +186,7 @@ describe('DefaultContextEngine', () => {
       // head 消息应该存在
       expect(messageContents).toContain('head 0');
       expect(messageContents).toContain('head 1');
-      // 压缩后的消息应该存在
+      // 压缩后的占位消息应该存在
       expect(messageContents).toContain('compressed 0');
       // tail 消息应该存在
       expect(messageContents).toContain('tail 0');

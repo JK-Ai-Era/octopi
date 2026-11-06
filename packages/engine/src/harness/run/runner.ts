@@ -55,7 +55,7 @@ import {
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
-import { readSessionCompact, writeSessionCompact } from '../session/compact.js';
+import { readSessionCompact } from '../session/compact.js';
 import type { ContextCompactSnapshot } from '../context/types.js';
 import { toCompactTransport } from '../context/capabilities/compact/types.js';
 import {
@@ -2538,9 +2538,8 @@ export class SessionAwareRunner {
       sm.transition('idle');
       session.meta.status = sm.state;
       session.meta.updatedAt = Date.now();
-      // 压缩状态写回 Session（E4 分桶 + primary 兼容视图）
-      const compactSnap = this.agent.getSessionCompactState(sessionId, _agentId);
-      writeSessionCompact(session, _agentId, compactSnap);
+      // 压缩覆盖/摘要正文由转换记录账本持久（sessions/<sid>/transform/）；
+      // 旧 contextCompact 快照停写（仅作迁移输入读取，见引擎 loadCompactState）。
       // 上下文用量随会话持久化：重开会话恢复显示（不靠 UI 用末页消息猜）。
       // 三量纲分账（P0-C）：promptTokensActual=实测单源（无实测不写、保留旧值不动）、
       // viewTokensEst=请求视图估算、rawTokens=全量原文估算；compact 视图值不写入。
@@ -2771,6 +2770,8 @@ export class SessionAwareRunner {
         compactTargetTokens?: number;
         /** task 快照：交接式摘要指令尾部注入 */
         taskSnapshot?: string;
+        /** 旧压缩快照读口（迁移输入） */
+        loadCompactState?: (sessionId: string) => Promise<import('../context/types.js').ContextCompactSnapshot | undefined> | import('../context/types.js').ContextCompactSnapshot | undefined;
       }) => Promise<import('../context/capabilities/compact/types.js').CompactOutcome>;
       summarize?: import('../context/types.js').SummarizeFunction;
       compactTargetTokens?: number;
@@ -2801,21 +2802,11 @@ export class SessionAwareRunner {
         compactTargetTokens: options.compactTargetTokens,
         // 交接式摘要素材：task 快照（裸状态块，不含对话引导语）随指令尾部注入
         taskSnapshot: renderSessionTasksInjection(session.tasks ?? [], { includeGuidance: false }),
+        // 旧压缩快照读口（迁移输入）：manual 路也要先迁移再产记录，防旧快照在
+        // 下次 assemble 迁移时以更高 seq 反向覆盖新记录
+        loadCompactState: () => readSessionCompact(session, agentId),
       });
-      if (result.ok && result.summary && result.compacted) {
-        // 手抄映射表（result 形状 ≠ 快照形状）：ContextCompactSnapshot 加字段时必须
-        // 同步此处，否则持久快照静默丢字段（审查 M2）。收口项：由引擎直接回传快照。
-        const snap: ContextCompactSnapshot = {
-          summary: result.summary,
-          lastProactiveMessageCount: session.messages.length,
-          lastProactiveCoverEnd: result.coveredMessageCount,
-          lastProactiveTokens: result.tokensAfter,
-        };
-        this.agent.setSessionCompactState(sessionId, agentId, snap);
-        writeSessionCompact(session, agentId, snap);
-        session.meta.updatedAt = Date.now();
-        await this.store.save(sessionId, session);
-      }
+      // 压缩产物 = 引擎内持久转换记录（append-only）；旧 contextCompact 快照不再写回。
 
       // 传输投影：view 不过锁面（大对象，UI 无需）——唯一投影实现在能力层
       //（禁止手抄字段表：新可选字段会静默丢失，评审 P3 major）

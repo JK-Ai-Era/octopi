@@ -151,6 +151,7 @@ export type {
 export {
   scanOrphanSessionUndo,
 } from './harness/extension/execution-environment/undo-log.js';
+export { scanOrphanSessionTransform } from './harness/session/transform-store.js';
 export type {
   SessionUndoPaths,
   FileUndoEntry,

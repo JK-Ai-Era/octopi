@@ -110,6 +110,33 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.102.0 (2026-11-06)
+
+### feat(engine): persistent transform records — compaction products become durable facts
+
+「压了又涨」的数据模型级根治（arch/context-size-accounting.md §10.18）：
+
+- 压缩/裁剪产物 = **持久转换记录**：append-only、生成即永久生效、回填只在显式撤销（`revokeTransformRecord`）；装配 = 原文 + 有效记录的**确定性 fold**——同一 (messages, ledger) 恒等同视图，没有游标、没有增量抢救。
+- per-agent 键控（sessionId, agentId，E4 同构，跨 agent 不串视图）；坐标 = 消息内容锚点（hash + occurrence，数组下标退场），跨重启 / fork / 编辑重发截断存活。
+- 存储与 undo 同基座：`sessions/<sid>/transform/<agent>.jsonl` + 内容寻址 `blobs/<sha256>`（blob 先于行；损坏行跳过；blob 丢失告警后记录不生效——降级方向恒为原文可见）。
+- fresh 门控只决定**新记录的类型**（summary / degrade 诚实分类），不再决定旧记录是否生效；「宁可胖不丢」在装配层退场（内容可追溯性不变：原文在 jsonl、撤销是显式动作）。
+- legacy `contextCompact` 快照一次性迁移（[headEnd, coverEnd) 映射，迁移前后视图等价、幂等门=账本非空）；旧快照停写；session fork 复制账本（复制失败降级由快照迁移兜底）。
+- 九条红线测试：跨装配永久生效 / 跨 agent 不串视图 / 锚点跨重启与 fork 存活 / 回填只在显式撤销 / 伪摘要禁冒充 summary / 迁移前后视图等价 / 机械降级不吞既有摘要 / 重启增长门对称 / 流截断逐 run 生效。
+
+### fix(engine): step-4 评审处置（del-70be9298，F1–F13 全处置）
+
+- **F1** 机械降级记录不得接管既有记录区间（摘要静默失忆回归，红线 7 钉）；**F2** fullTokens 随记录持久 + 重启门基排除 overflow 轮（增长门重启后不再静默失效/被饿死，红线 8 钉）；**F3** fold 逐 run 生效（编辑重发截断后残存覆盖不整记录回填，红线 9 钉）。
+- **F4** 持久面全路径接通：config-bridge / CLI 穿 sessionsDir，InMemory 降级一次性告警（不再静默空转）；**F5** store append 互斥 + load 按 seq 排序（seq 竞态封死）；**F6** 会话删除清理 `transform/` + doctor 孤儿扫描（判据=会话已删账本仍在）。
+- **F7** blob 丢失如实告警 + `hadEntries` 迁移幂等门（blob 全丢不重放旧快照）；**F8** occurrence 计数与解析对称（跳 ephemeral）；**F9** 占位计数措辞改 entries 口径、fold 注释纠正、残缺快照零覆盖摘要渲染、孤儿告警按 session|agent|seq 去重；**F10** 显式撤销公开口；**F11–F13** 测试诚实性修正（反真空、陈旧标题、fork 助手可测化、blob 丢失断言告警）。
+
+**Breaking notes**：
+- `AssembleResult.compactState` 删除——压缩覆盖/摘要正文由转换记录账本持久；`session.contextCompact/contextCompacts` 只作迁移输入（停写）。
+- manual/structuralCompact 的 `tokensBefore/After` 改「messages-only 未校准、同集合视图前后对」（与 `context.compact.*` 事件同口径，消除 UI「消息估算」同名两义）；`AssembleResult.readingSource`（calibrated/anchored/raw）新增并入 context pressure 快照。
+- `SelectResult` 新增身份契约：`kept/overflow/tail` 必须是入参同引用（自定义 MessageSelector 返回拷贝会让产物翻译失锚）。
+- 机械占位文案 "N earlier messages" → "N earlier entries"（视图条目口径；记录 `covers` 才是原文口径的审计真相）。
+
+---
+
 ## v0.101.4 (2026-11-06)
 
 ### fix(engine): honest compact-event gauges and calibration fail-safe (option B)

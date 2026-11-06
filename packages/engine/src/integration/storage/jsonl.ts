@@ -280,17 +280,19 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         await unlink(p);
       }
     }
-    // OP-15：会话附件目录随 session 删除清理
+    // OP-15：会话附件目录随 session 删除清理；转换记录同理（F6：摘要正文含用户内容）
     try {
       const { rm } = await import('node:fs/promises');
       const { join } = await import('node:path');
       const { toSessionFileName } = await import('@octopi-agent/core/session-filename.js');
-      await rm(join(this.sessionsDir, toSessionFileName(sessionId), 'attachments'), {
-        recursive: true,
-        force: true,
-      });
+      for (const dir of ['attachments', 'transform']) {
+        await rm(join(this.sessionsDir, toSessionFileName(sessionId), dir), {
+          recursive: true,
+          force: true,
+        });
+      }
     } catch {
-      // 附件清理失败不阻断 session 删除；残留由磁盘清理兜底
+      // 附件/转换记录清理失败不阻断 session 删除；残留由磁盘清理兜底
     }
     const metaPath = this.metaFile();
     if (await fileExists(metaPath)) {

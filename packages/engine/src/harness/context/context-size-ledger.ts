@@ -204,12 +204,28 @@ export class ContextSizeLedger {
     rawTokens: number,
     anchor?: { actual: number; raw: number; modelKey: string },
   ): number {
+    return this.decisionTokensWithSource(modelKey, rawTokens, anchor).tokens;
+  }
+
+  /**
+   * decisionTokens 的带来源变体（可观测：pressure 快照 readingSource，评审 F5）。
+   *
+   * @param modelKey provider/model 标识
+   * @param rawTokens 本次请求口径的未校准估算
+   * @param anchor 实测锚（冻结对）
+   * @returns 决策读数 + 读数来源（calibrated=校准 / anchored=实测锚定 / raw=裸估算）
+   */
+  decisionTokensWithSource(
+    modelKey: string,
+    rawTokens: number,
+    anchor?: { actual: number; raw: number; modelKey: string },
+  ): { tokens: number; source: 'calibrated' | 'anchored' | 'raw' } {
     const trusted = (this.samplesByModel.get(modelKey) ?? 0) >= 2 && !this.isDegraded(modelKey);
-    if (trusted) return this.calibrate(modelKey, rawTokens);
+    if (trusted) return { tokens: this.calibrate(modelKey, rawTokens), source: 'calibrated' };
     if (anchor && anchor.modelKey === modelKey && anchor.actual > 0 && anchor.raw > 0) {
-      return Math.ceil((anchor.actual * rawTokens) / anchor.raw);
+      return { tokens: Math.ceil((anchor.actual * rawTokens) / anchor.raw), source: 'anchored' };
     }
-    return rawTokens;
+    return { tokens: rawTokens, source: 'raw' };
   }
 
   /**

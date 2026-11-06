@@ -94,7 +94,7 @@ export function buildToolCallLedger(messages: Message[]): string {
  * @returns 账本视图消息
  */
 export function asLedgerMessage(ledger: string, removedCount: number): Message {
-  const head = `${MECHANICAL_NOTICE_TRUNCATED} ${removedCount} earlier messages replaced by a tool-call ledger to fit context window]`;
+  const head = `${MECHANICAL_NOTICE_TRUNCATED} ${removedCount} earlier entries replaced by a tool-call ledger to fit context window]`;
   const body = ledger
     ? `[Tool call ledger — do NOT redo these unless explicitly asked]\n${ledger}\n[Tool results and arguments were dropped; re-read files/sources if you need their content. Check session task list via task_* before continuing]`
     : '[No tool calls in the dropped range. Check session task list via task_* before continuing]';

@@ -272,6 +272,11 @@ async function buildAgent(
   await wireAgentBuilder(builder, {
     model: provider,
     agentId: agentConfig.id,
+    // 转换记录账本持久面（评审 F4）：sessionsDir 穿到引擎工厂；缺省时引擎为
+    // 进程内存 store（首条记录有一次性告警，不静默）
+    extraRunnerConfig: shared.runnerConfig?.sessionsDir
+      ? { sessionsDir: shared.runnerConfig.sessionsDir }
+      : undefined,
     workspace: agentConfig.workspace,
     // legacy：string persona 等价 home（config-bridge 显式决定，不进 wire 隐式规则）
     home:

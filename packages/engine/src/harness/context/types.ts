@@ -129,8 +129,8 @@ export interface AssembleParams {
   /** 压缩进度回调（可选；UI / 可观测） */
   emit?: ContextEmitFn;
   /**
-   * 从持久层加载压缩状态快照（进程重启恢复）。
-   * 引擎内存态为空时调用一次。
+   * 旧压缩快照读口（ContextCompactSnapshot，迁移输入）：转换记录账本为空且快照
+   * 存在时一次性迁移为初始记录（幂等）。迁移后快照不再更新。
    */
   loadCompactState?: (
     sessionId: string,
@@ -169,12 +169,12 @@ export interface AssembleResult {
   /** 被丢弃/压缩的信息摘要（告诉模型"你失去了什么"） */
   droppedSummary?: string;
   /**
-   * 当前会话压缩摘要正文（previousSummary）。
-   * 供调用方写回 Session 持久化；无摘要时为 undefined。
+   * 当前会话压缩摘要正文（最新 summary 型转换记录的文本）。
+   * 供调用方展示；无摘要时为 undefined。
    */
   summary?: string;
-  /** 可持久化压缩状态快照（含 lastProactiveMessageCount 等） */
-  compactState?: ContextCompactSnapshot;
+  /** estimatedTokens 的读数来源（pressure 快照可观测，评审 F5）：calibrated/anchored/raw */
+  readingSource?: 'calibrated' | 'anchored' | 'raw';
   /** 不可信内容范围 */
   untrustedRanges?: Array<{ start: number; end: number; source: string }>;
 }
@@ -248,11 +248,12 @@ export interface ContextEngine {
 // ── 消息选择器 ──
 
 export interface SelectResult {
-  /** 要保留的消息 */
+  /** 要保留的消息。**身份契约**：必须是入参数组的同引用对象（转换记录按对象身份
+   *  把产物翻译回原始区间；返回拷贝会让翻译失锚） */
   kept: Message[];
-  /** 溢出的消息（需要压缩） */
+  /** 溢出的消息（需要压缩）。同上：同引用 */
   overflow: Message[];
-  /** 尾部保护的消息 */
+  /** 尾部保护的消息。同上：同引用 */
   tail: Message[];
   /** 尾部 token 数 */
   tailTokens: number;

@@ -534,9 +534,9 @@ export class AgentBuilder {
   private _contextEngine?: ContextEngine;
   private _summarize?: SummarizeFunction;
   /** 按 session 键控的 context 压力（由 convertToLlm 更新；共享 Agent 下并发会话不串号） */
-  private _contextPressureBySession = new Map<string, { estimatedTokens: number; contextWindow?: number }>();
+  private _contextPressureBySession = new Map<string, { estimatedTokens: number; contextWindow?: number; readingSource?: 'calibrated' | 'anchored' | 'raw' }>();
   /** 兜底：无 sessionId 的调用方（仅 advisory 用途；并发下可能串号，不得用于持久化） */
-  private _lastContextPressure?: { estimatedTokens: number; contextWindow?: number };
+  private _lastContextPressure?: { estimatedTokens: number; contextWindow?: number; readingSource?: 'calibrated' | 'anchored' | 'raw' };
   /** 为 true 时禁止自动挂默认 summarize（测试/特殊场景） */
   private _disableAutoSummarize = false;
   private _events?: EventBus;
@@ -1821,6 +1821,13 @@ export class AgentBuilder {
     // ContextEngine 接线：经 convertToLlm 调用 assemble
     // 模型快照只读 ALS（Runner 每 run resolve 一次）；无 snapshot 时才回退 agent.model
     const contextEngine = this._contextEngine ?? new DefaultContextEngine({
+      ...(this._runnerConfig?.sessionsDir
+        ? {
+            transformStore: new (await import('../session/transform-store.js')).JsonlTransformStore({
+              sessionsDir: this._runnerConfig.sessionsDir,
+            }),
+          }
+        : {}),
       ...(this._runnerConfig?.extensionHooks === undefined ? {} : {
         extensionHooks: this._runnerConfig.extensionHooks,
         extensionIdentity: { sessionId: 'default', agentId: busAgentId },
@@ -1903,10 +1910,8 @@ export class AgentBuilder {
           bus.emit(event);
         },
       });
-      // 压缩状态回写 Agent 内存桥（E4 键 = sessionId × agentId）
-      if (result.compactState) {
-        agent.setSessionCompactState(sessionId, agentId, result.compactState);
-      }
+      // 压缩覆盖/摘要正文由转换记录账本持久（记录先落盘后发视图）；
+      // 旧 compactState 快照回写已随记录模型退役（迁移读口仍在 run 起点）。
       // Observer P1：LLM 实际输入视图（ContextEngine 出口）
       // 真源 = hub.recordLlmMessages；事件只带 summarizeLlmMessages，避免双套统计/覆盖全文
       if (this._observerHub?.isEnabled() && this._observerHub.getConfig().channels['context.llm']) {
@@ -1934,8 +1939,13 @@ export class AgentBuilder {
         });
       }
       // 保存 context 压力（供 harness.getContextPressure(sessionId) 使用）：
-      // 按 session 键控——共享 Agent 单例下并发会话各取自己的估算，不串号
-      const pressure = { estimatedTokens: result.estimatedTokens, contextWindow };
+      // 按 session 键控——共享 Agent 单例下并发会话各取自己的估算，不串号。
+      // readingSource（评审 F5）：读数是校准/实测锚定/裸估算——生产日志可判定读数可信度
+      const pressure = {
+        estimatedTokens: result.estimatedTokens,
+        contextWindow,
+        readingSource: result.readingSource,
+      };
       this._contextPressureBySession.set(sessionId, pressure);
       this._lastContextPressure = pressure;
 

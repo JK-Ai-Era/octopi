@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import { InMemoryTransformStore } from '@octopi-agent/engine/harness/session/transform-store.js';
 import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
 import { DefaultSkillManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/manager.js';
 import type { ModelProvider, LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
@@ -102,12 +103,14 @@ describe('Skill 索引进 system prompt', () => {
 });
 
 describe('压缩摘要 Session 持久化', () => {
-  it('assemble 返回 summary 并可经 loadCompactState 恢复', async () => {
+  it('assemble 返回 summary 并可经转换记录账本恢复（进程重启）', async () => {
+    const store = new InMemoryTransformStore();
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
+      transformStore: store,
     });
     const summarize = async (_m: LLMMessage[]) => '## Conversation Summary\npersist-me';
     const msgs: Message[] = [];
@@ -124,16 +127,19 @@ describe('压缩摘要 Session 持久化', () => {
       summarize,
     });
     expect(first.summary).toContain('persist-me');
-    expect(first.compactState?.lastProactiveMessageCount).toBe(30);
+    const ledger = await store.load('s-persist', '');
+    expect(ledger.records).toHaveLength(1);
+    expect(ledger.records[0]!.type).toBe('summary');
+    expect(ledger.records[0]!.meta.messageCount).toBe(30);
 
-    // 新引擎实例（模拟进程重启），靠 loadCompactState 恢复 count + summary
+    // 新引擎实例（模拟进程重启）：同一账本恢复覆盖 + 摘要
     const engine2 = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
+      transformStore: store,
     });
-    let loaded = false;
     let summarizeCalls = 0;
     const countingSummarize = async (m: LLMMessage[]) => {
       summarizeCalls += 1;
@@ -141,29 +147,26 @@ describe('压缩摘要 Session 持久化', () => {
     };
     const second = await engine2.assemble({
       sessionId: 's-persist',
-      // 仅 +1 条：应走缓存重建，不再打 LLM
+      // 仅 +1 条：应走复用（fold），不再打 LLM
       messages: [...msgs, userMsg('tiny')],
       systemPrompt: 'sys',
       tools: [],
       tokenBudget: 4000,
       summarize: countingSummarize,
-      loadCompactState: (sid) => {
-        loaded = sid === 's-persist';
-        return first.compactState;
-      },
     });
-    expect(loaded).toBe(true);
     expect(second.summary).toContain('persist-me');
     expect(summarizeCalls).toBe(0);
   });
 
-  it('多轮压缩：count 只在 LLM 摘要时推进，缓存重建不重置', async () => {
+  it('多轮压缩：count 只在完成的压缩轮推进，复用（fold）不产新记录', async () => {
+    const store = new InMemoryTransformStore();
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 20, // minNewForResummarize = max(3, 5) = 5
       proactiveCooldownMs: 0, // 本用例验证多轮 LLM 摘要，关闭冷却
+      transformStore: store,
     });
     let summarizeCalls = 0;
     const summarize = async (_m: LLMMessage[]) => {
@@ -186,10 +189,12 @@ describe('压缩摘要 Session 持久化', () => {
       summarize,
     });
     expect(summarizeCalls).toBe(1);
-    expect(r1.compactState?.lastProactiveMessageCount).toBe(30);
+    const after1 = await store.load('s-multi', '');
+    expect(after1.records).toHaveLength(1);
+    expect(after1.records[0]!.meta.messageCount).toBe(30);
     expect(r1.summary).toContain('v1');
 
-    // 连续 4 次缓存重建（每轮 +1）：不应再打 LLM，count 保持 30
+    // 连续 4 次复用（每轮 +1）：不应再打 LLM，也不产新记录（count 基数保持 30）
     let msgs = base;
     for (let i = 0; i < 4; i++) {
       msgs = [...msgs, userMsg(`t${i}`)];
@@ -202,7 +207,8 @@ describe('压缩摘要 Session 持久化', () => {
         summarize,
       });
       expect(summarizeCalls).toBe(1);
-      expect(r.compactState?.lastProactiveMessageCount).toBe(30);
+      expect((await store.load('s-multi', '')).records).toHaveLength(1);
+      expect(r.summary).toContain('v1');
     }
 
     // 第 5 条增量：newSinceLast=5 → 再摘要
@@ -216,16 +222,19 @@ describe('压缩摘要 Session 持久化', () => {
       summarize,
     });
     expect(summarizeCalls).toBe(2);
-    expect(r2.compactState?.lastProactiveMessageCount).toBe(35);
+    const after2 = await store.load('s-multi', '');
+    expect(after2.records).toHaveLength(2);
+    expect(after2.records[1]!.meta.messageCount).toBe(35);
     expect(r2.summary).toContain('v2');
 
-    // 模拟进程重启：用最后一次 compactState 恢复
+    // 模拟进程重启：同一账本恢复（增长门基数 35 从记录 meta 恢复）
     const engine2 = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 20,
       proactiveCooldownMs: 0,
+      transformStore: store,
     });
     let restartCalls = 0;
     const r3 = await engine2.assemble({
@@ -238,15 +247,14 @@ describe('压缩摘要 Session 持久化', () => {
         restartCalls += 1;
         return '## should-not-fire';
       },
-      loadCompactState: () => r2.compactState,
     });
-    // +1 条 → 缓存重建，不打 LLM
+    // +1 条 → 复用（fold），不打 LLM、不产新记录
     expect(restartCalls).toBe(0);
     expect(r3.summary).toContain('v2');
-    expect(r3.compactState?.lastProactiveMessageCount).toBe(35);
+    expect((await store.load('s-multi', '')).records).toHaveLength(2);
   });
 
-  it('Runner 路径：session.contextCompact 播种并在 save 前回写', async () => {
+  it('Agent 桥：legacy 快照播种（迁移输入）在 convertToLlm 后不被改写', async () => {
     const provider = mockProvider();
     const sessions = new Map<string, SessionData>();
     const store: SessionStore<SessionData> = {
