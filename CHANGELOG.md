@@ -110,7 +110,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.101.2 (2026-11-06)
+## v0.101.3 (2026-11-06)
+
+### fix(engine): pair calibration samples with fresh usage and gate mispairing poison
+
+2026-11-06 事故（真实用量 25% 被报「85% 上下文压力」停跑、compact 双连发）的校准侧根因修复：ratio 被「陈旧实测 × 当步估算」错配样本毒化（raw=0.085/0.088/11.014 跨度 129× 的双向垃圾样本被夹取抹进 EMA，ratio 在 clamp 两端震荡、决策读数虚高 3 倍）。
+
+- **喂样新鲜配对**：`notifyAfterStep` 只传本步 usage；缺 usage（失败/重试/中止步）传 undefined 不喂样，`lastUsage` 不再漏入校准。展示/落盘的 `writer=stale` 语义不变。
+- **样本门 + 逃逸重锚**：偏离已学 ratio 超 4× 的样本拒绝入账（`rejectedCount(modelKey)` 可观测）；连续 3 个同向且内部一致（max/min ≤ 2）的被拒簇视为 regime shift、以簇中心重锚——真值永不被永久锁死（防评审 F1 锁死路径），交替垃圾簇内永不一致、进不来。
+- **账本口径统一**：step 账本与兜底合成记录不再拿 `lastUsage` 冒充本步用量（缺 usage 留空）。
+- **告警**：reject/clamp/rebase 分事件类限频（拒绝不被夹取告警吞掉）；拒绝告警打 gate 区间与 learned 值。
+
+**Breaking notes**：`[ctx-cal]` 日志文本格式变化（`ratio sample <class>: …`）；`sampleCount` 只计已入账样本；step 记录 `usage` 在 provider 未回报时留空（此前误写上一步实测）。对抗性评审 F1–F10 全处置（含逃逸重锚/交替垃圾不逃逸/4× 边界/runner 配对同一性红线）。
+
+---
+
+
 
 ### fix(engine): knowledge grounding 装载预算换统一估算尺（一把尺审计收尾）
 

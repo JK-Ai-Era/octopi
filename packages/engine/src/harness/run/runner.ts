@@ -2287,7 +2287,11 @@ export class SessionAwareRunner {
           }
           llmCallIndexInUserTurn += 1;
           const stepMessages = runContext.messages.slice(stepStartIndex);
-          await this.agent.notifyAfterStep(lastUsage, stepMessages);
+          // 校准样本必须新鲜配对（arch §10.14）：只传本步 usage。缺 usage（失败/重试/
+          // 中止步）传 undefined——引擎不喂 observe。lastUsage 是展示口径的「最近实测」
+          // （stale 语义见上方 promptTokensActual），拿它配当步估算分母会产出错配
+          // ratio 样本（0.088/11.014 双向垃圾样本的源头）。
+          await this.agent.notifyAfterStep(loopEvent.usage, stepMessages);
           stepStartIndex = runContext.messages.length;
           // 账本正文 = adaptLoopEvent 按调用算好的快照（失败轮只有本次调用的部分流出）；
           // 失败轮必须带 error 标记，空正文也留账（审计价值），不得拿历史内容凑数
@@ -2298,8 +2302,14 @@ export class SessionAwareRunner {
               id: `step_${Date.now()}`,
               inputCount: Math.max(0, session.messages.length - 1),
               output: { role: 'assistant', content, timestamp: Date.now(), agentId: _agentId },
-              // 失败轮没有 usage（loop 的 error turn_end 不带）；不得写上一次调用的用量
-              ...(turnFailed ? { error: true as const } : { usage: lastUsage }),
+              // 失败轮没有 usage（loop 的 error turn_end 不带）；不得写上一次调用的用量。
+              // 非失败轮同理只记本步 usage——缺 usage（provider 未回报）留空，禁止拿
+              // lastUsage（可能属于别步）冒充本步用量（评审 F7）。
+              ...(turnFailed
+                ? { error: true as const }
+                : loopEvent.usage
+                  ? { usage: loopEvent.usage }
+                  : {}),
               durationMs: 0,
               model: effectiveRunConfig.model ?? 'unknown',
               timestamp: Date.now(),
@@ -2458,7 +2468,9 @@ export class SessionAwareRunner {
             id: `step_${Date.now()}`,
             inputCount: Math.max(0, session.messages.length - 1),
             output: { role: 'assistant', content: fallbackContent, timestamp: Date.now(), agentId: _agentId },
-            usage: lastUsage,
+            // 兜底合成记录：失败轮不写 usage（与上文账本口径一致，禁止拿别步用量凑数）；
+            // 非失败轮只在本 Run 确有实测时带上（评审 F7）
+            ...(!failedRun && lastUsage ? { usage: lastUsage } : {}),
             durationMs: 0,
             model: effectiveRunConfig.model ?? 'unknown',
             timestamp: Date.now(),

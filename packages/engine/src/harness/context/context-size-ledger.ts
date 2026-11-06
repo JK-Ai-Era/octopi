@@ -10,9 +10,15 @@
  *
  * 设计要点（拍板）：
  * - ratio **按 model 分 key**（跨 session 共享统计，收敛快）；
- * - EMA 平滑 0.7 新 / 0.3 旧；样本先夹取再入平滑（单次野值不掀桌）；
- * - clamp 放宽至 [0.25, 4.0]，越界**告警而非静默夹取**——夹取会让系统性偏差永久隐身；
- * - 告警按 (session, model) 限频 1 条/小时。
+ * - EMA 平滑 0.7 新 / 0.3 旧；
+ * - 夹取带 [0.25, 4.0] = 入账值域：超出即夹取（方向一致的越界样本可学习），越界**告警而非静默**；
+ *   注意偏离门相对「已学 ratio」判，r<1 时带内样本也可能出门——出门不等于越界；
+ * - 偏离门（arch §10.14）：新样本偏离已学 ratio 超 RATIO_SAMPLE_MAX_DEVIATION 倍即**拒绝入账**
+ *   （错配样本如「陈旧 usage × 当步估算」双向拉扯 ratio 震荡，见 2026-11-06 事故）；
+ * - 逃逸重锚（评审 F1）：连续 RATIO_ESCAPE_STREAK 个同向且内部一致的被拒样本 = regime shift
+ *   证据，以簇中心重锚——拒绝零状态变化会把真值永久锁在门外（毒化 bootstrap 后 50 个真样本
+ *   全拒的实测锁死）；交替垃圾内部永不一致、永远进不来；
+ * - 告警按 (session, model, 事件类) 限频 1 条/小时（拒绝告警不被夹取告警吞掉）。
  *
  * 状态为进程内存（ratio 冷启动 1.0，2–3 个样本内收敛）；不落盘。
  */
@@ -24,6 +30,15 @@ import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interface
 /** ratio 夹取边界（拍板：[0.25, 4.0]） */
 export const RATIO_CLAMP_MIN = 0.25;
 export const RATIO_CLAMP_MAX = 4.0;
+
+/** 样本偏离门：新样本偏离已学 ratio 超该倍数（任一方向）即拒绝入账（arch §10.14） */
+export const RATIO_SAMPLE_MAX_DEVIATION = 4.0;
+
+/** 逃逸重锚：连续同向且内部一致的被拒簇达该长度即视为 regime shift（评审 F1） */
+export const RATIO_ESCAPE_STREAK = 3;
+
+/** 逃逸簇内部一致性：max/min ≤ 该值才算「同向一致」（交替垃圾永不一致） */
+export const RATIO_ESCAPE_CONSISTENCY = 2.0;
 
 /** 越界告警限频：每 (session, model) 每小时 1 条 */
 export const RATIO_WARN_INTERVAL_MS = 3_600_000;
@@ -38,6 +53,8 @@ export interface SizeLedgerWarn {
 export class ContextSizeLedger {
   private ratioByModel = new Map<string, number>();
   private samplesByModel = new Map<string, number>();
+  private rejectedByModel = new Map<string, number>();
+  private rejectStreaks = new Map<string, { count: number; min: number; max: number }>();
   private lastWarnAt = new Map<string, number>();
 
   constructor(private readonly warn: SizeLedgerWarn = (m) => console.warn(m)) {}
@@ -53,12 +70,44 @@ export class ContextSizeLedger {
   observe(modelKey: string, actual: number, view: number, opts?: { sessionId?: string; now?: number }): void {
     if (!(actual > 0) || !(view > 0)) return;
     const raw = actual / view;
-    if (raw < RATIO_CLAMP_MIN || raw > RATIO_CLAMP_MAX) {
-      this.warnOnce(opts?.sessionId, modelKey, raw, opts?.now);
-    }
-    // 越界样本夹取后入平滑（防单次野值掀桌）；越界本身由告警负责可见
-    const clamped = Math.min(RATIO_CLAMP_MAX, Math.max(RATIO_CLAMP_MIN, raw));
     const prev = this.ratioByModel.get(modelKey) ?? 1.0;
+    const hasSamples = (this.samplesByModel.get(modelKey) ?? 0) > 0;
+    const outsideGate =
+      hasSamples &&
+      (raw > prev * RATIO_SAMPLE_MAX_DEVIATION || raw < prev / RATIO_SAMPLE_MAX_DEVIATION);
+    if (outsideGate) {
+      this.rejectedByModel.set(modelKey, (this.rejectedByModel.get(modelKey) ?? 0) + 1);
+      const streak = this.rejectStreaks.get(modelKey) ?? { count: 0, min: Number.POSITIVE_INFINITY, max: 0 };
+      streak.count += 1;
+      streak.min = Math.min(streak.min, raw);
+      streak.max = Math.max(streak.max, raw);
+      this.rejectStreaks.set(modelKey, streak);
+      // 逃逸重锚（评审 F1）：连续同向且内部一致的被拒簇 = regime shift 证据（真实换挡或
+      // 新错配源），以簇中心重锚。拒绝零状态变化会把真值永久锁在门外；交替垃圾（0.088↔11.014）
+      // 簇内 max/min 巨大、永不满足一致性，进不来。
+      if (streak.count >= RATIO_ESCAPE_STREAK && streak.max / streak.min <= RATIO_ESCAPE_CONSISTENCY) {
+        const rebase = Math.min(RATIO_CLAMP_MAX, Math.max(RATIO_CLAMP_MIN, (streak.min + streak.max) / 2));
+        this.ratioByModel.set(modelKey, rebase);
+        this.samplesByModel.set(modelKey, (this.samplesByModel.get(modelKey) ?? 0) + 1);
+        this.rejectStreaks.set(modelKey, { count: 0, min: Number.POSITIVE_INFINITY, max: 0 });
+        this.warnOnce(opts?.sessionId, modelKey, raw, opts?.now, 'rebase', `regime shift: rebase learned=${rebase.toFixed(3)}`);
+        return;
+      }
+      this.warnOnce(
+        opts?.sessionId,
+        modelKey,
+        raw,
+        opts?.now,
+        'reject',
+        `rejected（已拒绝入账） learned=${prev.toFixed(3)} gate=[${(prev / RATIO_SAMPLE_MAX_DEVIATION).toFixed(3)}, ${(prev * RATIO_SAMPLE_MAX_DEVIATION).toFixed(3)}]`,
+      );
+      return;
+    }
+    this.rejectStreaks.set(modelKey, { count: 0, min: Number.POSITIVE_INFINITY, max: 0 });
+    if (raw < RATIO_CLAMP_MIN || raw > RATIO_CLAMP_MAX) {
+      this.warnOnce(opts?.sessionId, modelKey, raw, opts?.now, 'clamp', `out of clamp（已夹取入账） clamp=[${RATIO_CLAMP_MIN}, ${RATIO_CLAMP_MAX}]`);
+    }
+    const clamped = Math.min(RATIO_CLAMP_MAX, Math.max(RATIO_CLAMP_MIN, raw));
     this.ratioByModel.set(modelKey, EMA_NEW_WEIGHT * clamped + (1 - EMA_NEW_WEIGHT) * prev);
     this.samplesByModel.set(modelKey, (this.samplesByModel.get(modelKey) ?? 0) + 1);
   }
@@ -79,9 +128,14 @@ export class ContextSizeLedger {
     return this.ratioByModel.get(modelKey) ?? 1.0;
   }
 
-  /** 已学习样本数（收敛观测用） */
+  /** 已学习样本数（收敛观测用；只计已入账样本） */
   sampleCount(modelKey: string): number {
     return this.samplesByModel.get(modelKey) ?? 0;
+  }
+
+  /** 被样本门拒绝的样本数（校准停学/锁死观测与 fail-safe 判定用） */
+  rejectedCount(modelKey: string): number {
+    return this.rejectedByModel.get(modelKey) ?? 0;
   }
 
   /**
@@ -106,15 +160,22 @@ export class ContextSizeLedger {
     };
   }
 
-  /** 越界告警：每 (session, model) 每小时至多 1 条 */
-  private warnOnce(sessionId: string | undefined, modelKey: string, raw: number, now?: number): void {
-    const key = `${sessionId ?? '—'}|${modelKey}`;
+  /** 样本告警：每 (session, model, 事件类) 每小时至多 1 条（reject/clamp/rebase 分键，拒绝不被夹取吞掉） */
+  private warnOnce(
+    sessionId: string | undefined,
+    modelKey: string,
+    raw: number,
+    now: number | undefined,
+    cls: 'reject' | 'clamp' | 'rebase',
+    detail: string,
+  ): void {
+    const key = `${sessionId ?? '—'}|${modelKey}|${cls}`;
     const ts = now ?? Date.now();
     const last = this.lastWarnAt.get(key);
     if (last !== undefined && ts - last < RATIO_WARN_INTERVAL_MS) return;
     this.lastWarnAt.set(key, ts);
     this.warn(
-      `[ctx-cal] ratio out of clamp: session=${sessionId ?? '—'} model=${modelKey} raw=${raw.toFixed(3)} clamp=[${RATIO_CLAMP_MIN}, ${RATIO_CLAMP_MAX}]（已夹取入平滑；系统性偏差请校正估算器比率）`,
+      `[ctx-cal] ratio sample ${cls}: session=${sessionId ?? '—'} model=${modelKey} raw=${raw.toFixed(3)} ${detail}（系统性偏差请校正估算器比率；错配请查 usage/估算配对，arch §10.14）`,
     );
   }
 }
