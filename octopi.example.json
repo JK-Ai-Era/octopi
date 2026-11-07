@@ -68,6 +68,7 @@
     "proactiveCompactRatio": 0.6,
     "proactiveCooldownMs": 30000,
     "protectLastN": 20,
+    "midTurnProtectLastN": 50,
     "targetTokens": 200000,
     "compactFallbackRatio": 3,
     "summaryBudget": { "ratioPct": 2, "minTokens": 2000, "maxTokens": 8000 },

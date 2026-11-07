@@ -49,6 +49,8 @@ export const ContextEngineConfigSchema = z.object({
   targetTokens: z.number().int().nonnegative().optional(),
   /** 目标线倍数（默认 3；目标线 = targetTokens × 倍数，须 > B2 老化稳态） */
   compactFallbackRatio: z.number().positive().optional(),
+  /** turn 内主动压缩的保护尾条数（默认 50，最小 1；活跃窗口——进行中工作记录不进压缩选段。0 不是「关闭」语义） */
+  midTurnProtectLastN: z.number().int().min(1).optional(),
   outputRatio: z.number().min(0).max(1).optional(),
   minOutputReserve: z.number().positive().optional(),
   maxOutputReserve: z.number().positive().optional(),

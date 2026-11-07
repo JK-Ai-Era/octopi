@@ -511,13 +511,21 @@ export interface ContextEngineConfig {
   protectFirstN?: number;
   /** 尾部保护消息数（默认 20） */
   protectLastN?: number;
+  /**
+   * turn 内活跃窗口条数（默认 50）：工具活动进行中（isMidTurn）时主动压缩选段的
+   * tail 扩大到 max(protectLastN, 本值)，进行中的工具步骤/证据/推理链不进选段。
+   * 2026-11-07 方案 E 修订：取代「turn 内禁 LLM 摘要」。条数上限，token 密集的
+   * 短 turn 仍有已知限制（见 CHANGELOG v0.102.2 已接受风险）。
+   */
+  midTurnProtectLastN?: number;
   /** 摘要软目标预算（P1c 缺省 clamp(2%, 2k, 8k)）：可配置 ratioPct/minTokens/maxTokens */
   summaryBudget?: { ratioPct?: number; minTokens?: number; maxTokens?: number };
   /**
    * 窗口比例线：消息 token / messagesBudget 超过该比例时，
    * 在硬溢出前先主动压缩（默认 0.6）。
    * `0` = **禁止发起新的**路径 A 压缩（不只禁 LLM；目标线/窗口比例线同闸）；**不**丢弃已有
-   * `previousSummary` 粘滞视图（粘滞重建仍生效）。turn 内（工具活动中）本就不打 LLM。
+   * `previousSummary` 粘滞视图（粘滞重建仍生效）。turn 内（工具活动中）同样打 LLM
+   * （2026-11-07 方案 E 修订），活动记录由 `midTurnProtectLastN` 活跃窗口保护。
    */
   proactiveCompactRatio?: number;
   /**

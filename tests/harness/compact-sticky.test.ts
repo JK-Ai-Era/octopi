@@ -132,8 +132,8 @@ describe('压缩视图粘滞 / proactiveCompactRatio=0', () => {
   });
 });
 
-describe('方案 E：turn 内禁 LLM 摘要', () => {
-  it('工具活动中不打 LLM，turn 边界才允许', async () => {
+describe('方案 E 修订：turn 内活跃窗口（2026-11-07 取代 turn 内禁令）', () => {
+  it('isMidTurn 判定（不变）：工具活动中 true，新 user 后 false', async () => {
     const { isMidTurn } = await import(
       '@octopi-agent/engine/harness/context/default-context-engine.js'
     );
@@ -147,11 +147,12 @@ describe('方案 E：turn 内禁 LLM 摘要', () => {
     expect(isMidTurn(afterNewUser)).toBe(false);
   });
 
-  it('turn 内超线：只机械，不调用 summarize', async () => {
+  it('turn 内小消息量：不打 LLM 是**活跃窗口覆盖**所致，不是禁令（窗口放小即触发）', async () => {
     const summarize = vi.fn(async () => 'should-not-run');
     const messages: Message[] = [userMsg('long job')];
     for (let i = 0; i < 25; i++) messages.push(...toolTurn(i, bigBody(i)));
 
+    // 缺省 midTurnProtectLastN=50 ≥ 消息量 → middle 为空 → 无压缩（窗口保护）
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       proactiveCooldownMs: 0,
@@ -170,6 +171,28 @@ describe('方案 E：turn 内禁 LLM 摘要', () => {
       contextWindow: 1_000_000,
     });
     expect(summarize).not.toHaveBeenCalled();
+
+    // 同一历史、活跃窗口放小（4 条）→ middle 非空 → turn 内必须打 LLM
+    // （证明拦截者是窗口而非 turn 禁令——方案 E 修订的核心语义）
+    const summarize2 = vi.fn(async () => 'SUMMARY-MARK');
+    const engine2 = new DefaultContextEngine({
+      proactiveCompactRatio: 0.5,
+      proactiveCooldownMs: 0,
+      targetTokens: 800,
+      compactFallbackRatio: 1.5,
+      protectFirstN: 2,
+      protectLastN: 4,
+      midTurnProtectLastN: 4,
+    });
+    await engine2.assemble({
+      sessionId: 's-mid-turn-2',
+      messages,
+      systemPrompt: 'sys',
+      tools: [],
+      summarize: summarize2,
+      contextWindow: 1_000_000,
+    });
+    expect(summarize2, '窗口放小后 turn 内必须能打 LLM（禁令已废止）').toHaveBeenCalledTimes(1);
   });
 });
 

@@ -172,16 +172,17 @@ Runner.handle
 - **预算不变量**（唯一硬约束）：`input_tokens + max_tokens ≤ contextWindow`。分配器先扣 `maxOutputTokens`，再扣固定开销（system + tools + 请求信封），剩余为 `messagesLimit`（历史硬上限）；`messagesBudget` 是软策略提示。强制点（消息选择、溢出压缩目标）一律用 `messagesLimit`，不得使用软值
 - `targetTokens: 0` 只挂窗口比例线。触发判据量**老化请求体量**（实际发送内容的保守上界），B2 稳态不会误触发（防双机制打架，单测锁死）。再压缩还要求自上次压缩以来 token 实质增长（偶发兜底，不是周期性重压）
 - **装配层永不降级消息**。粘滞重建只做重组（`head + 摘要 + 覆盖点之后增量原文 + tail`），降级动作单源归 compact 能力。重建边界每次请求都滑动，在那里降级等于每请求改写一次历史、摧毁前缀缓存（实测命中率 98% → 29%，1.5 小时 31.3M 未命中输入 token）
-- `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是窗口比例线系数。**`0` 禁止发起新的路径 A 压缩（不只禁 LLM），不丢弃已有粘滞压缩视图**（`previousSummary` / `lastProactiveMessageCount` 仍重建 `head + 摘要 + 覆盖点之后增量 + tail`）。turn 内（最近真实 user 之后已有工具活动）也不新打 LLM 摘要（方案 E），只走机械分级（B2 老化 / 账本截断），避免吃掉活动工作记录
-- 视图超兜底线时，在硬溢出前压缩中间段（LLM 仅限 turn 边界；turn 内机械）
+- `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是窗口比例线系数。**`0` 禁止发起新的路径 A 压缩（不只禁 LLM），不丢弃已有粘滞压缩视图**（`previousSummary` / `lastProactiveMessageCount` 仍重建 `head + 摘要 + 覆盖点之后增量 + tail`）。turn 内（最近真实 user 之后已有工具活动）同样可以发起 LLM 摘要（方案 E 修订 2026-11-07：整 turn 禁令让 agent 长 turn 全程目标线失效）；活动工作记录改由活跃窗口保护——`contextEngine.midTurnProtectLastN`（默认 `50`，取 `max(protectLastN, midTurnProtectLastN)`），进行中的工具步骤/证据/推理链不进压缩选段
+- 视图超兜底线时，在硬溢出前压缩中间段（任意时刻；turn 内选段遵守活跃窗口 tail）
 - 增量很小（或 `proactiveCompactRatio=0`）时用 `previousSummary` + **`lastProactiveMessageCount` 之后的消息** + head/tail 重建，不重复打 LLM，也**绝不打回全量历史**
 - `fallbackTruncate` / 溢出降级是 **middle 替换体**：归档说明 + 工具调用账本（**每次调用只留 `name + purpose`**，error 附在对应调用行下逐字保留、永不省略）+ 近尾——禁止「只留 4 条」。账本是**单级**形态：已是最小（约 16x 压缩），仍超预算时如实上报 `overBudget`，**不得丢条目**（丢条目 = 静默失忆）
 - LLM 摘要吃**原文**工具输出（F-b：机械降级只作用于丢弃体）；`error` 字段永不省略
-- 配置：`octopi.json` → `contextEngine.targetTokens` / `contextEngine.compactFallbackRatio` / `contextEngine.proactiveCompactRatio`
+- 配置：`octopi.json` → `contextEngine.targetTokens` / `contextEngine.compactFallbackRatio` / `contextEngine.proactiveCompactRatio` / `contextEngine.midTurnProtectLastN`
 
 **主动 LLM 摘要冷却（`proactiveCooldownMs`，默认 30s，`0` 关闭）：**
 
 - 冷却期内即使增量达到再摘要阈值，也**优先缓存重建**，避免单 turn 主动摘要 + 硬溢出摘要双打 LLM
+- **overflow 每 turn 限次（2026-11-07 止血）**：overflow 每 turn 至多发起**一次 fresh LLM 摘要**（turn = 末条真实 user 消息之后的段）；失败/超时/denied 不烧名额（冷却后可重试），同 turn 后续溢出退机械降级。无记录且仍超预算的溢出轮发 `context.compact.error`（`cannot_help`）——必须可见，不得伪装缓存重建
 - **已知边界**：`protectLastN = 20` 时，若冷却窗口内新增消息数 > `protectLastN`，则中间新增消息既不在旧摘要覆盖范围、也不在当前 tail 中，需等冷却结束后的下一轮 assemble 才会进入 LLM 视图  
   - 30s 内刷 20+ 条不常见；自动化/子系统高频写会话时可把 `proactiveCooldownMs` 调小或设为 `0`
 - 配置：`octopi.json` → `contextEngine.proactiveCooldownMs`

@@ -119,6 +119,13 @@ export interface DefaultContextEngineConfig {
   targetTokens?: number;
   /** 目标线倍数（默认 3）。触发线 = targetTokens × compactFallbackRatio；窗口比例线始终并存。 */
   compactFallbackRatio?: number;
+  /**
+   * turn 内（工具活动进行中）主动压缩的保护尾条数（2026-11-07 方案 E 修订）。
+   * turn 内进行中的工作记录（最近的工具步骤/证据/推理链）不进压缩选段，由活跃窗口保护；
+   * 窗口外的执行痕迹可正常语义压缩（长任务 turn 内上下文持续增长时目标线才真正生效）。
+   * turn 边界仍用 protectLastN。默认 50；取 max(protectLastN, midTurnProtectLastN)。
+   */
+  midTurnProtectLastN?: number;
   /** 公用能力 CompactEngine（缺省自动创建；算法委托，记录/状态仍在本引擎） */
   compactEngine?: CompactEngine;
   /**
@@ -161,6 +168,13 @@ interface CompactState {
   lastCompactGateTokens?: number;
   /** 上次真正发起 LLM 摘要调用的时间戳（冷却） */
   lastProactiveLlmAt?: number;
+  /**
+   * overflow 每 turn 至多发起一次 LLM 摘要（2026-11-07 止血）：记发起时的
+   * lastGenuineUserIndex 作 turn key（历史 append-only，同 turn 内稳定）。
+   * 连环触发的事故形态：冷却从完成起算+无增长门，一轮内反复削尖（200k→200k）。
+   * 完整触发纪律（无进展熔断/冷却从发起计时/目标统一）待 overflow 重构讨论后定。
+   */
+  overflowLlmTurnIndex?: number;
 }
 
 // ── 引擎实现 ──
@@ -209,6 +223,12 @@ export class DefaultContextEngine implements ContextEngine {
         config?.compactFallbackRatio != null && config.compactFallbackRatio >= 1
           ? config.compactFallbackRatio
           : 3,
+      // 非法/0 值回落缺省 50（0 会退化成 protectLastN，不是「关闭」语义——评审 m3）；
+      // 有效值再与 protectLastN 取 max（活跃窗口不得窄于常态保护尾）
+      midTurnProtectLastN:
+        config?.midTurnProtectLastN != null && config.midTurnProtectLastN >= 1
+          ? config.midTurnProtectLastN
+          : 50,
       transformStore: config?.transformStore ?? new InMemoryTransformStore(),
       compactEngine: (() => {
         const engine = config?.compactEngine ?? createCompactEngine({
@@ -466,8 +486,22 @@ export class DefaultContextEngine implements ContextEngine {
       overflowCooldownMs > 0 &&
       state?.lastProactiveLlmAt != null &&
       Date.now() - state.lastProactiveLlmAt < overflowCooldownMs;
+    // 每 turn 至多一次 overflow LLM 摘要（2026-11-07 止血）：冷却从完成起算 + 无增长门时
+    // 一轮内会反复触发反复削尖（连环 200k→200k 事故）。turn key = 末条真实 user 下标——
+    // **下标身份不跨改写稳定**（可靠性 truncate_context/租约切片会改写数组，key 变化
+    // 视为新 turn，属已知宽松面，完整触发纪律待 overflow 重构）。key < 0（无真实 user）
+    // 不落名额、仅受冷却约束，防 -1 永久锁死。名额只在**产出 fresh 摘要**时消耗
+    // （评审 M5）：失败/超时不烧名额（冷却后可重试），denied 推冷却但不烧名额。
+    const overflowTurnKey = lastGenuineUserIndex(messages);
+    const overflowLlmDoneThisTurn =
+      overflowTurnKey >= 0 &&
+      state?.overflowLlmTurnIndex !== undefined &&
+      state.overflowLlmTurnIndex === overflowTurnKey;
     const skipLlmCompaction =
-      compactionCannotHelp || overflowInCooldown || overflowNewSinceLast < overflowMinNew;
+      compactionCannotHelp ||
+      overflowInCooldown ||
+      overflowNewSinceLast < overflowMinNew ||
+      overflowLlmDoneThisTurn;
     const overflowStart = Date.now();
     // 事件计量口径（P0-C M2）：compact 对 = messages-only 未校准、同一集合（全视图前后）。
     const compactTokensBefore = rawEstimator.estimateMessages(view);
@@ -572,7 +606,8 @@ export class DefaultContextEngine implements ContextEngine {
               estimator,
             }).result;
             droppedSummary = `${reason}; fell back to truncation`;
-            overflowSummarizeAttempted = false;
+            // denied 也计入「已尝试」推冷却（评审 M5）：否则策略钩子每轮重复触发
+            // （HITL 场景反复弹确认）。名额不在这里消耗——只认 fresh 摘要。
             break;
           }
           overflowFresh =
@@ -635,7 +670,7 @@ export class DefaultContextEngine implements ContextEngine {
     }
 
     // 6. 产物 → 持久转换记录（记录先落盘，视图后发）
-    await this.appendRecordFromProduct({
+    const overflowRecord = await this.appendRecordFromProduct({
       sessionId,
       agentId,
       messages,
@@ -655,25 +690,55 @@ export class DefaultContextEngine implements ContextEngine {
     view = folded.view;
 
     // overflow 不推进增长门基数/全量口径（与既有语义一致：overflow 每轮都会发生，
-    // 随之推进会饿死真摘要的增长门）；只在发起过摘要调用时推进冷却。
+    // 随之推进会饿死真摘要的增长门）。冷却推「已尝试」；本 turn 名额只认 fresh 摘要
+    // （失败/超时/ denied 不烧名额，冷却后可重试——评审 M5）；key<0 不落名额（M3）。
     this.states.set(stateKey, {
       ...state,
       lastProactiveLlmAt: overflowSummarizeAttempted
         ? Date.now()
         : state?.lastProactiveLlmAt,
-      // 锚卫生：overflow 产转换记录 = 请求形状已变，旧锚即刻失效
-      lastUsageAnchor: undefined,
+      overflowLlmTurnIndex:
+        overflowFresh && overflowTurnKey >= 0
+          ? overflowTurnKey
+          : state?.overflowLlmTurnIndex,
+      // 锚卫生（评审 m4）：只有真产出转换记录（请求形状已变）才清锚；
+      // 什么都没变的轮清锚只会把下一轮决策打回裸估算
+      lastUsageAnchor: overflowRecord === undefined ? state?.lastUsageAnchor : undefined,
     });
 
-    emit?.({
-      type: 'context.compact.end',
-      sessionId,
-      reason: 'overflow',
-      tokensBefore: compactTokensBefore,
-      tokensAfter: rawEstimator.estimateMessages(view),
-      durationMs: Date.now() - overflowStart,
-      cached: false,
-    });
+    emit?.(
+      overflowRecord === undefined
+        ? rawEstimator.estimateMessages(view) > effectiveMessagesLimit
+          ? // 无记录且视图仍超预算 = 压缩救不了（cannot_help）：**必须可见**（评审 M4），
+            // 不得伪装成良性复用——「上下文已超窗」是需要暴露的异常
+            {
+              type: 'context.compact.error',
+              sessionId,
+              reason: 'overflow',
+              error: 'cannot_help: view remains over budget with nothing compressible',
+              durationMs: Date.now() - overflowStart,
+            }
+          : // 无记录且视图可装 = 真良性空转（auto 短路）：复用重建同形，cached 不入会话流；
+            // 计量对取同集合真实值（与 start 口径一致，不发 0/0 假计量）
+            {
+              type: 'context.compact.end',
+              sessionId,
+              reason: 'overflow',
+              tokensBefore: compactTokensBefore,
+              tokensAfter: compactTokensBefore,
+              durationMs: Date.now() - overflowStart,
+              cached: true,
+            }
+        : {
+            type: 'context.compact.end',
+            sessionId,
+            reason: 'overflow',
+            tokensBefore: compactTokensBefore,
+            tokensAfter: rawEstimator.estimateMessages(view),
+            durationMs: Date.now() - overflowStart,
+            cached: false,
+          },
+    );
 
     // 8. 构建 LLM 消息（校准基 = 老化后 LLM 视图估算——尺子必须量实际请求）
     const llmMessages = this.buildLlmMessages(view, systemPrompt, tools, agingPlan);
@@ -1125,8 +1190,21 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 边界对齐（不拆 tool_call/tool_result 对）——两形状都会被严格网关 400。
     // 保护窗只决定**压缩选段**（记录覆盖哪些原文），装配由 fold 负责。
-    const { headEnd, tailStart } = alignViewSplit(messages, protectFirstN, protectLastN);
-    const middleRaw = messages.slice(headEnd, tailStart);
+    // 方案 E 修订（2026-11-07）：turn 内不再禁止 LLM 摘要，改为活跃窗口保护——
+    // tail 扩大到 midTurnProtectLastN 条（进行中的工具步骤/证据/推理链不进选段），
+    // 窗口外的执行痕迹正常语义压缩；长任务 turn 内目标线由此真正生效。
+    const midTurn = isMidTurn(messages);
+    const tailCount = midTurn
+      ? Math.max(protectLastN, this.config.midTurnProtectLastN)
+      : protectLastN;
+    const { headEnd, tailStart } = alignViewSplit(messages, protectFirstN, tailCount);
+    // 锚点硬保护（评审 M2）：当前 turn 的真实 user 消息（含 turn_context/指令约束）
+    // 永不进选段——turn 内压缩不得吞掉任务的原始指令，模型续跑只能靠摘要转述风险太大。
+    // 老 turn 的锚点已由历史 summary 记录覆盖语义，这里只保最后一条（当前 turn）。
+    const anchorIdx = lastGenuineUserIndex(messages);
+    const middleRaw = messages
+      .slice(headEnd, tailStart)
+      .filter((_m, i) => headEnd + i !== anchorIdx);
     const middle = semanticHistory(middleRaw); // 仅供 summarize 素材，禁止回装进视图
 
     // 请求口径（F1-B3 + 2026-11-07 修正）：读数 = **fold 视图 + 老化** = 实际发给 LLM 的内容。
@@ -1170,16 +1248,20 @@ export class DefaultContextEngine implements ContextEngine {
     const threshold =
       this.config.targetTokens > 0 ? Math.min(targetLine, windowRatioLine) : windowRatioLine;
 
+    // 失败降级的机械账本目标（structure_only 下该值只作用于 summarize 失败后的
+    // mechanicalDegrade，不影响摘要大小——摘要走 summaryBudget clamp）。
+    // 地板 2000（评审 m2）：tail 活跃窗口扩大后 headTailTokens 变大，200 地板会把
+    // 失败降级压成极瘦账本（比降级前狠得多），宁可账本胖一点也别丢太多。
     const targetMiddleTokens = Math.max(
-      200,
+      2000,
       Math.floor(threshold * 0.55) - headTailTokens,
     );
 
-    // 新 LLM 压缩闸门（方案 E）：
-    // - 无 summarize 或 turn 内：禁止新 LLM，不丢已有压缩态
-    // - turn 边界（新 user 刚到、工具活动尚未开始）：才允许对更早历史做 LLM 摘要
-    const midTurn = isMidTurn(messages);
-    const allowNewLlmCompact = !!summarize && !midTurn;
+    // 新 LLM 压缩闸门（方案 E 修订，2026-11-07）：只看 summarize 可用性。
+    // 旧版 turn 内禁止新 LLM 摘要（保护活动工作记录）——但 agent 式长 turn 让该禁令
+    // 全程生效，目标线失效、长任务只能落 overflow 削尖。保护改由活跃窗口承担
+    // （切割处 turn 内 tail 扩到 midTurnProtectLastN 条），窗口外执行痕迹正常压缩。
+    const allowNewLlmCompact = !!summarize;
 
     // 未超线：fold 视图（记录天然粘滞）
     if (currentTokens <= threshold) {
@@ -1245,7 +1327,7 @@ export class DefaultContextEngine implements ContextEngine {
       return { view: folded.view, fold: folded };
     }
 
-    // 禁新路径 A（无 summarize / turn 内）且无压缩态：超线也只走机械（不打摘要 LLM）
+    // 无 summarize：超线也不打摘要 LLM（fold 机械分级照常）
     if (!allowNewLlmCompact) {
       return { view: folded.view, fold: folded };
     }
@@ -2014,15 +2096,7 @@ export class DefaultContextEngine implements ContextEngine {
  * @returns 是否 turn 内
  */
 export function isMidTurn(messages: Message[]): boolean {
-  let lastGenuineUserIdx = -1;
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    // 「真实 user」收紧：agentId 归因的 user（appendCommandDiscourse）不重置边界，
-    // 载体过滤走唯一谓词 isTurnAnchor
-    if (msg.agentId) continue;
-    if (!isTurnAnchor(msg)) continue;
-    lastGenuineUserIdx = i;
-  }
+  const lastGenuineUserIdx = lastGenuineUserIndex(messages);
   if (lastGenuineUserIdx < 0) return false;
   for (let i = lastGenuineUserIdx + 1; i < messages.length; i++) {
     const msg = messages[i];
@@ -2035,4 +2109,26 @@ export function isMidTurn(messages: Message[]): boolean {
     }
   }
   return false;
+}
+
+/**
+ * 最后一条「真实 user 消息」的下标（turn 起点标识）。
+ *
+ * 「真实 user」= 无 agentId 归因，且非引擎载体（含 `engineHint` reliability 注入）。
+ * 历史 append-only，该下标在同 turn 内稳定，可作 turn key（overflow 每 turn 限一次用）。
+ *
+ * @param messages - 全量消息
+ * @returns 下标；无真实 user 时返回 -1
+ */
+export function lastGenuineUserIndex(messages: Message[]): number {
+  let lastGenuineUserIdx = -1;
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    // 「真实 user」收紧：agentId 归因的 user（appendCommandDiscourse）不重置边界，
+    // 载体过滤走唯一谓词 isTurnAnchor
+    if (msg.agentId) continue;
+    if (!isTurnAnchor(msg)) continue;
+    lastGenuineUserIdx = i;
+  }
+  return lastGenuineUserIdx;
 }

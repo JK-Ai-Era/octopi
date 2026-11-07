@@ -98,6 +98,7 @@ export function resolveContextEngine(
     return new DefaultContextEngine({
       protectFirstN: config?.protectFirstN ?? 5,
       protectLastN: config?.protectLastN ?? 20,
+      midTurnProtectLastN: config?.midTurnProtectLastN,
       summaryBudget: config?.summaryBudget,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,

@@ -110,6 +110,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.102.2 (2026-11-07)
+
+### fix(engine): 主动压缩放开 turn 内触发（活跃窗口保护）+ overflow 连环触发止血
+
+2026-11-07 三连压缩事故（4 分钟 3 条 compacted、200k→200k 零缩减）的触发侧修复。根因：方案 E 的「turn 内禁止 LLM 摘要」让 600k 目标线在 agent 式长 turn（一条指令跑几小时工具链）全程失效，压缩只剩 overflow 安全网削尖；overflow 无增长门、冷却从完成起算，一轮内连环触发。
+
+- **方案 E 修订**：turn 内允许 LLM 摘要。活动工作记录保护改由**活跃窗口**承担——turn 内压缩选段的 tail 扩大到 `contextEngine.midTurnProtectLastN` 条（默认 `50`，取 `max(protectLastN, midTurnProtectLastN)`），进行中的工具步骤/证据/推理链不进选段；turn 边界维持 `protectLastN`。长任务 turn 内目标线由此真正生效。
+- **overflow 止血**（临时纪律，完整触发设计待后续重构讨论）：
+  - **每 turn 至多一次 fresh LLM 摘要**（`overflowLlmTurnIndex` 按 `lastGenuineUserIndex` 计 turn）——堵住「冷却从完成起算 + 无增长门」导致的同轮连环削尖。名额只在**产出 fresh 摘要**时消耗（失败/超时/denied 不烧名额，冷却后可重试）；无真实 user 的会话不落名额（仅受冷却约束）；
+  - **无记录轮终局三分**（事故中的 1ms 假通知即此形态）：真良性空转 → 复用重建同形（`cached:true`，不入会话流）；**无记录且仍超预算（cannot_help）→ `context.compact.error` fail-loud**——「压缩救不了」必须可见，不得伪装良性复用；
+  - **锚点硬保护**：当前 turn 的真实 user 消息（含 turn_context/指令约束）永不进压缩选段（turn 内压缩不得吞任务原始指令）；
+  - **失败降级目标地板 2000**（`targetMiddleTokens`）：tail 活跃窗口扩大后防止失败降级把中段压成极瘦账本。
+- 顺带实证（供 overflow 重构讨论）：工具链结尾的历史被消息选择器整体保留（当前 turn 活动记录不入选段），溢出材料主要来自 turn 边界后的旧段。
+- **已接受风险（overflow 重构讨论时定夺）**：①活跃窗口按条数而非 token——token 密集的短 turn（≤55 条消息但超大工具输出）主动压缩仍不触发，且每 turn 一次 LLM 用完后溢出只剩机械降级；②turn key 用 messages 下标，可靠性 `truncate_context`/租约切片改写数组时视为新 turn（宽松面）；③名额写回在摘要 await 之后（并发窗口由会话锁兜底）。
+
+**红线测试**（`tests/harness/proactive-midturn-overflow-guard.test.ts`）：turn 内可触发、活跃窗口 50 条保护、turn 边界维持 protectLastN、overflow 每 turn 限 1 次（含「第二轮确实溢出」防错断言）、无记录轮 cached 0/0。
+
 ## v0.102.1 (2026-11-07)
 
 ### fix(engine): 压缩决策读数与摘要请求前缀改按实际请求形状
