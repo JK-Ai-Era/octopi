@@ -44,6 +44,11 @@ export function createProviderSummarize(
           ? Math.min(opts?.maxTokens ?? options.maxOutputTokens, options.maxOutputTokens)
           : opts?.maxTokens,
     });
+    // usage 回传（2026-11-08 outputTokens 真值）：摘要产物体量的真值通道，
+    // 供压缩计量以真值替代估算（契约见 SummarizeFunction.onUsage）
+    if (response.usage && response.usage.outputTokens > 0) {
+      opts?.onUsage?.({ outputTokens: response.usage.outputTokens });
+    }
     return response.content;
   };
 }

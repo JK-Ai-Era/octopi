@@ -101,7 +101,7 @@ export function sumSegments(segments: Segment[]): number {
         total += seg.nameChars / CHARS_PER_TOKEN_BY_KIND.code + seg.argChars / CHARS_PER_TOKEN_BY_KIND.json;
         break;
       case 'tool_result':
-        // 分类计数：CJK 段按 1 token/字，结构化 ASCII 段按 2 chars/token。
+        // 分类计数：CJK 段按 1 token/字，结构化 ASCII 段按 TOOL_RESULT_CHARS_PER_TOKEN（1.7，2026-11-08 L1 调表）。
         // isError 当前与正常结果同权（属性保留，调参留待有实测支撑时）。
         total += seg.cjk / CHARS_PER_TOKEN_BY_KIND.text_cjk + (seg.chars - seg.cjk) / CHARS_PER_TOKEN_BY_KIND.tool_result;
         break;

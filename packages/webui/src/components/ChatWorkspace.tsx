@@ -1689,7 +1689,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       } else {
         const before = r.tokensBefore != null ? formatTokens(r.tokensBefore) : '?';
         const after = r.tokensAfter != null ? formatTokens(r.tokensAfter) : '?';
-        show(`已结构压缩 ${before} → ${after}（消息估算）`);
+        show(`已结构压缩 ${before} → ${after}（请求估算）`);
       }
     } catch (e) {
       show(e instanceof Error ? e.message : String(e));

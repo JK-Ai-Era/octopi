@@ -2693,6 +2693,9 @@ export class Gateway {
         summarize?: (messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
         compactTargetTokens?: number;
         taskSnapshot?: string;
+        /** 请求口径计量原料（2026-11-08 B1）：与会话下一请求同源的 system/tools */
+        systemPrompt?: string;
+        tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
         contextWindow?: number;
         maxOutputTokens?: number;
         /** 旧压缩快照读口（迁移输入） */
@@ -2749,8 +2752,28 @@ export class Gateway {
     const compactTargetTokens =
       this.config.context?.contextAssembler?.compactTargetTokens;
 
+    // 请求口径计量原料（评审 B1，2026-11-08）：manual 压缩的 before/after 须与会话
+    // 下一请求同源——tools 缺失会让 toast 少算整个 tool schema（tools「从来没有」）。
+    // 换算与 builder.convertToLlm 同式（sanitizeToolJsonSchema 同一实现，禁手抄）。
+    const { sanitizeToolJsonSchema } = await import(
+      '@octopi-agent/engine/harness/agent/tool-purpose.js'
+    );
+    const manualTools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] =
+      (cached.agent.context.tools ?? []).map((t) => ({
+        type: 'function' as const,
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: sanitizeToolJsonSchema(
+            t.parameters ?? { type: 'object', properties: {} },
+          ) as never,
+        },
+      }));
+
     // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 键）
     return cached.runner.compactSession(sessionId, effectiveAgentId, {
+      systemPrompt: cached.agent.context.systemPrompt,
+      tools: manualTools,
       compactStructural: (input) =>
         structural.compactStructural!({
           sessionId: input.sessionId,
@@ -2759,6 +2782,8 @@ export class Gateway {
           summarize: input.summarize,
           compactTargetTokens: input.compactTargetTokens,
           taskSnapshot: input.taskSnapshot,
+          systemPrompt: input.systemPrompt,
+          tools: input.tools,
           loadCompactState: input.loadCompactState,
           // 摘要请求窗口护栏（评审 F5）：窗口/输出上限随会话模型绑定注入，防最满时压缩被 400
           contextWindow: bound?.contextWindow,

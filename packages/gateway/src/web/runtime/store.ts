@@ -139,7 +139,7 @@ export interface ToolRun {
 
 export interface CompactStatus {
   active: boolean;
-  reason?: 'proactive' | 'overflow';
+  reason?: 'proactive' | 'overflow' | 'manual';
   cached?: boolean;
   tokensBefore?: number;
   tokensAfter?: number;
@@ -588,7 +588,26 @@ export class OctopiRuntimeStore extends EventTarget {
   }> {
     const sessionId = this.chat.sessionId;
     if (!sessionId) throw new Error('No active session');
-    return this.client.compactSession(sessionId, this.chat.agentId);
+    const r = await this.client.compactSession(sessionId, this.chat.agentId);
+    // B2（2026-11-08 评审）：manual 压缩不发 context.compact.end，旧「视图估算」已知失效——
+    // 与 auto 同款清空（writer=compact 语义），防 toast 与顶栏并排时一新一旧。
+    // 禁止把 r.tokensAfter 写进 viewTokensEst：该槽是校准后请求估算（pressure.estimatedTokens），
+    // tokensAfter 是未校准报告尺，混写会搅乱两把尺（与 P0-C 口径守护同款理由）。
+    if (r.ok && r.compacted) {
+      console.log(`[ctx] session=${sessionId} writer=compact field=viewTokensEst value=cleared`);
+      this.chat.inspector = {
+        ...this.chat.inspector,
+        viewTokensEst: undefined,
+        compact: {
+          active: false,
+          reason: 'manual',
+          cached: false,
+          tokensBefore: r.tokensBefore,
+          tokensAfter: r.tokensAfter,
+        },
+      };
+    }
+    return r;
   }
 
   /**
@@ -1894,7 +1913,7 @@ export class OctopiRuntimeStore extends EventTarget {
       }
       case 'context.compact.start': {
         const d = event.data as {
-          reason?: 'proactive' | 'overflow';
+          reason?: 'proactive' | 'overflow' | 'manual';
           tokensBefore?: number;
           threshold?: number;
         } | undefined;
@@ -1936,7 +1955,7 @@ export class OctopiRuntimeStore extends EventTarget {
       }
       case 'context.compact.end': {
         const d = event.data as {
-          reason?: 'proactive' | 'overflow';
+          reason?: 'proactive' | 'overflow' | 'manual';
           tokensBefore?: number;
           tokensAfter?: number;
           durationMs?: number;

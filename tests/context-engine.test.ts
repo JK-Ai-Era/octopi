@@ -33,6 +33,7 @@ import {
   MESSAGE_OVERHEAD_TOKENS,
   JSON_CHARS_PER_TOKEN,
   TOOL_RESULT_CHARS_PER_TOKEN,
+  CODE_CHARS_PER_TOKEN,
 } from '@octopi-agent/engine/harness/context/token-constants.js';
 import { DefaultMessageSelector } from '@octopi-agent/engine/harness/context/message-selector.js';
 import {
@@ -241,8 +242,10 @@ describe('estimateToolCallTokens', () => {
     const name = 'read_file';
     const args = { path: '/tmp/a.txt' };
     const argsStr = JSON.stringify(args);
-    const expected =
-      estimateTextTokens(name) + Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN);
+    // name 按 code 档、args 按 json 档，与 toolCallSegment/estimateSegments 同式（总量一次取整）
+    const expected = Math.ceil(
+      name.length / CODE_CHARS_PER_TOKEN + argsStr.length / JSON_CHARS_PER_TOKEN,
+    );
     expect(estimateToolCallTokens([{ name, arguments: args }])).toBe(expected);
   });
 
@@ -256,12 +259,15 @@ describe('estimateToolCallTokens', () => {
     expect(viaString).toBe(viaObject);
     // 且不应把字符串再包一层引号
     expect(viaString).toBe(
-      estimateTextTokens('read_file') + Math.ceil(argsStr.length / JSON_CHARS_PER_TOKEN),
+      Math.ceil('read_file'.length / CODE_CHARS_PER_TOKEN + argsStr.length / JSON_CHARS_PER_TOKEN),
     );
   });
 
   it('should treat missing arguments as empty object', () => {
-    const expected = estimateTextTokens('noop') + Math.ceil(JSON.stringify({}).length / JSON_CHARS_PER_TOKEN);
+    // name 按 code 档、args 按 json 档（与 toolCallSegment 同式）；比率常量变更时此处自动跟上
+    const expected = Math.ceil(
+      'noop'.length / CODE_CHARS_PER_TOKEN + JSON.stringify({}).length / JSON_CHARS_PER_TOKEN,
+    );
     expect(estimateToolCallTokens([{ name: 'noop' }])).toBe(expected);
   });
 

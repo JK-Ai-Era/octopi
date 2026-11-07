@@ -35,6 +35,12 @@ export type SummarizeFunction = (
     /** 自定义指令 */
     instructions?: string;
     /**
+     * usage 回传（2026-11-08 outputTokens 真值）：摘要请求的 provider 实测输出 tokens。
+     * 摘要产物的体量以此为准（真值），估算只作无回传时的兜底——「放着真值用估算」
+     * 是压缩计量的口径缺陷（tokensBefore/After 核对，2026-11-08）。
+     */
+    onUsage?: (usage: { outputTokens?: number }) => void;
+    /**
      * 中止信号（P3）：run 中止或摘要预算超时都必须能取消在飞请求，
      * 否则 UI 只能干等到 provider 侧超时（2026-11-07 事故：2.13MB 非流式请求挂 20+ 分钟）。
      */
@@ -130,6 +136,9 @@ export interface CompactOutcome {
    *  必填（显式标注，杜绝空值歧义）：机械/早退路径
    *  （empty、within_target、too_short、head_tail_only）显式 false，不许留空。 */
   summarizeAttempted: boolean;
+  /** fresh 摘要响应的 provider 实测输出 tokens（onUsage 回传，2026-11-08）：
+   *  摘要产物体量的真值；无回传（自定义 summarizeFn/失败）时缺省，计量回落估算。 */
+  summaryOutputTokens?: number;
   coverage?: SummaryCoverage;
   /** Message[] 或纯文本结果，由入口决定 */
   view: Message[] | string;

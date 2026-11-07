@@ -151,7 +151,9 @@ interface CompactState {
    *  会产出毒 ratio 样本，arch §10.14）。恒为「system+tools+视图」请求口径（P1-a 校准
    *  分母）；只允许请求口径写点写入（assemble 的三个出口），compact 路径的 messages-only
    *  值不得写入，否则 calibrationRatio 被口径错位结构性抬高。 */
-  pendingUsagePair?: { rawEstimatedTokens: number; modelKey: string };
+  pendingUsagePair?: { rawEstimatedTokens: number; modelKey: string; seq: number; orphaned?: boolean };
+  /** 配对槽序号（callId 同源配对，2026-11-08）：每次冻结递增，审计/覆盖判定用 */
+  pairSeq?: number;
   /** 会话最近一次 assemble 的分键（manual 压缩校准用，常驻不消费；与配对槽同源写入） */
   lastModelKey?: string;
   /** 降级 B 锚（arch §10.16，评审 F3 原子对）：{实测 prompt, 同请求未校准估算, modelKey}
@@ -344,11 +346,7 @@ export class DefaultContextEngine implements ContextEngine {
         rawEstimatedTokens,
         this.states.get(stateKey)?.lastUsageAnchor,
       );
-      this.states.set(stateKey, {
-        ...this.states.get(stateKey),
-        pendingUsagePair: { rawEstimatedTokens, modelKey },
-        lastModelKey: modelKey,
-      });
+      this.freezeUsagePair(stateKey, rawEstimatedTokens, modelKey);
       return {
         messages: llmMessages,
         estimatedTokens: decision.tokens,
@@ -435,11 +433,7 @@ export class DefaultContextEngine implements ContextEngine {
         this.states.get(stateKey)?.lastUsageAnchor,
       );
 
-      this.states.set(stateKey, {
-        ...this.states.get(stateKey),
-        pendingUsagePair: { rawEstimatedTokens, modelKey },
-        lastModelKey: modelKey,
-      });
+      this.freezeUsagePair(stateKey, rawEstimatedTokens, modelKey);
 
       return {
         messages: llmMessages,
@@ -748,11 +742,7 @@ export class DefaultContextEngine implements ContextEngine {
       rawEstimatedTokens,
       this.states.get(stateKey)?.lastUsageAnchor,
     );
-    this.states.set(stateKey, {
-      ...this.states.get(stateKey),
-      pendingUsagePair: { rawEstimatedTokens, modelKey },
-      lastModelKey: modelKey,
-    });
+    this.freezeUsagePair(stateKey, rawEstimatedTokens, modelKey);
 
     return {
       messages: llmMessages,
@@ -1562,10 +1552,7 @@ export class DefaultContextEngine implements ContextEngine {
     const stateKey = params.stateKey ?? compactStateKey(sessionId, params.agentId);
     const ledger = await this.loadLedger(sessionId, params.agentId, messages, params.loadCompactState);
     let folded = this.foldView(messages, ledger);
-    // F6（评审挂账）：manual 计量对 = messages-only 未校准、同集合（视图前后对），
-    // 与 context.compact.* 事件同口径；决策/截断仍走校准 estimator
     const raw = this.config.tokenEstimator;
-    const tokensBefore = raw.estimateMessages(folded.view);
 
     // 同形前缀单源：优先调用方现成 llmPrefix；否则引擎内建。
     // system 字节取自会话托管 system 消息（source==='systemPrompt'）——它就是上一轮请求的逐字
@@ -1577,6 +1564,18 @@ export class DefaultContextEngine implements ContextEngine {
     const systemText =
       (managedSystem ? getTextContent(managedSystem.content) : '') || params.systemPrompt;
     const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging);
+    // 计量口径（2026-11-08 三数字核对拍板）：before/after 用「报告尺」= fold 视图 + 老化 +
+    // system + tools 的未校准估算（rawRequestViewTokens，与 assemble 的 rawEstimatedTokens
+    // /配对槽分母同式）。注意与「决策尺」分工：proactive/overflow 触发与增长门基数走
+    // measureRequestViewTokens（校准后 messages-only）——report vs decision 两把尺各有其职，
+    // 勿互换（互换会搅乱增长门基数，见 arch/context-size-accounting.md §10.19）。
+    // 旧口径「未老化 fold 视图 messages-only」量的是存储形态不是请求（缺 aging 降级、
+    // 缺 system/tools），toast 数字与顶栏永远对不上。
+    const rawRequestViewTokens = (fold: { view: Message[] }): number =>
+      estimateLLMMessages(
+        this.buildLlmMessages(fold.view, systemText ?? '', params.tools ?? [], agingPlan),
+      ) + raw.estimateTools(params.tools ?? []);
+    const tokensBefore = rawRequestViewTokens(folded);
     // P2：前缀 = 折叠视图（与主会话请求同形）；调用方显式给的前缀仍优先
     const llmPrefix =
       params.llmPrefix ??
@@ -1711,7 +1710,14 @@ export class DefaultContextEngine implements ContextEngine {
       estimator,
     });
     folded = this.foldView(messages, ledger);
-    const tokensAfter = raw.estimateMessages(folded.view);
+    // after 同口径（报告尺）；摘要段用 provider 实测输出 tokens 真值替换估算（2026-11-08）。
+    // 只在记录真正落账（record 存在）时替换——record 缺失 = 产物没进视图，摘要不在请求里；
+    // outputTokens 须 >0（0 是「未回传」的常见形态，防把 after 减到近 0）。
+    let tokensAfter = rawRequestViewTokens(folded);
+    if (record && outcome.summary && (outcome.summaryOutputTokens ?? 0) > 0) {
+      tokensAfter =
+        tokensAfter - raw.estimateText(outcome.summary) + outcome.summaryOutputTokens!;
+    }
 
     const afterViewTokens = this.measureRequestViewTokens(folded, agingPlan, estimator);
     this.states.set(stateKey, {
@@ -1734,6 +1740,7 @@ export class DefaultContextEngine implements ContextEngine {
       coveredMessageCount: record ? tailStart : this.derivedCoverEnd(folded),
       fresh: true,
       summarizeAttempted: outcome.summarizeAttempted,
+      summaryOutputTokens: outcome.summaryOutputTokens,
       coverage: outcome.coverage,
       // 度量=装配严格同形：返还 fold 视图（与 tokensAfter 同源）
       view: folded.view,
@@ -1802,6 +1809,42 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
+   * 冻结请求级配对槽（callId 同源配对的唯一写入口，2026-11-08）。
+   *
+   * 每次冻结携带单调 seq（pairSeq）作请求身份；覆盖未消费的旧槽即作废并告警——
+   * 「上一请求 usage 未到就再次装配」正是错位对（0.085/0.258 家族）的嫌疑通道，
+   * 静默覆盖会让旧估算去配陌生 usage。覆盖语义=只认最新发送（串行下与先到先得等价，
+   * 非串行下更安全：旧请求可能已被重试/替代）。
+   *
+   * @param stateKey 会话状态键
+   * @param rawEstimatedTokens 本请求「system+tools+视图」口径未校准估算
+   * @param modelKey 校准分键
+   */
+  private freezeUsagePair(stateKey: string, rawEstimatedTokens: number, modelKey: string): void {
+    const state = this.states.get(stateKey) ?? {};
+    if (state.pendingUsagePair) {
+      console.warn(
+        `[ctx-pair] overwrite unconsumed pair: state=${stateKey} seq=${state.pendingUsagePair.seq} rawEst=${state.pendingUsagePair.rawEstimatedTokens}（旧 pair 作废；随后到达的 usage 归属不确定，下一个 usage 同样丢样）`,
+      );
+    }
+    const seq = (state.pairSeq ?? 0) + 1;
+    this.states.set(stateKey, {
+      ...state,
+      // 覆盖丢样（评审 M8，2026-11-08）：覆盖说明存在并发装配/未发送请求，随后到达的
+      // usage 可能属于被覆盖的旧请求——与其错配进 EMA 成毒样本，不如丢掉这一个样本。
+      // 只在**实际发生覆盖**时标 orphaned；下一轮正常冻结（无覆盖不标）恢复收集。
+      pendingUsagePair: {
+        rawEstimatedTokens,
+        modelKey,
+        seq,
+        ...(state.pendingUsagePair ? { orphaned: true } : {}),
+      },
+      pairSeq: seq,
+      lastModelKey: modelKey,
+    });
+  }
+
+  /**
    * 每轮结束后更新状态
    *
    * 使用 LLM 返回的真实 usage 校准 token 估算：把（实测 prompt, 请求口径估算）样本
@@ -1829,8 +1872,30 @@ export class DefaultContextEngine implements ContextEngine {
       usage.inputReportedTokens ??
       usage.inputUncachedTokens + usage.inputCachedTokens + usage.inputCacheWriteTokens;
 
-    // 缺对丢样：本请求没有冻结估算（或已被消费）时不喂样本——错配样本比少一个样本更糟
-    if (!pair || !(pair.rawEstimatedTokens > 0) || !(promptActual > 0)) return;
+    // 缺对丢样：本请求没有冻结估算（或已被消费）时不喂样本——错配样本比少一个样本更糟。
+    // 有 usage 却无对 = 外来 usage（摘要/子请求冒名）或漏写槽的信号，如实告警留破案线索。
+    if (!pair || !(pair.rawEstimatedTokens > 0) || !(promptActual > 0)) {
+      if (promptActual > 0) {
+        console.warn(
+          `[ctx-pair] usage without pair: session=${sessionId} actual=${promptActual}（丢样——疑似外来 usage 或漏写槽）`,
+        );
+      }
+      return;
+    }
+    // 覆盖丢样（评审 M8）：pair 曾覆盖未消费的旧槽——本 usage 可能属于被覆盖的旧请求，
+    // 归属不确定即丢样（宁缺不错配）；下一轮正常冻结恢复收集
+    if (pair.orphaned) {
+      console.warn(
+        `[ctx-pair] drop orphaned pair: session=${sessionId} seq=${pair.seq} actual=${promptActual}（覆盖后首个 usage 归属不确定，丢样）`,
+      );
+      return;
+    }
+
+    // 全样本审计（2026-11-08）：正常样本也打——错位家族（0.085/0.258）破案的盲区
+    // 就是 accepted 样本零日志，出事时只能看到被门拒的残影。
+    console.log(
+      `[ctx-pair] session=${sessionId} seq=${pair.seq} model=${pair.modelKey} raw=${pair.rawEstimatedTokens} actual=${promptActual} ratio=${(promptActual / pair.rawEstimatedTokens).toFixed(3)}`,
+    );
 
     // P1-a：校准样本入台账——分母 = 本请求冻结的请求口径未校准估算，分子 = provider 实测。
     // ratio 按 model 分键跨 session 共享。

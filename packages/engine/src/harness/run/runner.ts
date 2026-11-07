@@ -2774,11 +2774,17 @@ export class SessionAwareRunner {
         compactTargetTokens?: number;
         /** task 快照：交接式摘要指令尾部注入 */
         taskSnapshot?: string;
+        /** 请求口径计量原料（2026-11-08 B1）：与会话下一请求同源的 system/tools */
+        systemPrompt?: string;
+        tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
         /** 旧压缩快照读口（迁移输入） */
         loadCompactState?: (sessionId: string) => Promise<import('../context/types.js').ContextCompactSnapshot | undefined> | import('../context/types.js').ContextCompactSnapshot | undefined;
       }) => Promise<import('../context/capabilities/compact/types.js').CompactOutcome>;
       summarize?: import('../context/types.js').SummarizeFunction;
       compactTargetTokens?: number;
+      /** 请求口径计量原料（2026-11-08 B1）：透传给 compactStructural */
+      systemPrompt?: string;
+      tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
     },
   ): Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome> {
     const release = await this.acquireLock(sessionId);
@@ -2804,6 +2810,10 @@ export class SessionAwareRunner {
         messages: session.messages,
         summarize: options.summarize,
         compactTargetTokens: options.compactTargetTokens,
+        // 请求口径计量原料（评审 B1）：tools/system 缺失会让 before/after 少算整个
+        // tool schema——「请求口径」名不副实
+        systemPrompt: options.systemPrompt,
+        tools: options.tools,
         // 交接式摘要素材：task 快照（裸状态块，不含对话引导语）随指令尾部注入
         taskSnapshot: renderSessionTasksInjection(session.tasks ?? [], { includeGuidance: false }),
         // 旧压缩快照读口（迁移输入）：manual 路也要先迁移再产记录，防旧快照在

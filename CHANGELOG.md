@@ -110,7 +110,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.102.2 (2026-11-07)
+## v0.102.3 (2026-11-08)
+
+### fix(context): 计量四件套——校准配对同源、outputTokens 真值、L1 调表、压缩 before/after 报告尺
+
+三数字核对（顶栏「上下文(上次实测)/视图估算/压缩前后」互相对不上）暴露的两处「一把尺」破坏，本批根治（评审 del-7224e899 blocking 3/major 8 全数核实修复，细节 arch/context-size-accounting.md §10.19）：
+
+- **callId 同源配对（毒 ratio 源头）**：配对槽带 seq 身份+统一冻结入口；覆盖未消费 pair 即作废并标 orphaned（覆盖后首个 usage 归属不确定→丢样，宁缺不错配）；`[ctx-pair]` 全样本审计日志（此前 accepted 样本零日志，0.085/0.258 错位家族无从破案）+「usage without pair」告警。已知边界：真 callId 贯穿 loop 事件未做（防不配对靠 orphaned 丢样）。
+- **outputTokens 真值（能用真值处换真值）**：SummarizeFunction.onUsage 回传摘要响应实测输出 tokens，压缩 after 的摘要段以真值替换估算（仅记录落账且>0 时生效；strict 重试重置收集防串用）。
+- **L1 调表（200 生产样本拟合）**：TOOL_RESULT_CHARS_PER_TOKEN 2→1.7、JSON_CHARS_PER_TOKEN 3→2。**行为变化（有意）**：tool_result/JSON 密集内容估算 +17.6%/+50% → tools 预算占比回升、messagesLimit 略降、压缩触发略提前（更贴实测）。
+- **压缩 before/after 报告尺统一**：manual tokensBefore/After 从「未老化 fold 视图 messages-only」改为 `rawRequestViewTokens`（fold+老化+system+tools 未校准估算，与配对槽分母同式）；runner/gateway 透传 systemPrompt/tools（同 builder 换算，此前 tools 恒缺）。**两把尺分工**：报告尺（toast/记录，raw）vs 决策尺（触发/增长门，calibrated messages-only）——命名与注释已分开，勿互换。UI toast 文案改「（请求估算）」。
+- **manual 压缩后顶栏刷新**：清空 viewTokensEst 待下轮重算（不混写校准/未校准两把尺），inspector.compact 记 manual 块。
+- 红线 `tests/harness/context-metering-truth.test.ts` 7 条（配对三态/覆盖丢样/真值替换/tools JSON 档/调表/口径对照）；既有测试期望改引用比率常量（调表自动跟上）。
+
+已知限制：proactive/overflow 事件的 tokensBefore/After 仍 messages-only（auto 路统一另行拍板）；真值公式双写未抽单源；真值不落 record meta。## v0.102.2 (2026-11-07)
 
 ### fix(engine): 主动压缩放开 turn 内触发（活跃窗口保护）+ overflow 连环触发止血
 
