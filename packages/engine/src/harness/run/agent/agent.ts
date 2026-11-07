@@ -356,6 +356,8 @@ export class Agent {
       extensionSnapshotBudgetTokens: options?.runScope?.extensionSnapshotBudgetTokens,
       iteration: options?.runScope?.iteration,
       systemPrompt: options?.runScope?.systemPrompt ?? context.systemPrompt,
+      // 与请求 toolDefs 同源：loop 发送的就是 context.tools（run 级会话过滤面）
+      tools: options?.runScope?.tools ?? context.tools,
       grounding: options?.runScope?.grounding,
       toolRuntime: options?.runScope?.toolRuntime,
       agentRevision: options?.runScope?.agentRevision,

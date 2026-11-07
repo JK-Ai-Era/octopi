@@ -135,17 +135,20 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     assertToolPairsAligned(r1.messages as Array<{ role?: string; tool_calls?: Array<{ id?: string }>; tool_call_id?: string }>);
 
     events.length = 0;
-    // A：+1 条短消息 → 复用重建：不再打 LLM、不再发非 cached 事件（修复前：每 turn 重裁+发通知）
+    // A：+1 条短消息 → 视图已回落到触发线内：零 LLM、零压缩动作（不再每 turn 重裁）
     const r2 = await engine.assemble({ ...params, messages: [...base, userMsg('tiny follow-up')] });
     expect(summarize).toHaveBeenCalledTimes(1);
     expect(nonCachedCompacts(events)).toHaveLength(0);
-    // 复用重建确实发生了（cached 事件在场），而非静默无操作
-    expect(events.some((e) => e.type === 'context.compact.end' && e.cached)).toBe(true);
+    expect(events).toHaveLength(0);
     expect(r2.summary).toContain('proactive-summary');
 
     events.length = 0;
-    // 增量攒够（≥3 条）→ 开启新一轮压缩，摘要按 previousSummary 增量合并
-    const grown = atTurnBoundary([...base, userMsg('n1'), userMsg('n2'), userMsg('n3')]);
+    // 视图重新涨过触发线（口径=实际请求，必须是真内容增长）→ 开启新一轮压缩，
+    // 摘要按 previousSummary 增量合并
+    const grown = atTurnBoundary([
+      ...base,
+      ...Array.from({ length: 10 }, (_, i) => toolRound(100 + i, 'r'.repeat(5_000))).flat(),
+    ]);
     await engine.assemble({ ...params, messages: grown });
     expect(summarize).toHaveBeenCalledTimes(2);
     expect(nonCachedCompacts(events)).toHaveLength(1);
@@ -207,10 +210,17 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     expect(llmCompacts(events)).toHaveLength(0);
 
     events.length = 0;
-    // 攒够增量 → 重试 LLM 摘要（turn 边界）
-    await engine.assemble({ ...params, messages: atTurnBoundary([...base, userMsg('n1'), userMsg('n2'), userMsg('n3')]) });
+    // 视图重新涨过触发线（真内容增长）→ 重试 LLM 摘要（turn 边界）
+    await engine.assemble({
+      ...params,
+      messages: atTurnBoundary([
+        ...base,
+        ...Array.from({ length: 10 }, (_, i) => toolRound(200 + i, 'r'.repeat(5_000))).flat(),
+      ]),
+    });
     expect(summarize).toHaveBeenCalledTimes(2);
-    expect(nonCachedCompacts(events)).toHaveLength(1);
+    // overflow 降级是如实可见的真实动作（A′），此处只钉「proactive 重试」这一轮
+    expect(llmCompacts(events)).toHaveLength(1);
   });
 
   it('重启恢复的压缩快照（有计数无摘要）立即停止重裁，增量攒够才补真摘要（生产状态形状）', async () => {

@@ -444,7 +444,7 @@ describe('红线 7（评审 F1）：机械降级不得吞既有语义摘要', ()
 });
 
 describe('红线 8（评审 F2）：重启后增长门/冷却基数对称', () => {
-  it('fullTokens 随记录持久并恢复；overflow 记录不进门基', async () => {
+  it('请求口径读数（viewTokens）随记录持久并恢复；overflow 记录不进门基', async () => {
     const store = new InMemoryTransformStore();
     let summarizeCalls = 0;
     const summarize = async (): Promise<string> => {
@@ -473,7 +473,10 @@ describe('红线 8（评审 F2）：重启后增长门/冷却基数对称', () =
       messages: [...base, userMsg('boundary', 2000)],
     });
     const after1 = await store.load('s-gate', '');
-    expect(after1.records[0]!.meta.fullTokens).toBeGreaterThan(0);
+    // 增长门基 = 请求口径读数（fold 视图 + 老化），且必须带口径版本标记——
+    // 旧口径基数（全量历史）与请求口径互比会永久压制压缩（2026-11-07）
+    expect(after1.records[0]!.meta.viewTokens).toBeGreaterThan(0);
+    expect(after1.records[0]!.meta.viewTokensSource).toBe('request');
     const gateCount = after1.records[0]!.meta.messageCount;
 
     // 重启：增长门基数应从记录恢复——+1 条不得触发重摘要（门在工作）

@@ -63,7 +63,12 @@ export type ContextCompactReason = 'proactive' | 'overflow';
  * 避免 LLM 摘要耗时被误判为会话卡死。失败不中断本轮（引擎回退截断）。
  */
 export interface ContextCompactEvent {
-  type: 'context.compact.start' | 'context.compact.end' | 'context.compact.error' | 'context.compact.summarize_fallback';
+  type:
+    | 'context.compact.start'
+    | 'context.compact.progress'
+    | 'context.compact.end'
+    | 'context.compact.error'
+    | 'context.compact.summarize_fallback';
   sessionId: string;
   reason?: ContextCompactReason;
   /** 压缩前估算 token */
@@ -76,11 +81,21 @@ export interface ContextCompactEvent {
   durationMs?: number;
   /** 走缓存摘要重建，未调 LLM */
   cached?: boolean;
+  /** 中止收尾（本轮作废、零写入）——不是「压缩完成」，UI 不得显示 compacted */
+  cancelled?: boolean;
   /** summarize_fallback：cache-miss 旁路原因（no_prefix | window_guard | window_exhausted，F22） */
   fallback?: string;
   error?: string;
   /** error 的性质：denied = before_compaction 策略拒绝（不是故障）；failed = 压缩失败 */
   kind?: 'denied' | 'failed';
+  /** progress：当前阶段（summarize = 摘要请求已发出、等 provider 返回） */
+  phase?: 'summarize';
+  /** progress：摘要请求体量（JSON 字符数） */
+  requestChars?: number;
+  /** progress：摘要请求消息条数 */
+  requestMessages?: number;
+  /** progress：本次摘要调用预算（ms）；缺失 = 不设预算 */
+  timeoutMs?: number;
 }
 
 /** 事件回调（Builder 注入 → EventBus） */
@@ -113,7 +128,7 @@ export interface AssembleParams {
    * 与 contextWindow 无关；未知窗口时仍可作手动/结构压缩的目标。
    */
   compactTargetTokens?: number;
-  /** 中止信号 */
+  /** 中止信号（run 中止 → 取消在飞摘要；P3 起由 Loop 经 convertToLlm 透传） */
   signal?: AbortSignal;
   /** Token 估算器（可选，未提供时使用默认实现）。**必须是未校准的原始估算器**——
    *  校准由引擎 ContextSizeLedger 统一施加，传入已校准包装会造成双重校准 */
@@ -128,6 +143,7 @@ export interface AssembleParams {
   taskSnapshot?: string;
   /** 压缩进度回调（可选；UI / 可观测） */
   emit?: ContextEmitFn;
+  /**
   /**
    * 旧压缩快照读口（ContextCompactSnapshot，迁移输入）：转换记录账本为空且快照
    * 存在时一次性迁移为初始记录（幂等）。迁移后快照不再更新。

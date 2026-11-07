@@ -110,7 +110,31 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.102.0 (2026-11-06)
+## v0.102.1 (2026-11-07)
+
+### fix(engine): 压缩决策读数与摘要请求前缀改按实际请求形状
+
+长会话「压缩后仍在 waiting / 每轮必然重压」的根治（现场：视图 118,935 tokens，全量历史 621,088，摘要请求 2.13MB 且 provider 20+ 分钟不返回）。
+
+- **触发读数口径**：proactive 的 `currentTokens`、增长门基数、记录 `meta.viewTokens` 统一为 `fold + 老化`（`measureRequestViewTokens`）。旧实现量「老化后的全量历史」——压缩把视图压小却压不动读数，只要历史再涨 25% 阈值就必然再压一次。压缩**输入**仍用原 messages（摘要质量需要原文）。
+- **摘要请求前缀**：proactive / manual 的 `llmPrefix` 由 `messages`（全部历史）改为 `folded.view`，与主会话请求逐字节同形 → 前缀缓存命中；请求体随视图而非历史总量。带既有摘要时 `foldRange` 改述为「把 N 条新消息并入上一份交接书」（新增 `coveredCount`）。**已知边界**：cache-miss 降级旁路（小窗口 `window_guard`）仍以 raw middle 文本化发送（M-4 待收，见 arch/open-problems）。
+- **回声闸门**：`echoSource` 排除既有压缩占位——模型续写上一份交接书不是「复读原文」，否则新增内容不多时会被误判 `verbatim_echo` 而降级。
+- **零 LLM 守卫**：视图超线但中段已被既有摘要全部覆盖时不再发起摘要（重压只会原样复述，且 P2 让重压变便宜后会退化成摘要风暴）。
+- **口径版本自愈**：记录新增 `meta.viewTokensSource:'request'`；无该标记的旧记录不提供增长门基数（允许一次压缩自愈），避免旧全量口径与请求口径互比而永久压制压缩。
+- **门基数与展示读数分离**：新增 `lastCompactGateTokens`（只在压缩完成时推进）。展示用的 `lastProactiveTokens` 每轮装配都会刷新，若拿它当基数，基数永远追上当前读数 → 压缩永久饿死（已用变异测试钉住）。
+
+**Breaking notes**：`meta.fullTokens` 停止写入（仅保留读取历史记录）；增长门基数改读 `meta.viewTokens` + `viewTokensSource`。既有会话首次压缩后即完成口径迁移。
+
+### feat(engine): 摘要调用可中断 / 可观测 / 有独立预算（P3）
+
+同一次事故的后半程：请求发不回来时，abort 无效、UI 只能干等（实测 abort 后请求仍挂到进程重启）。
+
+- **abort 透传**：`convertToLlm(messages, signal)` 契约新增 signal（Loop → Builder → `assemble` → `compactMessages` → `summarizeFn` → `provider.chat`）。此前摘要调用在 run 的 modelCall watchdog 之外且不带 signal，provider 侧无法取消。
+- **中止轮不写记录**：run 中止时跳过本轮压缩（含机械降级）并且不推进增长门基数——中止代表本轮作废，残缺产物不得进历史。
+- **单次摘要预算**：新增 `contextEngine.summarizeTimeoutMs`（默认 300000，`0` = 不设）。超时中止请求，按 `onSummarizeFail` 降级，并发 `context.compact.error`（`kind:'failed'`，`error` 前缀 `summarize_timeout:`）。**中断不续做**——压缩是幂等整体动作，下一轮重新发起即可，不引入断点/分段摘要。
+- **进度可观测**：新增事件 `context.compact.progress`（phase / requestChars / requestMessages / timeoutMs）。Gateway `CompactStatus` 增加 `phase` / `startedAt` / `requestChars` / `timeoutMs`，WebUI 面板显示「摘要请求已发出 N KB，已等待 Ns / 预算 Ms」（1s tick 驱动，provider 静默期也走秒），不再是无法区分的「进行中」。范围：run 内自动路径（proactive/overflow）；manual 的 progress 事件暂不入 timeline/gatewayBus（待收，见 arch/open-problems）。
+
+**Breaking notes**：`ModelLoopConfig.convertToLlm` 第二参数由无到有（可选，旧实现不受影响）；`CompactOptions.signal` 新增；`ContextEngineConfig.summarizeTimeoutMs` 新增配置项。
 
 ### feat(engine): persistent transform records — compaction products become durable facts
 

@@ -526,6 +526,12 @@ export interface ContextEngineConfig {
    */
   proactiveCooldownMs?: number;
   /**
+   * 单次摘要 LLM 调用预算 ms（默认 300000；0 = 不设预算，只受 provider 超时约束）。
+   * 超时即中止摘要请求并按 onSummarizeFail 降级——防止 provider 挂死时 UI 全程假等。
+   * 中断不续做：下一轮重新发起压缩即可。
+   */
+  summarizeTimeoutMs?: number;
+  /**
    * 历史工具结果批量冻结老化（F1-B2）：当前 run 永不老化、近 rawWindow 条跨轮原文、
    * 更旧按 freezeBatch 成批降级为结构化指针（视图级、write-once、禁渐进）。
    */

@@ -79,8 +79,13 @@ describe('DefaultContextEngine emit', () => {
       protectLastN: 4,
     });
     const base: Message[] = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 26; i++) {
       base.push(userMsg('x'.repeat(400)));
+    }
+    // 尾部 protectLastN=4 故意放大：压缩后视图仍在线以上，才会走「复用重建」分支
+    // （2026-11-07 口径修正后，视图回落到线内就零动作——正是要防的重复压缩）
+    for (let i = 0; i < 4; i++) {
+      base.push(userMsg('y'.repeat(3000)));
     }
     const params = {
       sessionId: 's-cache-evt',

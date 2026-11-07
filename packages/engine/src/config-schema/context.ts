@@ -42,6 +42,8 @@ export const ContextEngineConfigSchema = z.object({
   /** 0 = 禁新的路径 A 压缩（不只禁 LLM；不丢粘滞视图）；见 ContextEngineConfig JSDoc */
   proactiveCompactRatio: z.number().min(0).max(1).optional(),
   proactiveCooldownMs: z.number().min(0).optional(),
+  /** 单次摘要 LLM 调用预算（ms）；0 = 不设预算（只受 provider 超时约束），缺省 300000 */
+  summarizeTimeoutMs: z.number().min(0).optional(),
   historyAging: HistoryAgingConfigSchema.optional(),
   /** 工作目标 token（与窗口解耦，F1-B3）；0 = 只挂窗口比例线（proactiveCompactRatio） */
   targetTokens: z.number().int().nonnegative().optional(),

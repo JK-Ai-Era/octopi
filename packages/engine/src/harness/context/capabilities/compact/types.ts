@@ -34,6 +34,11 @@ export type SummarizeFunction = (
     maxTokens?: number;
     /** 自定义指令 */
     instructions?: string;
+    /**
+     * 中止信号（P3）：run 中止或摘要预算超时都必须能取消在飞请求，
+     * 否则 UI 只能干等到 provider 侧超时（2026-11-07 事故：2.13MB 非流式请求挂 20+ 分钟）。
+     */
+    signal?: AbortSignal;
   },
 ) => Promise<string>;
 
@@ -54,6 +59,7 @@ export interface CompactOptions {
   summarizePolicy?: SummaryPolicy | string;
   /** 注入的摘要执行函数（族 A；契约见 SummarizeFunction） */
   summarizeFn?: SummarizeFunction;
+  /** 摘要失败/取消时的降级策略：truncate=裁掉未覆盖中段（宁可瘦不丢坏），keep_partial=保留部分产物 */
   onSummarizeFail?: 'truncate' | 'keep_partial';
   estimator?: CompactTokenEstimator;
   previousSummary?: string;
@@ -71,7 +77,16 @@ export interface CompactOptions {
    * 折叠区间（评审 F7）：告知摘要器「本次交接书将替换到第几条、尾部多少条原样保留」，
    * 防止模型只总结眼前最近的尾部、漏掉真正要被折叠的旧中段。
    */
-  foldRange?: { replacedCount: number; total: number; preservedTail: number };
+  foldRange?: {
+    /** 本次需要并入摘要的消息条数（既有摘要之后、保护尾之前） */
+    replacedCount: number;
+    /** 会话消息总数 */
+    total: number;
+    /** 原样保留的尾部条数 */
+    preservedTail: number;
+    /** 前缀里上一份摘要已经代表的早期消息条数（0/缺省 = 无既有摘要） */
+    coveredCount?: number;
+  };
   /** 会话模型窗口（评审 F5）：provider 多按 input+max_tokens ≤ window 校验，压缩恰在最满时触发 */
   contextWindow?: number;
   /** 会话模型输出上限（评审 F5）：保险丝不得越过模型自身的 max output */
@@ -81,6 +96,15 @@ export interface CompactOptions {
    * summarizeFn 路径只许尾部追加指令；禁止改写前缀字节。
    */
   llmPrefix?: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[];
+  /**
+   * 回声比对源覆盖（P2）：前缀含既有摘要占位时，占位正文不得参与回声判定——
+   * 模型复用/续写上一份交接书不是「复读原文」。缺省回落到前缀文本投影。
+   */
+  echoSource?: string;
+  /**
+   * 中止信号（P3）：run 中止 / 摘要预算超时 → 取消在飞摘要请求。
+   * 取消产生的错误按 onSummarizeFail 降级（调用方另按 signal.aborted 决定是否写记录）。
+   */
   signal?: AbortSignal;
   emit?: (e: {
     type: 'compact.start' | 'compact.end' | 'compact.error' | 'compact.summarize_fallback';

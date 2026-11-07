@@ -122,6 +122,13 @@ export interface RunScope {
   /** 本轮 systemPrompt 装配结果；供 convertToLlm / 层装配 */
   systemPrompt?: string;
   /**
+   * 本 Run 实际发送的工具清单（与 loop 的 toolDefs 同源 = run 级 AgentContext.tools）。
+   * 估算与请求必须量同一集合（F1-B3「尺子与作用域同源」）：convertToLlm 若回退
+   * 实例级 agent.context.tools，会话过滤面不同会产出系统性错位估算（2026-11-07：
+   * 委派子会话首步实测 23,811 / 估算 5,643，毒对进台账后被锚外推放大 5.4×）。
+   */
+  tools?: import('@octopi-agent/core/loop/types.js').AgentTool[];
+  /**
    * turn 级 Knowledge grounding（arch/knowledge-layer.md §4.4）。
    * 内容命中不进 system；消息侧插槽 source='knowledgeGrounding'。
    */

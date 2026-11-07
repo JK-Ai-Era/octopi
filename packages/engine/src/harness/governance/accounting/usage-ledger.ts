@@ -27,6 +27,8 @@ export interface UsageLedgerSnapshot {
   elapsedMs: number;
   /** P5: context 估算 tokens（最新值） */
   contextEstTokens?: number;
+  /** context 实测 tokens（最近一次非摘要 LLM 调用的 prompt 实测；wrap-up 压力轴优先用它） */
+  contextActualTokens?: number;
   /** P5: context 窗口大小（模型能力） */
   contextWindowTokens?: number;
   /** P5: 估算花费（币种由 pricing 决定） */
@@ -57,6 +59,7 @@ export class UsageLedger {
   private summaryOutputTokens = 0;
   private toolCalls = 0;
   private contextEstTokens?: number;
+  private contextActualTokens?: number;
   private contextWindowTokens?: number;
   private toolSummaryApplied = 0;
   private toolOutputRawChars = 0;
@@ -81,6 +84,13 @@ export class UsageLedger {
     if (opts?.summary) {
       this.summaryLlmCalls++;
       this.summaryOutputTokens += usage.outputTokens;
+    } else {
+      // context 实测：只认对话请求的 prompt 实测（摘要请求的 usage 是另一个请求的体量，
+      // 混入会污染压力轴）；provider 报告优先，分项和兜底——与展示口径同源
+      const promptActual =
+        usage.inputReportedTokens ??
+        usage.inputUncachedTokens + usage.inputCachedTokens + usage.inputCacheWriteTokens;
+      if (promptActual > 0) this.contextActualTokens = promptActual;
     }
   }
 
@@ -138,6 +148,7 @@ export class UsageLedger {
     this.summaryOutputTokens = 0;
     this.toolCalls = 0;
     this.contextEstTokens = undefined;
+    this.contextActualTokens = undefined;
     this.contextWindowTokens = undefined;
     this.toolSummaryApplied = 0;
     this.toolOutputRawChars = 0;
@@ -174,6 +185,7 @@ export class UsageLedger {
       toolCalls: this.toolCalls,
       elapsedMs: Date.now() - this.startTime,
       contextEstTokens: this.contextEstTokens,
+      contextActualTokens: this.contextActualTokens,
       contextWindowTokens: this.contextWindowTokens,
       toolSummaryApplied: this.toolSummaryApplied,
       toolOutputRawChars: this.toolOutputRawChars,
@@ -181,4 +193,18 @@ export class UsageLedger {
       toolEffects: Object.keys(this.toolEffects).length > 0 ? this.toolEffects : undefined,
     };
   }
+}
+
+/**
+ * wrap-up 压力轴的 context 体量口径（单一实现）：实测优先，估算只做前瞻补充。
+ * 毒估算/锚外推可把估算放大数倍（2026-11-07 实测 5.4× 虚高误杀 run），
+ * 压力裁决必须锚在 provider 实测上；无实测（首步前）才回落估算。
+ *
+ * @param snapshot - 用量账本快照
+ * @returns 压力裁决用的 context 体量（tokens），两者皆缺返回 undefined
+ */
+export function contextPressureTokens(
+  snapshot: Pick<UsageLedgerSnapshot, 'contextActualTokens' | 'contextEstTokens'>,
+): number | undefined {
+  return snapshot.contextActualTokens ?? snapshot.contextEstTokens;
 }

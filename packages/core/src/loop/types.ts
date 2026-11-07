@@ -308,7 +308,7 @@ export interface AgentLoopConfig extends ToolHooksConfig, StepHooksConfig {
 
   // ── 消息格式边界 ──
   /** 内部消息格式 → LLM 消息格式。不传则直接透传。 */
-  convertToLlm?: (messages: Message[]) => Promise<LLMMessage[]>;
+  convertToLlm?: (messages: Message[], signal?: AbortSignal) => Promise<LLMMessage[]>;
   /** Provider request-only projection; never assigned to the mutable message workspace. */
   transformLlmMessages?: (messages: LLMMessage[]) => Promise<LLMMessage[]>;
 

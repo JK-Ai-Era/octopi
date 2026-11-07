@@ -87,10 +87,15 @@ export interface TransformRecordMeta {
   summarizeAttempted: boolean;
   /** messages.length at creation (growth-gate base) */
   messageCount: number;
-  /** full-view token estimate at creation (growth gate, target mode) */
+  /** raw-history token estimate at creation — 仅诊断口径（有多段历史时远大于实际请求）
+   *  ：**不作增长门基数**（2026-11-07 起，改用 viewTokens） */
   fullTokens?: number;
-  /** post-compaction view token estimate */
+  /** post-compaction view token estimate = 实际请求口径（fold + 老化） */
   viewTokens?: number;
+  /** viewTokens 的计量口径版本：缺省 = 旧口径（fold 视图未老化、且非请求形状）。
+   *  增长门只认可 'request' 基；旧记录视为无基数（允许一次压缩自愈），
+   *  否则两种口径互比会永久压制压缩。 */
+  viewTokensSource?: 'request';
 }
 
 /** Record as handed to the store (seq assigned by the store; text goes to a blob). */

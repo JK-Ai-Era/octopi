@@ -146,6 +146,14 @@ export interface CompactStatus {
   threshold?: number;
   durationMs?: number;
   error?: string;
+  /** 当前阶段（P3）：summarize = 摘要请求已发出、等 provider 返回 */
+  phase?: 'summarize';
+  /** 进度起点（P3）：UI 用它显示「已等待 Ns」（无需后端心跳） */
+  startedAt?: number;
+  /** 摘要请求体量（P3）：JSON 字符数 */
+  requestChars?: number;
+  /** 本次摘要调用的单次预算（ms） */
+  timeoutMs?: number;
 }
 
 /** 模型调用重试的当前状态（用户可见，非调试信息） */
@@ -1897,6 +1905,30 @@ export class OctopiRuntimeStore extends EventTarget {
             reason: d?.reason,
             tokensBefore: typeof d?.tokensBefore === 'number' ? d.tokensBefore : undefined,
             threshold: typeof d?.threshold === 'number' ? d.threshold : undefined,
+            startedAt: Date.now(),
+          },
+        };
+        inspectorChanged = true;
+        break;
+      }
+      case 'context.compact.progress': {
+        // P3：摘要请求已发出但还没回来——把「等谁、等多久、等多大」如实带给 UI。
+        // 事故里 UI 只显示「进行中」，用户无法区分「在跑」和「provider 不返回」。
+        const d = event.data as {
+          phase?: 'summarize';
+          requestChars?: number;
+          requestMessages?: number;
+          timeoutMs?: number;
+        } | undefined;
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          compact: {
+            ...(this.chat.inspector.compact ?? { active: true }),
+            active: true,
+            phase: d?.phase ?? 'summarize',
+            requestChars: typeof d?.requestChars === 'number' ? d.requestChars : undefined,
+            timeoutMs: typeof d?.timeoutMs === 'number' ? d.timeoutMs : undefined,
+            startedAt: this.chat.inspector.compact?.startedAt ?? Date.now(),
           },
         };
         inspectorChanged = true;
@@ -1909,6 +1941,7 @@ export class OctopiRuntimeStore extends EventTarget {
           tokensAfter?: number;
           durationMs?: number;
           cached?: boolean;
+          cancelled?: boolean;
         } | undefined;
         const tokensAfter = typeof d?.tokensAfter === 'number' ? d.tokensAfter : undefined;
         // P0-C 口径守护：tokensAfter 是压缩器 messages 口径（未校准、不含 system/tools），
@@ -1944,6 +1977,19 @@ export class OctopiRuntimeStore extends EventTarget {
           },
         };
         inspectorChanged = true;
+        break;
+      }
+      // M-1 兜底：run 终态（正常结束/中止）时若压缩仍悬挂（引擎侧事件丢失等），
+      // 一次性清掉 active——压缩只存在于 run 进行中，run 结束后「进行中」必为假象。
+      case 'engine.end':
+      case 'interrupted': {
+        if (this.chat.inspector?.compact?.active) {
+          this.chat.inspector = {
+            ...this.chat.inspector,
+            compact: { ...this.chat.inspector.compact, active: false },
+          };
+          inspectorChanged = true;
+        }
         break;
       }
       case 'context.layers.assembled': {

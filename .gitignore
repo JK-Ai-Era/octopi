@@ -13,6 +13,7 @@ arch/
 # TypeScript 编译产物（防止 web tsc 污染 src/）
 web/dist/
 web/tsconfig.tsbuildinfo
+*.tsbuildinfo
 src/**/*.js
 web/src/**/*.js
 

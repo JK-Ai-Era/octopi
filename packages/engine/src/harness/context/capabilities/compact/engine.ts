@@ -247,7 +247,9 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
 
       let usePrefix = Boolean(opts.llmPrefix?.length);
       let llmMessages = usePrefix ? buildPrefixed() : buildTextify();
-      let echoSource = usePrefix ? prefixEchoSource() : middleText;
+      // 回声源：仅前缀分支才用调用方覆盖（前缀含既有摘要占位时，占位正文不得参与判定）；
+      // textify 分支的比对源必须是它自己发给模型的文本（middleText）
+      let echoSource = usePrefix ? (opts.echoSource ?? prefixEchoSource()) : middleText;
 
       // 硬顶 = 软目标 4 倍保险丝（P1c 禁硬截断/静默半截），再按窗口钳制（评审 F5）：
       // provider 多按 input+max_tokens ≤ window 校验，压缩恰在会话最满时触发，保险丝可能把
@@ -293,6 +295,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           return summarizeFn(msgs, {
             previousSummary: opts.previousSummary,
             maxTokens: providerMaxTokens,
+            ...(opts.signal ? { signal: opts.signal } : {}),
           });
         };
         const text = await invokeGuardedSummarize(invoke, echoSource);

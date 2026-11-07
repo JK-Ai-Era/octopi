@@ -1227,6 +1227,10 @@
           "type": "number",
           "minimum": 0
         },
+        "summarizeTimeoutMs": {
+          "type": "number",
+          "minimum": 0
+        },
         "historyAging": {
           "type": "object",
           "properties": {

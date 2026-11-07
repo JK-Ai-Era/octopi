@@ -40,12 +40,14 @@ const MERGE_HINT =
 
 /** 折叠区间（评审 F7/F3）：交接书替换范围与原样保留尾部——计数语义（两路都能精确供给，不编造索引） */
 export interface HandoverFoldRange {
-  /** 交接书替换的旧消息条数 */
+  /** 本次需要并入交接书的消息条数（既有摘要之后、保护尾之前） */
   replacedCount: number;
   /** 会话消息总数 */
   total: number;
   /** 原样保留的尾部条数（勿总结它们） */
   preservedTail: number;
+  /** 前缀中上一份交接书已代表的早期消息条数（P2：前缀=折叠视图时 >0） */
+  coveredCount?: number;
 }
 
 export interface HandoverPromptOptions {
@@ -99,7 +101,9 @@ export function buildHandoverPrompt(options: HandoverPromptOptions): HandoverPro
       )
     : 0;
   const foldBlock = options.foldRange
-    ? `\n\nFold boundary: the handoff summarizes ${options.foldRange.replacedCount} older messages of ${options.foldRange.total}; ${preservedHead} earlier and ${options.foldRange.preservedTail} newer messages are preserved verbatim - cover the replaced part in depth and keep the summary off the preserved ones.`
+    ? options.foldRange.coveredCount
+      ? `\n\nFold boundary: the conversation above already carries your previous handoff, which stands for ${options.foldRange.coveredCount} earlier messages of ${options.foldRange.total}. Fold the ${options.foldRange.replacedCount} newer messages that follow it into that handoff; the last ${options.foldRange.preservedTail} messages are preserved verbatim - keep the summary off them.`
+      : `\n\nFold boundary: the handoff summarizes ${options.foldRange.replacedCount} older messages of ${options.foldRange.total}; ${preservedHead} earlier and ${options.foldRange.preservedTail} newer messages are preserved verbatim - cover the replaced part in depth and keep the summary off the preserved ones.`
     : '';
   const mergeHint = options.previousSummary ? MERGE_HINT : '';
   const previousBlock = options.previousSummary

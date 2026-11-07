@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type {
   LayerRuntimeViewDto,
 } from '@octopi-agent/gateway/web/sdk/client';
@@ -42,6 +42,12 @@ const PLACEMENT_META: Record<'system' | 'snapshot', { label: string; cls: string
 };
 
 type LayerRow = LayerRuntimeViewDto & { placement?: 'system' | 'snapshot' };
+
+/** 摘要请求体量：字符数按 UTF-8 粗略折 KB/MB（只用于 UI 量级感知） */
+function formatBytes(chars: number): string {
+  const kb = chars / 1024;
+  return kb < 1024 ? `${kb.toFixed(0)}KB` : `${(kb / 1024).toFixed(2)}MB`;
+}
 
 function formatTokens(n: number | undefined | null): string {
   if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '未知';
@@ -101,6 +107,15 @@ export function ContextRuntimePanel({
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
   const [loadingContent, setLoadingContent] = useState(false);
+  // M-5（2026-11-07 评审）：elapsed 不能只在 render 期计算——provider 静默期没有任何
+  // 新事件触发重渲染，「已等待 Ns」会冻结在 0s。压缩进行中挂 1s tick 强制刷新。
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const compactActive = Boolean(inspector.compact?.active);
+  useEffect(() => {
+    if (!compactActive) return;
+    const timer = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [compactActive]);
 
   const layers = (snapshot?.layers ?? []) as LayerRow[];
   const rowKey = (l: LayerRow): string => `${l.id}#${rowPlacement(l)}`;
@@ -128,8 +143,19 @@ export function ContextRuntimePanel({
   const snapshotUsed = snapshot?.usedSnapshotTokens ?? 0;
 
   const compact = inspector.compact;
+  // P3：进行中要能回答「在等什么、等了多久、发出去多大」——三样都来自后端事件，
+  // 不做前端猜测；elapsed 由上面的 1s tick 驱动刷新（provider 静默期也走秒）。
+  const compactElapsedS =
+    compact?.active && compact.startedAt
+      ? Math.max(0, Math.round((nowTick - compact.startedAt) / 1000))
+      : undefined;
   const compactText = compact?.active
-    ? `进行中（${compact.reason === 'proactive' ? '主动摘要' : '溢出'}）`
+    ? `进行中（${compact.reason === 'proactive' ? '主动摘要' : compact.reason === 'overflow' ? '溢出' : '摘要'}）` +
+      (compact.phase === 'summarize'
+        ? `：摘要请求已发出${compact.requestChars ? ` ${formatBytes(compact.requestChars)}` : ''}` +
+          (compactElapsedS !== undefined ? `，已等待 ${compactElapsedS}s` : '') +
+          (compact.timeoutMs ? ` / 预算 ${Math.round(compact.timeoutMs / 1000)}s` : '')
+        : '')
     : compact?.error
       ? `失败：${compact.error}`
       : compact?.cached

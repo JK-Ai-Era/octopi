@@ -54,6 +54,12 @@ export interface SizeLedgerWarn {
   (message: string): void;
 }
 
+/**
+ * observe 裁决：accepted=干净入账（可作锚）/ clamped=越界夹取入账（禁作锚）/
+ * rejected=样本门拒收 / rebased=滑窗重锚 / ignored=无效对（缺一边，丢样）
+ */
+export type ObserveVerdict = 'accepted' | 'clamped' | 'rejected' | 'rebased' | 'ignored';
+
 /** 校准台账：observe(actual, view) 学 ratio；calibrate(viewTokens) 出校准读数 */
 export class ContextSizeLedger {
   private ratioByModel = new Map<string, number>();
@@ -72,9 +78,15 @@ export class ContextSizeLedger {
    * @param actual provider 实测 prompt tokens
    * @param view 同一请求的未校准视图估算
    * @param opts sessionId（告警限频键）/ now（测试注入时钟）
+   * @returns 裁决（调用方据其决定是否冻结实测锚——夹取/拒收/重锚样本一律不得作锚）
    */
-  observe(modelKey: string, actual: number, view: number, opts?: { sessionId?: string; now?: number }): void {
-    if (!(actual > 0) || !(view > 0)) return;
+  observe(
+    modelKey: string,
+    actual: number,
+    view: number,
+    opts?: { sessionId?: string; now?: number },
+  ): ObserveVerdict {
+    if (!(actual > 0) || !(view > 0)) return 'ignored';
     const raw = actual / view;
     const prev = this.ratioByModel.get(modelKey) ?? 1.0;
     const hasSamples = (this.samplesByModel.get(modelKey) ?? 0) > 0;
@@ -102,7 +114,7 @@ export class ContextSizeLedger {
           this.rejectStreaks.set(modelKey, []);
           this.setDegraded(modelKey, false, opts, raw); // 重锚基于新鲜证据窗，预测恢复可信
           this.warnOnce(opts?.sessionId, modelKey, raw, opts?.now, 'rebase', `regime shift: rebase learned=${rebase.toFixed(3)}`);
-          return;
+          return 'rebased';
         }
       }
       this.setDegraded(modelKey, true, opts, raw); // 证据流敌对 → 校准降级（方案 B）
@@ -114,10 +126,11 @@ export class ContextSizeLedger {
         'reject',
         `rejected（已拒绝入账） learned=${prev.toFixed(3)} gate=[${(prev / RATIO_SAMPLE_MAX_DEVIATION).toFixed(3)}, ${(prev * RATIO_SAMPLE_MAX_DEVIATION).toFixed(3)}]`,
       );
-      return;
+      return 'rejected';
     }
     this.rejectStreaks.set(modelKey, []);
-    if (raw < RATIO_CLAMP_MIN || raw > RATIO_CLAMP_MAX) {
+    const outOfClamp = raw < RATIO_CLAMP_MIN || raw > RATIO_CLAMP_MAX;
+    if (outOfClamp) {
       this.warnOnce(opts?.sessionId, modelKey, raw, opts?.now, 'clamp', `out of clamp（已夹取入账） clamp=[${RATIO_CLAMP_MIN}, ${RATIO_CLAMP_MAX}]`);
     }
     // 预测带（方案 B 门）：入账样本偏离已学 ratio 超 RATIO_PREDICTION_BAND 倍 = 乘数
@@ -131,6 +144,7 @@ export class ContextSizeLedger {
     const clamped = Math.min(RATIO_CLAMP_MAX, Math.max(RATIO_CLAMP_MIN, raw));
     this.ratioByModel.set(modelKey, EMA_NEW_WEIGHT * clamped + (1 - EMA_NEW_WEIGHT) * prev);
     this.samplesByModel.set(modelKey, (this.samplesByModel.get(modelKey) ?? 0) + 1);
+    return outOfClamp ? 'clamped' : 'accepted';
   }
 
   /** 降级状态写入 + 进入/退出可见（评审 F5）：生产须能从日志判定决策读数是校准还是实测锚定 */
@@ -223,6 +237,9 @@ export class ContextSizeLedger {
     const trusted = (this.samplesByModel.get(modelKey) ?? 0) >= 2 && !this.isDegraded(modelKey);
     if (trusted) return { tokens: this.calibrate(modelKey, rawTokens), source: 'calibrated' };
     if (anchor && anchor.modelKey === modelKey && anchor.actual > 0 && anchor.raw > 0) {
+      // 锚卫生（2026-11-07）：锚是同请求实测对的外推（配对槽保证同源）。此处不做比率带
+      // 拒用——ratio 远离 1 可能是合法极端内容（图片/大 schema，F1 冷锚定语义），
+      // 带检查会把这种内容的决策砸回裸估算（低估 → 压缩触发漏报）。
       return { tokens: Math.ceil((anchor.actual * rawTokens) / anchor.raw), source: 'anchored' };
     }
     return { tokens: rawTokens, source: 'raw' };

@@ -580,10 +580,12 @@ export class ConversationAdapter {
           tokensBefore?: number;
           tokensAfter?: number;
           cached?: boolean;
+          cancelled?: boolean;
           reason?: string;
           durationMs?: number;
         } | undefined;
-        if (d?.cached) break;
+        // cached=复用重建（非压缩）；cancelled=中止收尾（零写入）——都不是「compacted」
+        if (d?.cached || d?.cancelled) break;
         const before = typeof d?.tokensBefore === 'number' ? d.tokensBefore : undefined;
         const after = typeof d?.tokensAfter === 'number' ? d.tokensAfter : undefined;
         const parts: string[] = [];

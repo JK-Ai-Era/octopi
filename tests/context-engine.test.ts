@@ -1042,7 +1042,7 @@ describe('DefaultContextEngine', () => {
       expect(calibrated.overflow.length).toBeGreaterThan(base.overflow.length);
     });
 
-    it('compact-only rounds never write lastEstimatedTokens (single-writer invariant)', async () => {
+    it('compact-only rounds never write pendingUsagePair (single-writer invariant)', async () => {
       const engine2 = new DefaultContextEngine();
       await engine2.assemble({
         sessionId: 'sw-test',
@@ -1053,13 +1053,15 @@ describe('DefaultContextEngine', () => {
         tokenBudget: 100000,
       });
       const states = (
-        engine2 as unknown as { states: Map<string, { lastEstimatedTokens?: number; modelKey?: string }> }
+        engine2 as unknown as {
+          states: Map<string, { pendingUsagePair?: { rawEstimatedTokens: number; modelKey: string }; lastModelKey?: string }>;
+        }
       ).states;
       const stateKey = [...states.keys()][0];
-      const before = states.get(stateKey)!.lastEstimatedTokens;
-      expect(before).toBeGreaterThan(0);
+      const before = states.get(stateKey)!.pendingUsagePair;
+      expect(before?.rawEstimatedTokens).toBeGreaterThan(0);
 
-      // manual 压缩轮（无 summarize → 机械路径）：只动压缩态，不得触碰校准基 / modelKey
+      // manual 压缩轮（无 summarize → 机械路径）：只动压缩态，不得触碰校准配对槽 / lastModelKey
       await (
         engine2 as unknown as { compactStructural: (i: Record<string, unknown>) => Promise<unknown> }
       ).compactStructural({
@@ -1067,8 +1069,8 @@ describe('DefaultContextEngine', () => {
         messages: [createMessage('user', 'hello world'), createMessage('user', 'more content here')],
       });
       const after = states.get(stateKey)!;
-      expect(after.lastEstimatedTokens).toBe(before);
-      expect(after.modelKey).toBe('mock/m');
+      expect(after.pendingUsagePair).toEqual(before);
+      expect(after.lastModelKey).toBe('mock/m');
     });
   });
 

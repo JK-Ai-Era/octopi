@@ -47,7 +47,7 @@ import type { RunGuard, CheckpointContext, CheckpointVerdict, StepSummary } from
 import type { ReliabilityHarness as CoreReliabilityHarness } from '@octopi-agent/core/interfaces/reliability.js';
 import { RunMetricsCollector } from './run-metrics-collector.js';
 import { BudgetPolicyEngine } from '../budget/budget.js';
-import { UsageLedger } from '../../governance/accounting/usage-ledger.js';
+import { UsageLedger, contextPressureTokens } from '../../governance/accounting/usage-ledger.js';
 import type { UsageLedgerSnapshot } from '../../governance/accounting/usage-ledger.js';
 import { nominalTotalTokens } from '@octopi-agent/core/types/step.js';
 import { getRunScope } from '../run-scope.js';
@@ -1306,10 +1306,13 @@ export async function* runAgentWithReliability(
         const wrapUpSteps = wrapUpConfig?.steps ?? 3;
         const contextRatio = wrapUpConfig?.contextRatio ?? 0.85;
 
-        // 检查 context 轴 wrap-up（contextEstTokens / contextWindowTokens）
+        // 检查 context 轴 wrap-up：压力裁决**实测优先**（arch §10.19 尺子事故 #3：
+        // 估算/锚外推被毒读数劫持时，估算轴会 5× 虚高误杀 run——实测 173.7k/1.0M=17%
+        // 被判 86% 掐死评审）。实测缺席时才回落估算（估算只做前瞻补充）。
         const snapshot = ledger.snapshot({ scope: 'run' });
-        if (snapshot.contextEstTokens && snapshot.contextWindowTokens) {
-          const contextPressure = snapshot.contextEstTokens / snapshot.contextWindowTokens;
+        const contextSizeTokens = contextPressureTokens(snapshot);
+        if (contextSizeTokens && snapshot.contextWindowTokens) {
+          const contextPressure = contextSizeTokens / snapshot.contextWindowTokens;
           if (contextPressure >= contextRatio) {
             state.wrapUp = {
               reason: 'context',
@@ -1321,7 +1324,7 @@ export async function* runAgentWithReliability(
               type: 'budget.wrap_up',
               timestamp: Date.now(),
               metric: 'context',
-              contextEst: snapshot.contextEstTokens,
+              contextEst: contextSizeTokens,
               contextWindow: snapshot.contextWindowTokens,
               userMessage: state.wrapUp.userMessage,
               resumeHint: 'Run 已因 context 压力进入 wrap-up 模式，请输出阶段性结论。',

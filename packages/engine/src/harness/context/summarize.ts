@@ -35,6 +35,8 @@ export function createProviderSummarize(
       model: options?.model,
       // 未显式配置即不发送：由模型配置（ModelInfo.temperature）或服务端默认决定
       temperature: options?.temperature,
+      // P3：run 中止 / 摘要超时都靠这个 signal 取消在飞请求（provider 侧 fetch 已接 signal）
+      ...(opts?.signal ? { signal: opts.signal } : {}),
       // 源头钳制（评审 F6）：三条摘要路径（manual/proactive/overflow）共用本闭包，
       // 硬顶不得越过模型实际输出上限，否则窗口钳制在大窗口下仍会顶穿被 provider 400
       maxTokens:

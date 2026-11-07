@@ -101,6 +101,7 @@ export function resolveContextEngine(
       summaryBudget: config?.summaryBudget,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
+      summarizeTimeoutMs: config?.summarizeTimeoutMs,
       historyAging: config?.historyAging,
       targetTokens: config?.targetTokens,
       compactFallbackRatio: config?.compactFallbackRatio,

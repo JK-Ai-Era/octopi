@@ -2219,7 +2219,11 @@ export class SessionAwareRunner {
                 `[ctx] session=${sessionId} writer=estimate field=viewTokensEst value=${pressure.estimatedTokens}`,
               );
             }
-            const rawTokens = estimator.estimateMessages(session.messages);
+            // rawTokens = 全量原文估算（只进 Run 页签，永不冒充上下文用量）。
+            // 口径必须是 runContext.messages：fork/delegation 场景 :1981 会把
+            // runContext.messages 重绑定到工作集，session.messages 停在重绑定前的
+            // 快照（cs-* 会话 rawTokens 恒 4,203 的实锤），量它 = 量旧集合。
+            const rawTokens = estimator.estimateMessages(runContext.messages);
             eventData.rawTokens = rawTokens;
             lastRawTokens = rawTokens;
             console.log(`[ctx] session=${sessionId} writer=estimate field=rawTokens value=${rawTokens}`);

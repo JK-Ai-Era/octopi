@@ -1849,13 +1849,16 @@ export class AgentBuilder {
             })(messages, opts);
           }
         : undefined);
-    agent.setConvertToLlm(async (messages) => {
+    agent.setConvertToLlm(async (messages, signal) => {
       // I1：身份与 systemPrompt 优先读 RunScope ALS，避免共享 Agent 单例竞态
       const scope = getRunScope();
       const sessionId = scope?.sessionId ?? agent.contextSessionId;
       const agentId = scope?.agentId ?? 'default';
       const systemPrompt = scope?.systemPrompt ?? agent.context.systemPrompt;
-      const tools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] = (agent.context.tools ?? []).map((t) => ({
+      // 工具口径与请求同源（2026-11-07）：优先 run 级 tools（= loop 实际发送的 toolDefs），
+      // 实例级 agent.context.tools 仅作回退——两会话过滤面不同时错位估算会产生毒样本
+      const toolSource = scope?.tools ?? agent.context.tools ?? [];
+      const tools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] = toolSource.map((t) => ({
         type: 'function' as const,
         function: {
           name: t.name,
@@ -1889,6 +1892,8 @@ export class AgentBuilder {
         // 空串归一为 undefined——引擎口径「无素材」只有一种形状（评审 L3）
         taskSnapshot: scope?.taskSnapshot?.() || undefined,
         loadCompactState: () => agent.getSessionCompactState(sessionId, agentId),
+        // P3：run 中止信号 —— 摘要调用（provider.chat）随之取消；无此透传时 abort 只能干等
+        signal,
         // 惰性读 bus：覆盖 buildAgent 之后才 setEvents 的场景
         // Observer：ContextEngine 侧事件（context.compact.* 等）不经过 Runner emitObserved，
         // 必须在此直采 Hub，否则 timeline 永远看不到 compact。
