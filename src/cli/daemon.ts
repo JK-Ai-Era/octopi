@@ -87,7 +87,7 @@ export function resolveListenPort(
   const path = configPath ?? args.config;
   try {
     const config = loadConfig(path);
-    const httpChannel = config.channels?.find((c: { type: string }) => c.type === 'http');
+    const httpChannel = config.channels?.find((c: { type?: string }) => c.type === 'http');
     const gatewayOverride = (config as { gateway?: { port?: number } }).gateway;
     return resolveListenConfig({ gateway: gatewayOverride, http: httpChannel }).port;
   } catch { /* fall through */ }
@@ -1296,6 +1296,37 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         effectPolicy: gateway.getEffectPolicyStatus(),
       }),
     }));
+  }
+
+  // 插件 Channel 装配（channels[].plugin → 命名贡献工厂）：与 HttpChannelAdapter
+  // 同生命周期（gateway start/stop 驱动 adapter.start/stop）。fail-closed：引用未注册
+  // 贡献、工厂返回坏形状、未知内置类型都在启动时报真实原因，不静默丢弃。
+  {
+    const { createChannelAdapterFromConfig } = await import('@octopi-agent/engine/config.js');
+    for (const entry of config.channels ?? []) {
+      if (entry.plugin === undefined) {
+        if (entry.type === undefined) {
+          throw new Error('Channel: exactly one of type | plugin must be set');
+        }
+        if (entry.type !== 'http') {
+          throw new Error(
+            `Channel type "${entry.type}" is not supported (built-ins: http); use "plugin" for plugin channels`,
+          );
+        }
+        continue;
+      }
+      // 多用户 IM 通道 + dmScope main/缺省 = 全体发送者共享一个会话，显式告警
+      if ((config.session?.dmScope ?? 'main') === 'main') {
+        console.warn(
+          `[CLI] channel "${entry.plugin}": session.dmScope is "main" — all senders share one session; set "per-conversation" (IM groups) or "per-peer" for multi-user deployments`,
+        );
+      }
+      const adapter = await createChannelAdapterFromConfig(entry, (ref) =>
+        gateway.resolvePluginChannelFactory(ref),
+      );
+      gateway.registerChannel(adapter);
+      console.log(`[CLI] Registered channel: ${adapter.name} (plugin:${entry.plugin})`);
+    }
   }
 
   // 事件循环停滞看门狗（2026-10-28 事故的自检器官）：worker 侧检测停滞 + 自动栈采样，

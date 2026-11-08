@@ -1,7 +1,7 @@
 import { getOctopiHome } from '../../../../paths.js';
 import type { PluginLoaderConfig, LoadedPlugin, PluginDiagnostic, PluginEntryConfig } from './loader.js';
 import { PluginLoader } from './loader.js';
-import type { PluginCommandRecord, PluginToolRecord, PluginServiceRecord, PluginProviderRecord } from './contribution-registry.js';
+import type { PluginCommandRecord, PluginToolRecord, PluginServiceRecord, PluginProviderRecord, PluginChannelRecord } from './contribution-registry.js';
 import { PluginHookAdapter, type HookExecutionHost } from '../hooks/adapter.js';
 import { HookAuditJournal } from '../hooks/journal.js';
 import { resolveHitlOutcome, type HitlAskResult, type HitlOutcome } from '../../../governance/human-in-the-loop/decision-cache.js';
@@ -57,9 +57,16 @@ export class PluginManager {
 
   getProviders(): PluginProviderRecord[] { return this.loader.contributions.getProviders(); }
 
+  getChannels(): PluginChannelRecord[] { return this.loader.contributions.getChannels(); }
+
   /** Resolve a published provider factory by its globally unique contribution id. */
   resolveProviderFactory(ref: string): PluginProviderRecord | undefined {
     return this.loader.contributions.getProviders().find((provider) => provider.id === ref);
+  }
+
+  /** Resolve a published channel factory by its globally unique contribution id. */
+  resolveChannelFactory(ref: string): PluginChannelRecord | undefined {
+    return this.loader.contributions.getChannels().find((channel) => channel.id === ref);
   }
 
   getCommandSessionOps(pluginId: string, name: string): PluginCommandRecord['sessionOps'] | undefined {

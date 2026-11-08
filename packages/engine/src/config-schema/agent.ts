@@ -145,11 +145,27 @@ export const PluginConfigSchema = z
   })
   .strict();
 
-export const ChannelConfigSchema = z.object({
-  type: z.string({ error: 'Channel must have a type' }).min(1),
-  port: z.number().positive().optional(),
-  host: NetworkHostSchema.optional(),
-  path: z.string().optional(),
-  apiKey: z.string().optional(),
-  corsOrigins: z.array(z.string()).optional(),
-});
+export const ChannelConfigSchema = z
+  .object({
+    /** 内置通道类型（`http`）；与 plugin 二选一（恰好其一） */
+    type: z.string().min(1).optional(),
+    /** 插件 Channel 贡献 id（manifest contributes.channels）；与 type 二选一 */
+    plugin: z.string().min(1).optional(),
+    port: z.number().positive().optional(),
+    host: NetworkHostSchema.optional(),
+    path: z.string().optional(),
+    /** 密钥通道（如飞书 App Secret，推荐 `${ENV_VAR}` 引用）；options 禁放密钥 */
+    apiKey: z.string().optional(),
+    corsOrigins: z.array(z.string()).optional(),
+    /** 插件自定义旋钮（非密钥；原样透传） */
+    options: z.record(z.string(), z.unknown()).optional(),
+  })
+  .superRefine((v, ctx) => {
+    // type | plugin 恰好其一：schema/写盘校验与装配路由同闸（装配是第二道闸）
+    if ((v.type === undefined) === (v.plugin === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'exactly one of type | plugin must be set',
+      });
+    }
+  });

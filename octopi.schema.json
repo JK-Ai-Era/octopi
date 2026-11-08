@@ -2364,6 +2364,10 @@
             "type": "string",
             "minLength": 1
           },
+          "plugin": {
+            "type": "string",
+            "minLength": 1
+          },
           "port": {
             "type": "number",
             "exclusiveMinimum": 0
@@ -2394,11 +2398,15 @@
             "items": {
               "type": "string"
             }
+          },
+          "options": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
           }
-        },
-        "required": [
-          "type"
-        ]
+        }
       }
     },
     "session": {
@@ -2409,7 +2417,8 @@
           "enum": [
             "main",
             "per-peer",
-            "per-channel-peer"
+            "per-channel-peer",
+            "per-conversation"
           ]
         },
         "idleExpiryMs": {

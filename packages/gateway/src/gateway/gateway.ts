@@ -52,7 +52,7 @@ import { isTurnAnchor } from '@octopi-agent/engine/harness/context/layer-types.j
 import { wrapProviderWithCircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/provider-wrapper.js';
 import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '@octopi-agent/engine/harness/run/model/index.js';
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
-import type { PluginProviderRecord } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/contribution-registry.js';
+import type { PluginProviderRecord, PluginChannelRecord } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/contribution-registry.js';
 import {
   ClientToolRegistry,
   ClientStreamTransport,
@@ -409,6 +409,9 @@ export function createConcurrencyGate(max: number): {
   };
 }
 
+/** 启动窗口期入站消息缓冲上限（防御性容量，超限拒收并 fail loud） */
+const PENDING_INBOUND_CAP = 100;
+
 export class Gateway {
   /** 已注册的 Agent */
   private agents = new Map<string, AgentDefinition>();
@@ -441,6 +444,11 @@ export class Gateway {
   private started = false;
   private starting = false;
   private stopping = false;
+  /**
+   * 启动窗口期（channels 逐个 start、gateway_start hook 未完）的入站消息缓冲，
+   * started=true 后按序回放。上限防御内存膨胀；超限拒收（fail loud）。
+   */
+  private pendingInbound: ChannelMessage[] = [];
   private pluginServices!: PluginServiceSupervisor;
   private readonly activeChannels = new Set<ChannelAdapter>();
   /** 事件监听器 */
@@ -901,6 +909,13 @@ export class Gateway {
 
   private async rollbackFailedStart(): Promise<void> {
     this.started = false;
+    if (this.pendingInbound.length > 0) {
+      // 启动未完成即失败：显式命名被丢弃的消息，不静默吞
+      console.error(
+        `[Gateway] Dropping ${this.pendingInbound.length} inbound message(s) queued during failed startup`,
+      );
+      this.pendingInbound = [];
+    }
     for (const adapter of [...this.activeChannels].reverse()) {
       this.activeChannels.delete(adapter);
       try {
@@ -1092,6 +1107,19 @@ export class Gateway {
       sessionId: 'system', agentId: 'host', phase: 'started',
     });
     this.started = true;
+    // 回放启动窗口期排队的入站消息（保序；单条失败不阻断其余）
+    const pending = this.pendingInbound;
+    this.pendingInbound = [];
+    for (const queued of pending) {
+      try {
+        await this.handleInboundMessage(queued);
+      } catch (error) {
+        console.error(
+          `[Gateway] Queued inbound message ${queued.channel}:${queued.senderId} failed after startup:`,
+          error,
+        );
+      }
+    }
     console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
   }
 
@@ -1598,7 +1626,7 @@ export class Gateway {
         `[Gateway] knowledge stop failed: ${kStopErr instanceof Error ? kStopErr.message : String(kStopErr)}`,
       );
     }
-    for (const [name, adapter] of this.channels) {
+    for (const [name, adapter] of [...this.channels].reverse()) {
       if (!this.activeChannels.delete(adapter)) continue;
       console.log(`[Gateway] Stopping channel: ${name}`);
       try {
@@ -1871,6 +1899,11 @@ export class Gateway {
   }
 
   registerChannel(adapter: ChannelAdapter): void {
+    if (this.channels.has(adapter.name)) {
+      throw new Error(
+        `Channel "${adapter.name}" is already registered — v1 allows one instance per channel label; remove the duplicate channels[] entry`,
+      );
+    }
     this.channels.set(adapter.name, adapter);
     // 检测是否支持流式广播
     if ('broadcastEvent' in adapter && typeof adapter.broadcastEvent === 'function') {
@@ -1923,6 +1956,11 @@ export class Gateway {
   /** 插件 Provider 工厂解析（models.providers[].plugin → 命名贡献）。 */
   resolvePluginProviderFactory(ref: string): PluginProviderRecord | undefined {
     return this.pluginManager.resolveProviderFactory(ref);
+  }
+
+  /** 插件 Channel 工厂解析（channels[].plugin → 命名贡献）。 */
+  resolvePluginChannelFactory(ref: string): PluginChannelRecord | undefined {
+    return this.pluginManager.resolveChannelFactory(ref);
   }
 
   /**
@@ -5270,8 +5308,17 @@ export class Gateway {
   // ================================================================
 
   private async handleInboundMessage(msg: ChannelMessage): Promise<void> {
-    if (!this.started || this.stopping) {
-      throw new Error('gateway_not_ready: channel messages are not accepted');
+    if (this.stopping) {
+      throw new Error('gateway_not_ready: gateway is stopping');
+    }
+    if (!this.started) {
+      // 启动窗口期（先启动的通道可能已收消息，后启动的通道仍在握手）：
+      // 缓冲而非丢弃——IM 用户无法像 HTTP 客户端那样重试。
+      if (this.pendingInbound.length >= PENDING_INBOUND_CAP) {
+        throw new Error(`gateway_not_ready: inbound buffer full (${PENDING_INBOUND_CAP}) during startup`);
+      }
+      this.pendingInbound.push(msg);
+      return;
     }
     console.log(`[Gateway] Inbound message from ${msg.channel}:${msg.senderId} ?"${msg.content.substring(0, 50)}..."`);
 
@@ -6161,6 +6208,9 @@ export class Gateway {
         return `${agentId}:${msg.senderId}`;
       case 'per-channel-peer':
         return `${agentId}:${msg.channel}:${msg.senderId}`;
+      case 'per-conversation':
+        // IM 群聊（飞书等）按会话聚合：一个 chat 一个会话，P2P 的 chat 亦稳定
+        return `${agentId}:${msg.channel}:${msg.conversationId}`;
       default:
         return `${agentId}:main`;
     }

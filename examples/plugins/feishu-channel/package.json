@@ -1,0 +1,10 @@
+{
+  "name": "octopi-plugin-feishu-channel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Feishu (Lark) channel contribution for Octopi — official SDK long connection (WebSocket) transport",
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.76.0"
+  }
+}

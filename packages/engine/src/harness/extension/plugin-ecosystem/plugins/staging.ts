@@ -3,6 +3,7 @@
 import type { PluginApi } from './api.js';
 import type {
   OrderedHookEntry,
+  PluginChannelRegistration,
   PluginCommandRegistration,
   PluginProviderRegistration,
   PluginToolContribution,
@@ -16,13 +17,14 @@ export interface StagedContributions {
   hooks: Map<PluginHookName, OrderedHookEntry[]>;
   services: HookServiceRegistration[];
   providers: PluginProviderRegistration[];
+  channels: PluginChannelRegistration[];
 }
 
 const staged = new WeakMap<PluginApi, StagedContributions>();
 
 /** Called only by the host when constructing an author API. */
 export function createStaging(api: PluginApi): StagedContributions {
-  const value: StagedContributions = { tools: [], commands: [], hooks: new Map(), services: [], providers: [] };
+  const value: StagedContributions = { tools: [], commands: [], hooks: new Map(), services: [], providers: [], channels: [] };
   staged.set(api, value);
   return value;
 }

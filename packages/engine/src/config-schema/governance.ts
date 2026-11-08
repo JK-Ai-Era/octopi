@@ -41,7 +41,7 @@ export const CredentialsConfigSchema = z.object({
  * 由 `detectUnknownConfigKeys` 按 typo 告警（写路径拒绝），与其余显式段的语义一致。
  */
 export const SessionConfigSchema = z.object({
-  dmScope: z.enum(['main', 'per-peer', 'per-channel-peer']).optional(),
+  dmScope: z.enum(['main', 'per-peer', 'per-channel-peer', 'per-conversation']).optional(),
   /** 上下文租约（毫秒）。显式配置才生效；缺省不截断 LLM 窗口 */
   idleExpiryMs: z.number().int().positive().optional(),
 });

@@ -6,7 +6,7 @@ import type { HookServiceRegistration } from '../hooks/types.js';
 export interface PluginServiceRecord extends HookServiceRegistration {
   pluginId: string;
 }
-import type { PluginApi, PluginProviderFactory } from './api.js';
+import type { PluginApi, PluginProviderFactory, PluginChannelFactory } from './api.js';
 import type { PluginCommandRegistration, PluginToolContribution, OrderedHookEntry } from './api.js';
 import { readStaging } from './staging.js';
 
@@ -32,6 +32,13 @@ export interface PluginProviderRecord {
   factory: PluginProviderFactory;
 }
 
+/** A published channel factory contribution; globally unique id, like providers. */
+export interface PluginChannelRecord {
+  pluginId: string;
+  id: string;
+  factory: PluginChannelFactory;
+}
+
 /** An immutable published contribution set. Mutations are staged by PluginLoader. */
 export class PluginContributionRegistry {
   private plugins = new Map<string, RegisteredPlugin>();
@@ -40,6 +47,7 @@ export class PluginContributionRegistry {
   private hooks: OrderedHookEntry[] = [];
   private services: PluginServiceRecord[] = [];
   private providers: PluginProviderRecord[] = [];
+  private channels: PluginChannelRecord[] = [];
   private owners = new Map<string, string>();
 
   /** Replace the effective set only after all staged registrations validate. */
@@ -65,6 +73,10 @@ export class PluginContributionRegistry {
         next.addOwner('provider', provider.id, plugin.manifest.id);
         next.providers.push({ pluginId: plugin.manifest.id, ...provider });
       }
+      for (const channel of staged.channels) {
+        next.addOwner('channel', channel.id, plugin.manifest.id);
+        next.channels.push({ pluginId: plugin.manifest.id, ...channel });
+      }
     }
     const replyOwners = next.hooks.filter((entry) => entry.hookName === 'before_agent_reply');
     if (replyOwners.length > 1) {
@@ -76,6 +88,7 @@ export class PluginContributionRegistry {
     this.hooks = next.hooks;
     this.services = next.services;
     this.providers = next.providers;
+    this.channels = next.channels;
     this.owners = next.owners;
   }
 
@@ -100,4 +113,5 @@ export class PluginContributionRegistry {
   getHooks(): OrderedHookEntry[] { return [...this.hooks]; }
   getServices(): PluginServiceRecord[] { return [...this.services]; }
   getProviders(): PluginProviderRecord[] { return [...this.providers]; }
+  getChannels(): PluginChannelRecord[] { return [...this.channels]; }
 }

@@ -303,6 +303,7 @@ export class PluginLoader {
         ...(candidate.manifest.contributes?.commands ?? []).map((command) => `command:${command.name}`),
         ...(candidate.manifest.contributes?.services ?? []).map((name) => `service:${name}`),
         ...(candidate.manifest.contributes?.providers ?? []).map((name) => `provider:${name}`),
+        ...(candidate.manifest.contributes?.channels ?? []).map((name) => `channel:${name}`),
       ];
       for (const claim of entries) {
         const owner = claims.get(claim);
@@ -410,6 +411,14 @@ export class PluginLoader {
     }
     for (const provider of declaredProviders) {
       if (!actualProviders.has(provider)) throw new Error(`Declared provider "${provider}" was not registered`);
+    }
+    const declaredChannels = new Set(manifest.contributes?.channels ?? []);
+    const actualChannels = new Set(staged.channels.map((channel) => channel.id));
+    for (const channel of actualChannels) {
+      if (!declaredChannels.has(channel)) throw new Error(`Channel "${channel}" is not declared in manifest`);
+    }
+    for (const channel of declaredChannels) {
+      if (!actualChannels.has(channel)) throw new Error(`Declared channel "${channel}" was not registered`);
     }
   }
 

@@ -371,6 +371,7 @@ export type {
 
 export {
   createProviderFromConfig,
+  createChannelAdapterFromConfig,
   resolveModelConfig,
   flattenModels,
   resolveListenHost,

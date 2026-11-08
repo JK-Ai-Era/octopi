@@ -8,7 +8,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.103 | this file (current) |
+| v0.104 | this file (current) |
+| v0.103 | [changelog/v0.103.md](./changelog/v0.103.md) |
 | v0.102 | [changelog/v0.102.md](./changelog/v0.102.md) |
 | v0.101 | [changelog/v0.101.md](./changelog/v0.101.md) |
 | v0.100 | [changelog/v0.100.md](./changelog/v0.100.md) |
@@ -110,17 +111,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.3 | [changelog/v0.3.md](./changelog/v0.3.md) |
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
-## v0.103.0 (2026-11-09)
 
-### feat(plugin): Provider 贡献扩展点（P5a）——插件 Provider 工厂 + 真实插件全链路
+---
 
-- **插件可贡献 Provider 工厂**：manifest `contributes.providers`（全局唯一 id，与 services 同语义）+ `PluginApi.registerProvider(id, factory)`（暂存 → manifest↔register 双向一致性 → 有效注册表原子发布）。工厂按每个 `models.providers` 配置实例调用（启动与配置热更时，绝不在注册时）；上下文 `{ providerName, baseUrl, apiKey, models, defaultModel?, timeoutMs?, options }`。工厂返回值做最小契约校验（chat/stream/isAvailable）并**硬绑定 name=配置键**（不一致 fail-loud）。
-- **配置契约**：`models.providers[]` 新增 `plugin` / `options` 字段；`plugin` 与 `api` **二选一恰好其一**（Zod superRefine 覆盖启动与写盘校验，工厂路由为第二道闸）。apiKey 只走凭证通道（`${ENV_VAR}` 推荐）；`options` 为非密钥旋钮、原样透传由插件校验——**禁止放凭据**（会回显 Web 控制台并原样落盘，文档已警示；secret 感知 options schema 记 P6 候选）。
-- **装配三入口**：daemon 提前 `discoverPlugins()`（provider 创建先于 `gateway.start()`）；根包 `buildFromConfigFile` 与 `octopi health` 经共享 `resolvePluginProviderOption()` 注入解析器（loadPaths + allowList/blockList/entries 与 Gateway 同语义）；插件 provider 创建失败 **fail-closed** 保留真实原因（不再吞成误导性 unknown provider）。
-- **生命周期**：热更退役实例进 30 分钟宽限窗口后强制回收（显式常量、到期 warn——窗口语义，非逐请求排空）；`stop()` 全量 dispose。修复 `withWireDump` 装饰器丢 `dispose` 导致 dump 开启时退役/停机回收静默失效（Blocker）。daemon SummaryPort 复用已注册实例（消除双工厂构造与泄漏）。
-- **thinkingLevel 参数映射**（收掉 P4 延期项）：内置 openai 适配器映射 `reasoning_effort`、anthropic 映射 `thinking.budget_tokens`（extended-thinking 温度=1 / 预算<max_tokens 校验；`reasoning: false` 模型显式拒绝）。默认请求体逐字段不变（回归锁钉住）。
-- **WebUI/redact 透传修复**：`plugin`/`options`/`models[].temperature` 全链保留——修「编辑保存把插件 provider 改写成 openai-completions」与温度字段丢失；`testProvider` 对插件 provider fail-loud 且判别对齐 upsert 整段替换语义。
-- **真实插件** `examples/plugins/openai-compat-dialect`（维护中的参考实现）：自定义鉴权头/前缀（大小写不敏感）、extraHeaders、extraBody 压在标准字段之下、thinking 三模式方言映射（value/boolean/object + per-level values 构造期校验）、reasoningField、SSE 流（tool_call 分片按 id/index 键控、无尾随换行残行、usage chunk）；未知 `finish_reason` 视为 `error`；cache usage 账目与内置 `tokenUsageFromOpenAi` 一致；`dispose()` 中止在途请求含流式 body。
-- **测试**：`tests/plugin-provider.test.ts` 30 条（loader 契约 5 态 / api|plugin 路由 / thinking 映射 wire 级 / 真实插件 mock server / Gateway 发现链路 / 评审回归锁）。独立评审（del-9ffb1f3a：2 blocker / 8 major / 11 minor / 9 nit）逐条对码核实后全部处置，含 wire-dump dispose 转发、schema 恰好其一、退役窗口语义、usage 账目、finish_reason fail-closed 等；处置记录见工作区 `p5a-review-disposition.md`。
-- **openclaw 错标叙事正式关闭**（遗留①归口）：全仓无兼容叙事残留（risk-evaluator 敏感路径清单有意保留）。
+## v0.104.0 (2026-11-09)
 
+### feat(plugin): Channel contributions (P5b) — feishu real plugin
+
+- **贡献面**：`contributes.channels`（全局唯一，同 providers）+ `PluginApi.registerChannel(id, factory)`（暂存→manifest↔register 双向一致→原子发布；内置消息标签 `http`/`ws` 为保留名拒绝注册——回复路由按 `msg.channel` 标签查注册表，同名标签会劫持内置回复）。`channels[].plugin|options` 路由：`type`（内置）与 `plugin`（贡献 id）二选一恰好其一（Zod superRefine + 装配第二闸）；未知内置 type、未注册/禁用贡献在 daemon 启动报真实原因——**行为变更**：此前非 `http` 通道条目被静默丢弃，现在 fail-loud。工厂上下文 `{channelName, apiKey, options}`（apiKey 走凭证通道、options 非密钥原样透传）；最小契约校验（start/send/stop）+ `adapter.name` 硬绑定贡献 id；`gateway.registerChannel` 拒绝重名（原静默覆盖）。
+- **真实插件** `examples/plugins/feishu-channel`：飞书机器人走官方 `@larksuiteoapi/node-sdk`（供应链已核，lockfile 全部解析至官方 registry）长连接（WebSocket，免公网回调/域名/证书）；SDK 承担重连、事件去重、@ 检测与 DM/群 policy 准入（`dmMode`/`dmAllowlist`/`groupAllowlist`/`requireMention`；`dmMode: 'pair'` 显式拒绝——SDK 尚未实现该模式、会静默按开放处理，不允许安全误表述）。插件只做 ChannelMessage 规范化：**只转发 text/post 真实文字**（媒体/卡片的 SDK 合成占位文本如 `![image](key)` 绝不转发，防伪造用户输入）、handler 异常隔离（不倒 WS）、`send`→replyTo 回帖、停后陈旧 SDK 回调显式忽略、`stop()` disconnect 成功才清态（失败可重试、绝不产生第二连接）。`apiKey` = App Secret（推荐 `${ENV_VAR}`）；README 含飞书后台配置指引（事件订阅长连接、权限、发布版本）与安全警示。
+- **Gateway 生命周期加固**（独立评审发现的既有缺口，IM 场景放大）：**启动窗口期入站消息缓冲后按序回放**（容量上限 100 拒收 fail-loud；启动失败显式丢弃并计数——IM 用户无法像 HTTP 客户端重试，此前窗口期消息直接报 `gateway_not_ready` 丢失）；正常停止改**逆序**（对称回滚，与文档承诺一致，原为顺序）；启动窗口中 `session.dmScope: main` 多用户共享会话在 daemon 装配时显式告警。
+- **会话作用域**：`session.dmScope` 新增 `per-conversation`（IM 群聊全员共享一个会话，按 chat 聚合；P2P 每 chat 一个会话）。注意作用域是全局的：启用后无 `conversationId` 的 HTTP 调用会落到同一 `default` 会话（文档已注明）。
+- **测试**：`tests/plugin-channel.test.ts` 35 条——loader 契约 7（双向一致/跨插件冲突/保留名 http+ws/invalid id/重复）、工厂路由 6（二选一闸/缺贡献 fail-closed/坏形状/name 键绑定/上下文透传）、Gateway 发现链路 1、选项校验 3（appId 必填/pair 拒绝/策略默认值）、飞书适配器行为 12（消息映射/媒体跳过真实 SDK 形状/异常隔离/replyTo/幂等 stop/启动失败自清理/停后忽略/stop 失败可重试）、消息映射单测 1、Zod 闸 1、buildSessionKey 四作用域 2、Gateway 生命周期 2（启动缓冲回放/逆序停止）。SDK 以注入 fake 驱动：提交套件不依赖示例目录的 node_modules。
+- **独立评审**（del-bb625281：1 blocker / 5 major / 14 minor / 6 nit）逐条对码核实后**全部处置**（1 项驳回为文档已覆盖）：处置记录 `p5b-review-disposition.md`。JSON Schema 层面 `type|plugin` 互斥无法序列化（与 `models.providers[].api|plugin` 同待遇，M3 已记 P6 候选）；`octopi chat`/TUI 依赖 http 通道的既有行为记 NEXT-STEPS 延期。
+- **待续**：真流量实测（真实飞书应用、私聊+群 @ 双路、命令短回复、失败路径）待环境配合后收尾，见 `arch/NEXT-STEPS.md`；ContextEngine 讨论在其后。
+
+---

@@ -15,7 +15,7 @@ This document describes the v1 contract: manifest-first loading (P1), the per-Ag
 | JSON Schema config validation | Implemented |
 | Dependency, identity, and contribution validation | Implemented |
 | Staged registration and atomic effective-registry publication | Implemented |
-| Tool / Command / Service / Provider contribution registration | Implemented; declared and registered sets must match |
+| Tool / Command / Service / Provider / Channel contribution registration | Implemented; declared and registered sets must match |
 | Tool mounting, per-Agent allow/deny, execution, and source attribution | Implemented; empty `tools.allow` does not expose a plugin Tool |
 | Command metadata, caller admission, and Host `sessionOps` authorization | Implemented; Plugin SessionOps require matching manifest declarations |
 | Hook execution semantics | Implemented for the 22 hook names: typed Observe / Collect / Transform / Vote / Override composition, dual-phase Tool and Iteration hooks, cooperative timeout, per-call audit |
@@ -23,10 +23,11 @@ This document describes the v1 contract: manifest-first loading (P1), the per-Ag
 | Tool approval votes (`before_tool_call` `require_approval`) | Implemented through the Host HITL channel; `approve` / `approve_session` / `approve_always` are honored by the engine decision cache; no channel fails closed |
 | Background services | Implemented: manifest-declared `registerService` with Host start/stop, required rollback, optional failure issues, reverse-order stop, cooperative timeout |
 | Provider contributions (P5) | Implemented: `contributes.providers` + `registerProvider` factories referenced by `models.providers[].plugin`; real example plugin `examples/plugins/openai-compat-dialect` |
+| Channel contributions (P5b) | Implemented: `contributes.channels` + `registerChannel` factories referenced by `channels[].plugin`; real example plugin `examples/plugins/feishu-channel` |
 | `before_install` hook | Declared but dormant — the repository has no real Skill/Plugin install flow yet, so no trigger is wired and none is faked |
 | `session_end` hook | Fires only after a real archive export and hot-store deletion (when an archive manager is configured); plain deletion or compaction never emulates it |
 | `before_prompt_build` / `before_iteration` snapshots | Implemented; budgeted, pluginId-attributed snapshots ride the turn envelope's `runtime_snapshot` slot (`before_prompt_build`) or the per-request LLM view (`before_iteration`); never the system prompt |
-| Channel / ContextEngine registration | Not part of the stable v1 author surface yet |
+| ContextEngine registration | Not part of the stable v1 author surface yet |
 | Untrusted-code isolation / hot unload | Not supported |
 
 ## Package layout
@@ -63,6 +64,7 @@ The loader scans each configured path. A path can be one plugin directory or a p
     "commands": [{ "name": "acme-status", "sessionOps": [] }],
     "services": ["acme-watcher"],
     "providers": ["acme-llm-gateway"],
+    "channels": ["acme-im"],
     "hooks": ["message_received"]
   },
   "requiresPlugins": [],
@@ -129,7 +131,8 @@ export default definePlugin({
 - `api.on` is typed against the 22 existing Hook names. `before_tool_call` and `before_iteration` are dual-phase and must pass `{ phase: 'transform' | 'vote' }` (or use the `api.onBeforeToolCall` / `api.onBeforeIteration` helpers); every other event must omit `phase`. A declaration does not imply that every event already has a production trigger; see the status table above (`before_install` is dormant).
 - `api.registerService` stages a background service that must also be declared in `contributes.services`; the Host owns its start/stop lifecycle (see Background services).
 - `api.registerProvider` stages a Provider factory that must also be declared in `contributes.providers`; the Host instantiates it per `models.providers[].plugin` reference (see Provider contributions (P5)).
-- Channel, ContextEngine, and media-provider registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
+- `api.registerChannel` stages a Channel factory that must also be declared in `contributes.channels`; the Host instantiates it per `channels[].plugin` reference (see Channel contributions (P5b)).
+- ContextEngine and media-provider registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
 
 ## Plugin Commands and Session effects
 
@@ -264,6 +267,68 @@ api.registerProvider('acme-llm-gateway', (context) => {
   (`observability.llmRequestDump`) unless they implement
   `wireBodyFor(request, mode)`; the decoration chain forwards `dispose` so
   lifecycle guarantees hold with dumps enabled.
+
+## Channel contributions (P5b)
+
+A plugin can contribute a **Channel factory** — a named builder the Host calls
+to construct a Gateway `ChannelAdapter` (message transport) for one `channels`
+entry.
+
+```jsonc
+// octopi.plugin.json
+{ "contributes": { "channels": ["feishu"] } }
+```
+
+```ts
+api.registerChannel('feishu', async (context) => {
+  // context: { channelName, apiKey, options }
+  return myChannelAdapter; // { name, start(handler), send(reply), stop() }
+});
+```
+
+```jsonc
+// octopi.json — reference the contribution via `plugin` (mutually exclusive with `type`)
+{
+  "channels": [
+    {
+      "plugin": "feishu",
+      "apiKey": "${FEISHU_APP_SECRET}",
+      "options": { "appId": "cli_xxx", "policy": { "dmMode": "allowlist", "dmAllowlist": ["ou_…"] } }
+    }
+  ],
+  "session": { "dmScope": "per-conversation" }
+}
+```
+
+- `plugin` and `type` are mutually exclusive — exactly one must be set.
+  `type: "http"` selects the built-in HTTP/WebSocket channel; `plugin` names a
+  channel contribution. An unknown or disabled contribution id, or an unknown
+  built-in `type`, fails daemon startup loudly (fail closed).
+- The factory is called per `channels` entry at startup (never at registration
+  time). Contribution ids are globally unique across plugins and double as the
+  channel label: the Host rejects `adapter.name` ≠ contribution id, duplicate
+  names are refused at `registerChannel`, and built-in channel ids (`http`) are
+  reserved. One instance per channel contribution id in v1.
+- The adapter contract is the Channel SPI (`start(handler)` receives normalized
+  `ChannelMessage`s, `send(reply)` delivers a `ChannelReply`, `stop()` releases
+  the transport). The Host drives `start`/`stop` with the Gateway lifecycle:
+  services start before channels, channels stop in reverse registration order,
+  and a channel whose `start()` fails rolls back Gateway startup with the real
+  reason.
+- Messages carry `channel === adapter.name`; replies and command short-replies
+  route back through the same adapter. `channelBindings` key on the channel
+  label, and `session.dmScope: "per-conversation"` keys sessions per chat (one
+  session shared by all members of a group chat).
+- A channel lets whoever can reach it drive an agent with real tools. Configure
+  the transport's own admission gates (e.g. the `policy` allowlists in the
+  Feishu example) for anything beyond a personal setup.
+- `options` is written to disk as-is; **never put credentials in `options`**
+  (secrets belong in `apiKey`). The JSON Schema in `octopi.schema.json` cannot
+  express the `type | plugin` exclusivity (like `models.providers[].api|plugin`);
+  the runtime enforces it strictly.
+- Real example: `examples/plugins/feishu-channel` — a Feishu (Lark) bot over the
+  official SDK's long connection (WebSocket), with policy-gated DM/group
+  admission and mention detection.
 
 ## Configuration
 

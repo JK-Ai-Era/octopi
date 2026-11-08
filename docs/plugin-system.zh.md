@@ -15,7 +15,7 @@ Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过
 | JSON Schema 配置校验 | 已实现 |
 | 依赖、身份与贡献声明一致性校验 | 已实现 |
 | 暂存注册与有效注册表原子发布 | 已实现 |
-| Tool / Command / Service / Provider 贡献注册 | 已实现；声明集合与实际注册集合必须一致 |
+| Tool / Command / Service / Provider / Channel 贡献注册 | 已实现；声明集合与实际注册集合必须一致 |
 | Tool 挂载、per-Agent allow/deny、执行与来源归因 | 已实现；`tools.allow` 为空不会暴露插件 Tool |
 | Command 元数据、调用方准入与 Host `sessionOps` 授权 | 已实现；插件 SessionOp 必须与 manifest 声明一致 |
 | Hook 执行语义 | 22 个 Hook 名已实现：类型化 Observe / Collect / Transform / Vote / Override 组合、Tool 与 Iteration 双阶段、协作式超时、逐调用审计 |
@@ -23,10 +23,11 @@ Octopi 插件是**受信任、在宿主进程内运行的扩展**。插件通过
 | Tool 审批投票（`before_tool_call` 的 `require_approval`） | 已接入 Host HITL 通道；`approve` / `approve_session` / `approve_always` 由引擎决策缓存记账；无审批通道时拒绝执行 |
 | 后台服务 | 已实现：manifest 声明的 `registerService`，宿主负责启停、required 失败回滚、optional 失败产生 System Issue、逆序停止、协作式超时 |
 | Provider 贡献（P5） | 已实现：`contributes.providers` + `registerProvider` 工厂，由 `models.providers[].plugin` 引用；维护中的真实示例插件 `examples/plugins/openai-compat-dialect` |
+| Channel 贡献（P5b） | 已实现：`contributes.channels` + `registerChannel` 工厂，由 `channels[].plugin` 引用；维护中的真实示例插件 `examples/plugins/feishu-channel` |
 | `before_install` Hook | 已声明但休眠——仓库尚无真实 Skill/Plugin 安装流程，没有接线任何触发点，也绝不伪造 |
 | `session_end` Hook | 仅在真实归档导出并从热库删除后触发（需配置归档管理器）；普通删除或压缩不会冒充它 |
 | `before_prompt_build` / `before_iteration` 快照 | 已实现；带预算和 pluginId 归因的快照随 turn envelope 的 `runtime_snapshot` 槽位（`before_prompt_build`）或当次请求视图（`before_iteration`）携带；绝不写入 system prompt |
-| Channel / ContextEngine 注册 | 尚未进入稳定 v1 作者面 |
+| ContextEngine 注册 | 尚未进入稳定 v1 作者面 |
 | 不可信代码隔离 / 热卸载 | 不支持 |
 
 ## 包结构
@@ -63,6 +64,7 @@ Loader 扫描每个配置路径。路径可以是插件目录，也可以是包�
     "commands": [{ "name": "acme-status", "sessionOps": [] }],
     "services": ["acme-watcher"],
     "providers": ["acme-llm-gateway"],
+    "channels": ["acme-im"],
     "hooks": ["message_received"]
   },
   "requiresPlugins": [],
@@ -129,7 +131,8 @@ export default definePlugin({
 - `api.on` 按 22 个既有 Hook 名提供类型。`before_tool_call` 与 `before_iteration` 是双阶段事件，必须传 `{ phase: 'transform' | 'vote' }`（或使用 `api.onBeforeToolCall` / `api.onBeforeIteration` 辅助方法）；其余事件不得传 `phase`。声明不代表所有事件都已有生产触发点，见上方状态表（`before_install` 处于休眠）。
 - `api.registerService` 暂存后台服务，且必须同时在 `contributes.services` 声明；启停生命周期由宿主管理（见「后台服务」）。
 - `api.registerProvider` 暂存 Provider 工厂，且必须同时在 `contributes.providers` 声明；宿主按 `models.providers[].plugin` 引用逐实例化（见「Provider 贡献（P5）」）。
-- Channel、ContextEngine 与媒体 Provider 注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
+- `api.registerChannel` 暂存 Channel 工厂，且必须同时在 `contributes.channels` 声明；宿主按 `channels[].plugin` 引用逐实例化（见「Channel 贡献（P5b）」）。
+- ContextEngine 与媒体 Provider 注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
 
 ## 插件 Command 与 Session 效应
 
@@ -238,6 +241,44 @@ api.registerProvider('acme-llm-gateway', (context) => {
 - 内置 `api: "openai-completions"` / `"anthropic-messages"` 适配器已覆盖严格 OpenAI 兼容 / Anthropic 端点（自定义 `baseUrl`、可无鉴权）。只有内置覆盖不了的方言才需要 Provider 贡献——参见维护中的真实示例 `examples/plugins/openai-compat-dialect`（自定义鉴权头、extra body 字段、thinking 参数方言）。
 - `LLMRequest.thinkingLevel` 在内置适配器映射为 `reasoning_effort`（openai）与 `thinking.budget_tokens`（anthropic）；插件 Provider 自行决定映射。内置 openai 适配器不探测端点是否认识 `reasoning_effort`——仅在设置了 `thinkingLevel` 时发送；不接受该参数的方言端点应使用 Provider 贡献。
 - 插件 Provider 默认不参与 wire dump（`observability.llmRequestDump`），除非自行实现 `wireBodyFor(request, mode)`；装饰链会转发 `dispose`，生命周期保证在 dump 开启时同样成立。
+
+## Channel 贡献（P5b）
+
+插件可以贡献 **Channel 工厂**——一个命名的构建器，宿主为每个 `channels` 条目调用它构造 Gateway `ChannelAdapter`（消息传输面）。
+
+```jsonc
+// octopi.plugin.json
+{ "contributes": { "channels": ["feishu"] } }
+```
+
+```ts
+api.registerChannel('feishu', async (context) => {
+  // context: { channelName, apiKey, options }
+  return myChannelAdapter; // { name, start(handler), send(reply), stop() }
+});
+```
+
+```jsonc
+// octopi.json —— 通过 `plugin` 引用贡献（与 `type` 二选一）
+{
+  "channels": [
+    {
+      "plugin": "feishu",
+      "apiKey": "${FEISHU_APP_SECRET}",
+      "options": { "appId": "cli_xxx", "policy": { "dmMode": "allowlist", "dmAllowlist": ["ou_…"] } }
+    }
+  ],
+  "session": { "dmScope": "per-conversation" }
+}
+```
+
+- `plugin` 与 `type` 二选一恰好其一。`type: "http"` 选择内置 HTTP/WebSocket 通道；`plugin` 指向 channel 贡献。引用未注册/被禁用的贡献、或未知的内置 `type`，都在 daemon 启动时以真实原因失败（fail closed）。
+- 工厂按 `channels` 条目在启动时调用（绝不在注册时）。贡献 id 全局唯一且兼作通道标签：宿主拒绝 `adapter.name` ≠ 贡献 id，`registerChannel` 拒绝重名，内置通道 id（`http`）为保留名。v1 每个 channel 贡献 id 只支持一个实例。
+- 适配器契约即 Channel SPI（`start(handler)` 接收规范化 `ChannelMessage`，`send(reply)` 投递 `ChannelReply`，`stop()` 释放传输面）。宿主按 Gateway 生命周期驱动 `start`/`stop`：服务先于通道启动、通道按注册逆序停止，`start()` 失败以真实原因回滚 Gateway 启动。
+- 消息携带 `channel === adapter.name`；回复与命令短回复经同一适配器路由。`channelBindings` 以通道标签为键；`session.dmScope: "per-conversation"` 按会话聚合（群聊全员共享一个会话）。
+- 通道等于让能触达它的人驱动一个带真实工具的 agent。超出个人使用的部署必须配置传输面自身的准入闸（如飞书示例的 `policy` 白名单）。
+- `options` 原样落盘；**禁止在 `options` 里放任何凭据**（密钥走 `apiKey`）。`octopi.schema.json` 的 JSON Schema 无法表达 `type | plugin` 互斥（与 `models.providers[].api|plugin` 相同）；运行时强校验。
+- 真实示例：`examples/plugins/feishu-channel`——飞书机器人，走官方 SDK 长连接（WebSocket），带 DM/群准入策略与 @ 检测。
 
 ## 配置
 

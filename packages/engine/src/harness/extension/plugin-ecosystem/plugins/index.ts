@@ -15,6 +15,10 @@ export type {
   PluginProviderFactoryContext,
   PluginProviderModelEntry,
   PluginProviderRegistration,
+  PluginChannelFactory,
+  PluginChannelFactoryContext,
+  PluginChannelRegistration,
+  PluginChannelAdapterLike,
 } from './api.js';
 export {
   PLUGIN_API_VERSION,

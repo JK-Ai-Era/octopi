@@ -23,7 +23,7 @@ export interface GatewayConfig {
     maxWallClockMs?: number;
   };
   session?: {
-    dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
+    dmScope?: 'main' | 'per-peer' | 'per-channel-peer' | 'per-conversation';
     /** 上下文租约（毫秒）；显式配置才生效 */
     idleExpiryMs?: number;
   };

@@ -3,6 +3,7 @@
 import { resolve } from 'node:path';
 import { TOOL_CAPABILITIES, type ToolDefinition, type ToolHandler } from '@octopi-agent/core/types.js';
 import { CONTRIBUTION_NAME_RE, type PluginHookName, type PluginSessionOpName } from './manifest.js';
+import { BUILTIN_CHANNEL_IDS } from '../channel-types.js';
 import { createStaging, readStaging } from './staging.js';
 import type {
   ExtensionHookHandler,
@@ -116,6 +117,48 @@ export type PluginProviderFactory = (
 export interface PluginProviderRegistration {
   id: string;
   factory: PluginProviderFactory;
+}
+
+/**
+ * Factory context: everything a plugin needs to build a Gateway ChannelAdapter
+ * for one `channels` config instance.
+ */
+export interface PluginChannelFactoryContext {
+  /** The `channels` entry's `plugin` contribution id being instantiated. */
+  channelName: string;
+  /** `${ENV_VAR}` placeholders already expanded; empty string means keyless. */
+  apiKey: string;
+  /**
+   * `channels[].options` passed through verbatim. Non-secret tuning knobs only —
+   * secrets belong in `apiKey` (credential channel), never here.
+   */
+  options: Record<string, unknown>;
+}
+
+/**
+ * Channel factory staged by registerChannel. The Host calls it when a `channels`
+ * entry references this contribution via its `plugin` field (startup), never at
+ * registration time.
+ */
+export type PluginChannelFactory = (
+  context: PluginChannelFactoryContext,
+) => PluginChannelAdapterLike | Promise<PluginChannelAdapterLike>;
+
+/**
+ * Structural view of the ChannelAdapter SPI (`../channel-types.js`) kept local
+ * so the author API does not widen its import surface. The Host verifies the
+ * produced adapter and hard-binds its `name` to the config key.
+ */
+export interface PluginChannelAdapterLike {
+  name: string;
+  start(handler: (msg: import('../channel-types.js').ChannelMessage) => Promise<void>): Promise<void>;
+  send(reply: import('../channel-types.js').ChannelReply): Promise<void>;
+  stop(): Promise<void>;
+}
+
+export interface PluginChannelRegistration {
+  id: string;
+  factory: PluginChannelFactory;
 }
 
 export interface HookRegistrationOptions {
@@ -285,6 +328,27 @@ export class PluginApi {
       throw new Error(`Plugin "${this.id}" registered duplicate provider "${normalized}"`);
     }
     readStaging(this).providers.push({ id: normalized, factory });
+  }
+
+  /**
+   * Stage a Gateway channel factory. The Host instantiates it when a `channels`
+   * entry references this id via its `plugin` field.
+   *
+   * @param id - Stable channel id (globally unique across plugins, like providers)
+   * @param factory - Builds a ChannelAdapter for one channels config instance
+   */
+  registerChannel(id: string, factory: PluginChannelFactory): void {
+    const normalized = id.trim();
+    if (!CONTRIBUTION_NAME_RE.test(normalized) || typeof factory !== 'function') {
+      throw new Error(`Plugin "${this.id}" registered an invalid channel contribution "${id}"`);
+    }
+    if ((BUILTIN_CHANNEL_IDS as readonly string[]).includes(normalized)) {
+      throw new Error(`Plugin "${this.id}" cannot register channel "${normalized}": reserved by built-in adapters`);
+    }
+    if (readStaging(this).channels.some((entry) => entry.id === normalized)) {
+      throw new Error(`Plugin "${this.id}" registered duplicate channel "${normalized}"`);
+    }
+    readStaging(this).channels.push({ id: normalized, factory });
   }
 
   /**

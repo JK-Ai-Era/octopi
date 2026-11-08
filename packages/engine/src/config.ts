@@ -241,8 +241,8 @@ export interface WebSearchToolConfig {
  * Session 配置（合并了旧的 store + session 节点）
  */
 export interface SessionConfig {
-  /** DM 作用域: main / per-peer / per-channel-peer */
-  dmScope?: 'main' | 'per-peer' | 'per-channel-peer';
+  /** DM 作用域: main / per-peer / per-channel-peer / per-conversation */
+  dmScope?: 'main' | 'per-peer' | 'per-channel-peer' | 'per-conversation';
   /**
    * 上下文租约（毫秒）。**显式配置才生效**；缺省关闭。
    *
@@ -329,8 +329,10 @@ export function isLanHost(host?: NetworkHostConfig): boolean {
  * Channel 配置
  */
 export interface ChannelConfig {
-  /** 类型（http） */
-  type: string;
+  /** 内置通道类型（http）；与 plugin 二选一（恰好其一） */
+  type?: string;
+  /** 插件 Channel 贡献 id（manifest contributes.channels）；与 type 二选一 */
+  plugin?: string;
   /** 端口（HTTP channel 用） */
   port?: number;
   /**
@@ -341,10 +343,12 @@ export interface ChannelConfig {
   host?: NetworkHostConfig;
   /** 路径（HTTP channel 用） */
   path?: string;
-  /** API Key（HTTP channel 认证） */
+  /** API Key（HTTP channel 认证；插件通道的凭证通道，推荐 `${ENV_VAR}` 引用） */
   apiKey?: string;
   /** 允许的 CORS 源 */
   corsOrigins?: string[];
+  /** 插件自定义旋钮（非密钥；原样透传） */
+  options?: Record<string, unknown>;
 }
 
 
@@ -1420,6 +1424,54 @@ export async function createProviderFromConfig(
 
   const { OpenAIProvider } = await import('./integration/providers/openai.js');
   return decorate(new OpenAIProvider({ name, apiKey: pc.apiKey ?? '', baseUrl: pc.baseUrl, models, defaultModel, timeoutMs: pc.timeoutSeconds ? pc.timeoutSeconds * 1000 : undefined }));
+}
+
+/**
+ * 从 `channels[]` 配置条目创建插件 Channel Adapter。
+ *
+ * `plugin` 路由到插件 Channel 工厂（`contributes.channels` 命名贡献）；
+ * 内置 `type: 'http'` 由 daemon 的 HttpChannelAdapter 装配，不走本函数。
+ * 与 `createProviderFromConfig` 同闸：type | plugin 恰好其一，工厂是第二道闸。
+ *
+ * @param entry - channels[] 配置条目
+ * @param resolvePluginChannel - 解析插件 Channel 工厂（`entry.plugin` 必需）
+ * @returns ChannelAdapter 实例（最小契约校验，name 硬绑定贡献 id）
+ */
+export async function createChannelAdapterFromConfig(
+  entry: ChannelConfig,
+  resolvePluginChannel: (
+    ref: string,
+  ) => import('./harness/extension/plugin-ecosystem/plugins/contribution-registry.js').PluginChannelRecord | undefined,
+): Promise<import('./harness/extension/plugin-ecosystem/channel-types.js').ChannelAdapter> {
+  if ((entry.type === undefined) === (entry.plugin === undefined)) {
+    throw new Error('Channel: exactly one of type | plugin must be set');
+  }
+  if (entry.plugin === undefined) {
+    throw new Error(`Channel type "${entry.type}" has no built-in adapter (built-ins: http); use "plugin" for plugin channels`);
+  }
+  const ref = entry.plugin;
+  const record = resolvePluginChannel(ref);
+  if (!record) {
+    throw new Error(
+      `Channel "${ref}": plugin channel "${ref}" is not registered (plugin disabled, failed, or not discovered)`,
+    );
+  }
+  const built = await record.factory({
+    channelName: ref,
+    apiKey: entry.apiKey ?? '',
+    options: entry.options ?? {},
+  });
+  // 最小契约校验 + name 绑定：工厂结果必须挂在贡献 id 下，
+  // 否则 gateway 按 adapter.name 注册、回复按 msg.channel 路由都会错位
+  for (const member of ['start', 'send', 'stop'] as const) {
+    if (typeof built?.[member] !== 'function') {
+      throw new Error(`Channel "${ref}": plugin channel factory returned an invalid ChannelAdapter (missing ${member})`);
+    }
+  }
+  if (built.name !== ref) {
+    throw new Error(`Channel "${ref}": plugin channel factory returned adapter.name "${built.name}"; it must equal the contribution id "${ref}"`);
+  }
+  return built;
 }
 
 /**

@@ -6,11 +6,22 @@
  *
  * 设计要点：
  * - 本文件只定义契约，不关心 HTTP / WebSocket 传输
- * - Plugin 通过 registerChannel(adapter) 注册实现
+ * - Plugin 通过 registerChannel(id, factory) 贡献命名工厂（contributes.channels），
+ *   宿主按 channels[].plugin 引用实例化为本契约 adapter
  * - Gateway / Integration 按部署形态挂载具体 adapter
  */
 
 export type ChannelMessageDelivery = 'continued' | 'followup' | 'run';
+
+/**
+ * Channel labels owned by built-in adapters. Plugin contributions must not
+ * claim them. Reply routing looks up `channels.get(msg.channel)` — i.e. by the
+ * **message label**, not by adapter name: the built-in HttpChannelAdapter
+ * emits `channel: 'http'` (REST) and `channel: 'ws'` (WebSocket), so a plugin
+ * registering either label would intercept built-in replies and command
+ * short-replies.
+ */
+export const BUILTIN_CHANNEL_IDS = ['http', 'ws'] as const;
 
 export interface ChannelMessage {
   id: string;

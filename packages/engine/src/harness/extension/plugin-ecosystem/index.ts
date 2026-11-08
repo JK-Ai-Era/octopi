@@ -7,6 +7,7 @@ export * from './plugins/index.js';
 export * from './tools/index.js';
 export * from './client-tools/index.js';
 export type { ChannelAdapter, ChannelMessage, ChannelReply } from './channel-types.js';
+export { BUILTIN_CHANNEL_IDS } from './channel-types.js';
 export { DefaultSkillManager, FileSystemSkillSource } from './skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './skills/manager.js';
 export type { SkillDefinition, SkillManager } from './skills/types.js';

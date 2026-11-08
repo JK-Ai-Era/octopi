@@ -110,6 +110,7 @@ const manifestSchema = z
         hooks: z.array(z.enum(PLUGIN_HOOK_NAMES)).optional(),
         services: z.array(contributionName).optional(),
         providers: z.array(contributionName).optional(),
+        channels: z.array(contributionName).optional(),
       })
       .strict()
       .optional(),
@@ -131,6 +132,8 @@ export interface PluginContributions {
   services?: string[];
   /** Stable provider factory ids; referenced by models.providers entries via their `plugin` field. */
   providers?: string[];
+  /** Stable channel factory ids; referenced by channels entries via their `plugin` field. */
+  channels?: string[];
 }
 
 export interface PluginManifest {
@@ -169,6 +172,7 @@ export function validateManifest(raw: unknown): PluginManifest {
   assertUnique(manifest.contributes?.hooks ?? [], 'contributes.hooks');
   assertUnique(manifest.contributes?.services ?? [], 'contributes.services');
   assertUnique(manifest.contributes?.providers ?? [], 'contributes.providers');
+  assertUnique(manifest.contributes?.channels ?? [], 'contributes.channels');
   const commands = manifest.contributes?.commands ?? [];
   assertUnique(commands.map((command) => command.name), 'contributes.commands');
   for (const command of commands) {

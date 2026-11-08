@@ -1,0 +1,11 @@
+{
+  "id": "feishu",
+  "apiVersion": "1",
+  "version": "0.1.0",
+  "name": "Feishu Channel",
+  "description": "Channel contribution `feishu`: Feishu (Lark) bot via the official Node SDK long connection (WebSocket). Receives im.message.receive_v1 events and replies as the bot. Per-instance config lives in channels[].options (non-secret); the App Secret arrives via the credential channel (apiKey).",
+  "entry": "index.mjs",
+  "engine": { "octopi": ">=0.104.0" },
+  "configSchema": { "type": "object" },
+  "contributes": { "channels": ["feishu"] }
+}
