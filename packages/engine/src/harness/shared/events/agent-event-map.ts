@@ -173,26 +173,57 @@ export interface AgentEventMap {
   'persona.resolve.failed': {
     error: string;
   };
-  /** 上下文压缩开始（主动摘要 / 硬溢出；UI 可显示进行中） */
+  /** 上下文压缩开始（主动摘要 / 硬溢出 / 手动；UI 可显示进行中） */
   'context.compact.start': {
-    reason: 'proactive' | 'overflow';
+    reason: 'proactive' | 'overflow' | 'manual';
     tokensBefore?: number;
     threshold?: number;
   };
   /** 上下文压缩结束 */
   'context.compact.end': {
-    reason: 'proactive' | 'overflow';
+    reason: 'proactive' | 'overflow' | 'manual';
     tokensBefore?: number;
     tokensAfter?: number;
     durationMs?: number;
     cached?: boolean;
+    /** true=中止收尾（本轮作废、零写入）——不是「压缩完成」，UI 不得显示 compacted */
+    cancelled?: boolean;
   };
   /** 上下文压缩受阻（failed=压缩失败已回退截断；denied=before_compaction 策略拒绝，非故障） */
   'context.compact.error': {
-    reason?: 'proactive' | 'overflow';
+    reason?: 'proactive' | 'overflow' | 'manual';
     error: string;
     kind?: 'denied' | 'failed';
     durationMs?: number;
+  };
+  /**
+   * overflow 症状告警（P3 红线 7）：守门人触发 = 罕见异常信号，每次触发打告警。
+   * proactive_failed=A 类（前馈溢出，proactive 失效症状）；config_drift/config_missing=F 类实证；
+   * structural_over_budget=D 类（保护段超限）；window_mismatch=F 类归因未定（收缩兜底）。
+   */
+  'context.overflow.alert': {
+    symptom:
+      | 'proactive_failed'
+      | 'config_drift'
+      | 'config_missing'
+      | 'structural_over_budget'
+      | 'window_mismatch';
+    message: string;
+    estimatedTokens?: number;
+    contextWindow?: number;
+    trigger?: 'T1' | 'T2' | 'T3';
+  };
+  /** 摘要请求进行中（P3）：请求已发出、等 provider 返回——UI 据此显示「已发出 N 条 / 预算 Ms」而非只显示「进行中」 */
+  'context.compact.progress': {
+    reason?: 'proactive' | 'overflow' | 'manual';
+    /** 当前阶段（当前只有 summarize：请求已发出、等 provider 返回） */
+    phase: 'summarize';
+    /** 摘要请求体量（JSON 字符数）——事故里就是它从 ~150KB 涨到 2.13MB */
+    requestChars?: number;
+    /** 摘要请求消息条数 */
+    requestMessages?: number;
+    /** 本次调用的单次预算（ms）；缺失 = 不设预算 */
+    timeoutMs?: number;
   };
   /** 摘要请求 cache-miss 旁路/穷尽可观测（F22）：no_prefix=无同形前缀，window_guard=前缀放不下改文本化旁路，window_exhausted=最终失败 */
   'context.compact.summarize_fallback': {
@@ -329,6 +360,7 @@ export const AgentEvents = {
   SESSION_UPDATED: 'session.updated',
   PERSONA_RESOLVE_FAILED: 'persona.resolve.failed',
   CONTEXT_COMPACT_START: 'context.compact.start',
+  CONTEXT_COMPACT_PROGRESS: 'context.compact.progress',
   CONTEXT_COMPACT_END: 'context.compact.end',
   CONTEXT_COMPACT_ERROR: 'context.compact.error',
   CONTEXT_LAYERS_ASSEMBLED: 'context.layers.assembled',

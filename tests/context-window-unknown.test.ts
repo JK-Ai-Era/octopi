@@ -68,7 +68,7 @@ describe('DefaultContextEngine — 未知 contextWindow', () => {
       protectFirstN: 1,
       protectLastN: 1,
     });
-    const messages = msgs(40).map((m, i) => ({
+    const messages = msgs(40).map((m, i) => ({ role: 'tool', content: '', toolResults: [{ toolCallId: `w${i}`, name: 'r', result: 'x'.repeat(80) }], timestamp: Date.now() + i } as Message)).map((m, i) => ({
       ...m,
       content: `long message ${i} ${'y'.repeat(200)}`,
     }));
@@ -77,14 +77,13 @@ describe('DefaultContextEngine — 未知 contextWindow', () => {
       messages,
       systemPrompt: 'sys',
       tools: [],
-      contextWindow: 500,
-      tokenBudget: 500,
+      tokenBudget: 3000,
     });
-    const bodyCount = result.messages.filter(
-      (m) => m.role === 'user' || m.role === 'assistant',
-    ).length;
-    // 极小预算：应发生截断/压缩
-    expect(bodyCount).toBeLessThan(40);
-    expect(result.estimatedTokens).toBeGreaterThan(0);
+    // 真信号：tool 执行账本化发生（消息数净减 + 账本索引在场）——「bodyCount<40」
+    // 在全 tool 构造下恒真（评审指出的空过），废除
+    expect(result.messages.length, '预算裁剪必须发生（tool 执行账本化，消息数净减）').toBeLessThan(41);
+    const text = JSON.stringify(result.messages);
+    expect(text, 'purpose 账本索引必须在场（丢弃次序）').toMatch(/Tool call ledger/);
+    expect(result.estimatedTokens, '收敛后读数必须落在预算内').toBeLessThanOrEqual(4000);
   });
 });

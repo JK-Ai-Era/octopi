@@ -24,7 +24,11 @@ export type { ParsedModelRef, ResolveModelInput } from './resolver.js';
 export {
   withResolvedModel,
   getResolvedModel,
+  updateResolvedModel,
   getRunModelProvider,
   getRunContextWindow,
   getRunModelName,
 } from './run-scope.js';
+
+export { recordWindowTruth, getWindowTruth, resetWindowTruth } from './window-truth.js';
+export type { WindowTruthEntry } from './window-truth.js';

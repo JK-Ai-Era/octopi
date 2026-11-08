@@ -40,6 +40,7 @@ import {
 import type { ContextEngine } from '../context/types.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
+import { JsonlTransformStore } from '../session/transform-store.js';
 import type { AgentBuilder } from './builder.js';
 import { initShellParser } from '../governance/security/shell-parser.js';
 
@@ -84,23 +85,32 @@ export function resolveSecurityConfig(config: {
  * 从配置中创建 ContextEngine 实例
  *
  * @param config - contextEngine 配置（可空）
+ * @param extension - hooks / agentId / sessionsDir（有 sessionsDir 时转换记录落
+ *   `sessions/<sid>/transform/`；否则进程内账本）
  * @returns ContextEngine
  */
 export function resolveContextEngine(
   config: ContextEngineConfig | undefined,
-  extension?: { hooks?: SessionAwareRunnerConfig['extensionHooks']; agentId: string },
+  extension?: { hooks?: SessionAwareRunnerConfig['extensionHooks']; agentId: string; sessionsDir?: string },
 ): ContextEngine {
   // 缺省 type = default：只给旋钮（如 proactiveCompactRatio）也必须落到默认引擎
   if (!config || config.type == null || config.type === 'default') {
     return new DefaultContextEngine({
       protectFirstN: config?.protectFirstN ?? 5,
       protectLastN: config?.protectLastN ?? 20,
+      midTurnProtectLastN: config?.midTurnProtectLastN,
       summaryBudget: config?.summaryBudget,
       proactiveCompactRatio: config?.proactiveCompactRatio ?? 0.6,
       proactiveCooldownMs: config?.proactiveCooldownMs ?? 30_000,
+      summarizeTimeoutMs: config?.summarizeTimeoutMs,
       historyAging: config?.historyAging,
       targetTokens: config?.targetTokens,
       compactFallbackRatio: config?.compactFallbackRatio,
+      ...(extension?.sessionsDir
+        ? {
+            transformStore: new JsonlTransformStore({ sessionsDir: extension.sessionsDir }),
+          }
+        : {}),
       ...(extension?.hooks === undefined ? {} : {
         extensionHooks: extension.hooks,
         extensionIdentity: { sessionId: 'default', agentId: extension.agentId },
@@ -360,6 +370,7 @@ export async function wireAgentBuilder(
   builder.contextEngine(resolveContextEngine(spec.contextEngineConfig, {
     hooks: spec.extraRunnerConfig?.extensionHooks,
     agentId: spec.agentId,
+    sessionsDir: spec.extraRunnerConfig?.sessionsDir,
   }));
 
   // ── Context Assembler / Constitution / Memory policy ──

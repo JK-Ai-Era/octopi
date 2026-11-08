@@ -122,9 +122,20 @@ export class DefaultErrorStrategy implements ErrorStrategy {
     if (error.reason === 'content_filter' && attempt < maxAttempts) {
       return { action: 'retry', delayMs: (attempt + 1) * 1000 };
     }
-    // ── context_length：由引擎尝试 compact，这里返回 abort 让引擎决定 ──
+    // ── context_length（F 类，arch/overflow-redesign.md T2）：重发前 onError 已
+    // 回填真值/收缩上界，重装配会砍量后重发；限 2 次防「砍不给力」连环 400。
+    // 耗尽后如实收口换 session/model（L3 语义），不再伪装可恢复 ──
     if (error.reason === 'context_length') {
-      return { action: 'abort', reason: `Context length exceeded: ${error.message}` };
+      if (attempt < maxAttempts) {
+        return { action: 'retry', delayMs: (attempt + 1) * 1000 };
+      }
+      return {
+        action: 'abort',
+        reason:
+          'Context length exceeded after shrink-and-resend: ' +
+          `${error.message}. ` +
+          'This session is no longer suitable for continued work, or the current model does not fit the task scale — start a new session or switch to a model with a larger context window.',
+      };
     }
     // ── 不可重试错误：认证、计费 ──
     if (error.reason === 'auth') {
@@ -534,9 +545,9 @@ export class AgentBuilder {
   private _contextEngine?: ContextEngine;
   private _summarize?: SummarizeFunction;
   /** 按 session 键控的 context 压力（由 convertToLlm 更新；共享 Agent 下并发会话不串号） */
-  private _contextPressureBySession = new Map<string, { estimatedTokens: number; contextWindow?: number }>();
+  private _contextPressureBySession = new Map<string, { estimatedTokens: number; contextWindow?: number; readingSource?: 'calibrated' | 'anchored' | 'raw' }>();
   /** 兜底：无 sessionId 的调用方（仅 advisory 用途；并发下可能串号，不得用于持久化） */
-  private _lastContextPressure?: { estimatedTokens: number; contextWindow?: number };
+  private _lastContextPressure?: { estimatedTokens: number; contextWindow?: number; readingSource?: 'calibrated' | 'anchored' | 'raw' };
   /** 为 true 时禁止自动挂默认 summarize（测试/特殊场景） */
   private _disableAutoSummarize = false;
   private _events?: EventBus;
@@ -1821,6 +1832,13 @@ export class AgentBuilder {
     // ContextEngine 接线：经 convertToLlm 调用 assemble
     // 模型快照只读 ALS（Runner 每 run resolve 一次）；无 snapshot 时才回退 agent.model
     const contextEngine = this._contextEngine ?? new DefaultContextEngine({
+      ...(this._runnerConfig?.sessionsDir
+        ? {
+            transformStore: new (await import('../session/transform-store.js')).JsonlTransformStore({
+              sessionsDir: this._runnerConfig.sessionsDir,
+            }),
+          }
+        : {}),
       ...(this._runnerConfig?.extensionHooks === undefined ? {} : {
         extensionHooks: this._runnerConfig.extensionHooks,
         extensionIdentity: { sessionId: 'default', agentId: busAgentId },
@@ -1842,13 +1860,18 @@ export class AgentBuilder {
             })(messages, opts);
           }
         : undefined);
-    agent.setConvertToLlm(async (messages) => {
+    agent.setConvertToLlm(async (messages, signal) => {
       // I1：身份与 systemPrompt 优先读 RunScope ALS，避免共享 Agent 单例竞态
       const scope = getRunScope();
       const sessionId = scope?.sessionId ?? agent.contextSessionId;
       const agentId = scope?.agentId ?? 'default';
       const systemPrompt = scope?.systemPrompt ?? agent.context.systemPrompt;
-      const tools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] = (agent.context.tools ?? []).map((t) => ({
+      // 工具口径与请求同源（2026-11-07）：run 级 tools = loop 实际发送的 toolDefs。
+      // M-6：回退止于 []——run context 未带 tools 时 loop 发送的就是 0 个工具，估算也
+      // 必须是 0；回落实例工具面（agent.context.tools）会让估算多算整包 tools（毒样本）。
+      // 实例面只在 run context 本身就是实例 context 时经 scope.tools 自然成立。
+      const toolSource = scope?.tools ?? [];
+      const tools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] = toolSource.map((t) => ({
         type: 'function' as const,
         function: {
           name: t.name,
@@ -1882,6 +1905,8 @@ export class AgentBuilder {
         // 空串归一为 undefined——引擎口径「无素材」只有一种形状（评审 L3）
         taskSnapshot: scope?.taskSnapshot?.() || undefined,
         loadCompactState: () => agent.getSessionCompactState(sessionId, agentId),
+        // P3：run 中止信号 —— 摘要调用（provider.chat）随之取消；无此透传时 abort 只能干等
+        signal,
         // 惰性读 bus：覆盖 buildAgent 之后才 setEvents 的场景
         // Observer：ContextEngine 侧事件（context.compact.* 等）不经过 Runner emitObserved，
         // 必须在此直采 Hub，否则 timeline 永远看不到 compact。
@@ -1903,10 +1928,8 @@ export class AgentBuilder {
           bus.emit(event);
         },
       });
-      // 压缩状态回写 Agent 内存桥（E4 键 = sessionId × agentId）
-      if (result.compactState) {
-        agent.setSessionCompactState(sessionId, agentId, result.compactState);
-      }
+      // 压缩覆盖/摘要正文由转换记录账本持久（记录先落盘后发视图）；
+      // 旧 compactState 快照回写已随记录模型退役（迁移读口仍在 run 起点）。
       // Observer P1：LLM 实际输入视图（ContextEngine 出口）
       // 真源 = hub.recordLlmMessages；事件只带 summarizeLlmMessages，避免双套统计/覆盖全文
       if (this._observerHub?.isEnabled() && this._observerHub.getConfig().channels['context.llm']) {
@@ -1934,8 +1957,13 @@ export class AgentBuilder {
         });
       }
       // 保存 context 压力（供 harness.getContextPressure(sessionId) 使用）：
-      // 按 session 键控——共享 Agent 单例下并发会话各取自己的估算，不串号
-      const pressure = { estimatedTokens: result.estimatedTokens, contextWindow };
+      // 按 session 键控——共享 Agent 单例下并发会话各取自己的估算，不串号。
+      // readingSource（评审 F5）：读数是校准/实测锚定/裸估算——生产日志可判定读数可信度
+      const pressure = {
+        estimatedTokens: result.estimatedTokens,
+        contextWindow,
+        readingSource: result.readingSource,
+      };
       this._contextPressureBySession.set(sessionId, pressure);
       this._lastContextPressure = pressure;
 
@@ -1943,13 +1971,14 @@ export class AgentBuilder {
       // 本轮直接不投递；压缩语义由消息侧 contextSummary 承载。
       return result.messages;
     });
-    agent.setOnAfterStep(async (usage, step) => {
-      const scope = getRunScope();
-      const sessionId = scope?.sessionId ?? agent.contextSessionId;
-      const agentId = scope?.agentId ?? 'default';
+    agent.setOnAfterStep(async (identity, usage, step) => {
+      // 身份只信调用方显式传入（40-engineering #8 单源）：runner 事件循环跑在 run 的
+      // ALS 窗口外，getRunScope() 会拿到泄漏的外层 scope，agent.contextSessionId 是
+      // 共享可变字段——并发委派子 run 下两者双向串味，错位样本毒化 ratio 校准
+      // （2026-11-09 事故：视图估算 160k vs 实测 314k）。
       await contextEngine.afterStep?.({
-        sessionId,
-        agentId,
+        sessionId: identity.sessionId,
+        agentId: identity.agentId,
         step: step ?? [],
         usage: usage,
       });
@@ -2010,8 +2039,26 @@ export class AgentBuilder {
         sessionId !== undefined
           ? builderRef._contextPressureBySession.get(sessionId)
           : builderRef._lastContextPressure,
+      // 校准状态通道（持久化配套）：export 写进 session metadata、restore 时 import——
+      // 重启后第一轮即 anchored/calibrated，消除「跑几轮才校准」冷启动过渡
+      exportCalibration: () => contextEngine.exportCalibration?.(),
+      importCalibration: (data: unknown) => {
+        contextEngine.importCalibration?.(data as Parameters<NonNullable<typeof contextEngine.importCalibration>>[0]);
+      },
       // high 风险确认：有则走人工审批，无则 run-agent 回退 reject
       confirmHighRisk: this._confirmHighRisk,
+      // P3 告警通道：F 类反馈环（T2）的症状告警，与 ContextEngine emit 同路（Hub + EventBus）
+      // data 形状与 emit 闭包同源（剥 type/sessionId，其余入 data）
+      onOverflowAlert: (alert) => {
+        const { type, sessionId: sid, ...data } = alert;
+        const event = { type, timestamp: Date.now(), sessionId: sid, data };
+        try {
+          this._observerHub?.ingestEvent(event);
+        } catch {
+          // 观测 fail-open
+        }
+        this._events?.emit(event);
+      },
     };
 
     // Agent.run() 需要 harness；Builder 组装期绑定

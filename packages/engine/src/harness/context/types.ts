@@ -53,8 +53,8 @@ export interface TokenEstimator {
 
 // ── 组装参数 ──
 
-/** 压缩原因：主动摘要 vs 硬溢出 */
-export type ContextCompactReason = 'proactive' | 'overflow';
+/** 压缩原因：主动摘要 vs 硬溢出 vs 手动（m-2：manual 事件显式带 reason，防 store 沿用旧标签） */
+export type ContextCompactReason = 'proactive' | 'overflow' | 'manual';
 
 /**
  * 上下文压缩可观测事件
@@ -63,7 +63,12 @@ export type ContextCompactReason = 'proactive' | 'overflow';
  * 避免 LLM 摘要耗时被误判为会话卡死。失败不中断本轮（引擎回退截断）。
  */
 export interface ContextCompactEvent {
-  type: 'context.compact.start' | 'context.compact.end' | 'context.compact.error' | 'context.compact.summarize_fallback';
+  type:
+    | 'context.compact.start'
+    | 'context.compact.progress'
+    | 'context.compact.end'
+    | 'context.compact.error'
+    | 'context.compact.summarize_fallback';
   sessionId: string;
   reason?: ContextCompactReason;
   /** 压缩前估算 token */
@@ -76,15 +81,54 @@ export interface ContextCompactEvent {
   durationMs?: number;
   /** 走缓存摘要重建，未调 LLM */
   cached?: boolean;
+  /** 中止收尾（本轮作废、零写入）——不是「压缩完成」，UI 不得显示 compacted */
+  cancelled?: boolean;
   /** summarize_fallback：cache-miss 旁路原因（no_prefix | window_guard | window_exhausted，F22） */
   fallback?: string;
   error?: string;
   /** error 的性质：denied = before_compaction 策略拒绝（不是故障）；failed = 压缩失败 */
   kind?: 'denied' | 'failed';
+  /** progress：当前阶段（summarize = 摘要请求已发出、等 provider 返回） */
+  phase?: 'summarize';
+  /** progress：摘要请求体量（JSON 字符数） */
+  requestChars?: number;
+  /** progress：摘要请求消息条数 */
+  requestMessages?: number;
+  /** progress：本次摘要调用预算（ms）；缺失 = 不设预算 */
+  timeoutMs?: number;
 }
 
 /** 事件回调（Builder 注入 → EventBus） */
-export type ContextEmitFn = (event: ContextCompactEvent) => void;
+export type ContextEmitFn = (event: ContextCompactEvent | OverflowAlertEvent) => void;
+
+/**
+ * overflow 症状告警（P3，arch/overflow-redesign.md §2.3 + 红线 7）
+ *
+ * 守门人触发 = 罕见异常信号，每次触发打告警（不当日常）：
+ * - `proactive_failed`（A 类症状）：前馈溢出——proactive 本该在到达窗口前压缩
+ * - `config_drift` / `config_missing`（F 类，有实证）：contextWindow 配置漂移/缺失
+ * - `structural_over_budget`（D 类）：保护段超限——窗口连固定面都放不下
+ * - `window_mismatch`（F 类，归因未定）：请求超真窗口但未提取到数字，配置或尺子偏差待查
+ */
+export interface OverflowAlertEvent {
+  type: 'context.overflow.alert';
+  sessionId: string;
+  /** 症状语义（红线 7：前馈溢出必须含 proactive 失效语义） */
+  symptom:
+    | 'proactive_failed'
+    | 'config_drift'
+    | 'config_missing'
+    | 'structural_over_budget'
+    | 'window_mismatch';
+  /** 人类可读告警（含症状语义关键词，UI/日志直接展示） */
+  message: string;
+  /** 触发时的估算 token（可选） */
+  estimatedTokens?: number;
+  /** 窗口值（配置或真值，可选） */
+  contextWindow?: number;
+  /** 触发入口：T1 前馈溢出 / T2 反馈溢出（F 类回填）/ T3 保护段超限 */
+  trigger?: 'T1' | 'T2' | 'T3';
+}
 
 export interface AssembleParams {
   /** Session ID */
@@ -113,7 +157,7 @@ export interface AssembleParams {
    * 与 contextWindow 无关；未知窗口时仍可作手动/结构压缩的目标。
    */
   compactTargetTokens?: number;
-  /** 中止信号 */
+  /** 中止信号（run 中止 → 取消在飞摘要；P3 起由 Loop 经 convertToLlm 透传） */
   signal?: AbortSignal;
   /** Token 估算器（可选，未提供时使用默认实现）。**必须是未校准的原始估算器**——
    *  校准由引擎 ContextSizeLedger 统一施加，传入已校准包装会造成双重校准 */
@@ -129,8 +173,9 @@ export interface AssembleParams {
   /** 压缩进度回调（可选；UI / 可观测） */
   emit?: ContextEmitFn;
   /**
-   * 从持久层加载压缩状态快照（进程重启恢复）。
-   * 引擎内存态为空时调用一次。
+  /**
+   * 旧压缩快照读口（ContextCompactSnapshot，迁移输入）：转换记录账本为空且快照
+   * 存在时一次性迁移为初始记录（幂等）。迁移后快照不再更新。
    */
   loadCompactState?: (
     sessionId: string,
@@ -169,12 +214,12 @@ export interface AssembleResult {
   /** 被丢弃/压缩的信息摘要（告诉模型"你失去了什么"） */
   droppedSummary?: string;
   /**
-   * 当前会话压缩摘要正文（previousSummary）。
-   * 供调用方写回 Session 持久化；无摘要时为 undefined。
+   * 当前会话压缩摘要正文（最新 summary 型转换记录的文本）。
+   * 供调用方展示；无摘要时为 undefined。
    */
   summary?: string;
-  /** 可持久化压缩状态快照（含 lastProactiveMessageCount 等） */
-  compactState?: ContextCompactSnapshot;
+  /** estimatedTokens 的读数来源（pressure 快照可观测，评审 F5）：calibrated/anchored/raw */
+  readingSource?: 'calibrated' | 'anchored' | 'raw';
   /** 不可信内容范围 */
   untrustedRanges?: Array<{ start: number; end: number; source: string }>;
 }
@@ -215,6 +260,19 @@ export interface AfterStepParams {
  * 本域契约（@layer harness/context）；Harness 提供 DefaultContextEngine。
  */
 export interface ContextEngine {
+  /**
+   * 校准状态快照（可选，持久化配套）：锚+样本计数导出——restore 后回填消除冷启动。
+   * @returns per-key 样本计数与锚
+   */
+  exportCalibration?(): {
+    samples: Record<string, { samples: number }>;
+    anchors: Record<string, { actual: number; raw: number; modelKey: string }>;
+  };
+  /** 校准状态恢复（可选）：importCalibration 配对使用 */
+  importCalibration?(data: {
+    samples?: Record<string, { samples: number }>;
+    anchors?: Record<string, { actual: number; raw: number; modelKey: string }>;
+  }): void;
   readonly info: ContextEngineInfo;
 
   /**
@@ -248,11 +306,12 @@ export interface ContextEngine {
 // ── 消息选择器 ──
 
 export interface SelectResult {
-  /** 要保留的消息 */
+  /** 要保留的消息。**身份契约**：必须是入参数组的同引用对象（转换记录按对象身份
+   *  把产物翻译回原始区间；返回拷贝会让翻译失锚） */
   kept: Message[];
-  /** 溢出的消息（需要压缩） */
+  /** 溢出的消息（需要压缩）。同上：同引用 */
   overflow: Message[];
-  /** 尾部保护的消息 */
+  /** 尾部保护的消息。同上：同引用 */
   tail: Message[];
   /** 尾部 token 数 */
   tailTokens: number;

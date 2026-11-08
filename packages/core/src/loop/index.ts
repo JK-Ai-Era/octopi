@@ -15,7 +15,7 @@ export { agentLoop } from './agent-loop.js';
 export { callModel } from './call-model.js';
 
 // ── 错误分类 ──
-export { classifyError } from './error-classifier.js';
+export { classifyError, isContextLengthErrorText, extractContextWindowLimit, collectErrorText } from './error-classifier.js';
 
 // ── 内容过滤罐头拒答（签名识别 + ContentFilterError） ──
 

@@ -34,6 +34,17 @@ export type SummarizeFunction = (
     maxTokens?: number;
     /** 自定义指令 */
     instructions?: string;
+    /**
+     * usage 回传（2026-11-08 outputTokens 真值）：摘要请求的 provider 实测输出 tokens。
+     * 摘要产物的体量以此为准（真值），估算只作无回传时的兜底——「放着真值用估算」
+     * 是压缩计量的口径缺陷（tokensBefore/After 核对，2026-11-08）。
+     */
+    onUsage?: (usage: { outputTokens?: number }) => void;
+    /**
+     * 中止信号（P3）：run 中止或摘要预算超时都必须能取消在飞请求，
+     * 否则 UI 只能干等到 provider 侧超时（2026-11-07 事故：2.13MB 非流式请求挂 20+ 分钟）。
+     */
+    signal?: AbortSignal;
   },
 ) => Promise<string>;
 
@@ -54,9 +65,17 @@ export interface CompactOptions {
   summarizePolicy?: SummaryPolicy | string;
   /** 注入的摘要执行函数（族 A；契约见 SummarizeFunction） */
   summarizeFn?: SummarizeFunction;
+  /** 摘要失败/取消时的降级策略：truncate=裁掉未覆盖中段（宁可瘦不丢坏），keep_partial=保留部分产物 */
   onSummarizeFail?: 'truncate' | 'keep_partial';
   estimator?: CompactTokenEstimator;
   previousSummary?: string;
+  /**
+   * 摘要增量素材（M-4）：上一份摘要覆盖终点之后、保护尾之前的新消息。与 previousSummary
+   * 同时给出时，textify 旁路只文本化本段（合并契约：previousSummary + 新消息 = 完整
+   * 更新），不再把已覆盖历史以全量 raw middle 复发（2.13MB 事故形状）。缺省 = 全量
+   * middle（首次压缩/无摘要兜底）。
+   */
+  freshMessages?: Message[];
   maxSummaryTokens?: number;
   /**
    * 摘要软目标预算（P1c 拍板缺省 clamp(2%, 2k, 8k)）：写进指令的「尽量控制在 N tokens」，
@@ -71,7 +90,16 @@ export interface CompactOptions {
    * 折叠区间（评审 F7）：告知摘要器「本次交接书将替换到第几条、尾部多少条原样保留」，
    * 防止模型只总结眼前最近的尾部、漏掉真正要被折叠的旧中段。
    */
-  foldRange?: { replacedCount: number; total: number; preservedTail: number };
+  foldRange?: {
+    /** 本次需要并入摘要的消息条数（既有摘要之后、保护尾之前） */
+    replacedCount: number;
+    /** 会话消息总数 */
+    total: number;
+    /** 原样保留的尾部条数 */
+    preservedTail: number;
+    /** 前缀里上一份摘要已经代表的早期消息条数（0/缺省 = 无既有摘要） */
+    coveredCount?: number;
+  };
   /** 会话模型窗口（评审 F5）：provider 多按 input+max_tokens ≤ window 校验，压缩恰在最满时触发 */
   contextWindow?: number;
   /** 会话模型输出上限（评审 F5）：保险丝不得越过模型自身的 max output */
@@ -81,6 +109,15 @@ export interface CompactOptions {
    * summarizeFn 路径只许尾部追加指令；禁止改写前缀字节。
    */
   llmPrefix?: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[];
+  /**
+   * 回声比对源覆盖（P2）：前缀含既有摘要占位时，占位正文不得参与回声判定——
+   * 模型复用/续写上一份交接书不是「复读原文」。缺省回落到前缀文本投影。
+   */
+  echoSource?: string;
+  /**
+   * 中止信号（P3）：run 中止 / 摘要预算超时 → 取消在飞摘要请求。
+   * 取消产生的错误按 onSummarizeFail 降级（调用方另按 signal.aborted 决定是否写记录）。
+   */
   signal?: AbortSignal;
   emit?: (e: {
     type: 'compact.start' | 'compact.end' | 'compact.error' | 'compact.summarize_fallback';
@@ -106,6 +143,9 @@ export interface CompactOutcome {
    *  必填（显式标注，杜绝空值歧义）：机械/早退路径
    *  （empty、within_target、too_short、head_tail_only）显式 false，不许留空。 */
   summarizeAttempted: boolean;
+  /** fresh 摘要响应的 provider 实测输出 tokens（onUsage 回传，2026-11-08）：
+   *  摘要产物体量的真值；无回传（自定义 summarizeFn/失败）时缺省，计量回落估算。 */
+  summaryOutputTokens?: number;
   coverage?: SummaryCoverage;
   /** Message[] 或纯文本结果，由入口决定 */
   view: Message[] | string;

@@ -155,12 +155,17 @@ export async function buildFromConfigFile(configPath?: string): Promise<Map<stri
   );
   const filePath = resolveConfigFilePath(configPath);
   const config = loadConfig(filePath);
+  const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+  const { join } = await import('node:path');
   // ops P2 §4.3/§8.4：启动期锚定安全字段指纹（取 raw 文件切面，与复核同口径——
   // 展开 ${VAR} 后的值与文件字面不同，混用会永久误报漂移）。run 起点复核，漂移拒新 run；
   // 受控写通道（console 管理面）经 guard.reattest 署名重锚定。
   return buildFromConfig(config, {
     runnerConfig: {
       securityIntegrity: createSecurityIntegrityGuard({ configPath: filePath }),
+      // 转换记录账本持久面（评审 F4）：CLI/库嵌入路径同样落 sessions/<sid>/transform，
+      // 不得静默降级为进程内存（压缩产物重启即回填）
+      sessionsDir: join(getOctopiHome(), 'sessions'),
     },
     // 插件 provider：与 daemon 同语义——按配置发现插件后注入工厂解析器
     ...(await resolvePluginProviderOption(config)),

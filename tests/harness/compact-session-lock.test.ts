@@ -14,6 +14,8 @@ import type { Message } from '@octopi-agent/core/types.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import { compactStateKey } from '@octopi-agent/engine/harness/context/compact-key.js';
+import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import { InMemoryTransformStore } from '@octopi-agent/engine/harness/session/transform-store.js';
 import {
   readSessionCompact,
   writeSessionCompact,
@@ -191,7 +193,8 @@ describe('Runner.compactSession lock (D1)', () => {
     expect(compactIdx).toBeGreaterThan(runEnd);
 
     const sess = await store.load('s-lock');
-    expect(sess?.contextCompacts?.a1?.summary).toBe('compacted-sum');
+    // 旧 contextCompact 快照停写（转换记录是唯一持久面；runner 不再回写快照）
+    expect(sess?.contextCompacts?.a1).toBeUndefined();
     // 传输投影钉（P3）：view 不过锁面——mock 带 view，锁面结果必须剥离
     expect('view' in compactResult).toBe(false);
     expect(compactResult.summary).toBe('compacted-sum');
@@ -215,41 +218,28 @@ describe('Runner.compactSession lock (D1)', () => {
   });
 });
 
-describe('Runner writeback compact key (D2/D4)', () => {
-  it('handle writeback stores compact under this run agentId only', async () => {
-    const compactStates = new Map<string, { summary?: string; lastProactiveMessageCount?: number }>();
-    const agent = makeMockAgent({ compactStates });
-    // seed only after handle path via mock: simulate convertToLlm writing compact
-    const originalRun = (agent as unknown as { run: unknown }).run;
-    (agent as unknown as { run: unknown }).run = async function* (
-      this: unknown,
-      signal?: AbortSignal,
-      h?: unknown,
-      opts?: { context?: { messages: Message[] }; runScope?: { sessionId: string; agentId: string } },
-    ) {
-      const sid = opts?.runScope?.sessionId ?? 's';
-      const aid = opts?.runScope?.agentId ?? 'a1';
-      compactStates.set(compactStateKey(sid, aid), { summary: `sum-${aid}`, lastProactiveMessageCount: 2 });
-       
-      for await (const ev of (originalRun as any).call(this, signal, h, opts)) {
-        yield ev;
-      }
-    };
-
-    const store = new InMemorySessionStore();
-    const runner = new SessionAwareRunner(agent, {} as never, store);
-    await store.save('s-w', emptySession('s-w', 'a1'));
-
-    for await (const _ of runner.handle(
-      's-w',
-      { role: 'user', content: 'hi', timestamp: Date.now() },
-      { systemPrompt: '', agentId: 'a1', sessionId: 's-w' },
-    )) {
-      void _;
+describe('转换记录键 (D2/D4)', () => {
+  it('记录按 (sessionId, agentId) 分账，不借用他 agent 桶', async () => {
+    const store = new InMemoryTransformStore();
+    const engine = new DefaultContextEngine({ transformStore: store });
+    const messages: Message[] = [];
+    for (let i = 0; i < 30; i++) {
+      messages.push({ role: 'user', content: `m${i} ` + 'x'.repeat(400), timestamp: Date.now() + i });
     }
+    const result = await engine.compactStructural({
+      sessionId: 's-w',
+      agentId: 'a1',
+      messages,
+      summarize: async () => '## Conversation Summary\nsum-a1',
+    });
+    expect(result.summary).toContain('sum-a1');
 
-    const sess = await store.load('s-w');
-    expect(sess?.contextCompacts?.a1?.summary).toBe('sum-a1');
-    expect(sess?.contextCompact?.summary).toBe('sum-a1');
+    // 记录落在 a1 桶，a2 桶为空（E4：跨 agent 互不可见）
+    const a1 = await store.load('s-w', 'a1');
+    expect(a1.records.length).toBeGreaterThan(0);
+    expect(a1.records[0]!.agentId).toBe('a1');
+    expect(a1.records[0]!.type).toBe('summary');
+    const a2 = await store.load('s-w', 'a2');
+    expect(a2.records).toHaveLength(0);
   });
 });

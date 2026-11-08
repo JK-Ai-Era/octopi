@@ -10,11 +10,11 @@
 /** 通用文本：英文约 4 chars/token，中文约 1 char/token */
 export const CHARS_PER_TOKEN = 4;
 
-/** 工具结果：结构化输出更密集，约 2 chars/token */
-export const TOOL_RESULT_CHARS_PER_TOKEN = 2;
+/** 工具结果：结构化输出更密集，约 1.7 chars/token（2026-11-08 生产样本拟合：原 2 系统低估 ~40%） */
+export const TOOL_RESULT_CHARS_PER_TOKEN = 1.7;
 
-/** JSON 负载：结构符号多，约 3 chars/token */
-export const JSON_CHARS_PER_TOKEN = 3;
+/** JSON 负载（schema / arguments）：结构符号多，约 2 chars/token（2026-11-08 样本拟合调低；与 tr 档共线，取业界密度区间居中，勿硬拟合） */
+export const JSON_CHARS_PER_TOKEN = 2;
 
 /** 中文等 CJK：1 token/字 */
 export const TEXT_CJK_CHARS_PER_TOKEN = 1;

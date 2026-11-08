@@ -15,7 +15,7 @@
  */
 
 import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
-import type { Delegation } from './types.js';
+import { DEFAULT_DELEGATION_OUTPUT_CHARS, type Delegation } from './types.js';
 import type { DelegationNotifier } from './service.js';
 import {
   emitAgentSignal,
@@ -33,6 +33,11 @@ export interface DelegationNotifierConfig {
 /**
  * 渲染委派终态通知（§7.1：`<delegation_completed …/>`）
  *
+ * `<output>` 截断上限按委派单 `maxOutputChars`（缺省 {@link DEFAULT_DELEGATION_OUTPUT_CHARS}）——
+ * 只影响自动送达的 notice；`delegate_get` 全文取回不受此限。上限计量**原始 output 字符**
+ * （截断补 `…`，实体最多 max+1 字符）；escapeText 后投递文本可因转义膨胀（最坏 5×，
+ * 上限约束内容量不约束投递字节——2026-11-09 评审 m5 记债）。
+ *
  * @param delegation - 终态委派单
  * @returns 通知文本
  */
@@ -48,7 +53,8 @@ export function renderDelegationNotice(delegation: Delegation): string {
   const body: string[] = [];
 
   if (delegation.output) {
-    body.push(`<output>${escapeText(truncate(delegation.output, 4000))}</output>`);
+    const maxOutputChars = delegation.maxOutputChars ?? DEFAULT_DELEGATION_OUTPUT_CHARS;
+    body.push(`<output>${escapeText(truncate(delegation.output, maxOutputChars))}</output>`);
   }
   if (delegation.error) {
     body.push(`<error>${escapeText(truncate(delegation.error, 1000))}</error>`);

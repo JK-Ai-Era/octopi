@@ -31,6 +31,10 @@ export const MODEL_ERROR_MAX_ATTEMPTS: Readonly<Record<string, number>> = {
   // 内容过滤拒答多为阈值型误杀（同请求重试常过）；给 2 次原样重试，
   // 仍被拦则如实收口（不教模型换说法绕过审核）
   content_filter: 2,
+  // 长度类 400（F 类，arch/overflow-redesign.md T2⑤）：重发前已收缩上界 +
+  // 重装配砍量，必须重试；限 2 次防「砍不给力」连环 400（再 400 = 模型/
+  // 会话不适配，L3 语义收口换 session/model）
+  context_length: 2,
 };
 
 /**

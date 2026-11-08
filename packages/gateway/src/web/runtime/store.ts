@@ -137,15 +137,31 @@ export interface ToolRun {
   error?: string;
 }
 
+/** P3 overflow 症状告警（context.overflow.alert；红线 7 可见面） */
+export interface OverflowAlertState {
+  symptom: string;
+  message: string;
+  trigger?: string;
+  timestamp: number;
+}
+
 export interface CompactStatus {
   active: boolean;
-  reason?: 'proactive' | 'overflow';
+  reason?: 'proactive' | 'overflow' | 'manual';
   cached?: boolean;
   tokensBefore?: number;
   tokensAfter?: number;
   threshold?: number;
   durationMs?: number;
   error?: string;
+  /** 当前阶段（P3）：summarize = 摘要请求已发出、等 provider 返回 */
+  phase?: 'summarize';
+  /** 进度起点（P3）：UI 用它显示「已等待 Ns」（无需后端心跳） */
+  startedAt?: number;
+  /** 摘要请求体量（P3）：JSON 字符数 */
+  requestChars?: number;
+  /** 本次摘要调用的单次预算（ms） */
+  timeoutMs?: number;
 }
 
 /** 模型调用重试的当前状态（用户可见，非调试信息） */
@@ -169,6 +185,8 @@ export interface InspectorState {
   promptTokensActual?: number;
   /** 请求视图估算（校准后，最近一次 assemble 口径；estimate 写入，压缩后清空待下轮重算） */
   viewTokensEst?: number;
+  /** 视图估算来源：restore=重启恢复的旧快照（显示侧标「(旧)」防误读）；live=本轮实算 */
+  viewTokensEstSource?: 'live' | 'restore';
   /** 全量原文估算（仅 Run 页签展示，不进主显示/决策） */
   rawTokens?: number;
   contextWindow?: number;
@@ -185,6 +203,8 @@ export interface InspectorState {
   lastModelRetryLabel?: string;
   /** 上下文压缩状态（context.compact.*） */
   compact?: CompactStatus;
+  /** P3：最近一次 overflow 症状告警（罕见异常信号，出现即异常） */
+  overflowAlert?: OverflowAlertState;
   /** System 装配快照（产品 L1–L7；context.layers.assembled / REST） */
   contextLayers?: ContextLayersSnapshot;
   /** Agent 数据面健康（产品 L1–L7 store 计数；REST） */
@@ -580,7 +600,37 @@ export class OctopiRuntimeStore extends EventTarget {
   }> {
     const sessionId = this.chat.sessionId;
     if (!sessionId) throw new Error('No active session');
-    return this.client.compactSession(sessionId, this.chat.agentId);
+    const r = await this.client.compactSession(sessionId, this.chat.agentId);
+    // B2（2026-11-08 评审）：manual 压缩不发 context.compact.end，旧「视图估算」已知失效——
+    // 与 auto 同款清空（writer=compact 语义），防 toast 与顶栏并排时一新一旧。
+    // 禁止把 r.tokensAfter 写进 viewTokensEst：该槽是校准后请求估算（pressure.estimatedTokens），
+    // tokensAfter 是未校准报告尺，混写会搅乱两把尺（与 P0-C 口径守护同款理由）。
+    if (r.ok && r.compacted) {
+      console.log(`[ctx] session=${sessionId} writer=compact field=viewTokensEst value=cleared`);
+      this.chat.inspector = {
+        ...this.chat.inspector,
+        viewTokensEst: undefined,
+        compact: {
+          active: false,
+          reason: 'manual',
+          cached: false,
+          tokensBefore: r.tokensBefore,
+          tokensAfter: r.tokensAfter,
+        },
+      };
+    } else if (this.chat.inspector.compact?.active) {
+      // M1（评审 del-e1ee43ef）：active 无条件收敛——progress 已置 active，失败/无需压缩若只
+      // 在 compacted 时清理会永久悬挂「摘要进行中」。viewTokensEst 不动（视图未变，旧估算仍有效）。
+      this.chat.inspector = {
+        ...this.chat.inspector,
+        compact: {
+          ...this.chat.inspector.compact,
+          active: false,
+          ...(r.ok ? {} : { error: String((r as { error?: unknown }).error ?? 'compact failed') }),
+        },
+      };
+    }
+    return r;
   }
 
   /**
@@ -1139,7 +1189,7 @@ export class OctopiRuntimeStore extends EventTarget {
       inspector: {
         // 持久化的最近一次真值作底（重启/冷打开恢复显示）；运行时缓存（更新）优先
         ...(typeof view.promptTokensActual === 'number' ? { promptTokensActual: view.promptTokensActual } : {}),
-        ...(typeof view.viewTokensEst === 'number' ? { viewTokensEst: view.viewTokensEst } : {}),
+        ...(typeof view.viewTokensEst === 'number' ? { viewTokensEst: view.viewTokensEst, viewTokensEstSource: 'restore' as const } : {}),
         ...(typeof view.rawTokens === 'number' ? { rawTokens: view.rawTokens } : {}),
         ...(typeof view.contextWindow === 'number' ? { contextWindow: view.contextWindow } : {}),
         ...(cached?.inspector ?? {}),
@@ -1886,7 +1936,7 @@ export class OctopiRuntimeStore extends EventTarget {
       }
       case 'context.compact.start': {
         const d = event.data as {
-          reason?: 'proactive' | 'overflow';
+          reason?: 'proactive' | 'overflow' | 'manual';
           tokensBefore?: number;
           threshold?: number;
         } | undefined;
@@ -1897,6 +1947,34 @@ export class OctopiRuntimeStore extends EventTarget {
             reason: d?.reason,
             tokensBefore: typeof d?.tokensBefore === 'number' ? d.tokensBefore : undefined,
             threshold: typeof d?.threshold === 'number' ? d.threshold : undefined,
+            startedAt: Date.now(),
+          },
+        };
+        inspectorChanged = true;
+        break;
+      }
+      case 'context.compact.progress': {
+        // P3：摘要请求已发出但还没回来——把「等谁、等多久、等多大」如实带给 UI。
+        // 事故里 UI 只显示「进行中」，用户无法区分「在跑」和「provider 不返回」。
+        const d = event.data as {
+          phase?: 'summarize';
+          requestChars?: number;
+          requestMessages?: number;
+          timeoutMs?: number;
+          reason?: 'proactive' | 'overflow' | 'manual';
+        } | undefined;
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          compact: {
+            ...(this.chat.inspector.compact ?? { active: true }),
+            active: true,
+            // N1（评审 del-e1ee43ef）：progress 消费 reason——否则 {...compact} 会把上一次
+            // proactive/overflow 的标签带给 manual 轮（本批 reason 字段的落点）
+            ...(d?.reason ? { reason: d.reason } : {}),
+            phase: d?.phase ?? 'summarize',
+            requestChars: typeof d?.requestChars === 'number' ? d.requestChars : undefined,
+            timeoutMs: typeof d?.timeoutMs === 'number' ? d.timeoutMs : undefined,
+            startedAt: this.chat.inspector.compact?.startedAt ?? Date.now(),
           },
         };
         inspectorChanged = true;
@@ -1904,11 +1982,12 @@ export class OctopiRuntimeStore extends EventTarget {
       }
       case 'context.compact.end': {
         const d = event.data as {
-          reason?: 'proactive' | 'overflow';
+          reason?: 'proactive' | 'overflow' | 'manual';
           tokensBefore?: number;
           tokensAfter?: number;
           durationMs?: number;
           cached?: boolean;
+          cancelled?: boolean;
         } | undefined;
         const tokensAfter = typeof d?.tokensAfter === 'number' ? d.tokensAfter : undefined;
         // P0-C 口径守护：tokensAfter 是压缩器 messages 口径（未校准、不含 system/tools），
@@ -1944,6 +2023,36 @@ export class OctopiRuntimeStore extends EventTarget {
           },
         };
         inspectorChanged = true;
+        break;
+      }
+      // P3 红线 7：overflow 症状告警可见面（proactive 失效/配置病——罕见，出现即异常）
+      case 'context.overflow.alert': {
+        const d = event.data as
+          | { symptom?: string; message?: string; trigger?: string }
+          | undefined;
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          overflowAlert: {
+            symptom: String(d?.symptom ?? 'unknown'),
+            message: String(d?.message ?? ''),
+            trigger: d?.trigger,
+            timestamp: Date.now(),
+          },
+        };
+        inspectorChanged = true;
+        break;
+      }
+      // M-1 兜底：run 终态（正常结束/中止）时若压缩仍悬挂（引擎侧事件丢失等），
+      // 一次性清掉 active——压缩只存在于 run 进行中，run 结束后「进行中」必为假象。
+      case 'engine.end':
+      case 'interrupted': {
+        if (this.chat.inspector?.compact?.active) {
+          this.chat.inspector = {
+            ...this.chat.inspector,
+            compact: { ...this.chat.inspector.compact, active: false },
+          };
+          inspectorChanged = true;
+        }
         break;
       }
       case 'context.layers.assembled': {
@@ -2097,7 +2206,7 @@ export class OctopiRuntimeStore extends EventTarget {
           this.chat.inspector = {
             ...this.chat.inspector,
             ...(promptTokensActual !== undefined ? { promptTokensActual } : {}),
-            ...(viewTokensEst !== undefined ? { viewTokensEst } : {}),
+            ...(viewTokensEst !== undefined ? { viewTokensEst, viewTokensEstSource: 'live' as const } : {}),
             ...(rawTokens !== undefined ? { rawTokens } : {}),
             // 未知窗口时清掉上一模型的旧值，避免 UI 显示假预算
             ...(hasWindowKey ? { contextWindow } : {}),

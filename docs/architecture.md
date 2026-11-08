@@ -733,9 +733,10 @@ Session save: full messages + contextCompact snapshot
 
 **contextWindow semantics (unknown means no guessing)**:
 
-- **Only explicit configuration** counts as known: `models.providers[].models[].contextWindow`, values hard-coded in agent.model, user-configured `defaults.contextWindow`
+- **Explicit configuration** counts as known: `models.providers[].models[].contextWindow`, values hard-coded in agent.model, user-configured `defaults.contextWindow`
+- **Provider-measured truth** also counts as known (`source: 'measured'`): a length-class 400 error text reporting the window limit is backfilled per-model (F-class feedback, `harness/run/model/window-truth.ts`) — measurement beats prediction and overrides configuration. A post-400 shrink bound (`source: 'shrunk'`) is a conservative run-scoped guess and never persists to the truth table.
 - Providers do **not** auto-merge builtin tables; the resolver does **not** use builtin/200k as budget
-- Unconfigured → `contextWindow: undefined` / REST `null`; UI shows “unknown”
+- Neither configured nor measured → `contextWindow: undefined` / REST `null`; UI shows “unknown”
 
 **Unknown vs configured**:
 

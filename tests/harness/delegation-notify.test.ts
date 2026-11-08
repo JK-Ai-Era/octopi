@@ -19,6 +19,11 @@ import {
 import { compileMessages } from '@octopi-agent/engine/harness/activation/compiler.js';
 import type { Delegation } from '@octopi-agent/engine/harness/collaboration/delegation/types.js';
 import {
+  DEFAULT_DELEGATION_OUTPUT_CHARS,
+  DELEGATION_SCHEMA_VERSION,
+  normalizeMaxOutputChars,
+} from '@octopi-agent/engine/harness/collaboration/delegation/types.js';
+import {
   createDelegationNotifier,
   renderDelegationNotice,
   delegationReason,
@@ -29,11 +34,14 @@ import {
 import {
   DelegateService,
 } from '@octopi-agent/engine/harness/collaboration/delegation/service.js';
+import type {
+  DispatchDelegationInput,
+} from '@octopi-agent/engine/harness/collaboration/delegation/service.js';
+import {
+  createDelegateDispatchTool,
+} from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/delegation.js';
 import { DefaultAgentRegistry } from '@octopi-agent/engine/harness/collaboration/delegation/registry.js';
 import { InProcessTransport } from '@octopi-agent/engine/harness/collaboration/delegation/transport.js';
-import {
-  DELEGATION_SCHEMA_VERSION,
-} from '@octopi-agent/engine/harness/collaboration/delegation/types.js';
 import {
   wireDelegation,
   createDelegationRuntime,
@@ -96,6 +104,145 @@ describe('renderDelegationNotice', () => {
   it('derives the notify reason from status', () => {
     expect(delegationReason(makeDelegation({ status: 'completed' }))).toBe('delegation_completed');
     expect(delegationReason(makeDelegation({ status: 'failed', output: undefined }))).toBe('delegation_failed');
+  });
+});
+
+// ── 自动返回结果截断上限（B 方案，2026-11-09 拍板） ──
+
+describe('delegation output cap（max_output_chars）', () => {
+  it('缺省按 DEFAULT_DELEGATION_OUTPUT_CHARS（16k）截断自动返回 <output>', () => {
+    const big = 'x'.repeat(30_000);
+    const text = renderDelegationNotice(makeDelegation({ output: big }));
+    const m = text.match(/<output>([\s\S]*)<\/output>/);
+    expect(m).toBeTruthy();
+    expect(m![1]!.length).toBe(DEFAULT_DELEGATION_OUTPUT_CHARS + 1); // +1 = '…' 截断标记
+    expect(m![1]!.endsWith('…')).toBe(true);
+  });
+
+  it('maxOutputChars 按委派单生效（覆盖缺省）', () => {
+    const big = 'x'.repeat(30_000);
+    const text = renderDelegationNotice(makeDelegation({ output: big, maxOutputChars: 500 }));
+    const m = text.match(/<output>([\s\S]*)<\/output>/);
+    expect(m![1]!.length).toBe(501);
+    expect(m![1]!.startsWith('x'.repeat(500))).toBe(true);
+  });
+
+  it('短输出不截断（上限只封顶不填充）', () => {
+    const text = renderDelegationNotice(makeDelegation({ output: 'short', maxOutputChars: 500 }));
+    expect(text).toContain('<output>short</output>');
+  });
+
+  it('默认上限钉死产品拍板 16k（B 方案，m7）', () => {
+    expect(DEFAULT_DELEGATION_OUTPUT_CHARS).toBe(16_000);
+  });
+
+  it('<error> 1000 cap 回归（n4，有意保留）', () => {
+    const text = renderDelegationNotice(
+      makeDelegation({ output: undefined, error: 'e'.repeat(3000) }),
+    );
+    const m = text.match(/<error>([\s\S]*)<\/error>/);
+    expect(m).toBeTruthy();
+    expect(m![1]!.length).toBe(1001); // 1000 + '…' 截断标记
+  });
+});
+
+describe('normalizeMaxOutputChars（写入口校验，M2）', () => {
+  it('undefined 通过（未指定，渲染侧回落默认）', () => {
+    expect(normalizeMaxOutputChars(undefined)).toBeUndefined();
+  });
+
+  it('正整数原样通过', () => {
+    expect(normalizeMaxOutputChars(16_000)).toBe(16_000);
+  });
+
+  it('NaN/0/负数/Infinity/小数 fail loud（不静默丢结果也不静默禁用截断）', () => {
+    for (const bad of [NaN, 0, -3, Infinity, 1.5]) {
+      expect(() => normalizeMaxOutputChars(bad), String(bad)).toThrow(/maxOutputChars/);
+    }
+  });
+});
+
+describe('delegate_dispatch max_output_chars 透传与校验', () => {
+  /** 捕获 dispatch 入参的假服务 */
+  function fakeService(): { service: DelegateService; calls: DispatchDelegationInput[] } {
+    const calls: DispatchDelegationInput[] = [];
+    const service = {
+      dispatch: async (input: DispatchDelegationInput) => {
+        calls.push(input);
+        return { delegation: makeDelegation(), resolvedAgentId: 'worker' };
+      },
+    } as unknown as DelegateService;
+    return { service, calls };
+  }
+
+  /** 真实 service（M3 中间层：service.dispatch → store.create 链路） */
+  function realService(): { store: DelegationStore; service: DelegateService } {
+    const events = new DefaultEventBus();
+    const registry = new DefaultAgentRegistry();
+    registry.register({
+      id: 'worker',
+      name: 'worker',
+      traits: [],
+      status: 'idle',
+      delegation: { callable: true, canDelegate: false, maxDepth: 1 },
+    });
+    const store = new DelegationStore(events);
+    const service = new DelegateService(
+      store,
+      registry,
+      new InProcessTransport(async (req) => ({
+        delegationId: req.delegationId,
+        status: 'completed',
+        output: 'ok',
+        schemaVersion: DELEGATION_SCHEMA_VERSION,
+      })),
+      {},
+    );
+    return { store, service };
+  }
+
+  const ctx = { agentId: 'main', sessionId: 's1', runId: 'r1', messages: [] } as never;
+
+  it('max_output_chars 传入 → maxOutputChars 透传到 dispatch 入参', async () => {
+    const { service, calls } = fakeService();
+    const tool = createDelegateDispatchTool(service);
+    const res = (await tool.handler!(
+      { agent: 'worker', task: 't', input: 'i', max_output_chars: 500 },
+      ctx,
+    )) as { ok: boolean };
+    expect(res.ok).toBe(true);
+    expect(calls[0]!.maxOutputChars).toBe(500);
+  });
+
+  it('maxOutputChars 穿透 service.dispatch → store（M3 中间层）', async () => {
+    const { store, service } = realService();
+    const tool = createDelegateDispatchTool(service);
+    const res = (await tool.handler!(
+      { agent: 'worker', task: 't', input: 'i', max_output_chars: 500 },
+      ctx,
+    )) as { ok: boolean };
+    expect(res.ok).toBe(true);
+    expect(store.list()[0]!.maxOutputChars).toBe(500);
+  });
+
+  it('非法值 fail loud（M2/m6）：NaN/0/负数/Infinity/小数 → ok:false 带错', async () => {
+    const { service } = realService();
+    const tool = createDelegateDispatchTool(service);
+    for (const bad of [NaN, 0, -5, Infinity, 1.5]) {
+      const res = (await tool.handler!(
+        { agent: 'worker', task: 't', input: 'i', max_output_chars: bad },
+        ctx,
+      )) as { ok: boolean; error?: string };
+      expect(res.ok, `max_output_chars=${String(bad)}`).toBe(false);
+      expect(res.error).toContain('maxOutputChars');
+    }
+  });
+
+  it('缺省 → undefined（渲染侧回落 DEFAULT_DELEGATION_OUTPUT_CHARS）', async () => {
+    const { service, calls } = fakeService();
+    const tool = createDelegateDispatchTool(service);
+    await tool.handler!({ agent: 'worker', task: 't', input: 'i' }, ctx);
+    expect(calls[0]!.maxOutputChars).toBeUndefined();
   });
 });
 

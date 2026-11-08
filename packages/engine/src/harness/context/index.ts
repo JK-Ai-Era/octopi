@@ -20,6 +20,7 @@ export type {
   ContextCompactReason,
   ContextCompactEvent,
   ContextEmitFn,
+  OverflowAlertEvent,
   ContextCompactSnapshot,
 } from './types.js';
 export { DefaultContextEngine } from './default-context-engine.js';

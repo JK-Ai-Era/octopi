@@ -112,6 +112,29 @@ export interface DelegationParentRef {
 /** 结果送达父的状态机（§7.1 送达语义） */
 export type DelegationDeliveryState = 'pending' | 'delivering' | 'surfaced';
 
+/** 自动返回通知（`<delegation_result>`）`<output>` 默认截断上限（chars）。
+ * B 方案（2026-11-09 拍板）：默认 16k，可按委派 `max_output_chars` 覆盖；
+ * 只影响自动送达 notice，`delegate_get` 全文取回不受此限。 */
+export const DEFAULT_DELEGATION_OUTPUT_CHARS = 16_000;
+
+/**
+ * 校验/归一化自动返回截断上限（单源；`DelegationStore.create` 唯一写入口消费）。
+ *
+ * fail loud：非法值（非有限数 / 非正整数）直接抛错，不静默丢结果也不静默禁用截断
+ * （NaN 会产出空 `<output>`、负数丢尾部、Infinity 关闭截断——2026-11-09 评审 M2 实测）。
+ *
+ * @param value - 待校验上限（chars）；undefined = 未指定（渲染侧回落默认）
+ * @returns 归一化后的上限（undefined = 未指定）
+ * @throws 非有限数、非正整数
+ */
+export function normalizeMaxOutputChars(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`maxOutputChars must be a positive integer (got ${value})`);
+  }
+  return value;
+}
+
 /**
  * 委派单 —— 一次委派的全程记录
  *
@@ -143,6 +166,12 @@ export interface Delegation {
 
   /** 子的最后一轮 assistant 文本 = 结论（D5） */
   output?: string;
+  /**
+   * 自动返回通知（`<delegation_result>`）中 `<output>` 的截断上限（chars）。
+   * 只影响 notify 自动送达；`delegate_get` 全文取回不受此限。
+   * 缺省 = {@link DEFAULT_DELEGATION_OUTPUT_CHARS}（B 方案 2026-11-09）。
+   */
+  maxOutputChars?: number;
   /** 子产出的文件路径（D5/D6：不共享文件系统，显式声明） */
   artifacts?: string[];
   /** 子 Run 的 token 消耗（归集到父的 run 账，决策 C2） */

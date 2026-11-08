@@ -1237,6 +1237,10 @@
           "type": "number",
           "minimum": 0
         },
+        "summarizeTimeoutMs": {
+          "type": "number",
+          "minimum": 0
+        },
         "historyAging": {
           "type": "object",
           "properties": {
@@ -1276,6 +1280,11 @@
         "compactFallbackRatio": {
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "midTurnProtectLastN": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
         },
         "outputRatio": {
           "type": "number",

@@ -26,6 +26,7 @@ const MAP_KEYS = [
   'session.updated',
   'persona.resolve.failed',
   'context.compact.start',
+  'context.compact.progress',
   'context.compact.end',
   'context.compact.error',
   'context.layers.assembled',

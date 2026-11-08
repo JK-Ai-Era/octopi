@@ -35,6 +35,8 @@ export function createProviderSummarize(
       model: options?.model,
       // 未显式配置即不发送：由模型配置（ModelInfo.temperature）或服务端默认决定
       temperature: options?.temperature,
+      // P3：run 中止 / 摘要超时都靠这个 signal 取消在飞请求（provider 侧 fetch 已接 signal）
+      ...(opts?.signal ? { signal: opts.signal } : {}),
       // 源头钳制（评审 F6）：三条摘要路径（manual/proactive/overflow）共用本闭包，
       // 硬顶不得越过模型实际输出上限，否则窗口钳制在大窗口下仍会顶穿被 provider 400
       maxTokens:
@@ -42,6 +44,11 @@ export function createProviderSummarize(
           ? Math.min(opts?.maxTokens ?? options.maxOutputTokens, options.maxOutputTokens)
           : opts?.maxTokens,
     });
+    // usage 回传（2026-11-08 outputTokens 真值）：摘要产物体量的真值通道，
+    // 供压缩计量以真值替代估算（契约见 SummarizeFunction.onUsage）
+    if (response.usage && response.usage.outputTokens > 0) {
+      opts?.onUsage?.({ outputTokens: response.usage.outputTokens });
+    }
     return response.content;
   };
 }

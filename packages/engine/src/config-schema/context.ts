@@ -42,11 +42,15 @@ export const ContextEngineConfigSchema = z.object({
   /** 0 = 禁新的路径 A 压缩（不只禁 LLM；不丢粘滞视图）；见 ContextEngineConfig JSDoc */
   proactiveCompactRatio: z.number().min(0).max(1).optional(),
   proactiveCooldownMs: z.number().min(0).optional(),
+  /** 单次摘要 LLM 调用预算（ms）；0 = 不设预算（只受 provider 超时约束），缺省 300000 */
+  summarizeTimeoutMs: z.number().min(0).optional(),
   historyAging: HistoryAgingConfigSchema.optional(),
   /** 工作目标 token（与窗口解耦，F1-B3）；0 = 只挂窗口比例线（proactiveCompactRatio） */
   targetTokens: z.number().int().nonnegative().optional(),
   /** 目标线倍数（默认 3；目标线 = targetTokens × 倍数，须 > B2 老化稳态） */
   compactFallbackRatio: z.number().positive().optional(),
+  /** turn 内主动压缩的保护尾条数（默认 50，最小 1；活跃窗口——进行中工作记录不进压缩选段。0 不是「关闭」语义） */
+  midTurnProtectLastN: z.number().int().min(1).optional(),
   outputRatio: z.number().min(0).max(1).optional(),
   minOutputReserve: z.number().positive().optional(),
   maxOutputReserve: z.number().positive().optional(),

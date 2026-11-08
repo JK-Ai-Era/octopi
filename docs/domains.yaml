@@ -319,6 +319,7 @@ module_catalog:
   - { id: context, domain: context }
   - { id: context/capabilities, domain: context, kind: capability }
   - { id: context/constitution, domain: context }
+  - { id: context/transform, domain: context }
 
   # Cross-domain harness capability (Document extract Port)
   - { id: capabilities/document, domain: document-extract, kind: capability }

@@ -456,6 +456,10 @@ export interface RunTimelineEventView {
   hasError?: boolean;
   durationMs?: number;
   reason?: string;
+  /** P3 告警可见性：overflow 症状（红线 7 的 proactive 失效语义在展示层可见） */
+  symptom?: string;
+  /** 人类可读文本（告警/审计消息） */
+  message?: string;
   usage?: import('@octopi-agent/core/types/step.js').TokenUsage;
   /** F3 计时段（step.end 的 LLM 计时 / run.timing 的 wait/build/run_end 分段） */
   timing?: {

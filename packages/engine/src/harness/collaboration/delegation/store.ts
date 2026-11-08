@@ -32,6 +32,7 @@ import {
   DELEGATION_SCHEMA_VERSION,
   DelegationEvents,
   isTerminalDelegationStatus,
+  normalizeMaxOutputChars,
 } from './types.js';
 
 // ── 写入入参 ──
@@ -42,6 +43,8 @@ export interface CreateDelegationInput {
   target: DelegationTarget;
   task: string;
   input: string;
+  /** 自动返回通知 `<output>` 截断上限（chars）；缺省 = DEFAULT_DELEGATION_OUTPUT_CHARS */
+  maxOutputChars?: number;
   context?: DelegationContextMode;
   budget?: DelegationBudget;
   /** 绝对截止时刻（D4）；由 budget.timeoutMs 换算或调用方直接给 */
@@ -128,6 +131,7 @@ export class DelegationStore {
       target: { ...input.target },
       task: input.task,
       input: input.input,
+      maxOutputChars: normalizeMaxOutputChars(input.maxOutputChars),
       context: input.context ?? 'clean',
       status: 'queued',
       depth: input.depth ?? 1,

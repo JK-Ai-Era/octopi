@@ -4,7 +4,7 @@
  * 设计约定（架构收口，见 docs/architecture.md）：
  * 1. 每个 run / 每个 catalog 条目只 resolve 一次
  * 2. 下游只读 ResolvedModel，禁止二次回退
- * 3. **contextWindow 仅认显式配置**；未配置 = unknown，不猜测
+ * 3. **contextWindow 认显式配置，或 provider 测量真值（F 类回填）**；两者皆无 = unknown，不猜测
  * 4. 会话覆盖到另一模型时，不继承 agent 默认模型的窗口
  *
  * @module harness/run/model/resolver
@@ -17,6 +17,7 @@ import type {
   ResolvedModel,
 } from './types.js';
 import type { ModelInputType } from '@octopi-agent/core/types/agent-definition.js';
+import { getWindowTruth } from './window-truth.js';
 
 export interface ParsedModelRef {
   provider?: string;
@@ -171,6 +172,25 @@ export function resolveModel(input: ResolveModelInput): ResolvedModel | null {
 
   const bound = bindModelName(raw, modelName);
   const provider = wrapProvider ? wrapProvider(bound, providerName) : bound;
+
+  // F 类真值回填（T2②，红线 3）：provider 测量 > 配置预测——配置漂移/缺失时
+  // 前馈直接用真值（守门人反哺调度器）。真值只覆盖窗口，不改 maxOutputTokens。
+  const truth = getWindowTruth(`${providerName}/${modelName}`);
+  if (truth) {
+    return {
+      ref: `${providerName}/${modelName}`,
+      providerName,
+      modelName,
+      provider,
+      contextWindow: truth.tokens,
+      maxOutputTokens: cap.maxOutputTokens,
+      reasoning: cap.reasoning,
+      input: cap.input,
+      source: 'measured',
+      known: true,
+      isOverride,
+    };
+  }
 
   return {
     ref: `${providerName}/${modelName}`,

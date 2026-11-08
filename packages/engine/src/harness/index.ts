@@ -102,8 +102,6 @@ export {
 } from './context/index.js';
 export { DefaultMessageSelector } from './context/message-selector.js';
 export { DefaultBudgetAllocator } from './context/budget-allocator.js';
-export { SmartRouter } from './context/smart-router.js';
-export type { SmartRouterConfig, Route, RoutingDecision } from './context/smart-router.js';
 export {
   LAYER_ORDER,
   LAYER_PRIORITY,
@@ -551,6 +549,28 @@ export type { SessionSwitchRecord } from './session/types.js';
 export type { RunAuditRecord } from './activation/types.js';
 export { readSessionCompact, writeSessionCompact } from './session/compact.js';
 export { compactStateKey } from './context/compact-key.js';
+export {
+  JsonlTransformStore,
+  InMemoryTransformStore,
+  resolveSessionTransformPaths,
+  copySessionTransformDir,
+  removeSessionTransformDir,
+  scanOrphanSessionTransform,
+} from './session/transform-store.js';
+export { foldTransformView } from './context/transform/fold.js';
+export { anchorFor, anchorRange, resolveAnchor, resolveRun, canonicalMessageHash } from './context/transform/anchors.js';
+export { legacySnapshotToRecords } from './context/transform/migrate.js';
+export type {
+  TransformRecord,
+  TransformRun,
+  TransformLedger,
+  TransformStore,
+  NewTransformRecord,
+  MessageAnchor,
+  TransformRecordType,
+  TransformPlaceholder,
+  TransformRecordMeta,
+} from './context/transform/types.js';
 
 // ── Config Bridge ──
 // (exported from agent-building above)
@@ -561,7 +581,7 @@ export type { AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoo
 
 // ── Agent 门面（Harness） ──
 export { Agent } from './run/agent/index.js';
-export type { AgentOptions } from './run/agent/index.js';
+export type { AgentOptions, RunIdentity } from './run/agent/index.js';
 export { withRunScope, getRunScope, getRunSessionId, createRunId } from './run/run-scope.js';
 export type { RunScope, RunToolRuntime } from './run/run-scope.js';
 export { ObserverHub } from './observability/observer/hub.js';

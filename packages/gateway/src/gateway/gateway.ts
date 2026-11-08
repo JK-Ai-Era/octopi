@@ -2033,7 +2033,7 @@ export class Gateway {
     hasMemory: boolean;
     hasNotReversed: boolean;
   }>> {
-    const { scanOrphanSessionUndo } = await import('@octopi-agent/engine');
+    const { scanOrphanSessionUndo, scanOrphanSessionTransform } = await import('@octopi-agent/engine');
     const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
     const { join } = await import('node:path');
     const sessionsDir = join(getOctopiHome(), 'sessions');
@@ -2054,6 +2054,25 @@ export class Gateway {
       });
     } else {
       this.issueRegistry.resolve('orphan-session-undo');
+    }
+    // F6：transform 账本孤儿（会话已删、账本残留——含用户内容的摘要正文）
+    const orphanTransforms = await scanOrphanSessionTransform(sessionsDir).catch(() => [] as never[]);
+    if (orphanTransforms.length > 0) {
+      const list = orphanTransforms
+        .map((o) => `${o.sessionDirName}(${o.ledgerFiles} ledgers/${o.blobFiles} blobs)`)
+        .join(', ');
+      this.issueRegistry.report({
+        id: 'orphan-session-transform',
+        domain: 'other',
+        code: 'transform_orphan_dirs',
+        severity: 'warning',
+        title: '发现残留转换记录账本',
+        detail: `会话已删除但转换记录仍在：${list}。含压缩摘要正文（用户内容派生），可手动删除 sessions/*/transform。`,
+        refs: orphanTransforms.slice(0, 5).map((o) => ({ label: o.sessionDirName, path: o.transformRoot })),
+        actions: [{ id: 'doctor', label: '重新扫描' }],
+      });
+    } else {
+      this.issueRegistry.resolve('orphan-session-transform');
     }
     return orphans;
   }
@@ -2726,8 +2745,13 @@ export class Gateway {
         summarize?: (messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
         compactTargetTokens?: number;
         taskSnapshot?: string;
+        /** 请求口径计量原料（2026-11-08 B1）：与会话下一请求同源的 system/tools */
+        systemPrompt?: string;
+        tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
         contextWindow?: number;
         maxOutputTokens?: number;
+        /** 旧压缩快照读口（迁移输入） */
+        loadCompactState?: (sessionId: string) => Promise<import('@octopi-agent/engine/harness/context/types.js').ContextCompactSnapshot | undefined> | import('@octopi-agent/engine/harness/context/types.js').ContextCompactSnapshot | undefined;
         /** F22：cache-miss 旁路事件出口（ContextEmitFn 形状，经 observerHub 直采进 timeline） */
         emit?: (event: {
           type: string;
@@ -2780,8 +2804,28 @@ export class Gateway {
     const compactTargetTokens =
       this.config.context?.contextAssembler?.compactTargetTokens;
 
+    // 请求口径计量原料（评审 B1，2026-11-08）：manual 压缩的 before/after 须与会话
+    // 下一请求同源——tools 缺失会让 toast 少算整个 tool schema（tools「从来没有」）。
+    // 换算与 builder.convertToLlm 同式（sanitizeToolJsonSchema 同一实现，禁手抄）。
+    const { sanitizeToolJsonSchema } = await import(
+      '@octopi-agent/engine/harness/agent/tool-purpose.js'
+    );
+    const manualTools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] =
+      (cached.agent.context.tools ?? []).map((t) => ({
+        type: 'function' as const,
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: sanitizeToolJsonSchema(
+            t.parameters ?? { type: 'object', properties: {} },
+          ) as never,
+        },
+      }));
+
     // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 键）
     return cached.runner.compactSession(sessionId, effectiveAgentId, {
+      systemPrompt: cached.agent.context.systemPrompt,
+      tools: manualTools,
       compactStructural: (input) =>
         structural.compactStructural!({
           sessionId: input.sessionId,
@@ -2790,23 +2834,30 @@ export class Gateway {
           summarize: input.summarize,
           compactTargetTokens: input.compactTargetTokens,
           taskSnapshot: input.taskSnapshot,
+          systemPrompt: input.systemPrompt,
+          tools: input.tools,
+          loadCompactState: input.loadCompactState,
           // 摘要请求窗口护栏（评审 F5）：窗口/输出上限随会话模型绑定注入，防最满时压缩被 400
           contextWindow: bound?.contextWindow,
           maxOutputTokens: bound?.maxOutputTokens,
           // F22：manual 路 cache-miss 旁路事件直采 Hub（同 Builder ContextEngine emit 合同：
-          // ContextEngine 侧事件不经 Runner emitObserved，不直采 timeline 就永远看不到）
+          // ContextEngine 侧事件不经 Runner emitObserved，不直采 timeline 就永远看不到）。
+          // m-2：Builder 合同是**双缝**（Hub timeline + gatewayBus → WS/store）——只进 Hub
+          // 会让 manual 的 progress 在 store 侧成为死事件（用户点了压缩后卡在哪无人知道）。
           emit: (e) => {
             const { type, sessionId: sid, ...data } = e;
+            const event = {
+              type,
+              timestamp: Date.now(),
+              sessionId: sid ?? input.sessionId,
+              data,
+            };
             try {
-              this.observerHub.ingestEvent({
-                type,
-                timestamp: Date.now(),
-                sessionId: sid ?? input.sessionId,
-                data,
-              });
+              this.observerHub.ingestEvent(event);
             } catch {
               // 观测 fail-open
             }
+            this.gatewayBus.emit(event);
           },
         }),
       summarize,
@@ -3459,6 +3510,23 @@ export class Gateway {
     // compact 作前缀种子（E4：写到新 session 键下，不借用）
     if (compactSnap) {
       writeSessionCompact(session, agentId, compactSnap);
+    }
+    // 转换记录账本随 fork 复制（内容锚点随消息复制一起存活）。复制失败降级由
+    // 旧快照迁移兜底（幂等门 = 账本非空）；两者都没有则新会话从原文开始。
+    {
+      const { copySessionTransformDir } = await import(
+        '@octopi-agent/engine/harness/session/transform-store.js'
+      );
+      const copied = await copySessionTransformDir(
+        join(getOctopiHome(), 'sessions'),
+        sessionId,
+        newSessionId,
+      ).catch(() => false);
+      if (!copied) {
+        console.warn(
+          `[gateway] fork transform ledger copy failed or absent (${sessionId} -> ${newSessionId}); falls back to legacy snapshot migration`,
+        );
+      }
     }
 
     await this.store.save(newSessionId, session);

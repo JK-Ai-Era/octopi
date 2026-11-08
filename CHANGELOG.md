@@ -8,7 +8,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.102 | this file (current) |
+| v0.103 | this file (current) |
+| v0.102 | [changelog/v0.102.md](./changelog/v0.102.md) |
 | v0.101 | [changelog/v0.101.md](./changelog/v0.101.md) |
 | v0.100 | [changelog/v0.100.md](./changelog/v0.100.md) |
 | v0.99 | [changelog/v0.99.md](./changelog/v0.99.md) |
@@ -109,10 +110,7 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.3 | [changelog/v0.3.md](./changelog/v0.3.md) |
 | v0.2 | [changelog/v0.2.md](./changelog/v0.2.md) |
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
-
----
-
-## v0.102.0 (2026-11-06)
+## v0.103.0 (2026-11-09)
 
 ### feat(plugin): Provider 贡献扩展点（P5a）——插件 Provider 工厂 + 真实插件全链路
 

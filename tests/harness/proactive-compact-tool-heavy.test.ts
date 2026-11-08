@@ -15,6 +15,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Message } from '@octopi-agent/core/types.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
+import { InMemoryTransformStore } from '@octopi-agent/engine/harness/session/transform-store.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
@@ -126,25 +127,28 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     const r1 = await engine.assemble({ ...params, messages: atTurnBoundary(base) });
     // B：机械截断达标也必须调 LLM 产出摘要（修复前：永不调用）；E：仅 turn 边界可打 LLM
     expect(summarize).toHaveBeenCalledTimes(1);
-    // 摘要是语义正文，进入持久化快照
-    expect(r1.compactState?.summary).toContain('proactive-summary');
+    // 摘要是语义正文，进入转换记录账本（summary 型记录）
+    expect(r1.summary).toContain('proactive-summary');
     // 恰好一条非 cached 压缩事件（UI 可见的那次）
     expect(nonCachedCompacts(events)).toHaveLength(1);
     // 视图形状：head/tail 边界不得拆散 tool_call/tool_result 对
     assertToolPairsAligned(r1.messages as Array<{ role?: string; tool_calls?: Array<{ id?: string }>; tool_call_id?: string }>);
 
     events.length = 0;
-    // A：+1 条短消息 → 复用重建：不再打 LLM、不再发非 cached 事件（修复前：每 turn 重裁+发通知）
+    // A：+1 条短消息 → 视图已回落到触发线内：零 LLM、零压缩动作（不再每 turn 重裁）
     const r2 = await engine.assemble({ ...params, messages: [...base, userMsg('tiny follow-up')] });
     expect(summarize).toHaveBeenCalledTimes(1);
     expect(nonCachedCompacts(events)).toHaveLength(0);
-    // 复用重建确实发生了（cached 事件在场），而非静默无操作
-    expect(events.some((e) => e.type === 'context.compact.end' && e.cached)).toBe(true);
-    expect(r2.compactState?.summary).toContain('proactive-summary');
+    expect(events).toHaveLength(0);
+    expect(r2.summary).toContain('proactive-summary');
 
     events.length = 0;
-    // 增量攒够（≥3 条）→ 开启新一轮压缩，摘要按 previousSummary 增量合并
-    const grown = atTurnBoundary([...base, userMsg('n1'), userMsg('n2'), userMsg('n3')]);
+    // 视图重新涨过触发线（口径=实际请求，必须是真内容增长）→ 开启新一轮压缩，
+    // 摘要按 previousSummary 增量合并
+    const grown = atTurnBoundary([
+      ...base,
+      ...Array.from({ length: 10 }, (_, i) => toolRound(100 + i, 'r'.repeat(5_000))).flat(),
+    ]);
     await engine.assemble({ ...params, messages: grown });
     expect(summarize).toHaveBeenCalledTimes(2);
     expect(nonCachedCompacts(events)).toHaveLength(1);
@@ -159,12 +163,14 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     const summarize = vi.fn(async (_messages: Array<{ content?: unknown }>, _options?: unknown) => {
       throw new Error('llm down');
     });
+    const store = new InMemoryTransformStore();
     const engine = new DefaultContextEngine({
       proactiveCompactRatio: 0.5,
       targetTokens: 0,
       protectFirstN: 2,
       protectLastN: 4,
       proactiveCooldownMs: 0,
+      transformStore: store,
     });
     const events: CollectedEvent[] = [];
     // 纯文本历史：一级截断不适用，走摘要级 → LLM 失败 → 兜底截断（产机械占位说明）
@@ -185,12 +191,16 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     const firstMessages = atTurnBoundary(base);
     const r1 = await engine.assemble({ ...params, messages: firstMessages });
     expect(summarize).toHaveBeenCalledTimes(1);
-    // 降级占位说明（[Context truncated…]）不得冒充语义摘要（修复前会被存进 previousSummary）
-    expect(r1.compactState?.summary).toBeUndefined();
-    // 拆门语义（F8-F1 修正）：机械降级也推进增长门计数（「有计数无摘要」是生产状态形状），
-    // 语义覆盖终点不得推进——被丢的中段仍由 sticky 增量兜住（宁可胖不丢）
-    expect(r1.compactState?.lastProactiveMessageCount).toBe(firstMessages.length);
-    expect(r1.compactState?.lastProactiveCoverEnd).toBeUndefined();
+    // 降级占位说明（[Context truncated…]）不得冒充语义摘要（不得进 summary 口径）
+    expect(r1.summary).toBeUndefined();
+    // 拍板（2026-11-06 转换记录）：机械降级产物 = degrade 型记录，**永久生效**——
+    // 被丢中段记为已覆盖（回填只在显式撤销）；类型诚实：degrade 不冒充 summary
+    const ledger = await store.load('s-th-fail', '');
+    expect(ledger.records).toHaveLength(1);
+    const degrade = ledger.records[0]!;
+    expect(degrade.type).toBe('degrade');
+    expect(degrade.meta.messageCount).toBe(firstMessages.length);
+    expect(degrade.covers.length).toBeGreaterThan(0);
     expect(nonCachedCompacts(events)).toHaveLength(1);
 
     events.length = 0;
@@ -200,10 +210,17 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     expect(llmCompacts(events)).toHaveLength(0);
 
     events.length = 0;
-    // 攒够增量 → 重试 LLM 摘要（turn 边界）
-    await engine.assemble({ ...params, messages: atTurnBoundary([...base, userMsg('n1'), userMsg('n2'), userMsg('n3')]) });
+    // 视图重新涨过触发线（真内容增长）→ 重试 LLM 摘要（turn 边界）
+    await engine.assemble({
+      ...params,
+      messages: atTurnBoundary([
+        ...base,
+        ...Array.from({ length: 10 }, (_, i) => toolRound(200 + i, 'r'.repeat(5_000))).flat(),
+      ]),
+    });
     expect(summarize).toHaveBeenCalledTimes(2);
-    expect(nonCachedCompacts(events)).toHaveLength(1);
+    // overflow 降级是如实可见的真实动作（A′），此处只钉「proactive 重试」这一轮
+    expect(llmCompacts(events)).toHaveLength(1);
   });
 
   it('重启恢复的压缩快照（有计数无摘要）立即停止重裁，增量攒够才补真摘要（生产状态形状）', async () => {
@@ -272,7 +289,7 @@ describe('主动压缩 × 工具输出密集历史（连线回归）', () => {
     const r1 = await engine.assemble({ ...params, messages: atTurnBoundary(base) });
     expect(summarize).toHaveBeenCalledTimes(1);
     // 空摘要不进状态（修复前：'[Conversation Summary]' 空壳会冒充语义摘要、中间段被空正文替换）
-    expect(r1.compactState?.summary).toBeUndefined();
+    expect(r1.summary).toBeUndefined();
     expect(nonCachedCompacts(events)).toHaveLength(1);
   });
 });

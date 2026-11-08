@@ -202,7 +202,7 @@ export async function* agentLoop(
     // ── 2. 消息格式转换（内部格式 → LLM 格式） ──
     const toolDefs = buildToolDefinitions(currentContext.tools);
     const normalizedLlmMessages: LLMMessage[] = convertToLlm
-      ? await convertToLlm(currentContext.messages)
+      ? await convertToLlm(currentContext.messages, signal)
       : normalizeMessagesForLlm(currentContext.messages);
     const llmMessages = transformLlmMessages
       ? await transformLlmMessages(normalizedLlmMessages)

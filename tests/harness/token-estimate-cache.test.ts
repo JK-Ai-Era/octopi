@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { HeuristicTokenEstimator, estimateTextTokens } from '@octopi-agent/engine/harness/context/token-estimator.js';
 import { toolResultBody } from '@octopi-agent/engine/harness/context/tool-result-body.js';
+import { TOOL_RESULT_CHARS_PER_TOKEN } from '@octopi-agent/engine/harness/context/token-constants.js';
 import type { Message } from '@octopi-agent/core/types.js';
 
 describe('toolResultBody cache', () => {
@@ -39,10 +40,13 @@ describe('HeuristicTokenEstimator message cache', () => {
     const estimator = new HeuristicTokenEstimator();
 
     // 手算（独立路径，不经过缓存）：新口径 = 每条 toolResult 一条开销（wire 对齐）+
-    // Σ 结果体分类计数（纯 ASCII → chars / TOOL_RESULT_CHARS_PER_TOKEN=2），总量一次取整
+    // Σ 结果体分类计数（纯 ASCII → chars / TOOL_RESULT_CHARS_PER_TOKEN），总量一次取整。
+    // 比率常量引用而非硬编码：L1 调表（2026-11-08）自动跟上。
     const body1 = JSON.stringify({ content: 'x'.repeat(500) }).length; // 514
     const body2 = JSON.stringify({ error: 'failed' }).length; // 18
-    const expected = Math.ceil(2 * 12 + body1 / 2 + body2 / 2);
+    const expected = Math.ceil(
+      2 * 12 + body1 / TOOL_RESULT_CHARS_PER_TOKEN + body2 / TOOL_RESULT_CHARS_PER_TOKEN,
+    );
 
     const first = estimator.estimateMessage(message);
     const second = estimator.estimateMessage(message);

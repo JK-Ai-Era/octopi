@@ -98,7 +98,7 @@ describe('DefaultContextEngine', () => {
       expect(result.messages.length).toBeGreaterThan(0);
     });
 
-    it('should compress only overflow messages, not head and tail', async () => {
+    it('overflow 零 compactMessages（Q1）：收敛不经 LLM 压缩执行', async () => {
       const headMsgs = makeMessages(3, 'head');
       const overflowMsgs = makeMessages(5, 'overflow');
       const tailMsgs = makeMessages(2, 'tail');
@@ -131,19 +131,16 @@ describe('DefaultContextEngine', () => {
       const params = makeAssembleParams();
       await engine.assemble(params);
 
-      // 压缩执行应该只收到 overflow 消息
-      expect(compactSpy).toHaveBeenCalled();
-      const compactArgs = compactSpy.mock.calls[0][0] as Message[];
-      expect(compactArgs).toEqual(overflowMsgs);
-      // 不应该包含 head 或 tail
-      expect(compactArgs).not.toEqual(expect.arrayContaining(headMsgs));
-      expect(compactArgs).not.toEqual(expect.arrayContaining(tailMsgs));
+      // Q1 纯机械：overflow 收敛全程零 LLM——compactMessages 一次都不许被调
+      expect(compactSpy).not.toHaveBeenCalled();
     });
 
-    it('should reassemble: head + compressed overflow + tail', async () => {
+    it('收敛重组保序：幸存者=输入的保序子序列（identity 契约）', async () => {
+      // 身份契约：MessageSelector 返回的必须是输入数组的同引用对象（产品翻译按身份定锚）
       const headMsgs = makeMessages(2, 'head');
       const overflowMsgs = makeMessages(5, 'overflow');
       const tailMsgs = makeMessages(2, 'tail');
+      const messages = [...headMsgs, ...overflowMsgs, ...tailMsgs];
       const compressedMsg = makeMessages(1, 'compressed')[0];
 
       const mockSelector: MessageSelector = {
@@ -173,22 +170,25 @@ describe('DefaultContextEngine', () => {
         compactEngine: mockCompact,
       });
 
-      const params = makeAssembleParams();
+      const params = makeAssembleParams({ messages });
       const result = await engine.assemble(params);
 
-      // 结果应该包含 system prompt + head + compressed + tail
+      // Q1 纯机械：零 LLM 压缩执行，「compressed」摘要文本不许出现
       const messageContents = result.messages
         .filter(m => m.role !== 'system')
-        .map(m => m.content);
+        .map(m => String(m.content ?? ''));
+      expect(mockCompact.compactMessages).not.toHaveBeenCalled();
+      expect(messageContents.join('\n')).not.toContain('compressed 0');
 
-      // head 消息应该存在
-      expect(messageContents).toContain('head 0');
-      expect(messageContents).toContain('head 1');
-      // 压缩后的消息应该存在
-      expect(messageContents).toContain('compressed 0');
-      // tail 消息应该存在
-      expect(messageContents).toContain('tail 0');
-      expect(messageContents).toContain('tail 1');
+      // identity 契约：幸存者=输入的保序子序列（收敛砍原对象、不重排、不伪造）
+      const origins = [...headMsgs, ...overflowMsgs, ...tailMsgs].map((m) => String(m.content ?? ''));
+      const survivorIdx = messageContents
+        .map((c) => origins.findIndex((o) => c === o))
+        .filter((i) => i >= 0);
+      expect(survivorIdx.length).toBeGreaterThan(0);
+      for (let i = 1; i < survivorIdx.length; i++) {
+        expect(survivorIdx[i]).toBeGreaterThan(survivorIdx[i - 1]!);
+      }
     });
 
     it('should respect custom protectFirstN and protectLastN', async () => {

@@ -20,7 +20,7 @@ import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.j
 import type { SessionData } from '../session/types.js';
 
 type TypedSessionStore = SessionStore<SessionData>;
-import type { Agent } from './agent/index.js';
+import type { Agent, RunIdentity } from './agent/index.js';
 import type { AgentContext } from '@octopi-agent/core/loop/types.js';
 import type { HarnessLoopEvent } from './reliability/harness-events.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
@@ -55,7 +55,7 @@ import {
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
-import { readSessionCompact, writeSessionCompact } from '../session/compact.js';
+import { readSessionCompact } from '../session/compact.js';
 import type { ContextCompactSnapshot } from '../context/types.js';
 import { toCompactTransport } from '../context/capabilities/compact/types.js';
 import {
@@ -1040,6 +1040,8 @@ export class SessionAwareRunner {
     const runStartTs = Date.now();
 
     const _agentId = runConfig.agentId ?? 'default';
+    /** 本 run 身份单源（m1，2026-11-09 评审）：runScope 构造与 afterStep 归属共用同一对象 */
+    const runIdentity: RunIdentity = { sessionId, agentId: _agentId };
 
     /** Observer 收口状态（finally 统一关闭，含异常路径） */
     let observerRunId = '';
@@ -1095,6 +1097,16 @@ export class SessionAwareRunner {
         session.primaryAgentId = session.agentId || _agentId;
       }
       if (!session.tasks) session.tasks = [];
+      // 校准状态恢复（取舍③配套）：上次 run persist 的锚+样本回填——本轮第一请求即
+      // anchored/calibrated，消除「重启后跑几轮才校准」冷启动（best-effort：不阻塞 run）
+      const persistedCalibration = (session.metadata as Record<string, unknown> | undefined)?.calibration;
+      if (persistedCalibration && typeof (this.harness as { importCalibration?: (d: unknown) => void }).importCalibration === 'function') {
+        try {
+          (this.harness as { importCalibration?: (d: unknown) => void }).importCalibration!(persistedCalibration);
+        } catch (err) {
+          console.warn(`[ctx] session=${sessionId} calibration restore failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
 
       // E6：可选 ACL（注入时才强制）；primary 自动 owner；带入 agent 天花板
       const acl = this.config.sessionAcl;
@@ -1797,8 +1809,7 @@ export class SessionAwareRunner {
         ? [resolveSessionUndoPaths(this.config.sessionsDir, sessionId).root]
         : undefined;
       const runScope: RunScope = {
-        sessionId,
-        agentId: _agentId,
+        ...runIdentity,
         runId,
         principal: effectiveRunConfig.principal,
         prompt: getTextContent(input.content),
@@ -2219,7 +2230,11 @@ export class SessionAwareRunner {
                 `[ctx] session=${sessionId} writer=estimate field=viewTokensEst value=${pressure.estimatedTokens}`,
               );
             }
-            const rawTokens = estimator.estimateMessages(session.messages);
+            // rawTokens = 全量原文估算（只进 Run 页签，永不冒充上下文用量）。
+            // 口径必须是 runContext.messages：fork/delegation 场景 :1981 会把
+            // runContext.messages 重绑定到工作集，session.messages 停在重绑定前的
+            // 快照（cs-* 会话 rawTokens 恒 4,203 的实锤），量它 = 量旧集合。
+            const rawTokens = estimator.estimateMessages(runContext.messages);
             eventData.rawTokens = rawTokens;
             lastRawTokens = rawTokens;
             console.log(`[ctx] session=${sessionId} writer=estimate field=rawTokens value=${rawTokens}`);
@@ -2287,7 +2302,15 @@ export class SessionAwareRunner {
           }
           llmCallIndexInUserTurn += 1;
           const stepMessages = runContext.messages.slice(stepStartIndex);
-          await this.agent.notifyAfterStep(lastUsage, stepMessages);
+          // 校准样本必须新鲜配对（arch §10.14）：只传本步 usage。缺 usage（失败/重试/
+          // 中止步）传 undefined——引擎不喂 observe。lastUsage 是展示口径的「最近实测」
+          // （stale 语义见上方 promptTokensActual），拿它配当步估算分母会产出错配
+          // ratio 样本（0.088/11.014 双向垃圾样本的源头）。
+          // 校准样本身份单源（2026-11-09 事故）：显式传本 run 身份，不经环境推断——
+          // 本调用在 runner 事件循环（run 的 ALS 窗口外）执行，getRunScope() 会拿到
+          // 泄漏的外层 scope，agent.contextSessionId 是共享可变字段；并发委派子 run
+          // 下两者双向串味，错位样本毒化 ratio 校准（视图估算背离实测 160k vs 314k）。
+          await this.agent.notifyAfterStep(runIdentity, loopEvent.usage, stepMessages);
           stepStartIndex = runContext.messages.length;
           // 账本正文 = adaptLoopEvent 按调用算好的快照（失败轮只有本次调用的部分流出）；
           // 失败轮必须带 error 标记，空正文也留账（审计价值），不得拿历史内容凑数
@@ -2298,8 +2321,14 @@ export class SessionAwareRunner {
               id: `step_${Date.now()}`,
               inputCount: Math.max(0, session.messages.length - 1),
               output: { role: 'assistant', content, timestamp: Date.now(), agentId: _agentId },
-              // 失败轮没有 usage（loop 的 error turn_end 不带）；不得写上一次调用的用量
-              ...(turnFailed ? { error: true as const } : { usage: lastUsage }),
+              // 失败轮没有 usage（loop 的 error turn_end 不带）；不得写上一次调用的用量。
+              // 非失败轮同理只记本步 usage——缺 usage（provider 未回报）留空，禁止拿
+              // lastUsage（可能属于别步）冒充本步用量（评审 F7）。
+              ...(turnFailed
+                ? { error: true as const }
+                : loopEvent.usage
+                  ? { usage: loopEvent.usage }
+                  : {}),
               durationMs: 0,
               model: effectiveRunConfig.model ?? 'unknown',
               timestamp: Date.now(),
@@ -2458,7 +2487,9 @@ export class SessionAwareRunner {
             id: `step_${Date.now()}`,
             inputCount: Math.max(0, session.messages.length - 1),
             output: { role: 'assistant', content: fallbackContent, timestamp: Date.now(), agentId: _agentId },
-            usage: lastUsage,
+            // 兜底合成记录：失败轮不写 usage（与上文账本口径一致，禁止拿别步用量凑数）；
+            // 非失败轮只在本 Run 确有实测时带上（评审 F7）
+            ...(!failedRun && lastUsage ? { usage: lastUsage } : {}),
             durationMs: 0,
             model: effectiveRunConfig.model ?? 'unknown',
             timestamp: Date.now(),
@@ -2526,9 +2557,8 @@ export class SessionAwareRunner {
       sm.transition('idle');
       session.meta.status = sm.state;
       session.meta.updatedAt = Date.now();
-      // 压缩状态写回 Session（E4 分桶 + primary 兼容视图）
-      const compactSnap = this.agent.getSessionCompactState(sessionId, _agentId);
-      writeSessionCompact(session, _agentId, compactSnap);
+      // 压缩覆盖/摘要正文由转换记录账本持久（sessions/<sid>/transform/）；
+      // 旧 contextCompact 快照停写（仅作迁移输入读取，见引擎 loadCompactState）。
       // 上下文用量随会话持久化：重开会话恢复显示（不靠 UI 用末页消息猜）。
       // 三量纲分账（P0-C）：promptTokensActual=实测单源（无实测不写、保留旧值不动）、
       // viewTokensEst=请求视图估算、rawTokens=全量原文估算；compact 视图值不写入。
@@ -2540,6 +2570,10 @@ export class SessionAwareRunner {
       ) {
         session.metadata = {
           ...session.metadata,
+          // 校准状态持久化（取舍③配套）：锚+样本计数随会话落盘，restore 后回填
+          ...(typeof (this.harness as { exportCalibration?: () => unknown }).exportCalibration === 'function'
+            ? { calibration: (this.harness as { exportCalibration?: () => unknown }).exportCalibration!() }
+            : {}),
           ...(lastPromptTokensActual !== undefined ? { promptTokensActual: lastPromptTokensActual } : {}),
           ...(lastViewTokensEst !== undefined ? { viewTokensEst: lastViewTokensEst } : {}),
           ...(lastRawTokens !== undefined ? { rawTokens: lastRawTokens } : {}),
@@ -2759,9 +2793,17 @@ export class SessionAwareRunner {
         compactTargetTokens?: number;
         /** task 快照：交接式摘要指令尾部注入 */
         taskSnapshot?: string;
+        /** 请求口径计量原料（2026-11-08 B1）：与会话下一请求同源的 system/tools */
+        systemPrompt?: string;
+        tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
+        /** 旧压缩快照读口（迁移输入） */
+        loadCompactState?: (sessionId: string) => Promise<import('../context/types.js').ContextCompactSnapshot | undefined> | import('../context/types.js').ContextCompactSnapshot | undefined;
       }) => Promise<import('../context/capabilities/compact/types.js').CompactOutcome>;
       summarize?: import('../context/types.js').SummarizeFunction;
       compactTargetTokens?: number;
+      /** 请求口径计量原料（2026-11-08 B1）：透传给 compactStructural */
+      systemPrompt?: string;
+      tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
     },
   ): Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome> {
     const release = await this.acquireLock(sessionId);
@@ -2787,23 +2829,17 @@ export class SessionAwareRunner {
         messages: session.messages,
         summarize: options.summarize,
         compactTargetTokens: options.compactTargetTokens,
+        // 请求口径计量原料（评审 B1）：tools/system 缺失会让 before/after 少算整个
+        // tool schema——「请求口径」名不副实
+        systemPrompt: options.systemPrompt,
+        tools: options.tools,
         // 交接式摘要素材：task 快照（裸状态块，不含对话引导语）随指令尾部注入
         taskSnapshot: renderSessionTasksInjection(session.tasks ?? [], { includeGuidance: false }),
+        // 旧压缩快照读口（迁移输入）：manual 路也要先迁移再产记录，防旧快照在
+        // 下次 assemble 迁移时以更高 seq 反向覆盖新记录
+        loadCompactState: () => readSessionCompact(session, agentId),
       });
-      if (result.ok && result.summary && result.compacted) {
-        // 手抄映射表（result 形状 ≠ 快照形状）：ContextCompactSnapshot 加字段时必须
-        // 同步此处，否则持久快照静默丢字段（审查 M2）。收口项：由引擎直接回传快照。
-        const snap: ContextCompactSnapshot = {
-          summary: result.summary,
-          lastProactiveMessageCount: session.messages.length,
-          lastProactiveCoverEnd: result.coveredMessageCount,
-          lastProactiveTokens: result.tokensAfter,
-        };
-        this.agent.setSessionCompactState(sessionId, agentId, snap);
-        writeSessionCompact(session, agentId, snap);
-        session.meta.updatedAt = Date.now();
-        await this.store.save(sessionId, session);
-      }
+      // 压缩产物 = 引擎内持久转换记录（append-only）；旧 contextCompact 快照不再写回。
 
       // 传输投影：view 不过锁面（大对象，UI 无需）——唯一投影实现在能力层
       //（禁止手抄字段表：新可选字段会静默丢失，评审 P3 major）

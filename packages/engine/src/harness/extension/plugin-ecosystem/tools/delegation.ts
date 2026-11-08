@@ -18,7 +18,10 @@ import type {
   DelegationContextMode,
   DelegationStatus,
 } from '../../../collaboration/delegation/types.js';
-import { isTerminalDelegationStatus } from '../../../collaboration/delegation/types.js';
+import {
+  DEFAULT_DELEGATION_OUTPUT_CHARS,
+  isTerminalDelegationStatus,
+} from '../../../collaboration/delegation/types.js';
 
 /** 委派单摘要（进 LLM 结果，字段名 snake_case 对齐其他工具） */
 function delegationSummary(d: Delegation) {
@@ -140,6 +143,12 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
           type: 'number',
           description: 'Token budget for the child run (intersected with the target ceiling)',
         },
+        max_output_chars: {
+          type: 'number',
+          description:
+            'Truncation cap (chars) for the auto-returned result notice <output>. ' +
+            `Default ${DEFAULT_DELEGATION_OUTPUT_CHARS}. The full output is collectable via delegate_get (not subject to this cap).`,
+        },
         timeout_ms: {
           type: 'number',
           description: 'Delegation timeout in milliseconds',
@@ -160,6 +169,10 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
       const timeoutMs = args.timeout_ms != null ? Number(args.timeout_ms) : undefined;
       const maxSteps = args.max_steps != null ? Number(args.max_steps) : undefined;
       const maxTokens = args.max_tokens != null ? Number(args.max_tokens) : undefined;
+      // 非法值不在工具层静默丢弃（m6）：透传给 dispatch，由 normalizeMaxOutputChars
+      // fail loud——错误经下方 catch 以 ok:false 回给 LLM，形成反馈闭环
+      const maxOutputChars =
+        args.max_output_chars != null ? Number(args.max_output_chars) : undefined;
 
       try {
         const { delegation, resolvedAgentId } = await service.dispatch({
@@ -173,6 +186,7 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
           target: agent ? { agentId: agent } : { trait },
           task: String(args.task ?? ''),
           input: String(args.input ?? ''),
+          maxOutputChars,
           context: contextMode as DelegationContextMode,
           // D1：传快照而非活数组引用——父 run 在子起跑后仍会 append
           parentMessages: contextMode === 'fork' ? context.messages.map((m) => ({ ...m })) : undefined,
@@ -228,8 +242,9 @@ export function createDelegateListTool(service: DelegateService): RegisteredTool
         status,
         activeOnly,
       });
-      // 列表是只读概览：不 markSurfaced。结果可能被 ToolResultValidator 截断，
-      // 「标已送达」只留给明确取回单条全文的 delegate_get，宁可提示多留也不误消音
+      // 列表是只读概览：不 markSurfaced。结果体量无委派层上限（专用工具结果截断器
+      // 尚未接线——记债见 CHANGELOG v0.102.10），「标已送达」只留给明确取回单条全文的
+      // delegate_get，宁可提示多留也不误消音
       return {
         delegations: items.map(delegationSummary),
         total: items.length,

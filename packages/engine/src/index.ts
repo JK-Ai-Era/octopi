@@ -69,7 +69,7 @@ export type { AgentTraceOptions } from './harness/agent/builder.js';
 export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './harness/agent/builder.js';
 export type { ChannelAdapter, ChannelMessage, ChannelReply } from './harness/extension/plugin-ecosystem/channel-types.js';
 export { Agent } from './harness/run/agent/index.js';
-export type { AgentOptions } from './harness/run/agent/index.js';
+export type { AgentOptions, RunIdentity } from './harness/run/agent/index.js';
 export type { HarnessLoopEvent, BudgetControlEvent, ControlStopMetric, PolicyUnit } from './harness/run/reliability/harness-events.js';
 export { SessionAwareRunner } from './harness/run/runner.js';
 export {
@@ -151,6 +151,7 @@ export type {
 export {
   scanOrphanSessionUndo,
 } from './harness/extension/execution-environment/undo-log.js';
+export { scanOrphanSessionTransform } from './harness/session/transform-store.js';
 export type {
   SessionUndoPaths,
   FileUndoEntry,
@@ -189,8 +190,6 @@ export type { DefaultContextEngineConfig } from './harness/context/default-conte
 export { HeuristicTokenEstimator, estimateTextTokens } from './harness/context/index.js';
 export { DefaultMessageSelector } from './harness/context/message-selector.js';
 export { DefaultBudgetAllocator } from './harness/context/budget-allocator.js';
-export { SmartRouter } from './harness/context/smart-router.js';
-export type { SmartRouterConfig, Route, RoutingDecision } from './harness/context/smart-router.js';
 
 export { CapabilityEnforcer, PluginTrustLevel } from './harness/governance/security/capability-enforcer.js';
 
@@ -299,6 +298,8 @@ export {
   AgentRegistryEvents,
   DelegationEvents,
   DELEGATION_SCHEMA_VERSION,
+  DEFAULT_DELEGATION_OUTPUT_CHARS,
+  normalizeMaxOutputChars,
 } from './harness/collaboration/delegation/index.js';
 export type {
   Delegation,

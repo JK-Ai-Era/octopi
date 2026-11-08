@@ -1689,7 +1689,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
       } else {
         const before = r.tokensBefore != null ? formatTokens(r.tokensBefore) : '?';
         const after = r.tokensAfter != null ? formatTokens(r.tokensAfter) : '?';
-        show(`已结构压缩 ${before} → ${after}（消息估算）`);
+        show(`已结构压缩 ${before} → ${after}（请求估算）`);
       }
     } catch (e) {
       show(e instanceof Error ? e.message : String(e));
@@ -1723,6 +1723,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   // 不用「已加载消息」估算——那只是末页 100 条，会把 400k 的会话显示成 21.6k 误导人。
   const promptTokensActual = typeof inspector.promptTokensActual === 'number' ? inspector.promptTokensActual : undefined;
   const viewTokensEst = typeof inspector.viewTokensEst === 'number' ? inspector.viewTokensEst : undefined;
+  const viewTokensEstStale = inspector.viewTokensEstSource === 'restore';
   // 预算展示：只读引擎下发的 snapshot（catalog / sessionModel.resolved），UI 不做策略
   const selectedModelMeta =
     (sessionModel?.resolved?.id === effectiveModelId ? sessionModel.resolved : undefined)
@@ -2043,7 +2044,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 </div>
                 {viewTokensEst !== undefined && (
                   <div className="small muted" style={{ marginTop: 2 }}>
-                    {`视图估算: ${formatTokens(viewTokensEst)}`}
+                    {`视图估算: ${formatTokens(viewTokensEst)}${viewTokensEstStale ? ' (旧)' : ''}`}
                   </div>
                 )}
               </div>

@@ -56,6 +56,8 @@ export interface DispatchDelegationInput {
   parentRights?: import('../../governance/session-acl/types.js').SessionRights;
   task: string;
   input: string;
+  /** 自动返回通知 `<output>` 截断上限（chars）；缺省 = DEFAULT_DELEGATION_OUTPUT_CHARS（B 方案 2026-11-09） */
+  maxOutputChars?: number;
   context?: DelegationContextMode;
   /** 父消息历史（仅 context='fork' 时携带） */
   parentMessages?: import('@octopi-agent/core/types.js').Message[];
@@ -245,6 +247,7 @@ export class DelegateService {
       target: input.target,
       task: input.task,
       input: input.input,
+      maxOutputChars: input.maxOutputChars,
       context: input.context,
       budget,
       deadlineAt,

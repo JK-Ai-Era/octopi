@@ -201,8 +201,11 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     error?: string;
     /** 是否真正发起过摘要 LLM 调用（成功/失败均算）——与 CompactOutcome.summarizeAttempted 同义 */
     summarizeAttempted: boolean;
+    /** fresh 摘要响应的 provider 实测输出 tokens（onUsage 回传，2026-11-08；无回传缺省） */
+    outputTokens?: number;
   }> {
     const summarizeFn = opts.summarizeFn;
+    let summaryOutputTokens: number | undefined;
     const registry = buildPolicyRegistry();
     let policy: SummaryPolicy = registry['conversation_default']!;
     if (typeof opts.summarizePolicy === 'string' && registry[opts.summarizePolicy]) {
@@ -247,7 +250,9 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
 
       let usePrefix = Boolean(opts.llmPrefix?.length);
       let llmMessages = usePrefix ? buildPrefixed() : buildTextify();
-      let echoSource = usePrefix ? prefixEchoSource() : middleText;
+      // 回声源：仅前缀分支才用调用方覆盖（前缀含既有摘要占位时，占位正文不得参与判定）；
+      // textify 分支的比对源必须是它自己发给模型的文本（middleText）
+      let echoSource = usePrefix ? (opts.echoSource ?? prefixEchoSource()) : middleText;
 
       // 硬顶 = 软目标 4 倍保险丝（P1c 禁硬截断/静默半截），再按窗口钳制（评审 F5）：
       // provider 多按 input+max_tokens ≤ window 校验，压缩恰在会话最满时触发，保险丝可能把
@@ -281,6 +286,9 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
 
       try {
         const invoke = (strict: boolean): Promise<string> => {
+          // 重试重置（评审 M1）：strict 重试产生的是新响应——被丢弃响应的 outputTokens
+          // 不得串给最终摘要；每次 invoke 从零收集
+          summaryOutputTokens = undefined;
           const msgs = strict
             ? [
                 ...llmMessages.slice(0, -1),
@@ -293,6 +301,11 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           return summarizeFn(msgs, {
             previousSummary: opts.previousSummary,
             maxTokens: providerMaxTokens,
+            ...(opts.signal ? { signal: opts.signal } : {}),
+            // outputTokens 真值收集（2026-11-08）：摘要产物体量以 provider 实测为准
+            onUsage: (u) => {
+              summaryOutputTokens = u.outputTokens;
+            },
           });
         };
         const text = await invokeGuardedSummarize(invoke, echoSource);
@@ -301,7 +314,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         if (!text.trim()) {
           return { error: 'empty_output', summarizeAttempted: true };
         }
-        return { summary: text, coverage: 'full', summarizeAttempted: true };
+        return { summary: text, coverage: 'full', summarizeAttempted: true, outputTokens: summaryOutputTokens };
       } catch (err) {
         // 吞两类抛错并转 error 通道交 onSummarizeFail 降级：① provider 报错/超时；
         // ② 闸门二次污染（contaminated_output:*）。try 内无其他可抛代码，无其他路径可至此
@@ -323,6 +336,17 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     const tokensBefore = isMessages
       ? estimator.estimateMessages(messages)
       : estimator.estimateText(text);
+    // 摘要段真值替换（2026-11-08 outputTokens 真值）：摘要产物体量以 provider 实测输出
+    // tokens 为准，估算只作无回传兜底——压缩计量「放着真值用估算」是三数字核对暴露的
+    // 口径缺陷（问题 2 拍板：能用真实值的地方换真实值）。
+    const afterWithSummaryTruth = (
+      baseTokens: number,
+      summaryText: string | undefined,
+      outputTokens: number | undefined,
+    ): number =>
+      outputTokens != null && summaryText
+        ? baseTokens - estimator.estimateText(summaryText) + outputTokens
+        : baseTokens;
 
     // 边界归一：负数无契约语义，按 0 处理（slice 对负数是另一套语义，会切出意外视图）
     const protectHead = Math.max(0, opts.protectHead ?? defaults.protectHead);
@@ -454,10 +478,11 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           compacted: true,
           reason: 'summary_only',
           tokensBefore,
-          tokensAfter: estimator.estimateText(summary),
+          tokensAfter: afterWithSummaryTruth(estimator.estimateText(summary), summary, summarized.outputTokens),
           summary,
           fresh: true,
           summarizeAttempted: summarized.summarizeAttempted,
+          summaryOutputTokens: summarized.outputTokens,
           coverage: summarized.coverage,
           view: summary,
         };
@@ -468,10 +493,11 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         compacted: true,
         reason: 'summary_only',
         tokensBefore,
-        tokensAfter: estimator.estimateMessages(view),
+        tokensAfter: afterWithSummaryTruth(estimator.estimateMessages(view), summary, summarized.outputTokens),
         summary,
         fresh: true,
         summarizeAttempted: summarized.summarizeAttempted,
+        summaryOutputTokens: summarized.outputTokens,
         coverage: summarized.coverage,
         view,
         droppedSummary: `Conversation compressed from ${tokensBefore} tokens`,
@@ -508,10 +534,11 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         compacted: true,
         reason: 'structure_only',
         tokensBefore,
-        tokensAfter: estimator.estimateText(view),
+        tokensAfter: afterWithSummaryTruth(estimator.estimateText(view), summary, summarized.outputTokens),
         summary,
         fresh: true,
         summarizeAttempted: summarized.summarizeAttempted,
+        summaryOutputTokens: summarized.outputTokens,
         coverage: summarized.coverage,
         view,
       };
@@ -532,7 +559,14 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     const maxSummaryTokens =
       opts.maxSummaryTokens ?? summarySoftTargetTokens(tokensBefore, opts.summaryBudget);
 
-    const middleText = formatMessagesAsText(middle);
+    // 摘要素材（M-4）：有 previousSummary + freshMessages 时只文本化未覆盖新消息——
+    // 合并契约保证完整性，已覆盖历史不以 raw middle 复发（textify 旁路曾重现 2.13MB
+    // 事故形状）。无摘要兜底 = 全量 middle（首次压缩无合并输入，完整性优先）。
+    // N2 配套（评审 del-e1ee43ef）：空 fresh 段也回退全量 middle——宁可这一次请求胖，
+    // 不得丢内容；调用方已有 already_covered 守门，空段常态不达这里。
+    const summarizeSource =
+      opts.freshMessages?.length && opts.previousSummary ? opts.freshMessages : middle;
+    const middleText = formatMessagesAsText(summarizeSource);
     const summarized = await summarizeMiddle(middleText, opts, maxSummaryTokens);
 
     // 摘要即完整更新（previousSummary 已随 prompt 交给 summarizeFn 合并）。
@@ -576,7 +610,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
 
     const summary = summarized.summary;
     const view = [...head, asSummaryMessage(summary), ...tail];
-    const tokensAfter = estimator.estimateMessages(view);
+    const tokensAfter = afterWithSummaryTruth(estimator.estimateMessages(view), summary, summarized.outputTokens);
     opts.emit?.({ type: 'compact.end', reason: mode, cached: false });
 
     return {
@@ -588,6 +622,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       summary,
       fresh: true,
       summarizeAttempted: summarized.summarizeAttempted,
+      summaryOutputTokens: summarized.outputTokens,
       coverage: summarized.coverage ?? (middle.length > 0 ? 'partial' : 'full'),
       view,
       droppedSummary: `Structural compact: head=${head.length} middle=${middle.length} tail=${tail.length}`,

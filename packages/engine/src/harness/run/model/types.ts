@@ -1,8 +1,9 @@
 /**
  * ResolvedModel — run/catalog 级模型快照
  *
- * contextWindow **仅**来自显式配置；未配置时为 undefined（未知），
- * 下游禁止用 builtin/默认值「猜」窗口。
+ * contextWindow 来自显式配置，或 provider 测量回填（长度类 400 报告的真值），
+ * 或 400 后的 run 级收缩上界；三者皆无时为 undefined（未知），下游禁止用
+ * builtin/默认值「猜」窗口。
  *
  * @module harness/run/model/types
  */
@@ -10,16 +11,27 @@
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { ModelInputType } from '@octopi-agent/core/types/agent-definition.js';
 
-/** contextWindow / maxTokens 的声明来源 */
+/**
+ * contextWindow / maxTokens 的声明来源
+ *
+ * `config`：显式配置（models.providers[].models[] / agent.model）；
+ * `measured`：provider 长度类 400 错误文本报告的窗口真值（F 类回填，见
+ * window-truth.ts）——测量优先于预测；
+ * `shrunk`：长度类 400 后的收缩上界（run 级保守猜测，非持久真值）；
+ * `unknown`：两者皆无（不猜测）。
+ */
 export type ModelCapabilitySource =
   | 'config'
+  | 'measured'
+  | 'shrunk'
   | 'unknown';
 
 /**
  * 已解析模型快照
  *
  * 不变量：
- * - `contextWindow` 有值 ⇔ `known === true` ⇔ 来自配置
+ * - `contextWindow` 有值 ⇔ `known === true`；来源见 `source`（config 显式配置 /
+ *   measured provider 窗口真值 / shrunk run 级收缩上界）
  * - `contextWindow === undefined` 时，基于窗口的自动压缩/预算截断必须跳过
  * - `provider` 已 `bindModelName`，`defaultModel === modelName`
  */
