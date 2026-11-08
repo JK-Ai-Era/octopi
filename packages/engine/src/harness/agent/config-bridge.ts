@@ -87,7 +87,7 @@ export async function resolveProviders(
     } catch (err) {
       // 插件 provider 的失败必须 fail-closed：吞掉会让 buildAgent 报误导性的 "unknown provider"，
       // 真实原因（插件未发现/被禁用/注册失败）不能丢
-      if (providerConfig.plugin !== undefined) throw err;
+      if (pc.plugin !== undefined) throw err;
       console.warn(`[ConfigBridge] Failed to create provider "${name}":`, err);
     }
   }
