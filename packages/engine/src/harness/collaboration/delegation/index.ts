@@ -23,6 +23,8 @@ export type {
 } from './types.js';
 export {
   DELEGATION_SCHEMA_VERSION,
+  DEFAULT_DELEGATION_OUTPUT_CHARS,
+  normalizeMaxOutputChars,
   DELEGATION_TERMINAL_STATUSES,
   DELEGATION_ACTIVE_STATUSES,
   DelegationEvents,

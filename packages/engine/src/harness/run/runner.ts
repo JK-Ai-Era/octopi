@@ -20,7 +20,7 @@ import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.j
 import type { SessionData } from '../session/types.js';
 
 type TypedSessionStore = SessionStore<SessionData>;
-import type { Agent } from './agent/index.js';
+import type { Agent, RunIdentity } from './agent/index.js';
 import type { AgentContext } from '@octopi-agent/core/loop/types.js';
 import type { HarnessLoopEvent } from './reliability/harness-events.js';
 import type { ReliabilityHarness } from './reliability/run-agent.js';
@@ -1040,6 +1040,8 @@ export class SessionAwareRunner {
     const runStartTs = Date.now();
 
     const _agentId = runConfig.agentId ?? 'default';
+    /** 本 run 身份单源（m1，2026-11-09 评审）：runScope 构造与 afterStep 归属共用同一对象 */
+    const runIdentity: RunIdentity = { sessionId, agentId: _agentId };
 
     /** Observer 收口状态（finally 统一关闭，含异常路径） */
     let observerRunId = '';
@@ -1807,8 +1809,7 @@ export class SessionAwareRunner {
         ? [resolveSessionUndoPaths(this.config.sessionsDir, sessionId).root]
         : undefined;
       const runScope: RunScope = {
-        sessionId,
-        agentId: _agentId,
+        ...runIdentity,
         runId,
         principal: effectiveRunConfig.principal,
         prompt: getTextContent(input.content),
@@ -2305,7 +2306,11 @@ export class SessionAwareRunner {
           // 中止步）传 undefined——引擎不喂 observe。lastUsage 是展示口径的「最近实测」
           // （stale 语义见上方 promptTokensActual），拿它配当步估算分母会产出错配
           // ratio 样本（0.088/11.014 双向垃圾样本的源头）。
-          await this.agent.notifyAfterStep(loopEvent.usage, stepMessages);
+          // 校准样本身份单源（2026-11-09 事故）：显式传本 run 身份，不经环境推断——
+          // 本调用在 runner 事件循环（run 的 ALS 窗口外）执行，getRunScope() 会拿到
+          // 泄漏的外层 scope，agent.contextSessionId 是共享可变字段；并发委派子 run
+          // 下两者双向串味，错位样本毒化 ratio 校准（视图估算背离实测 160k vs 314k）。
+          await this.agent.notifyAfterStep(runIdentity, loopEvent.usage, stepMessages);
           stepStartIndex = runContext.messages.length;
           // 账本正文 = adaptLoopEvent 按调用算好的快照（失败轮只有本次调用的部分流出）；
           // 失败轮必须带 error 标记，空正文也留账（审计价值），不得拿历史内容凑数

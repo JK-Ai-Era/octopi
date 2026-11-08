@@ -6,6 +6,10 @@
  * ContextSizeLedger 收到「陈旧实测 × 当步估算」错配样本（实测 raw=0.088/11.014
  * 双向垃圾样本），ratio 在 clamp 两端震荡、决策读数虚高 3 倍 → 假 85% 压力停跑。
  * 本测试锁住「notifyAfterStep 只传本步新鲜 usage；缺 usage 传 undefined」。
+ *
+ * 追加红线（2026-11-09 事故）：runner 必须显式传本 run 身份——现场并发委派子 run
+ * 时共享 contextSessionId 被顶掉，父 usage 被贴子会话标签丢样、错位样本毒化 ratio
+ * （视图估算 160k vs 实测 314k）。身份以 handle() 的入参为准，禁止环境回退。
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -13,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
 import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
-import type { Agent } from '@octopi-agent/engine/harness/run/agent/index.js';
+import type { Agent, RunIdentity } from '@octopi-agent/engine/harness/run/agent/index.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import { makeTokenUsage, type TokenUsage } from '@octopi-agent/core/types/step.js';
@@ -41,16 +45,23 @@ function emptySession(id: string, agentId = 'a1'): SessionData {
   };
 }
 
+/** notifyAfterStep 捕获的一次调用 */
+interface CapturedCall {
+  identity?: RunIdentity;
+  usage?: TokenUsage;
+}
+
 /**
  * 按给定 usage 序列产出 step_end 的 agent（undefined = 该步缺 usage，如失败/重试/中止步）
  *
  * @param usages - 每个 step_end 携带的 usage 序列
- * @param captured - notifyAfterStep 收到的 usage（含 undefined）按调用序记录
+ * @param captured - notifyAfterStep 收到的 (identity, usage) 按调用序记录
  */
-function scriptedAgent(usages: Array<TokenUsage | undefined>, captured: Array<TokenUsage | undefined>): Agent {
+function scriptedAgent(usages: Array<TokenUsage | undefined>, captured: CapturedCall[]): Agent {
   return {
     context: { systemPrompt: '', messages: [] as Message[], tools: [] },
-    contextSessionId: 'default',
+    // 共享字段故意不是 's1'：任何回退到 contextSessionId 的归属都会拿到 'cs-CHILD'
+    contextSessionId: 'cs-CHILD',
     tools: [],
     model: { name: 'mock', defaultModel: 'm' },
     config: {},
@@ -61,8 +72,8 @@ function scriptedAgent(usages: Array<TokenUsage | undefined>, captured: Array<To
     getSessionCompactState: () => undefined,
     toolsForSession: () => [],
     setOnAfterStep: () => {},
-    notifyAfterStep: async (usage?: TokenUsage) => {
-      captured.push(usage);
+    notifyAfterStep: async (identity: RunIdentity, usage?: TokenUsage) => {
+      captured.push({ identity, usage });
     },
     run: async function* (
       _s?: AbortSignal,
@@ -94,15 +105,15 @@ describe('afterStep usage 新鲜配对（§10.14 红线）', () => {
   });
 
   /**
-   * 跑一轮并返回 notifyAfterStep 捕获的 usage 序列
+   * 跑一轮并返回 notifyAfterStep 捕获的调用序列
    *
    * @param usages - 每个 step_end 携带的 usage 序列
    */
-  async function runOnce(usages: Array<TokenUsage | undefined>): Promise<Array<TokenUsage | undefined>> {
+  async function runOnce(usages: Array<TokenUsage | undefined>): Promise<CapturedCall[]> {
     home = await mkdtemp(join(tmpdir(), 'octopi-afterstep-pairing-'));
     const store = new JsonlSessionStore({ sessionsDir: join(home, 'sessions') });
     await store.save('s1', emptySession('s1'));
-    const captured: Array<TokenUsage | undefined> = [];
+    const captured: CapturedCall[] = [];
     const runner = new SessionAwareRunner(
       scriptedAgent(usages, captured),
       {} as never,
@@ -124,13 +135,21 @@ describe('afterStep usage 新鲜配对（§10.14 红线）', () => {
     const freshB = makeTokenUsage({ promptTokens: 200, completionTokens: 1 });
     const captured = await runOnce([freshA, undefined, freshB]);
     expect(captured).toHaveLength(3);
-    expect(captured[0]).toBe(freshA); // 首步新鲜 usage 原样传递（同一性，防错传别步用量）
-    expect(captured[1]).toBeUndefined(); // 核心断言：缺 usage 步不得携带 freshA
-    expect(captured[2]).toBe(freshB); // 后续新鲜 usage 同一性
+    expect(captured[0]!.usage).toBe(freshA); // 首步新鲜 usage 原样传递（同一性，防错传别步用量）
+    expect(captured[1]!.usage).toBeUndefined(); // 核心断言：缺 usage 步不得携带 freshA
+    expect(captured[2]!.usage).toBe(freshB); // 后续新鲜 usage 同一性
   });
 
   it('首个 step 就缺 usage 时传 undefined（不得凭空产出样本）', async () => {
     const captured = await runOnce([undefined, undefined]);
-    expect(captured).toEqual([undefined, undefined]);
+    expect(captured.map((c) => c.usage)).toEqual([undefined, undefined]);
+  });
+
+  it('runner 显式传本 run 身份（不得回退共享 contextSessionId）', async () => {
+    const captured = await runOnce([makeTokenUsage({ promptTokens: 100, completionTokens: 1 }), undefined]);
+    expect(captured).toHaveLength(2);
+    for (const c of captured) {
+      expect(c.identity).toEqual({ sessionId: 's1', agentId: 'a1' }); // 与共享字段 'cs-CHILD' 不同
+    }
   });
 });

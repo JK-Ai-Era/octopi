@@ -29,6 +29,19 @@ import type { ResolvedModel } from '../model/types.js';
 import type { HarnessLoopEvent } from '../reliability/harness-events.js';
 import { compactStateKey } from '../../context/compact-key.js';
 
+// ── Run 身份 ──
+
+/**
+ * Run 身份（afterStep 等跨层回调的显式归属，I1）。
+ *
+ * 回调触发点可能在 run 的 ALS 窗口之外（runner 事件循环），且共享 Agent 实例上
+ * 的 `contextSessionId` 是多会话竞态字段——身份必须由调用方显式携带，禁止环境推断。
+ */
+export interface RunIdentity {
+  sessionId: string;
+  agentId: string;
+}
+
 // ── Agent 选项 ──
 
 export interface AgentOptions {
@@ -92,7 +105,11 @@ export class Agent {
   private _contextSessionId = 'default';
   /** sessionId → 压缩状态快照；Runner 从 Session 播种，assemble 后回写 Session */
   private _sessionCompactStates = new Map<string, ContextCompactSnapshot>();
-  private _onAfterStep?: (usage?: import('@octopi-agent/core/types/step.js').TokenUsage, step?: Message[]) => Promise<void>;
+  private _onAfterStep?: (
+    identity: RunIdentity,
+    usage?: import('@octopi-agent/core/types/step.js').TokenUsage,
+    step?: Message[],
+  ) => Promise<void>;
   /** Client Tool 会话可见性；undefined = 全部可见 */
   private _toolVisibilityFilter?: (sessionId: string, toolName: string) => boolean;
 
@@ -239,15 +256,38 @@ export class Agent {
     return this._sessionCompactStates.get(compactStateKey(sessionId, agentId));
   }
 
-  /** 每轮结束后通知 ContextEngine（afterStep 校准等）；step 为本轮增量消息 */
-  setOnAfterStep(fn?: (usage?: import('@octopi-agent/core/types/step.js').TokenUsage, step?: Message[]) => Promise<void>): void {
+  /**
+   * 每轮结束后通知 ContextEngine（afterStep 校准等）。
+   *
+   * @param fn - 回调 `(identity, usage, step)`：identity = 本 run 权威身份（首位）；
+   *   usage = 本步新鲜 usage（可缺，缺则不喂校准）；step = 本轮增量消息。
+   *   ⚠️ 2026-11-09 签名变更（Breaking）：identity 插入首位，旧 `(usage, step)` 回调
+   *   会静默错位读参，外部注册方须同步迁移（见 CHANGELOG v0.102.10）。
+   */
+  setOnAfterStep(
+    fn?: (
+      identity: RunIdentity,
+      usage?: import('@octopi-agent/core/types/step.js').TokenUsage,
+      step?: Message[],
+    ) => Promise<void>,
+  ): void {
     this._onAfterStep = fn;
   }
 
-  /** 由 Runner 在 step 结束后调用 */
-  async notifyAfterStep(usage?: import('@octopi-agent/core/types/step.js').TokenUsage, step?: Message[]): Promise<void> {
+  /**
+   * 由 Runner 在 step 结束后调用。
+   *
+   * @param identity - 本 run 的权威身份（显式传递；调用点在 ALS 窗口外，禁止环境推断）
+   * @param usage - 本步新鲜 usage（缺 usage 的失败/重试/中止步传 undefined）
+   * @param step - 本轮增量消息
+   */
+  async notifyAfterStep(
+    identity: RunIdentity,
+    usage?: import('@octopi-agent/core/types/step.js').TokenUsage,
+    step?: Message[],
+  ): Promise<void> {
     if (this._onAfterStep) {
-      await this._onAfterStep(usage, step);
+      await this._onAfterStep(identity, usage, step);
     }
   }
 

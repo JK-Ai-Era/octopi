@@ -6,4 +6,4 @@
  */
 
 export { Agent } from './agent.js';
-export type { AgentOptions } from './agent.js';
+export type { AgentOptions, RunIdentity } from './agent.js';

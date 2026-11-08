@@ -581,7 +581,7 @@ export type { AgentContext, AgentTool, LoopToolResult, AgentLoopConfig, AgentLoo
 
 // ── Agent 门面（Harness） ──
 export { Agent } from './run/agent/index.js';
-export type { AgentOptions } from './run/agent/index.js';
+export type { AgentOptions, RunIdentity } from './run/agent/index.js';
 export { withRunScope, getRunScope, getRunSessionId, createRunId } from './run/run-scope.js';
 export type { RunScope, RunToolRuntime } from './run/run-scope.js';
 export { ObserverHub } from './observability/observer/hub.js';

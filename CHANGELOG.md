@@ -109,7 +109,7 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
 ---
-## v0.102.9 (2026-11-09)
+…[3635 chars]
 
 ### fix(context): 评审 del-fa8c54e9 记档遗留四条（M-3 门基单位 / M-4 textify 素材 / M-6 tools 同源 / m-2 progress 观测）
 

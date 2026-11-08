@@ -1971,13 +1971,14 @@ export class AgentBuilder {
       // 本轮直接不投递；压缩语义由消息侧 contextSummary 承载。
       return result.messages;
     });
-    agent.setOnAfterStep(async (usage, step) => {
-      const scope = getRunScope();
-      const sessionId = scope?.sessionId ?? agent.contextSessionId;
-      const agentId = scope?.agentId ?? 'default';
+    agent.setOnAfterStep(async (identity, usage, step) => {
+      // 身份只信调用方显式传入（40-engineering #8 单源）：runner 事件循环跑在 run 的
+      // ALS 窗口外，getRunScope() 会拿到泄漏的外层 scope，agent.contextSessionId 是
+      // 共享可变字段——并发委派子 run 下两者双向串味，错位样本毒化 ratio 校准
+      // （2026-11-09 事故：视图估算 160k vs 实测 314k）。
       await contextEngine.afterStep?.({
-        sessionId,
-        agentId,
+        sessionId: identity.sessionId,
+        agentId: identity.agentId,
         step: step ?? [],
         usage: usage,
       });

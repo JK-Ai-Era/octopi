@@ -69,7 +69,7 @@ export type { AgentTraceOptions } from './harness/agent/builder.js';
 export type { AgentBuildOptions, AgentBuildResult, AgentBuildCoreResult } from './harness/agent/builder.js';
 export type { ChannelAdapter, ChannelMessage, ChannelReply } from './harness/extension/plugin-ecosystem/channel-types.js';
 export { Agent } from './harness/run/agent/index.js';
-export type { AgentOptions } from './harness/run/agent/index.js';
+export type { AgentOptions, RunIdentity } from './harness/run/agent/index.js';
 export type { HarnessLoopEvent, BudgetControlEvent, ControlStopMetric, PolicyUnit } from './harness/run/reliability/harness-events.js';
 export { SessionAwareRunner } from './harness/run/runner.js';
 export {
@@ -298,6 +298,8 @@ export {
   AgentRegistryEvents,
   DelegationEvents,
   DELEGATION_SCHEMA_VERSION,
+  DEFAULT_DELEGATION_OUTPUT_CHARS,
+  normalizeMaxOutputChars,
 } from './harness/collaboration/delegation/index.js';
 export type {
   Delegation,
