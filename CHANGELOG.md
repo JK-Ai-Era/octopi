@@ -109,6 +109,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
 ---
+## v0.102.5 (2026-11-08)
+
+### fix(context): 校准冷启动消除（重启后第一轮即校准）+ 视图估算 stale 标注
+
+生产观察（大哥编译重启后）：重启后第一轮读数不准、跑几轮才逐渐校准。根因两条：
+
+- **早退路径不冻结配对槽**：无溢出早退 return 不调 `freezeUsagePair` → `afterStep` 无对丢样（usage 永不入账）→ 校准收集只在走主路径的轮发生。修复=「装配出口=配对冻结点」不变量：全部早退/L3/catch 出口统一冻结（配对对=本请求的原始估算+实测，早退轮的样本同样该学）。
+- **校准状态不持久化**：锚+样本计数是引擎内存态，重启即冷启动。修复=校准状态随 session metadata 落盘（`exportCalibration`/`importCalibration` 通道，harness 可选方法），runner persist 写入、handle 入口回填——重启后第一轮即 anchored/calibrated。
+
+顺带：顶栏「视图估算」重启恢复值标「(旧)」（`viewTokensEstSource: 'restore'|'live'`），不再把旧快照当现值误读。附带发现：既有测试的 `usage: {promptTokens}` 字段与引擎读取的 `inputReportedTokens` 不符（NaN→静默丢样），「锚定路径在测试中不生效」的遗留调查一并销案（生产链路正常，测试构造错）。红线：校准持久化（export→import→第一轮 anchored）。
+
+**验证**：4236 passed / 7 skipped + build + lint + arch-sync 四绿。
+
 
 ## v0.102.4 (2026-11-08)
 

@@ -90,6 +90,10 @@ export interface ReliabilityHarness {
   sessionLedger?: unknown;
   /** P5: Context 压力回调（可选，用于 context wrap-up 判断） */
   getContextPressure?: (sessionId?: string) => { estimatedTokens: number; contextWindow?: number } | undefined;
+  /** 校准状态快照（可选，持久化配套） */
+  exportCalibration?: () => unknown;
+  /** 校准状态恢复（可选） */
+  importCalibration?: (data: unknown) => void;
   /**
    * high 风险人工确认（可选，SEC-7 单模型）。
    * 返回 {@link HitlDecision}：`approve*` 放行（session/always 由引擎缓存）；`deny` / 抛错 = 拒绝。

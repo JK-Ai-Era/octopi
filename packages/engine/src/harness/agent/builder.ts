@@ -2025,6 +2025,12 @@ export class AgentBuilder {
         sessionId !== undefined
           ? builderRef._contextPressureBySession.get(sessionId)
           : builderRef._lastContextPressure,
+      // 校准状态通道（持久化配套）：export 写进 session metadata、restore 时 import——
+      // 重启后第一轮即 anchored/calibrated，消除「跑几轮才校准」冷启动过渡
+      exportCalibration: () => contextEngine.exportCalibration?.(),
+      importCalibration: (data: unknown) => {
+        contextEngine.importCalibration?.(data as Parameters<NonNullable<typeof contextEngine.importCalibration>>[0]);
+      },
       // high 风险确认：有则走人工审批，无则 run-agent 回退 reject
       confirmHighRisk: this._confirmHighRisk,
     };

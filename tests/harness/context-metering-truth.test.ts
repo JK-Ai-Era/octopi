@@ -237,12 +237,28 @@ describe('④ 压缩 before/after 请求口径', () => {
 });
 
 describe('校准作用域与锚卫生（2026-11-08 生产毒读数回归钉）', () => {
+  it('校准持久化红线：export→import 后第一轮即 anchored（重启无冷启动过渡）', async () => {
+    const engine1 = new DefaultContextEngine({ transformStore: new InMemoryTransformStore() });
+    const assemble = (eng: DefaultContextEngine, sid: string) => eng.assemble({ sessionId: sid, modelKey: 'mock/m', messages: [{ role: 'user', content: 'hi', timestamp: 1 } as Message], systemPrompt: 's', tools: [], tokenBudget: 100000 });
+    await assemble(engine1, 'cal-persist');
+    await engine1.afterStep!({ sessionId: 'cal-persist', step: [], usage: { inputReportedTokens: 200, outputTokens: 1 } as never }); // 冻锚（ratio=8→clamp 4）
+    // 「重启」：导出→新引擎导入
+    const snapshot = engine1.exportCalibration();
+    expect(snapshot.anchors['cal-persist'], '锚随 export 落盘').toBeDefined();
+    const engine2 = new DefaultContextEngine({ transformStore: new InMemoryTransformStore() });
+    engine2.importCalibration(snapshot);
+    const r = await assemble(engine2, 'cal-persist');
+    // 第一轮即 anchored（不是 raw 冷启动）：读数=clamp(ratio)×raw≈4×25=100（>裸估算 25）
+    expect(r.estimatedTokens, 'import 后第一轮读数走锚外推（无冷启动）').toBeGreaterThan(50);
+    expect(r.readingSource, '第一轮 readingSource=anchored').toBe('anchored');
+  });
+
   it('复合键接线红线：同 modelKey 不同 session 的样本互不污染（calKey 引擎接线）', async () => {
     const engine = new DefaultContextEngine({ transformStore: new InMemoryTransformStore() });
     // session A 学到 2×；session B 冷启动——B 的读数不得吃到 A 的 ratio（裸估算）
     const assemble = (sessionId: string) => engine.assemble({ sessionId, modelKey: 'mock/m', messages: [{ role: 'user', content: 'hi', timestamp: 1 } as Message], systemPrompt: 's', tools: [], tokenBudget: 100000 });
     await assemble('cal-a');
-    await engine.afterStep!({ sessionId: 'cal-a', step: [], usage: { promptTokens: 200, completionTokens: 1 } as never });
+    await engine.afterStep!({ sessionId: 'cal-a', step: [], usage: { inputReportedTokens: 200, outputTokens: 1 } as never });
     await assemble('cal-a'); // A 样本入账
     const b = await assemble('cal-b');
     // B 冷启动（复合键隔离）：读数=裸估算（≈与 A 同请求的 raw 一致），不被 A 的 2× 拉走

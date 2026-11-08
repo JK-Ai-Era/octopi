@@ -177,6 +177,8 @@ export interface InspectorState {
   promptTokensActual?: number;
   /** 请求视图估算（校准后，最近一次 assemble 口径；estimate 写入，压缩后清空待下轮重算） */
   viewTokensEst?: number;
+  /** 视图估算来源：restore=重启恢复的旧快照（显示侧标「(旧)」防误读）；live=本轮实算 */
+  viewTokensEstSource?: 'live' | 'restore';
   /** 全量原文估算（仅 Run 页签展示，不进主显示/决策） */
   rawTokens?: number;
   contextWindow?: number;
@@ -1166,7 +1168,7 @@ export class OctopiRuntimeStore extends EventTarget {
       inspector: {
         // 持久化的最近一次真值作底（重启/冷打开恢复显示）；运行时缓存（更新）优先
         ...(typeof view.promptTokensActual === 'number' ? { promptTokensActual: view.promptTokensActual } : {}),
-        ...(typeof view.viewTokensEst === 'number' ? { viewTokensEst: view.viewTokensEst } : {}),
+        ...(typeof view.viewTokensEst === 'number' ? { viewTokensEst: view.viewTokensEst, viewTokensEstSource: 'restore' as const } : {}),
         ...(typeof view.rawTokens === 'number' ? { rawTokens: view.rawTokens } : {}),
         ...(typeof view.contextWindow === 'number' ? { contextWindow: view.contextWindow } : {}),
         ...(cached?.inspector ?? {}),
@@ -2162,7 +2164,7 @@ export class OctopiRuntimeStore extends EventTarget {
           this.chat.inspector = {
             ...this.chat.inspector,
             ...(promptTokensActual !== undefined ? { promptTokensActual } : {}),
-            ...(viewTokensEst !== undefined ? { viewTokensEst } : {}),
+            ...(viewTokensEst !== undefined ? { viewTokensEst, viewTokensEstSource: 'live' as const } : {}),
             ...(rawTokens !== undefined ? { rawTokens } : {}),
             // 未知窗口时清掉上一模型的旧值，避免 UI 显示假预算
             ...(hasWindowKey ? { contextWindow } : {}),

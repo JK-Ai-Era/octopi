@@ -231,6 +231,19 @@ export interface AfterStepParams {
  * 本域契约（@layer harness/context）；Harness 提供 DefaultContextEngine。
  */
 export interface ContextEngine {
+  /**
+   * 校准状态快照（可选，持久化配套）：锚+样本计数导出——restore 后回填消除冷启动。
+   * @returns per-key 样本计数与锚
+   */
+  exportCalibration?(): {
+    samples: Record<string, { samples: number }>;
+    anchors: Record<string, { actual: number; raw: number; modelKey: string }>;
+  };
+  /** 校准状态恢复（可选）：importCalibration 配对使用 */
+  importCalibration?(data: {
+    samples?: Record<string, { samples: number }>;
+    anchors?: Record<string, { actual: number; raw: number; modelKey: string }>;
+  }): void;
   readonly info: ContextEngineInfo;
 
   /**

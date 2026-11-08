@@ -480,6 +480,7 @@ export class DefaultContextEngine implements ContextEngine {
         durationMs: Date.now() - overflowStart,
         cancelled: true,
       });
+      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
       return {
         messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
         estimatedTokens: this.sizeLedger.decisionTokensWithSource(
@@ -536,6 +537,7 @@ export class DefaultContextEngine implements ContextEngine {
           durationMs: Date.now() - overflowStart,
           cancelled: true,
         });
+      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
         return {
           messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
           estimatedTokens: this.sizeLedger.decisionTokensWithSource(
@@ -566,6 +568,7 @@ export class DefaultContextEngine implements ContextEngine {
             'This session is no longer suitable for continued work, or the current model does not fit the task scale — start a new session or switch to a model with a larger context window.',
           durationMs: Date.now() - overflowStart,
         });
+      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
         return {
           messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan),
           estimatedTokens: this.sizeLedger.decisionTokensWithSource(
@@ -628,6 +631,7 @@ export class DefaultContextEngine implements ContextEngine {
         error: `overflow_convergence_failed: ${err instanceof Error ? err.message : String(err)}`,
         durationMs: Date.now() - overflowStart,
       });
+      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
       return {
         messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan),
         estimatedTokens: this.sizeLedger.decisionTokensWithSource(
@@ -1845,6 +1849,34 @@ export class DefaultContextEngine implements ContextEngine {
    * DefaultContextEngine 不需要单独存储消息，
    * 因为消息历史由调用方管理。
    */
+  /**
+   * 校准状态快照（持久化用）：per-key 样本计数 + 锚（含 stateKey 归属）。
+   * 与 importCalibration 配对——重启后恢复，消除校准冷启动过渡（跑几轮才准）。
+   */
+  exportCalibration(): {
+    samples: Record<string, { samples: number }>;
+    anchors: Record<string, { actual: number; raw: number; modelKey: string }>;
+  } {
+    const anchors: Record<string, { actual: number; raw: number; modelKey: string }> = {};
+    for (const [stateKey, st] of this.states) {
+      if (st.lastUsageAnchor) anchors[stateKey] = st.lastUsageAnchor;
+    }
+    return { samples: this.sizeLedger.exportState(), anchors };
+  }
+
+  /**
+   * 校准状态恢复（restore 用）：锚/样本计数回填——restore 后第一轮即 anchored/calibrated。
+   */
+  importCalibration(data: {
+    samples?: Record<string, { samples: number }>;
+    anchors?: Record<string, { actual: number; raw: number; modelKey: string }>;
+  }): void {
+    if (data?.samples) this.sizeLedger.importState(data.samples);
+    for (const [stateKey, anchor] of Object.entries(data?.anchors ?? {})) {
+      this.states.set(stateKey, { ...this.states.get(stateKey), lastUsageAnchor: anchor });
+    }
+  }
+
   async ingest(_params: IngestParams): Promise<void> {
     // No-op: 消息历史由调用方管理
   }

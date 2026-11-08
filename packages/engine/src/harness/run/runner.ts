@@ -1095,6 +1095,16 @@ export class SessionAwareRunner {
         session.primaryAgentId = session.agentId || _agentId;
       }
       if (!session.tasks) session.tasks = [];
+      // 校准状态恢复（取舍③配套）：上次 run persist 的锚+样本回填——本轮第一请求即
+      // anchored/calibrated，消除「重启后跑几轮才校准」冷启动（best-effort：不阻塞 run）
+      const persistedCalibration = (session.metadata as Record<string, unknown> | undefined)?.calibration;
+      if (persistedCalibration && typeof (this.harness as { importCalibration?: (d: unknown) => void }).importCalibration === 'function') {
+        try {
+          (this.harness as { importCalibration?: (d: unknown) => void }).importCalibration!(persistedCalibration);
+        } catch (err) {
+          console.warn(`[ctx] session=${sessionId} calibration restore failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
 
       // E6：可选 ACL（注入时才强制）；primary 自动 owner；带入 agent 天花板
       const acl = this.config.sessionAcl;
@@ -2555,6 +2565,10 @@ export class SessionAwareRunner {
       ) {
         session.metadata = {
           ...session.metadata,
+          // 校准状态持久化（取舍③配套）：锚+样本计数随会话落盘，restore 后回填
+          ...(typeof (this.harness as { exportCalibration?: () => unknown }).exportCalibration === 'function'
+            ? { calibration: (this.harness as { exportCalibration?: () => unknown }).exportCalibration!() }
+            : {}),
           ...(lastPromptTokensActual !== undefined ? { promptTokensActual: lastPromptTokensActual } : {}),
           ...(lastViewTokensEst !== undefined ? { viewTokensEst: lastViewTokensEst } : {}),
           ...(lastRawTokens !== undefined ? { rawTokens: lastRawTokens } : {}),

@@ -229,6 +229,23 @@ export class ContextSizeLedger {
    * @param anchor 实测锚（冻结对）
    * @returns 决策读数 + 读数来源（calibrated=校准 / anchored=实测锚定 / raw=裸估算）
    */
+  /**
+   * 校准状态导出（持久化用，取舍③配套）：重启后第一轮即 anchored/calibrated，
+   * 消除「跑几轮才校准」的冷启动过渡。导出 per-key 样本计数 + 最新锚。
+   */
+  exportState(): Record<string, { samples: number }> {
+    const out: Record<string, { samples: number }> = {};
+    for (const [k, v] of this.samplesByModel) out[k] = { samples: v };
+    return out;
+  }
+
+  /** 校准状态导入（restore 用）：样本计数回填 EMA 可信度判定（ratio 本身按新样本重建）。 */
+  importState(state: Record<string, { samples: number }>): void {
+    for (const [k, v] of Object.entries(state ?? {})) {
+      if (typeof v?.samples === 'number' && v.samples > 0) this.samplesByModel.set(k, v.samples);
+    }
+  }
+
   decisionTokensWithSource(
     modelKey: string,
     rawTokens: number,
