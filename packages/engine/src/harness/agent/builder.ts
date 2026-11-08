@@ -122,9 +122,20 @@ export class DefaultErrorStrategy implements ErrorStrategy {
     if (error.reason === 'content_filter' && attempt < maxAttempts) {
       return { action: 'retry', delayMs: (attempt + 1) * 1000 };
     }
-    // ── context_length：由引擎尝试 compact，这里返回 abort 让引擎决定 ──
+    // ── context_length（F 类，arch/overflow-redesign.md T2）：重发前 onError 已
+    // 回填真值/收缩上界，重装配会砍量后重发；限 2 次防「砍不给力」连环 400。
+    // 耗尽后如实收口换 session/model（L3 语义），不再伪装可恢复 ──
     if (error.reason === 'context_length') {
-      return { action: 'abort', reason: `Context length exceeded: ${error.message}` };
+      if (attempt < maxAttempts) {
+        return { action: 'retry', delayMs: (attempt + 1) * 1000 };
+      }
+      return {
+        action: 'abort',
+        reason:
+          'Context length exceeded after shrink-and-resend: ' +
+          `${error.message}. ` +
+          'This session is no longer suitable for continued work, or the current model does not fit the task scale — start a new session or switch to a model with a larger context window.',
+      };
     }
     // ── 不可重试错误：认证、计费 ──
     if (error.reason === 'auth') {

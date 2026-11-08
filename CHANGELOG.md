@@ -109,6 +109,30 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
 ---
+## v0.102.7 (2026-11-08)
+
+### feat(context): F 类 400 反馈环——错误分类器 + 窗口真值回填 + 收缩上界 + 重发限 2
+
+overflow 设计的 P2 落地（arch/overflow-redesign.md §7）。「配置窗口是预测、provider 是测量」——长度类 400 是唯一能知道真窗口的信号，此前整条链路缺失：400 一律归 `context_length`（rate_limit/invalid 被误伤）且一律 abort（真值被丢弃、无重发）。
+
+实现：
+- **分类器精确化**（T2①/红线 4）：400 不再按状态码归类，改为文本细分（`isContextLengthErrorText`，覆盖 OpenAI/Anthropic/Gemini 及变体措辞）；rate_limit 文本优先判定——限流变体的 400 宁可走限流重试也不乱砍上下文。
+- **真值回填**（T2②/红线 3）：`extractContextWindowLimit` 从 400 文本提取 provider 报告的窗口上限，登记 per-model 真值表（`window-truth.ts`）；resolver 以 `source:'measured'` 优先于配置——下次前馈直接用新值。抽取带邻域约束：邻近出现 `output` 即拒绝（防「25000 tokens > 4096 maximum output tokens」把输出上限写进无 TTL 的进程级真值表）。
+- **收缩上界**（T2③）：提取不到时 `min(上次成功请求实测, 已知值×0.7)`；收缩是保守猜测，只写 run 级快照（`source:'shrunk'`），**不入真值表**——猜测持久化会永久削窗。
+- **机械压缩**（T2④）：零新压缩代码。重试重跑迭代 → 重新装配 → `fits` 对新上界失效 → P1 收敛阶梯自动砍后重发。
+- **重发限 2**（T2⑤）：`context_length` 由 abort 改为 retry（限 2 次）；耗尽后如实收口换 session/model，不再伪装可恢复。
+- **漂移告警**（T2⑥）：真值与配置不一致时 `[overflow] contextWindow truth backfill` 可见（正式告警通道 P3）。
+
+评审修复（del-5cbac0d8，0 blocking/6 major，逐条对码核实）：
+- M1 措辞漏报：原正则只覆盖三种典型 → 补 `more than the maximum allowed` / `input too long` / `request too large` 等变体，避免「改动后比改动前覆盖更差」。
+- M2 语义错抓：抽取加 output 语境拒绝 + 主语/邻域约束（见上）。
+- M3 跨错误串扰：attempt 计数从全局改为 **per-reason**（`modelErrorAttempts`）——`server×2 → context_length` 不再让长度类错误拿到 attempt=2 而零重发机会。
+- M4 收口语不可达：Loop 契约只回 `'retry'|'abort'`，`decision.reason` 被丢弃 → 新增 `modelAbortGuidance` 通道，在 `agent_end` 出口并入可见错误文本（保留原始错误为 cause）。
+- M5 文本不同源：反馈侧改用分类器的 `collectErrorText`（支持普通对象 / cause / code），对象型 provider 错误不再「分类成功但抽不到数字」。
+- M6 缺闭环测试：新增 `context-length-feedback-loop.test.ts`，用 `runAgentWithReliability` 真跑（400→重发→成功）、per-reason attempt、abort 指引可达。
+
+**验证**：4270 passed / 7 skipped + build + lint + arch-sync 四绿。红线均以摘修复法验证真钉（摘 M3/M4/M2/M5 修复对应用例即挂）。escalation(priv_exec) 并发下偶发 flaky，单跑稳定（既有记档）。
+
 ## v0.102.6 (2026-11-08)
 
 ### test(context): 弱化用例补强（评审遗留批）+ 任务账本收口

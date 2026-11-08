@@ -735,9 +735,10 @@ Session save：全量 messages + contextCompact 快照
 
 **contextWindow 语义（未知不猜测）**：
 
-- **仅显式配置**算 known：`models.providers[].models[].contextWindow`、agent.model 写死的值、用户配置的 `defaults.contextWindow`
+- **显式配置**算 known：`models.providers[].models[].contextWindow`、agent.model 写死的值、用户配置的 `defaults.contextWindow`
+- **provider 测量真值**也算 known（`source: 'measured'`）：长度类 400 错误文本报告的窗口上限会按模型回填（F 类反馈，`harness/run/model/window-truth.ts`）——测量优先于预测，覆盖配置值。400 后的收缩上界（`source: 'shrunk'`）是 run 级保守猜测，不入真值表
 - Provider **不**自动合并 builtin 表；resolver **不**用 builtin/200k 作预算
-- 未配置 → `contextWindow: undefined` / REST `null`，UI 显示「未知」
+- 未配置且无测量真值 → `contextWindow: undefined` / REST `null`，UI 显示「未知」
 
 **未知时 vs 已配置**：
 

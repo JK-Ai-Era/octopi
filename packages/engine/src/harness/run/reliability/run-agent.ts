@@ -30,6 +30,7 @@ import type { HarnessLoopEvent, PolicyUnit } from './harness-events.js';
 import { classifyError } from '@octopi-agent/core/loop/error-classifier.js';
 import { agentLoop } from '@octopi-agent/core/loop/agent-loop.js';
 import { maxAttemptsFor } from './model-error-policy.js';
+import { applyContextLengthFeedback } from './context-length-feedback.js';
 import { guardRefusalProvider } from './refusal-guard.js';
 import type {
   ToolCallRecord,
@@ -185,8 +186,23 @@ interface ReliabilityState {
   runGuardRecovered: false | { reason: string; actions: string[] };
   hasProgress: boolean;
   forceCheckpoint: boolean;
-  /** 连续模型错误的 attempt 序号（从 0 起）；成功一轮后重置 */
-  modelErrorAttempt: number;
+  /**
+   * 连续模型错误的 attempt 序号（**按错误原因独立计数**）；成功一轮后全部重置。
+   *
+   * 分原因计数的理由：重试上限本就是 per-reason 的（MODEL_ERROR_MAX_ATTEMPTS）。
+   * 单一全局计数会让 `timeout×2 → context_length` 里的长度类错误拿到
+   * attempt=2 而一次重发机会都没有（F 类反馈环的收缩/回填白写），
+   * 反向则让后到的高上限原因白吃前面的额度。
+   */
+  modelErrorAttempts: Record<string, number>;
+  /**
+   * ErrorStrategy 给出的 abort 指引（如「换 session / 换更大窗口模型」）。
+   *
+   * Loop 契约的 onError 只回 'retry' | 'abort'，`action.reason` 穿不过去；
+   * 在此暂存，由 agent_end 出口改写为可见错误文本——否则收口语只存在于
+   * 单元测试里，用户看到的仍是原始 provider 报错（T2⑤ 红线 2 只完成一半）。
+   */
+  modelAbortGuidance?: string;
   /** hard 在 onStepComplete 补判：generator 下一事件后 yield */
   pendingBudgetHardYield: false | {
     reason: 'wall_clock' | 'steps' | 'tool_calls';
@@ -327,7 +343,7 @@ function createInitialState(checkpointInterval = 15): ReliabilityState {
     runGuardRecovered: false,
     hasProgress: true,
     forceCheckpoint: false,
-    modelErrorAttempt: 0,
+    modelErrorAttempts: {},
     pendingBudgetHardYield: false,
     pendingSecurityEvents: [],
     pendingRetryDelayMs: 0,
@@ -801,7 +817,7 @@ export async function* runAgentWithReliability(
     // onStepComplete：可靠性副作用（注入 steer 指令，不控制停止）
     onStepComplete: async (ctx) => {
       // 一轮成功走到这里：重置模型错误 attempt
-      state.modelErrorAttempt = 0;
+      state.modelErrorAttempts = {};
 
       // 用户/扩展链先行（含 before_agent_finalize 定稿）：下面的空回复/planning/
       // no-op 判定必须针对定稿后的真实回复，否则 Finalize 补空/改写会误触重试或漏检。
@@ -1082,8 +1098,24 @@ export async function* runAgentWithReliability(
     onError: async (error) => {
       if (shouldAbortWithoutRetry(error)) return 'abort';
       const classified = classifyError(error);
-      const attempt = state.modelErrorAttempt;
-      state.modelErrorAttempt++;
+      // attempt 按错误原因独立计数（上限本就是 per-reason 的）
+      const attempt = state.modelErrorAttempts[classified.reason] ?? 0;
+      state.modelErrorAttempts[classified.reason] = attempt + 1;
+
+      // F 类反馈环（T2②③，arch/overflow-redesign.md）：长度类 400 → 真值回填/
+      // 收缩上界写入 run 快照（side effect，非主路径依赖）。重试重跑迭代 →
+      // transformContext 重新装配 → fits 对新上界失效 → P1 阶梯自动砍后重发。
+      if (classified.reason === 'context_length') {
+        try {
+          applyContextLengthFeedback(classified, {
+            lastSuccessActual: ledger.snapshot().contextActualTokens,
+          });
+        } catch (feedbackErr) {
+          // 反馈是 side effect：失败不得阻断错误决策链（retry/abort 照常）。
+          // 吞掉的只是回填/收缩写入，下一次 400 会再走一遍本路径。
+          console.warn('[overflow] context-length feedback failed:', feedbackErr);
+        }
+      }
 
       // ErrorStrategy 决策（attempt 从 0 起，与 DefaultErrorStrategy 的 attempt < N 对齐）
       // skip 在 Loop 层无对应动作，映射为 abort；模型灾备用 FallbackProvider，不在此切换
@@ -1096,6 +1128,8 @@ export async function* runAgentWithReliability(
           pushRetryNotice(state, classified, attempt, delayMs, Math.max(1, maxAttemptsFor(classified.reason)));
           return 'retry';
         }
+        // abort：暂存可执行指引（Loop 契约穿不过 reason）
+        if (action.reason) state.modelAbortGuidance = action.reason;
         return 'abort';
       }
 
@@ -1430,11 +1464,39 @@ export async function* runAgentWithReliability(
       };
     }
 
+    // abort 指引注入（T2⑤/红线 2）：Loop 契约穿不过 decision.reason，在出口
+    // 把可执行指引并入可见错误文本——否则用户只看到原始 provider 报错
+    if (event.type === 'agent_end' && event.reason === 'error' && state.modelAbortGuidance) {
+      const guidance = state.modelAbortGuidance;
+      state.modelAbortGuidance = undefined;
+      yield withAbortGuidance(event, guidance);
+      continue;
+    }
+
     yield event;
   }
 }
 
 // ── 辅助函数 ──
+
+/**
+ * 把 abort 指引并入可见错误文本（保留原始错误为 cause）。
+ *
+ * @param event - 原始 agent_end 事件
+ * @param guidance - ErrorStrategy 产出的可执行指引
+ * @returns 错误文本已增强的事件副本
+ */
+function withAbortGuidance(
+  event: Extract<AgentLoopEvent, { type: 'agent_end' }>,
+  guidance: string,
+): Extract<AgentLoopEvent, { type: 'agent_end' }> {
+  const base =
+    event.error instanceof Error ? event.error : new Error(String(event.error ?? 'model call failed'));
+  return {
+    ...event,
+    error: new Error(`${base.message}\n${guidance}`, { cause: base }),
+  };
+}
 
 function executeRecoveryActions(
   actions: Array<{ type: string; [key: string]: unknown }>,
