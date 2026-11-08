@@ -69,6 +69,13 @@ export interface CompactOptions {
   onSummarizeFail?: 'truncate' | 'keep_partial';
   estimator?: CompactTokenEstimator;
   previousSummary?: string;
+  /**
+   * 摘要增量素材（M-4）：上一份摘要覆盖终点之后、保护尾之前的新消息。与 previousSummary
+   * 同时给出时，textify 旁路只文本化本段（合并契约：previousSummary + 新消息 = 完整
+   * 更新），不再把已覆盖历史以全量 raw middle 复发（2.13MB 事故形状）。缺省 = 全量
+   * middle（首次压缩/无摘要兜底）。
+   */
+  freshMessages?: Message[];
   maxSummaryTokens?: number;
   /**
    * 摘要软目标预算（P1c 拍板缺省 clamp(2%, 2k, 8k)）：写进指令的「尽量控制在 N tokens」，

@@ -116,6 +116,9 @@ const TIMELINE_TYPES = new Set([
   'context.compact.end',
   'context.compact.error',
   'context.compact.summarize_fallback',
+  // m-2：progress 必须落 timeline——manual/慢请求的「已发出多少、等了多久」是
+  // 卡死归因的唯一线索（丢弃 = 观测静默失明）
+  'context.compact.progress',
   // P3 红线 7：overflow 症状告警（proactive 失效 / 配置漂移缺失）——罕见异常信号必须落 timeline
   'context.overflow.alert',
   'context.layers.assembled',

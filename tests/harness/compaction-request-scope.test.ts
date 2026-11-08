@@ -256,7 +256,7 @@ describe('增长门基数只随压缩完成推进', () => {
           summarizeAttempted: true,
           messageCount: 5,
           viewTokens: 55_000,
-          viewTokensSource: 'request',
+          viewTokensSource: 'request-raw',
         },
       },
     ]);
@@ -331,5 +331,360 @@ describe('增长门口径版本（自愈）', () => {
     });
 
     expect(summarize).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('M-3：增长门基数 raw 单位 + 比较时按当前 ratio 折算（评审 del-fa8c54e9）', () => {
+  /** 收敛到目标 token 的等长消息（比例迭代，误差 <2%） */
+  function fitMsgs(target: number, count: number, tag: string): Message[] {
+    const estimator = new HeuristicTokenEstimator();
+    let chars = 200;
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const out = Array.from({ length: count }, (_, k) =>
+        assistantMsg(`${tag}-${k} ${'x'.repeat(chars)}`),
+      );
+      const tokens = estimator.estimateMessages(out);
+      if (Math.abs(tokens - target) <= target * 0.02) return out;
+      chars = Math.max(1, Math.round((chars * target) / Math.max(1, tokens)));
+    }
+    throw new Error(`fitMsgs(${target}) 未能收敛`);
+  }
+
+  function gateRecord(
+    sessionId: string,
+    messages: Message[],
+    viewTokens: number,
+    source: 'request-raw' | 'request',
+  ) {
+    return {
+      sessionId,
+      agentId: '',
+      type: 'summary' as const,
+      createdAt: Date.now(),
+      covers: [anchorRange(messages, 5, 14)!],
+      text: '## 交接摘要\nbase',
+      placeholder: { role: 'user' as const, source: 'contextSummary' as const },
+      meta: {
+        reason: 'proactive' as const,
+        fresh: true,
+        summarizeAttempted: true,
+        messageCount: 5,
+        viewTokens,
+        viewTokensSource: source,
+      },
+    };
+  }
+
+  type EngineInternals = {
+    sizeLedger: { observe(modelKey: string, actual: number, view: number): unknown };
+  };
+
+  it('ratio≠1：早退轮不得抢跑、增长够才触发（门基与读数同走当前尺）', async () => {
+    const sessionId = 's-gate-unit';
+    const store = new InMemoryTransformStore();
+    const engine = new DefaultContextEngine({
+      targetTokens: 20_000, // 触发线 60k，25% 增长门 = 15k
+      proactiveCompactRatio: 0.5,
+      proactiveCooldownMs: 0,
+      transformStore: store,
+    });
+    // 校准 ratio ≈1.91（两样本入账）：门基若存「写入时校准值」不折算，读数 ×1.91 会抢跑
+    const ledger = (engine as unknown as EngineInternals).sizeLedger;
+    ledger.observe(`${sessionId}::unknown`, 200, 100);
+    ledger.observe(`${sessionId}::unknown`, 200, 100);
+    // Nit 4（评审 del-e1ee43ef）：断言 ratio 确实 ≠1——否则 calKey 格式变化会让用例
+    // 静默退化为 ratio=1 下仍通过（防测试毒化）
+    expect(
+      (ledger as unknown as { ratio(modelKey: string): number }).ratio(`${sessionId}::unknown`),
+    ).toBeGreaterThan(1.5);
+
+    const head = fitMsgs(250, 5, 'head');
+    const middle = fitMsgs(12_000, 12, 'mid');
+    const tail = fitMsgs(60_000, 20, 'tail');
+    let messages = [...head, ...middle, ...tail];
+    await store.append(sessionId, '', [gateRecord(sessionId, messages, 55_000, 'request-raw')]);
+
+    const summarize = vi.fn(async () => '## 交接摘要\ncompressed');
+    const run = () =>
+      engine.assemble({
+        messages,
+        sessionId,
+        systemPrompt: 'sys',
+        tools: [],
+        tokenBudget: 1_048_576,
+        contextWindow: 1_048_576,
+        summarize,
+      });
+
+    // 轮 1：raw 视图 ≈62k → 校准读数 ≈118k。门基 55k(raw) 折算 ≈105k，门槛 105k+15k=120k
+    // > 118k → 早退。旧实现（基数不折算）：118k ≥ 70k → 抢跑压缩（换尺错位即 M-3 病灶）。
+    await run();
+    expect(summarize).not.toHaveBeenCalled();
+
+    // 轮 2：raw ≈74k → 校准 ≈141k ≥ 120k → 必须触发
+    messages = [...head, ...middle, ...fitMsgs(12_000, 4, 'more'), ...tail];
+    await run();
+    expect(summarize).toHaveBeenCalledTimes(1);
+  });
+
+  it("旧 'request' 标记（校准存量，缺写入时 ratio）不提供门基——自愈多压一次", async () => {
+    const sessionId = 's-gate-legacy-unit';
+    const summarize = vi.fn(async () => '## 交接摘要\nself-healed');
+    const store = new InMemoryTransformStore();
+    const engine = new DefaultContextEngine({
+      targetTokens: 20_000,
+      proactiveCompactRatio: 0.5,
+      proactiveCooldownMs: 0,
+      transformStore: store,
+    });
+    const head = fitMsgs(250, 5, 'head');
+    const middle = fitMsgs(12_000, 12, 'mid');
+    const tail = fitMsgs(60_000, 20, 'tail');
+    const messages = [...head, ...middle, ...tail];
+    // 旧引擎写的校准存量：999_999 大到永不「长够」。恢复端若认 'request' → 永久压制压缩。
+    await store.append(sessionId, '', [gateRecord(sessionId, messages, 999_999, 'request')]);
+    await engine.assemble({
+      messages,
+      sessionId,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 1_048_576,
+      contextWindow: 1_048_576,
+      summarize,
+    });
+    expect(summarize).toHaveBeenCalledTimes(1);
+  });
+
+  it('meta.viewTokens 写 raw（ratio 无关）：同样输入在 ratio=1 与 ratio≠1 下读数相等', async () => {
+    const summarize = vi.fn(async () => '## 交接摘要\nfixed-output');
+    const messages = [
+      ...fitMsgs(250, 5, 'head'),
+      ...fitMsgs(12_000, 12, 'mid'),
+      ...fitMsgs(60_000, 20, 'tail'),
+    ];
+    const runOnce = async (sessionId: string, withRatio: boolean) => {
+      const store = new InMemoryTransformStore();
+      const engine = new DefaultContextEngine({
+        targetTokens: 20_000,
+        proactiveCompactRatio: 0.5,
+        proactiveCooldownMs: 0,
+        transformStore: store,
+      });
+      if (withRatio) {
+        const ledger = (engine as unknown as EngineInternals).sizeLedger;
+        ledger.observe(`${sessionId}::unknown`, 200, 100);
+        ledger.observe(`${sessionId}::unknown`, 200, 100);
+      }
+      await engine.assemble({
+        messages,
+        sessionId,
+        systemPrompt: 'sys',
+        tools: [],
+        tokenBudget: 1_048_576,
+        contextWindow: 1_048_576,
+        summarize,
+      });
+      return (await store.load(sessionId, ''))!.records[0]!;
+    };
+    const recA = await runOnce('s-write-raw-a', false);
+    const recB = await runOnce('s-write-raw-b', true);
+    expect(recA.meta.viewTokensSource).toBe('request-raw');
+    expect(recB.meta.viewTokensSource).toBe('request-raw');
+    // 旧实现存校准值：B 侧 ×1.91 → 不相等（M-3 写入侧病灶）
+    expect(recB.meta.viewTokens).toBe(recA.meta.viewTokens);
+  });
+
+  it('m-2 顺修：manual 路径 progress 显式带 reason:manual（防 store 沿用旧标签）', async () => {
+    const store = new InMemoryTransformStore();
+    const engine = new DefaultContextEngine({
+      targetTokens: 20_000,
+      proactiveCompactRatio: 0.5,
+      proactiveCooldownMs: 0,
+      protectFirstN: 2,
+      protectLastN: 20,
+      transformStore: store,
+    });
+    const events: Array<{ type: string; reason?: string }> = [];
+    const summarize = vi.fn(async () => '## 交接摘要\nmanual-ok');
+    const messages = textTurns(30, 2000, 'man');
+    await engine.compactStructural({
+      sessionId: 's-manual-m2',
+      messages,
+      summarize,
+      systemPrompt: 'sys',
+      tools: [],
+      emit: (e) => {
+        const r = (e as { reason?: string }).reason;
+        events.push(r === undefined ? { type: e.type } : { type: e.type, reason: r });
+      },
+    });
+    const progress = events.find((e) => e.type === 'context.compact.progress');
+    expect(progress).toBeDefined();
+    expect(progress!.reason).toBe('manual');
+  });
+});
+
+describe('评审 del-e1ee43ef 修复批（C1 素材同源 / M1 manual 终端 / N2 already_covered）', () => {
+  it('C1：textify 素材起点 = previousSummary 覆盖端——degrade 多记录间的 gap 原文不得被吞', async () => {
+    const sessionId = 's-c1-gap';
+    const store = new InMemoryTransformStore();
+    const engine = new DefaultContextEngine({
+      protectFirstN: 2,
+      protectLastN: 10,
+      transformStore: store,
+    });
+    // 40 条消息：summary 覆盖 5..14（S=15），degrade 覆盖 [20,22] 与 [24,26]（E=27）。
+    // 15–19/23 是 gap 原文——既不在 previousSummary 里，也不得被排除出素材，
+    // 而新记录 covers 会吞掉 [headEnd, tailStart) 全区间（C1 静默丢数据现场）。
+    const messages = Array.from({ length: 40 }, (_, i) =>
+      userMsg(i >= 15 && i <= 19 ? `GAP-SECRET-${i} ${'g'.repeat(30)}` : `body-${i} ${'b'.repeat(30)}`),
+    );
+    await store.append(sessionId, '', [
+      {
+        sessionId,
+        agentId: '',
+        type: 'summary' as const,
+        createdAt: Date.now(),
+        covers: [anchorRange(messages, 5, 14)!],
+        text: 'PREVIOUS-HANDOFF-SUMMARY',
+        placeholder: { role: 'user' as const, source: 'contextSummary' as const },
+        meta: {
+          reason: 'proactive' as const,
+          fresh: true,
+          summarizeAttempted: true,
+          messageCount: 5,
+        },
+      },
+      {
+        sessionId,
+        agentId: '',
+        type: 'degrade' as const,
+        createdAt: Date.now(),
+        covers: [anchorRange(messages, 20, 22)!],
+        text: '[Context truncated: 3 earlier entries replaced by a tool-call ledger to fit context window]',
+        placeholder: { role: 'user' as const, source: 'contextLedger' as const },
+        meta: {
+          reason: 'overflow' as const,
+          fresh: false,
+          summarizeAttempted: false,
+          messageCount: 3,
+        },
+      },
+      {
+        sessionId,
+        agentId: '',
+        type: 'degrade' as const,
+        createdAt: Date.now(),
+        covers: [anchorRange(messages, 24, 26)!],
+        text: '[Context truncated: 3 earlier entries replaced by a tool-call ledger to fit context window]',
+        placeholder: { role: 'user' as const, source: 'contextLedger' as const },
+        meta: {
+          reason: 'overflow' as const,
+          fresh: false,
+          summarizeAttempted: false,
+          messageCount: 3,
+        },
+      },
+    ]);
+
+    const bodies: string[] = [];
+    const summarize = vi.fn(async (msgs: unknown) => {
+      bodies.push(JSON.stringify(msgs));
+      return '## 交接摘要\nmerged-ok';
+    });
+    // 无 systemPrompt → 无 llmPrefix → textify 旁路（C1 只在这条路上咬人）
+    const result = await engine.compactStructural({ sessionId, messages, summarize });
+    expect(result.compacted).toBe(true);
+    const body = bodies.join('\n');
+    // C1 红线：gap 原文必须进素材（旧实现以 E=27 为起点 → 15–19 被静默吞掉）
+    expect(body).toContain('GAP-SECRET-15');
+    expect(body).toContain('GAP-SECRET-19');
+    // 合并输入仍在；summary 已覆盖的 [5,15) 不再 raw 复发（M-4 语义保持）
+    expect(body).toContain('PREVIOUS-HANDOFF-SUMMARY');
+    expect(body).not.toContain('body-8 ');
+  });
+
+  it('M1：manual 成功/失败都有终端事件（progress 之后必以 end/error 收口）', async () => {
+    const messages = textTurns(30, 2000, 'tm');
+
+    const events: string[] = [];
+    const engine = new DefaultContextEngine({ transformStore: new InMemoryTransformStore() });
+    const summarize = vi.fn(async () => '## 交接摘要\nok-manual');
+    await engine.compactStructural({
+      sessionId: 's-m1-ok',
+      messages,
+      summarize,
+      systemPrompt: 'sys',
+      tools: [],
+      emit: (e) => {
+        events.push(e.type);
+      },
+    });
+    expect(events).toContain('context.compact.progress');
+    expect(events[events.length - 1]).toBe('context.compact.end');
+
+    const events2: string[] = [];
+    const engine2 = new DefaultContextEngine({ transformStore: new InMemoryTransformStore() });
+    const failing = vi.fn(async () => {
+      throw new Error('provider down');
+    });
+    await engine2.compactStructural({
+      sessionId: 's-m1-fail',
+      messages,
+      summarize: failing,
+      systemPrompt: 'sys',
+      tools: [],
+      emit: (e) => {
+        events2.push(e.type);
+      },
+    });
+    // 失败不发 end：UI「摘要进行中」必须由 error 收敛（M1 悬挂回归钉）
+    expect(events2).toContain('context.compact.progress');
+    expect(events2[events2.length - 1]).toBe('context.compact.error');
+  });
+
+  it('N2：manual 已全被摘要覆盖 = already_covered 收口，不发 progress 不打 LLM', async () => {
+    const sessionId = 's-n2-covered';
+    const store = new InMemoryTransformStore();
+    const engine = new DefaultContextEngine({
+      protectFirstN: 2,
+      protectLastN: 10,
+      transformStore: store,
+    });
+    const messages = Array.from({ length: 40 }, (_, i) => userMsg(`body-${i} ${'b'.repeat(30)}`));
+    // summary 覆盖 [2, 29]（S=30 = tailStart）→ 无新消息可压
+    await store.append(sessionId, '', [
+      {
+        sessionId,
+        agentId: '',
+        type: 'summary' as const,
+        createdAt: Date.now(),
+        covers: [anchorRange(messages, 2, 29)!],
+        text: 'PREVIOUS-HANDOFF-SUMMARY',
+        placeholder: { role: 'user' as const, source: 'contextSummary' as const },
+        meta: {
+          reason: 'proactive' as const,
+          fresh: true,
+          summarizeAttempted: true,
+          messageCount: 2,
+        },
+      },
+    ]);
+    const summarize = vi.fn(async () => 'x');
+    const events: string[] = [];
+    const result = await engine.compactStructural({
+      sessionId,
+      messages,
+      summarize,
+      systemPrompt: 'sys',
+      tools: [],
+      emit: (e) => {
+        events.push(e.type);
+      },
+    });
+    expect(result.reason).toBe('already_covered');
+    expect(result.compacted).toBe(false);
+    expect(summarize).not.toHaveBeenCalled();
+    expect(events).not.toContain('context.compact.progress');
   });
 });

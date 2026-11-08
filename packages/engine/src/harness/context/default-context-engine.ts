@@ -164,7 +164,10 @@ interface CompactState {
   lastProactiveTokens?: number;
   /** 增长门基数：**上次压缩完成时**的请求口径读数（fold 视图 + 老化），只在压缩完成时推进。
    *  与 lastProactiveTokens 分开是必须的：后者每轮装配都刷新，若拿它当基数，
-   *  基数永远追上当前读数 → grownEnough 恒 false → 压缩永久饿死。 */
+   *  基数永远追上当前读数 → grownEnough 恒 false → 压缩永久饿死。
+   *  单位 = **raw（未校准）**（M-3，评审 del-fa8c54e9）：门基跨时间比对，而校准 ratio
+   *  会随 EMA/rebase/重启漂移（重启后 ratio 归 1、样本计数恢复）——校准值存的是
+   *  「写入时的尺」，比较时必须折算到当前尺（calibrate 一次），否则换尺即饿死/抢跑。 */
   lastCompactGateTokens?: number;
   /** 上次真正发起 LLM 摘要调用的时间戳（冷却） */
   lastProactiveLlmAt?: number;
@@ -310,6 +313,7 @@ export class DefaultContextEngine implements ContextEngine {
               taskSnapshot,
               estimator,
               rawEstimator,
+              calKey: this.calKey(stateKey, modelKey),
               emit,
               systemPrompt,
               tools,
@@ -408,6 +412,7 @@ export class DefaultContextEngine implements ContextEngine {
       taskSnapshot,
       estimator,
       rawEstimator,
+      calKey: this.calKey(stateKey, modelKey),
       emit,
       systemPrompt,
       tools,
@@ -631,7 +636,7 @@ export class DefaultContextEngine implements ContextEngine {
         fresh: false,
         summarizeAttempted: false,
         reason: 'overflow',
-        estimator,
+        rawEstimator,
       });
       // 6. 确定性重装配：fold 是唯一视图实现
       folded = this.foldView(messages, ledger);
@@ -872,6 +877,30 @@ export class DefaultContextEngine implements ContextEngine {
     return undefined;
   }
 
+  /**
+   * previousSummary 的覆盖终点（下标，不含）——与 deriveSummary 同一选择口径（最新、
+   * type==='summary'、有正文）的记录，返回其**解析后**覆盖端（M-4/C1，评审 del-e1ee43ef）。
+   *
+   * 摘要素材起点必须与 previousSummary 同源：derivedCoverEnd 含 degrade 多 run 的最大覆盖
+   * 端 E（E > S 是常态），以 E 为起点会把 [S, E)「既不在旧摘要、也不在新素材」的原文排除，
+   * 而新记录 covers 吞掉 [headEnd, tailStart) 全区间 → 静默丢数据。返回 undefined = 覆盖端
+   * 解析不出（如零覆盖 legacy 记录）→ 素材回退全区间（宁可胖不丢，方向安全）。
+   */
+  private deriveSummaryCoverEnd(folded: FoldResult): number | undefined {
+    for (let i = folded.applied.length - 1; i >= 0; i--) {
+      const run = folded.applied[i]!;
+      const record = run.record;
+      if (record.revoked || record.type !== 'summary') continue;
+      if (!record.text) continue;
+      let end: number | undefined;
+      for (const [, b] of run.spans) {
+        if (end === undefined || b + 1 > end) end = b + 1;
+      }
+      return end;
+    }
+    return undefined;
+  }
+
   /** 有效记录覆盖终点（下标，不含）——传输口径 coveredMessageCount 用 */
   private derivedCoverEnd(folded: FoldResult): number | undefined {
     let end: number | undefined;
@@ -892,18 +921,18 @@ export class DefaultContextEngine implements ContextEngine {
     const gateBase = [...effective].reverse().find((r) => r.meta.reason !== 'overflow');
     const lastLlm = [...effective].reverse().find((r) => r.meta.summarizeAttempted);
     if (!gateBase && !lastLlm) return;
-    // 口径版本守卫：旧记录的 viewTokens 是另一套口径（未老化、非请求形状），拿它当增长门
-    // 基数会与请求口径互比 → 永远判「没长够」而永久压制压缩。无版本标记 = 无基数，
+    // 口径版本守卫：旧记录的 viewTokens 是另一套口径/单位（未老化、非请求形状，或
+    // 'request' 校准存量），拿它当增长门基数会与当前尺互比 → 永远判「没长够」而永久
+    // 压制压缩。只认 'request-raw'（请求形状 + raw 单位）；无该标记 = 无基数，
     // 允许下一次压缩自愈（代价至多多压一次）。
     const gateTokens =
-      gateBase?.meta.viewTokensSource === 'request' ? gateBase.meta.viewTokens : undefined;
+      gateBase?.meta.viewTokensSource === 'request-raw' ? gateBase.meta.viewTokens : undefined;
     this.states.set(stateKey, {
       ...(gateBase
         ? {
             lastProactiveMessageCount: gateBase.meta.messageCount,
-            ...(gateTokens !== undefined
-              ? { lastProactiveTokens: gateTokens, lastCompactGateTokens: gateTokens }
-              : {}),
+            // 门基 raw 单位（M-3）；lastProactiveTokens 展示值随后续装配刷新，不从 raw 存量回填
+            ...(gateTokens !== undefined ? { lastCompactGateTokens: gateTokens } : {}),
           }
         : {}),
       lastProactiveLlmAt: lastLlm?.createdAt,
@@ -937,8 +966,8 @@ export class DefaultContextEngine implements ContextEngine {
     reason: 'proactive' | 'overflow' | 'manual';
     /** fresh 语义摘要正文（有则 summary 型） */
     summaryText?: string;
-    /** 视图 token 估算器（记录 meta 用） */
-    estimator: TokenEstimator;
+    /** raw 视图估算器（M-3）：meta.viewTokens 存 raw 单位（时间稳定），恢复后比较时折算 */
+    rawEstimator: TokenEstimator;
   }): Promise<TransformRecord | undefined> {
     const kept = new Set(params.productView);
     const rawIndex = new Map<Message, number>();
@@ -1032,7 +1061,8 @@ export class DefaultContextEngine implements ContextEngine {
     };
 
     // 记录 meta 的视图估算：以「记录生效后的 fold」度量（度量=装配），
-    // 且与真实请求同口径（老化 + fold）——增长门基数只认这个读数
+    // 且与真实请求同口径（老化 + fold）——增长门基数只认这个读数。
+    // 单位 raw（M-3）：跨时间存量必须用时间稳定的单位，比较点折算当前 ratio。
     const virtual: TransformLedger = {
       records: [
         ...this.ledgers.get(compactStateKey(params.sessionId, params.agentId))!.records,
@@ -1043,9 +1073,11 @@ export class DefaultContextEngine implements ContextEngine {
     record.meta.viewTokens = this.measureRequestViewTokens(
       virtualFold,
       params.agingPlan,
-      params.estimator,
+      params.rawEstimator,
     );
-    record.meta.viewTokensSource = 'request';
+    // 口径标记升版（M-3）：'request-raw' = 请求形状 + raw 单位。恢复端只认新标记——
+    // 旧 'request'（校准存量）缺写入时 ratio，无法换算 raw，按无基数处理（一次自愈）。
+    record.meta.viewTokensSource = 'request-raw';
 
     const [persisted] = await this.config.transformStore.append(
       params.sessionId,
@@ -1086,6 +1118,8 @@ export class DefaultContextEngine implements ContextEngine {
     estimator: TokenEstimator;
     /** 事件计量用原始估算器（compact 对 = messages-only 未校准口径，P0-C M2） */
     rawEstimator: TokenEstimator;
+    /** 校准键（M-3）：增长门基数是 raw 存量，比较时折算到当前 ratio 需要台账键 */
+    calKey: string;
     emit?: ContextEmitFn;
     /** 缓存前缀原料：与会话请求同形（system+tools+完整历史） */
     systemPrompt: string;
@@ -1106,6 +1140,7 @@ export class DefaultContextEngine implements ContextEngine {
       summarize,
       estimator,
       rawEstimator,
+      calKey,
       emit,
       systemPrompt,
       tools,
@@ -1224,7 +1259,11 @@ export class DefaultContextEngine implements ContextEngine {
     // **压缩完成时**实质增长（≥ 25% 阈值）才允许再打 LLM。基数只认 lastCompactGateTokens——
     // 不能用 lastProactiveTokens（每轮装配都刷新）当基数，否则基数永远追上当前读数、
     // grownEnough 恒 false，压缩永久饿死。
-    const lastViewTokens = state?.lastCompactGateTokens;
+    // 基数单位 raw（M-3）：门基跨时间比对，比较时用**当前** ratio 折到校准单位（与
+    // currentTokens 同尺）——ratio 漂移/重启换尺不再让两端异尺（饿死/抢跑）。
+    const lastViewRaw = state?.lastCompactGateTokens;
+    const lastViewTokens =
+      lastViewRaw === undefined ? undefined : this.sizeLedger.calibrate(calKey, lastViewRaw);
     const grownEnough =
       this.config.targetTokens <= 0 ||
       lastViewTokens === undefined ||
@@ -1278,9 +1317,13 @@ export class DefaultContextEngine implements ContextEngine {
     // 待并入摘要的新消息 = 「上一份摘要覆盖终点之后、保护尾之前」。
     // 视图超线但这里为 0（中段全被既有摘要覆盖）：重压只会原样复述上一份交接书——
     // P2 让重压请求变便宜后，若不拦住就会退化成每轮一次「摘要风暴」。零 LLM 复用。
-    const coveredEnd = Math.max(this.derivedCoverEnd(folded) ?? headEnd, headEnd);
-    const coveredCount = coveredEnd - headEnd;
-    const newFoldCount = Math.max(0, tailStart - coveredEnd);
+    // M-4/C1（评审 del-e1ee43ef）：覆盖终点与 previousSummary 同源（summary 记录覆盖端 S）。
+    // derivedCoverEnd 含 degrade 多 run 的最大端 E（E>S 常态）：以 E 判零新会饿死真摘要，
+    // 以 E 当素材起点会把 [S,E) 未摘要原文排除出素材而被新记录吞掉（静默丢数据）。
+    const summaryEnd = this.deriveSummaryCoverEnd(folded);
+    const freshStart = Math.max(summaryEnd ?? headEnd, headEnd);
+    const coveredCount = freshStart - headEnd;
+    const newFoldCount = Math.max(0, tailStart - freshStart);
     if (coveredCount > 0 && newFoldCount === 0) {
       if (hasCompactView) {
         this.states.set(stateKey, {
@@ -1333,6 +1376,13 @@ export class DefaultContextEngine implements ContextEngine {
         targetTokens: targetMiddleTokens,
         mode: 'structure_only',
         previousSummary: this.deriveSummary(ledger),
+        // M-4：textify 旁路只文本化未覆盖新消息（合并契约：previousSummary + 新消息 =
+        // 完整更新），已覆盖历史不以 raw middle 复发；锚排除与 middleRaw 同式。
+        // C1（评审 del-e1ee43ef）：起点 = previousSummary 覆盖端（同源）——[S,E) 原文必须
+        // 进素材，否则新记录 covers 吞掉全区间而模型从未见过它（静默丢数据）
+        freshMessages: semanticHistory(
+          messages.slice(freshStart, tailStart).filter((_m, i) => freshStart + i !== anchorIdx),
+        ),
         summarizeFn: summarize,
         taskSnapshot: params.taskSnapshot,
         estimator,
@@ -1431,19 +1481,22 @@ export class DefaultContextEngine implements ContextEngine {
       summarizeAttempted: outcome.summarizeAttempted === true,
       reason: 'proactive',
       summaryText: outcome.summary,
-      estimator,
+      rawEstimator,
     });
     folded = this.foldView(messages, ledger);
 
     const reducedTokens = this.measureRequestViewTokens(folded, agingPlan, estimator);
+    // 增长门基数单位 raw（M-3）：raw 是时间稳定单位（ratio 漂移/重启不改写历史存量），
+    // 比较点再用当前 ratio 折算到校准单位（grownEnough 处）
+    const gateBaseRaw = this.measureRequestViewTokens(folded, agingPlan, rawEstimator);
     // 增长门计数随任何**完成的压缩轮**推进（含机械降级）——它是「自上次压缩新增条数」
     // 的基数；只随 fresh 推进会让无摘要会话每轮被判全量新增、复用分支永远进不去。
     this.states.set(stateKey, {
       ...state,
       lastProactiveMessageCount: messages.length,
       lastProactiveTokens: reducedTokens,
-      // 增长门基数只在**压缩完成**时推进（视图口径，与 currentTokens 同源）
-      lastCompactGateTokens: reducedTokens,
+      // 增长门基数只在**压缩完成**时推进（raw 口径，与比较点折算配对）
+      lastCompactGateTokens: gateBaseRaw,
       // 锚卫生：压缩改变请求形状，旧锚的 (actual,raw) 对不再对应任何未来请求 → 即刻失效
       lastUsageAnchor: undefined,
       // 只在 LLM 摘要调用真正发起过时推进冷却时间戳（成功/失败均算发起，防打爆）
@@ -1514,8 +1567,9 @@ export class DefaultContextEngine implements ContextEngine {
     const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging);
     // 计量口径（2026-11-08 三数字核对拍板）：before/after 用「报告尺」= fold 视图 + 老化 +
     // system + tools 的未校准估算（rawRequestViewTokens，与 assemble 的 rawEstimatedTokens
-    // /配对槽分母同式）。注意与「决策尺」分工：proactive/overflow 触发与增长门基数走
-    // measureRequestViewTokens（校准后 messages-only）——report vs decision 两把尺各有其职，
+    // /配对槽分母同式）。注意与「决策尺」分工：proactive/overflow 触发走
+    // measureRequestViewTokens（校准后 messages-only）；增长门**基数**存 raw 同形读数、
+    // 比较点按当前 ratio 折算（M-3，评审 del-e1ee43ef）——report vs decision 两把尺各有其职，
     // 勿互换（互换会搅乱增长门基数，见 arch/context-size-accounting.md §10.19）。
     // 旧口径「未老化 fold 视图 messages-only」量的是存储形态不是请求（缺 aging 降级、
     // 缺 system/tools），toast 数字与顶栏永远对不上。
@@ -1559,9 +1613,26 @@ export class DefaultContextEngine implements ContextEngine {
     const { headEnd, tailStart } = alignViewSplit(messages, protectFirstN, protectLastN);
     const middle = semanticHistory(messages.slice(headEnd, tailStart));
     // P2 视图口径：前缀已含上一份摘要，本次只需并入它之后、保护尾之前的新消息
-    const coveredEnd = Math.max(this.derivedCoverEnd(folded) ?? headEnd, headEnd);
-    const coveredCount = coveredEnd - headEnd;
-    const newFoldCount = Math.max(0, tailStart - coveredEnd);
+    const summaryEnd = this.deriveSummaryCoverEnd(folded);
+    const freshStart = Math.max(summaryEnd ?? headEnd, headEnd);
+    const coveredCount = freshStart - headEnd;
+    const newFoldCount = Math.max(0, tailStart - freshStart);
+    // N2（评审 del-e1ee43ef）：已全被摘要覆盖 = 无需压缩（语义成功，不是失败）——
+    // 不发 progress、不打 LLM，直接以 already_covered 收口（否则退化为 empty_middle 失败）
+    if (coveredCount > 0 && newFoldCount === 0) {
+      return {
+        ok: true,
+        summary: this.deriveSummary(ledger),
+        compacted: false,
+        reason: 'already_covered',
+        tokensBefore,
+        tokensAfter: tokensBefore,
+        coveredMessageCount: this.derivedCoverEnd(folded),
+        fresh: false,
+        summarizeAttempted: false,
+        view: folded.view,
+      };
+    }
 
     // P3：手动压缩同样受摘要预算约束（无 run signal 时只有超时；超时 → 失败不产记录）
     const manualBudget = this.createSummarizeSignal(params.signal);
@@ -1569,6 +1640,9 @@ export class DefaultContextEngine implements ContextEngine {
       params.emit?.({
         type: 'context.compact.progress',
         sessionId: params.sessionId,
+        // m-2 顺修（评审 Nit）：manual 显式带 reason——缺省会被 store 沿用上一次
+        // proactive/overflow 的标签
+        reason: 'manual',
         phase: 'summarize',
         requestChars: JSON.stringify(llmPrefix).length,
         requestMessages: llmPrefix.length,
@@ -1585,6 +1659,9 @@ export class DefaultContextEngine implements ContextEngine {
         targetTokens: params.compactTargetTokens,
         mode: 'structure_only',
         previousSummary: this.deriveSummary(ledger),
+        // M-4：textify 旁路只文本化未覆盖新消息（合并契约完整性），不重发已覆盖 raw 历史。
+        // 起点 = previousSummary 覆盖端（同源，C1）——[S,E) 原文必须进素材，否则被新记录吞掉
+        freshMessages: semanticHistory(messages.slice(Math.min(freshStart, tailStart), tailStart)),
         summarizeFn: summarize,
         estimator,
         // 软目标预算（P1c clamp(2%,2k,8k)）交 compactCore 公式；可配置 ratio/min/max 经 summaryBudget
@@ -1625,13 +1702,26 @@ export class DefaultContextEngine implements ContextEngine {
       !isMechanicalNotice(outcome.summary!);
 
     if (!fresh) {
+      const failReason =
+        outcome.reason?.startsWith('summarize_failed') || outcome.reason?.startsWith('denied:')
+          ? outcome.reason
+          : `summarize_failed:${outcome.reason ?? 'no_output'}`;
+      // M1（评审 del-e1ee43ef）：manual 终端事件——progress 已置 store active，失败若不发
+      // error/end 会让「摘要进行中」永久悬挂（progress 不是 start，没有别的路径收敛它）
+      if (llmPrefix) {
+        params.emit?.({
+          type: 'context.compact.error',
+          sessionId: params.sessionId,
+          reason: 'manual',
+          error: failReason,
+          kind: failReason.startsWith('denied:') ? 'denied' : 'failed',
+        });
+      }
       return {
         ok: true,
         summary: this.deriveSummary(ledger),
         compacted: false,
-        reason: outcome.reason?.startsWith('summarize_failed') || outcome.reason?.startsWith('denied:')
-          ? outcome.reason
-          : `summarize_failed:${outcome.reason ?? 'no_output'}`,
+        reason: failReason,
         tokensBefore,
         tokensAfter: tokensBefore,
         coveredMessageCount: this.derivedCoverEnd(folded),
@@ -1655,7 +1745,7 @@ export class DefaultContextEngine implements ContextEngine {
       summarizeAttempted: outcome.summarizeAttempted === true,
       reason: 'manual',
       summaryText: outcome.summary,
-      estimator,
+      rawEstimator: raw,
     });
     folded = this.foldView(messages, ledger);
     // after 同口径（报告尺）；摘要段用 provider 实测输出 tokens 真值替换估算（2026-11-08）。
@@ -1668,16 +1758,34 @@ export class DefaultContextEngine implements ContextEngine {
     }
 
     const afterViewTokens = this.measureRequestViewTokens(folded, agingPlan, estimator);
+    // 增长门基数单位 raw（M-3）：raw 存量 + 比较点当前 ratio 折算，漂移/重启不换尺
+    const afterGateRaw = this.measureRequestViewTokens(
+      folded,
+      agingPlan,
+      this.config.tokenEstimator,
+    );
     this.states.set(stateKey, {
       ...this.states.get(stateKey),
       lastProactiveMessageCount: messages.length,
-      // 展示读数与增长门基数同口径（manual 压缩完成 = 基数推进到压缩后视图）
+      // 展示读数（校准）与增长门基数（raw）单位分工，见字段注释（M-3）
       lastProactiveTokens: afterViewTokens,
-      lastCompactGateTokens: afterViewTokens,
+      lastCompactGateTokens: afterGateRaw,
       // 锚卫生：压缩改变请求形状，旧锚即刻失效
       lastUsageAnchor: undefined,
       lastProactiveLlmAt: outcome.summarizeAttempted ? Date.now() : this.states.get(stateKey)?.lastProactiveLlmAt,
     });
+
+    // M1（评审 del-e1ee43ef）：manual 终端事件（成功收口）——与 progress 配对收敛 store
+    if (llmPrefix) {
+      params.emit?.({
+        type: 'context.compact.end',
+        sessionId: params.sessionId,
+        reason: 'manual',
+        tokensBefore,
+        tokensAfter,
+        ...(outcome.summarizeAttempted === true ? {} : { cached: true }),
+      });
+    }
 
     return {
       ok: true,

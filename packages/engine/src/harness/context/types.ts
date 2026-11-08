@@ -53,8 +53,8 @@ export interface TokenEstimator {
 
 // ── 组装参数 ──
 
-/** 压缩原因：主动摘要 vs 硬溢出 */
-export type ContextCompactReason = 'proactive' | 'overflow';
+/** 压缩原因：主动摘要 vs 硬溢出 vs 手动（m-2：manual 事件显式带 reason，防 store 沿用旧标签） */
+export type ContextCompactReason = 'proactive' | 'overflow' | 'manual';
 
 /**
  * 上下文压缩可观测事件

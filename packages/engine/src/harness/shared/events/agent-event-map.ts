@@ -173,15 +173,15 @@ export interface AgentEventMap {
   'persona.resolve.failed': {
     error: string;
   };
-  /** 上下文压缩开始（主动摘要 / 硬溢出；UI 可显示进行中） */
+  /** 上下文压缩开始（主动摘要 / 硬溢出 / 手动；UI 可显示进行中） */
   'context.compact.start': {
-    reason: 'proactive' | 'overflow';
+    reason: 'proactive' | 'overflow' | 'manual';
     tokensBefore?: number;
     threshold?: number;
   };
   /** 上下文压缩结束 */
   'context.compact.end': {
-    reason: 'proactive' | 'overflow';
+    reason: 'proactive' | 'overflow' | 'manual';
     tokensBefore?: number;
     tokensAfter?: number;
     durationMs?: number;
@@ -191,7 +191,7 @@ export interface AgentEventMap {
   };
   /** 上下文压缩受阻（failed=压缩失败已回退截断；denied=before_compaction 策略拒绝，非故障） */
   'context.compact.error': {
-    reason?: 'proactive' | 'overflow';
+    reason?: 'proactive' | 'overflow' | 'manual';
     error: string;
     kind?: 'denied' | 'failed';
     durationMs?: number;
@@ -215,7 +215,7 @@ export interface AgentEventMap {
   };
   /** 摘要请求进行中（P3）：请求已发出、等 provider 返回——UI 据此显示「已发出 N 条 / 预算 Ms」而非只显示「进行中」 */
   'context.compact.progress': {
-    reason?: 'proactive' | 'overflow';
+    reason?: 'proactive' | 'overflow' | 'manual';
     /** 当前阶段（当前只有 summarize：请求已发出、等 provider 返回） */
     phase: 'summarize';
     /** 摘要请求体量（JSON 字符数）——事故里就是它从 ~150KB 涨到 2.13MB */

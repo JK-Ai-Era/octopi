@@ -618,6 +618,17 @@ export class OctopiRuntimeStore extends EventTarget {
           tokensAfter: r.tokensAfter,
         },
       };
+    } else if (this.chat.inspector.compact?.active) {
+      // M1（评审 del-e1ee43ef）：active 无条件收敛——progress 已置 active，失败/无需压缩若只
+      // 在 compacted 时清理会永久悬挂「摘要进行中」。viewTokensEst 不动（视图未变，旧估算仍有效）。
+      this.chat.inspector = {
+        ...this.chat.inspector,
+        compact: {
+          ...this.chat.inspector.compact,
+          active: false,
+          ...(r.ok ? {} : { error: String((r as { error?: unknown }).error ?? 'compact failed') }),
+        },
+      };
     }
     return r;
   }
@@ -1950,12 +1961,16 @@ export class OctopiRuntimeStore extends EventTarget {
           requestChars?: number;
           requestMessages?: number;
           timeoutMs?: number;
+          reason?: 'proactive' | 'overflow' | 'manual';
         } | undefined;
         this.chat.inspector = {
           ...this.chat.inspector,
           compact: {
             ...(this.chat.inspector.compact ?? { active: true }),
             active: true,
+            // N1（评审 del-e1ee43ef）：progress 消费 reason——否则 {...compact} 会把上一次
+            // proactive/overflow 的标签带给 manual 轮（本批 reason 字段的落点）
+            ...(d?.reason ? { reason: d.reason } : {}),
             phase: d?.phase ?? 'summarize',
             requestChars: typeof d?.requestChars === 'number' ? d.requestChars : undefined,
             timeoutMs: typeof d?.timeoutMs === 'number' ? d.timeoutMs : undefined,

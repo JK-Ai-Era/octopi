@@ -559,7 +559,14 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
     const maxSummaryTokens =
       opts.maxSummaryTokens ?? summarySoftTargetTokens(tokensBefore, opts.summaryBudget);
 
-    const middleText = formatMessagesAsText(middle);
+    // 摘要素材（M-4）：有 previousSummary + freshMessages 时只文本化未覆盖新消息——
+    // 合并契约保证完整性，已覆盖历史不以 raw middle 复发（textify 旁路曾重现 2.13MB
+    // 事故形状）。无摘要兜底 = 全量 middle（首次压缩无合并输入，完整性优先）。
+    // N2 配套（评审 del-e1ee43ef）：空 fresh 段也回退全量 middle——宁可这一次请求胖，
+    // 不得丢内容；调用方已有 already_covered 守门，空段常态不达这里。
+    const summarizeSource =
+      opts.freshMessages?.length && opts.previousSummary ? opts.freshMessages : middle;
+    const middleText = formatMessagesAsText(summarizeSource);
     const summarized = await summarizeMiddle(middleText, opts, maxSummaryTokens);
 
     // 摘要即完整更新（previousSummary 已随 prompt 交给 summarizeFn 合并）。

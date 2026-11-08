@@ -1866,9 +1866,11 @@ export class AgentBuilder {
       const sessionId = scope?.sessionId ?? agent.contextSessionId;
       const agentId = scope?.agentId ?? 'default';
       const systemPrompt = scope?.systemPrompt ?? agent.context.systemPrompt;
-      // 工具口径与请求同源（2026-11-07）：优先 run 级 tools（= loop 实际发送的 toolDefs），
-      // 实例级 agent.context.tools 仅作回退——两会话过滤面不同时错位估算会产生毒样本
-      const toolSource = scope?.tools ?? agent.context.tools ?? [];
+      // 工具口径与请求同源（2026-11-07）：run 级 tools = loop 实际发送的 toolDefs。
+      // M-6：回退止于 []——run context 未带 tools 时 loop 发送的就是 0 个工具，估算也
+      // 必须是 0；回落实例工具面（agent.context.tools）会让估算多算整包 tools（毒样本）。
+      // 实例面只在 run context 本身就是实例 context 时经 scope.tools 自然成立。
+      const toolSource = scope?.tools ?? [];
       const tools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] = toolSource.map((t) => ({
         type: 'function' as const,
         function: {

@@ -2789,19 +2789,23 @@ export class Gateway {
           contextWindow: bound?.contextWindow,
           maxOutputTokens: bound?.maxOutputTokens,
           // F22：manual 路 cache-miss 旁路事件直采 Hub（同 Builder ContextEngine emit 合同：
-          // ContextEngine 侧事件不经 Runner emitObserved，不直采 timeline 就永远看不到）
+          // ContextEngine 侧事件不经 Runner emitObserved，不直采 timeline 就永远看不到）。
+          // m-2：Builder 合同是**双缝**（Hub timeline + gatewayBus → WS/store）——只进 Hub
+          // 会让 manual 的 progress 在 store 侧成为死事件（用户点了压缩后卡在哪无人知道）。
           emit: (e) => {
             const { type, sessionId: sid, ...data } = e;
+            const event = {
+              type,
+              timestamp: Date.now(),
+              sessionId: sid ?? input.sessionId,
+              data,
+            };
             try {
-              this.observerHub.ingestEvent({
-                type,
-                timestamp: Date.now(),
-                sessionId: sid ?? input.sessionId,
-                data,
-              });
+              this.observerHub.ingestEvent(event);
             } catch {
               // 观测 fail-open
             }
+            this.gatewayBus.emit(event);
           },
         }),
       summarize,

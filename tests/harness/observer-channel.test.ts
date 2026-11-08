@@ -838,3 +838,21 @@ describe('ObserverHub', () => {
     expect(d.added[0]?.role).toBe('assistant');
   });
 });
+
+describe('m-2：context.compact.progress 观测面（评审 del-fa8c54e9）', () => {
+  const scope = { sessionId: 's-m2', agentId: 'a1' } as RunScope;
+
+  it('progress 落 timeline——丢弃 = 卡死归因线索失明', () => {
+    const hub = new ObserverHub({ level: 'full' });
+    const runId = hub.recordRunStart({ scope, messages: [] });
+    hub.ingestEvent({
+      type: 'context.compact.progress',
+      timestamp: Date.now(),
+      sessionId: 's-m2',
+      data: { sessionId: 's-m2', reason: 'manual', phase: 'summarize', requestChars: 123, requestMessages: 3 },
+    });
+    const obs = hub.getRunById(runId);
+    const types = obs?.timeline?.map((t) => t.type) ?? [];
+    expect(types).toContain('context.compact.progress');
+  });
+});

@@ -235,3 +235,59 @@ describe('Builder 默认接线', () => {
     expect(seen[seen.length - 1]).toBeUndefined();
   });
 });
+
+describe('M-6：估算工具面与请求同源（评审 del-fa8c54e9）', () => {
+  it('run 未带 tools 时估算工具面为 0（不回落实例工具面）；run 级 tools 优先', async () => {
+    const provider = mockProvider();
+    const inner = new DefaultContextEngine();
+    const seenTools: Array<Array<{ function?: { name?: string }; name?: string }>> = [];
+    const capturing: ContextEngine = {
+      get info() {
+        return inner.info;
+      },
+      assemble: (p) => {
+        seenTools.push((p.tools ?? []) as Array<{ function?: { name?: string }; name?: string }>);
+        return inner.assemble(p);
+      },
+    };
+    const builder = new AgentBuilder().model(provider).contextEngine(capturing);
+    const { agent } = await builder.buildAgent();
+    agent.setSystemPrompt('You are test.');
+    // 实例工具面非空——旧回退链（scope?.tools ?? agent.context.tools）会把它算进估算，
+    // 而 loop 实发 0 个工具（run context 未带 tools）→ 估算/请求错位（毒样本源，5,643 vs 23,811 同型）
+    (agent.context as { tools?: unknown[] }).tools = [
+      { name: 'inst_tool', description: 'instance', parameters: { type: 'object', properties: {} } },
+    ];
+
+    const shortMsgs: Message[] = [msg('hello')];
+    const scopeNoTools: RunScope = { sessionId: 'wiring-m6', agentId: 'main', runId: 'run_m6_1' };
+    async function* drive1(): AsyncGenerator<void> {
+      await agent.config.convertToLlm!(shortMsgs);
+    }
+    for await (const step of withRunScope(scopeNoTools, drive1())) {
+      void step;
+    }
+    expect(seenTools[0]!).toEqual([]);
+
+    const scopeWithTools: RunScope = {
+      sessionId: 'wiring-m6',
+      agentId: 'main',
+      runId: 'run_m6_2',
+      tools: [
+        {
+          name: 'run_tool',
+          description: 'run',
+          parameters: { type: 'object', properties: {} },
+          execute: async () => ({ toolCallId: 't1', name: 'run_tool', content: 'ok' }),
+        },
+      ],
+    };
+    async function* drive2(): AsyncGenerator<void> {
+      await agent.config.convertToLlm!(shortMsgs);
+    }
+    for await (const step of withRunScope(scopeWithTools, drive2())) {
+      void step;
+    }
+    expect((seenTools[1] ?? []).map((t) => t.function?.name ?? t.name)).toEqual(['run_tool']);
+  });
+});

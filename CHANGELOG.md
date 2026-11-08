@@ -109,6 +109,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
 ---
+## v0.102.9 (2026-11-09)
+
+### fix(context): 评审 del-fa8c54e9 记档遗留四条（M-3 门基单位 / M-4 textify 素材 / M-6 tools 同源 / m-2 progress 观测）
+
+**⚠️ Breaking（M-3）**：增长门基数 `meta.viewTokens` / `lastCompactGateTokens` 改存 **raw（未校准）** 单位，口径标记升版 `viewTokensSource:'request-raw'`；旧 `'request'`（校准存量，缺写入时 ratio 无法换算）不再提供门基——**升级后首轮可能多压一次**（自愈方向，随后恢复常态）。理由：门基跨时间比对，而 ratio 随 EMA/rebase/重启漂移（`exportState` 只持久样本数，重启后 ratio=1.0）——校准存量是「写入时的尺」，跨尺互比会饿死/抢跑压缩。
+
+- **M-3**：门基存 raw + 比较点按当前 ratio 折算（`sizeLedger.calibrate(calKey, …)`）；`migrate.ts` 不再迁移死字段（旧值量纲错误且会被口径守卫丢弃）。
+- **M-4**：textify 旁路素材收缩为「previousSummary 覆盖端之后的新消息」（合并契约：previousSummary + 新消息 = 完整更新），不再把已覆盖历史以全量 raw middle 复发（2.13MB 事故形状的残留口）。**评审 C1 修复**：素材起点与 previousSummary 同源（`deriveSummaryCoverEnd`，经 fold 解析锚）——原以 `derivedCoverEnd`（含 degrade 多 run 最大端 E）为起点，[S,E) 段「不在旧摘要、也不在素材」却被新记录 covers 吞掉 = 静默丢数据；proactive 零新守门同源修正（degrade 全覆盖不再饿死真摘要）。
+- **M-6**：估算工具面与请求同源——builder 回退链止于 `[]`（run 未带 tools 时 loop 实发 0 个工具，估算不得回落实例工具面）；`RunScope.tools` 改活读 getter 且只信 `context.tools`（loop 实发面；防 beforeStep 换工具面后估算按旧面、防宿主宣告清单与实发分叉）。
+- **m-2**：`context.compact.progress` 进 timeline（丢弃 = 卡死归因线索失明）；manual 压缩 emit 补 gatewayBus 缝（双缝合同对齐，store/WS 可见）；manual progress 显式带 `reason:'manual'` 并被 store 消费。**评审 M1 修复**：manual 补终端事件（成功 `end` / 失败 `error`，reason:'manual'）+ `compactSession` 的 active 无条件收敛——否则失败后 UI「摘要进行中」永久悬挂。**N2**：manual 已全被摘要覆盖以 `already_covered` 收口（不发 progress 不打 LLM，不再退化为 empty_middle 失败）。
+
+**验证**：红线 11 条（M-3×3 / M-4×2 / M-6×1 / m-2×2 / C1×1 / M1×1 / N2×1）摘除验证全部真钉；全量 4291 tests + build + lint + arch-sync 四绿。**已知债（记档不修）**：echo 盲区（previousSummary 不在回声比对源，既有问题被 M-4 放大，另议）；M-6 活读 getter 的 run 中途换工具面动态场景无独立测试；gateway bus 缝无 gateway 级测试；`lastProactiveTokens` 已无读者（待接展示或删）；progress 分支 spread 旧状态的小口径未动（评审 Nit b）。
+
+---
+
 ## v0.102.8 (2026-11-08)
 
 ### feat(context): P3 告警与观测——overflow 症状告警通道 + 红线 7

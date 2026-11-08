@@ -410,3 +410,48 @@ describe('F8 模板统一：降级标志与可观测（评审 F1/F5/F22）', () 
     ).toBe(true);
   });
 });
+
+describe('M-4：textify 旁路素材 = 未覆盖新消息（评审 del-fa8c54e9）', () => {
+  it('有 previousSummary + freshMessages：只发新消息，已覆盖 raw 历史不复发', async () => {
+    const summarize = vi.fn(async (_m: LLMMessage[], _o?: { maxTokens?: number }) => CLEAN_HANDOFF);
+    const engine = createCompactEngine();
+    const middle = [
+      userMsg('COVERED-OLD-SECRET-A'),
+      userMsg('COVERED-OLD-SECRET-B'),
+      userMsg('FRESH-NEW-CONTENT'),
+    ];
+    const out = await engine.compactMessages(middle, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: summarize,
+      previousSummary: 'PREVIOUS-HANDOFF-TXT',
+      freshMessages: [userMsg('FRESH-NEW-CONTENT')],
+    });
+    const request = summarize.mock.calls[0]![0] as LLMMessage[];
+    const body = request.map((m) => String(m.content)).join('\n');
+    // 合并契约：previousSummary 仍是完整更新的合并输入
+    expect(body).toContain('PREVIOUS-HANDOFF-TXT');
+    expect(body).toContain('FRESH-NEW-CONTENT');
+    // 已覆盖历史不得以 raw middle 复发（2.13MB 事故形状的残留口）
+    expect(body).not.toContain('COVERED-OLD-SECRET');
+    expect(out.summarizeAttempted).toBe(true);
+    expect(out.summary).toBe(CLEAN_HANDOFF);
+  });
+
+  it('无 previousSummary 兜底：textify 仍发全量 middle（无合并输入时完整性优先）', async () => {
+    const summarize = vi.fn(async (_m: LLMMessage[], _o?: { maxTokens?: number }) => CLEAN_HANDOFF);
+    const engine = createCompactEngine();
+    const middle = [userMsg('COVERED-OLD-SECRET-A'), userMsg('FRESH-NEW-CONTENT')];
+    await engine.compactMessages(middle, {
+      mode: 'structure_only',
+      protectHead: 0,
+      protectTail: 0,
+      summarizeFn: summarize,
+    });
+    const request = summarize.mock.calls[0]![0] as LLMMessage[];
+    const body = request.map((m) => String(m.content)).join('\n');
+    expect(body).toContain('COVERED-OLD-SECRET-A');
+    expect(body).toContain('FRESH-NEW-CONTENT');
+  });
+});

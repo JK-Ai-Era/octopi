@@ -473,10 +473,10 @@ describe('红线 8（评审 F2）：重启后增长门/冷却基数对称', () =
       messages: [...base, userMsg('boundary', 2000)],
     });
     const after1 = await store.load('s-gate', '');
-    // 增长门基 = 请求口径读数（fold 视图 + 老化），且必须带口径版本标记——
-    // 旧口径基数（全量历史）与请求口径互比会永久压制压缩（2026-11-07）
+    // 增长门基 = 请求口径读数（fold 视图 + 老化，raw 单位），且必须带口径版本标记——
+    // 旧口径/旧单位基数与当前尺互比会永久压制压缩（2026-11-07；M-3 单位升版 2026-11-09）
     expect(after1.records[0]!.meta.viewTokens).toBeGreaterThan(0);
-    expect(after1.records[0]!.meta.viewTokensSource).toBe('request');
+    expect(after1.records[0]!.meta.viewTokensSource).toBe('request-raw');
     const gateCount = after1.records[0]!.meta.messageCount;
 
     // 重启：增长门基数应从记录恢复——+1 条不得触发重摘要（门在工作）

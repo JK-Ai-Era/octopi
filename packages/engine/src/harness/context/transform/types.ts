@@ -90,12 +90,13 @@ export interface TransformRecordMeta {
   /** raw-history token estimate at creation — 仅诊断口径（有多段历史时远大于实际请求）
    *  ：**不作增长门基数**（2026-11-07 起，改用 viewTokens） */
   fullTokens?: number;
-  /** post-compaction view token estimate = 实际请求口径（fold + 老化） */
+  /** post-compaction view token estimate = 实际请求口径（fold + 老化）；单位 raw（M-3） */
   viewTokens?: number;
   /** viewTokens 的计量口径版本：缺省 = 旧口径（fold 视图未老化、且非请求形状）。
-   *  增长门只认可 'request' 基；旧记录视为无基数（允许一次压缩自愈），
-   *  否则两种口径互比会永久压制压缩。 */
-  viewTokensSource?: 'request';
+   *  增长门只认 'request-raw'（请求形状 + raw 单位）；'request' 是历史存量（校准单位、
+   *  缺写入时 ratio 无法换算）只读不写，与更旧记录一律视为无基数（允许一次压缩自愈），
+   *  否则两种口径/单位互比会永久压制压缩。 */
+  viewTokensSource?: 'request' | 'request-raw';
 }
 
 /** Record as handed to the store (seq assigned by the store; text goes to a blob). */

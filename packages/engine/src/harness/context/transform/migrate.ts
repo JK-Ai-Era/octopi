@@ -11,8 +11,10 @@
  *
  * Counter-only legacy states ("compacted, no summary") migrate to a `degrade`
  * gate-anchor record with empty covers: the legacy behavior covered nothing
- * (products refilled), so no coverage may be claimed — only the growth-gate
- * base is carried over.
+ * (products refilled), so no coverage may be claimed. The growth-gate **count**
+ * base carries over; the token base does **not** — legacy `lastProactiveTokens`
+ * is a stale calibrated quantity and, without its write-time ratio, cannot be
+ * converted to the raw unit the gate now stores (M-3, review del-e1ee43ef N3).
  *
  * Idempotence is owned by the caller: migrate only when the ledger is empty.
  *
@@ -52,7 +54,8 @@ export function legacySnapshotToRecords(params: LegacyMigrateParams): NewTransfo
     fresh: hasSummary,
     summarizeAttempted: false,
     messageCount: snapshot.lastProactiveMessageCount ?? messages.length,
-    ...(snapshot.lastProactiveTokens != null ? { viewTokens: snapshot.lastProactiveTokens } : {}),
+    // M-3（评审 del-e1ee43ef N3）：不迁移 viewTokens——旧值是校准存量（缺写入时 ratio 无法
+    // 换算成 raw），迁移过去也会被恢复端的口径版本守卫丢弃；计数基数照常带。
   };
 
   const covers: TransformRun[] = [];

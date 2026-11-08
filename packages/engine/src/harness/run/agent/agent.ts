@@ -356,8 +356,16 @@ export class Agent {
       extensionSnapshotBudgetTokens: options?.runScope?.extensionSnapshotBudgetTokens,
       iteration: options?.runScope?.iteration,
       systemPrompt: options?.runScope?.systemPrompt ?? context.systemPrompt,
-      // 与请求 toolDefs 同源：loop 发送的就是 context.tools（run 级会话过滤面）
-      tools: options?.runScope?.tools ?? context.tools,
+      // 与请求 toolDefs 同源：loop 实发 = buildToolDefinitions(currentContext.tools)
+      // （agent-loop；undefined = 0 工具）。
+      // M-6：活读（getter）而非快照——beforeStep 可 Object.assign 替换 tools 数组，
+      // 快照会让估算按 run 起点工具面、请求按 run 中途工具面（错位估算 = 毒样本）。
+      // Nit 3（评审 del-e1ee43ef）：不回退 options.runScope.tools——那是「宿主宣告清单」，
+      // 请求实发的是 context.tools，分叉即毒样本；runScope.tools 仅是外部 withRunScope
+      // 桥接场景的携带字段（builder 读 scope?.tools ?? []），不参与 agent.run 估算口径。
+      get tools(): AgentTool[] | undefined {
+        return context.tools;
+      },
       grounding: options?.runScope?.grounding,
       toolRuntime: options?.runScope?.toolRuntime,
       agentRevision: options?.runScope?.agentRevision,
