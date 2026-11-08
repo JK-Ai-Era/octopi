@@ -109,6 +109,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
 ---
+## v0.102.6 (2026-11-08)
+
+### test(context): 弱化用例补强（评审遗留批）+ 任务账本收口
+
+评审 del-bc7bee99 指出的空过/弱化测试补强：①context-window-unknown「bodyCount<40」恒真（全 tool 构造下 bodyCount=0）废除，换真信号（消息数净减+账本索引在场+读数落预算）②保序断言同义反复——补「账本 notice 时间序锚」真信号（head 后 tail 前），构造 tool 化（user 不可账本化）③persist 的 filter 吸收伴生 degrade——补 covers 不与 summary 区间重叠断言（实证无同区间双覆盖）。M-1 的「≥1 终态」为有意语义（proactive/overflow 双动作各自配对闭合），不回改。config.router schema 清理在 v0.102.4 SmartRouter 删除时已连带完成。
+
+任务账本收口：生产症状任务的三个待拍板取舍被 overflow 重构（防抖拆除）+校准治理（复合键/重锚/口径统一）吸收；顶栏口径与三问随 v0.102.4/5 落地——四任务关闭。
+
+**验证**：4236 passed / 7 skipped + build + lint + arch-sync 四绿（escalation-p4 并发下偶发 flaky，单跑稳定，另行跟踪）。
+
 ## v0.102.5 (2026-11-08)
 
 ### fix(context): 校准冷启动消除（重启后第一轮即校准）+ 视图估算 stale 标注

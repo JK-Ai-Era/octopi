@@ -106,7 +106,8 @@ describe('P0-3 overflow 时间序', () => {
     // 可识别顺序的标记
     messages.push(userMsg('HEAD-0'));
     for (let i = 0; i < 30; i++) {
-      messages.push(userMsg(`OLD-${String(i).padStart(2, '0')}-` + 'z'.repeat(200)));
+      // OLD 用 tool 执行（user 不可账本化——账本化对象是工具执行）
+      messages.push({ role: 'tool', content: '', toolResults: [{ toolCallId: `o${i}`, name: 'old_op', result: `OLD-${String(i).padStart(2, '0')}-` + 'z'.repeat(200) }], timestamp: Date.now() + i } as Message);
     }
     messages.push(userMsg('TAIL-A'));
     messages.push(userMsg('TAIL-B'));
@@ -127,6 +128,14 @@ describe('P0-3 overflow 时间序', () => {
       .map((t) => origins.findIndex((o) => t.includes(o)))
       .filter((i) => i >= 0);
     expect(survivorIdx.length).toBeGreaterThan(1);
+    // 真信号（补强「同义反复」批评）：账本 notice 必须落在时间序锚上——
+    // head 之后、tail 之前（账本占据被砍区间的位置，不得漂到视图两端）
+    const noticeIdx = texts.findIndex((t) => t.includes('Tool call ledger'));
+    const headIdx = texts.findIndex((t) => t.includes('HEAD-0'));
+    const tailIdx = texts.findIndex((t) => t.includes('TAIL-A'));
+    expect(noticeIdx, '账本 notice 必须在场').toBeGreaterThanOrEqual(0);
+    expect(noticeIdx, 'notice 在 head 之后（时间序锚）').toBeGreaterThan(headIdx);
+    expect(noticeIdx, 'notice 在 tail 之前（时间序锚）').toBeLessThan(tailIdx);
     for (let i = 1; i < survivorIdx.length; i++) {
       expect(survivorIdx[i]).toBeGreaterThan(survivorIdx[i - 1]!);
     }

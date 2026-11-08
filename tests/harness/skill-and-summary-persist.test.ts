@@ -193,6 +193,18 @@ describe('压缩摘要 Session 持久化', () => {
     // 换代：count/推进语义只认 summary 记录（overflow degrade 是同轮机械兜底副产物，不计入）
     const summaries1 = after1.records.filter((r) => r.type === 'summary');
     expect(summaries1).toHaveLength(1);
+    // 补强「filter 吸收多余记录」批评：伴生 degrade（overflow）必须合法——
+    // covers 不得与 summary 记录区间重叠（同区间双覆盖=fold 语义混乱的信号）
+    const all1 = (await store.load('s-multi', '')).records;
+    const sum = all1.find((r) => r.type === 'summary')!;
+    for (const d of all1.filter((r) => r.type === 'degrade')) {
+      for (const dr of d.covers) {
+        for (const sr of sum.covers) {
+          const overlap = (dr.from.indexHint) <= (sr.to.indexHint) && (sr.from.indexHint) <= (dr.to.indexHint);
+          expect(overlap, `degrade covers [${dr.from.indexHint},${dr.to.indexHint}] 不得与 summary [${sr.from.indexHint},${sr.to.indexHint}] 重叠`).toBe(false);
+        }
+      }
+    }
     expect(summaries1[0]!.meta.messageCount).toBe(30);
     expect(r1.summary).toContain('v1');
 
