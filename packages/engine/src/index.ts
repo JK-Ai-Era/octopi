@@ -190,8 +190,6 @@ export type { DefaultContextEngineConfig } from './harness/context/default-conte
 export { HeuristicTokenEstimator, estimateTextTokens } from './harness/context/index.js';
 export { DefaultMessageSelector } from './harness/context/message-selector.js';
 export { DefaultBudgetAllocator } from './harness/context/budget-allocator.js';
-export { SmartRouter } from './harness/context/smart-router.js';
-export type { SmartRouterConfig, Route, RoutingDecision } from './harness/context/smart-router.js';
 
 export { CapabilityEnforcer, PluginTrustLevel } from './harness/governance/security/capability-enforcer.js';
 

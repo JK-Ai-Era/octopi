@@ -192,14 +192,14 @@ describe('压缩完成清锚', () => {
     ).toBeUndefined();
   });
 
-  it('overflow 压缩完成后 lastUsageAnchor 清空', async () => {
+  it('overflow 产出记录 → lastUsageAnchor 清空（请求形状已变，旧锚失效）', async () => {
     const engine = new DefaultContextEngine({
       protectFirstN: 1,
       protectLastN: 1,
       targetTokens: 0,
       proactiveCompactRatio: 0,
     });
-    // 小预算先装配+锚定
+    // 先装配+锚定
     await engine.assemble({
       sessionId: 'anchor-overflow',
       modelKey: 'mock/m',
@@ -217,12 +217,17 @@ describe('压缩完成清锚', () => {
     });
     expect(statesOf(engine).get(stateKey)!.lastUsageAnchor).toBeDefined();
 
-    // 溢出装配（大工具结果压垮预算）→ overflow 记录生成 → 清锚
-    const messages: Message[] = [createMessage('user', 'go')];
-    for (let i = 0; i < 6; i++) {
-      messages.push(createToolResultMessage(`call_${i}`, 'read_file', 'R'.repeat(3000)));
+    // 62 条工具执行溢出构造（user 消息永不账本化——丢弃次序原则）：
+    // 账本档咬得动 → 收敛成功产出 degrade 记录 → 清锚
+    const messages: Message[] = [];
+    for (let i = 0; i < 62; i++) {
+      messages.push({
+        role: 'tool',
+        content: '',
+        toolResults: [{ toolCallId: `g${i}`, name: 'r', result: 'y'.repeat(150) }],
+        timestamp: Date.now() + i,
+      } as Message);
     }
-    messages.push(createMessage('user', 'wrap up'));
     await engine.assemble({
       sessionId: 'anchor-overflow',
       modelKey: 'mock/m',
@@ -237,7 +242,51 @@ describe('压缩完成清锚', () => {
       'overflow 记录生成 = 请求形状已变，旧锚必须失效',
     ).toBeUndefined();
   });
-});
+
+  it('overflow 第 0 轮 aging 收敛（无记录）→ 锚保持（m4：什么都没变不打回裸估算）', async () => {
+    const engine = new DefaultContextEngine({
+      protectFirstN: 1,
+      protectLastN: 1,
+      targetTokens: 0,
+      proactiveCompactRatio: 0,
+    });
+    await engine.assemble({
+      sessionId: 'anchor-cached',
+      modelKey: 'mock/m',
+      messages: [createMessage('user', 'hello')],
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 100000,
+    });
+    const stateKey = [...statesOf(engine).keys()][0];
+    const raw = statesOf(engine).get(stateKey)!.pendingUsagePair!.rawEstimatedTokens;
+    await engine.afterStep!({
+      sessionId: 'anchor-cached',
+      step: [createMessage('assistant', 'r')],
+      usage: makeTokenUsage({ promptTokens: raw, completionTokens: 1 }),
+    });
+    expect(statesOf(engine).get(stateKey)!.lastUsageAnchor).toBeDefined();
+
+    // 6 个胖 tool 结果：overflow aging（第 0 轮）即 fits → 无记录（cached end）→ 锚保持
+    const messages: Message[] = [createMessage('user', 'go')];
+    for (let i = 0; i < 6; i++) {
+      messages.push(createToolResultMessage(`call_${i}`, 'read_file', 'R'.repeat(3000)));
+    }
+    messages.push(createMessage('user', 'wrap up'));
+    await engine.assemble({
+      sessionId: 'anchor-cached',
+      modelKey: 'mock/m',
+      messages,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 4000,
+      contextWindow: 32000,
+    });
+    expect(
+      statesOf(engine).get(stateKey)!.lastUsageAnchor,
+      '第 0 轮 aging 收敛无记录：请求形状没变，锚保持',
+    ).toBeDefined();
+  });});
 
 // ── 红线 4：wrap-up 压力轴实测优先 ──
 

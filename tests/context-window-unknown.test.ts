@@ -68,7 +68,7 @@ describe('DefaultContextEngine — 未知 contextWindow', () => {
       protectFirstN: 1,
       protectLastN: 1,
     });
-    const messages = msgs(40).map((m, i) => ({
+    const messages = msgs(40).map((m, i) => ({ role: 'tool', content: '', toolResults: [{ toolCallId: `w${i}`, name: 'r', result: 'x'.repeat(80) }], timestamp: Date.now() + i } as Message)).map((m, i) => ({
       ...m,
       content: `long message ${i} ${'y'.repeat(200)}`,
     }));

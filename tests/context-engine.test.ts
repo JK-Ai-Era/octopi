@@ -45,7 +45,6 @@ import { MECHANICAL_NOTICE_TRUNCATED } from '@octopi-agent/engine/harness/contex
 import { alignViewSplit } from '@octopi-agent/engine/harness/context/capabilities/compact/view-split.js';
 import { DefaultBudgetAllocator } from '@octopi-agent/engine/harness/context/budget-allocator.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
-import { SmartRouter } from '@octopi-agent/engine/harness/context/smart-router.js';
 
 // ── 测试工具函数 ──
 
@@ -869,7 +868,8 @@ describe('DefaultContextEngine', () => {
         messages,
         systemPrompt: 'You are a helpful assistant.',
         tools: [],
-        tokenBudget: 2000, // Small budget
+        tokenBudget: 10000, // 可行预算（infeasible 地板 1000 下 notice 自身超限=Q3 正确 L3，非本测试语义）
+      // （消息量 300 保证 est(view) 真超限进收敛——量少时 est<limit 早退不压缩）
       });
 
       // Should have fewer messages than original (including system prompt)
@@ -1004,8 +1004,8 @@ describe('DefaultContextEngine', () => {
     });
 
     it('extreme sample cannot drive decisions (F1 cold anchors to measured)', async () => {
-      // Assemble to create state
-      await engine.assemble({
+      // Assemble to create state（基线读数）
+      const baseline = await engine.assemble({
         sessionId: 'clamp-test',
         messages: [createMessage('user', 'Test')],
         systemPrompt: 'Test',
@@ -1032,7 +1032,12 @@ describe('DefaultContextEngine', () => {
       // F1（v0.101.4）：单样本（cold）ratio 不进决策——极端样本后第二请求走实测锚定
       // （= 100000 真值），而非 3.1×EMA 猜测；clamp 语义由 ledger 级测试钉
       // （context-size-ledger.test.ts 'clamp [0.25, 4.0] as admission band'）
-      expect(result.estimatedTokens).toBe(100000);
+      // 极端样本（100×）被样本门拒收：决策读数不得被其拉走——与无样本基线一致
+      // clamp 语义（v0.102.4）：100× 病态样本（usage 错位量级）被锚夹取 [0.25,4.0] 限制外推——
+      // 驱动被限幅（≤4×基线），不得原样外推 100×（生产实证 0.185 毒读数）；
+      // 真实极端内容（图片等 ratio 0.25-4）在界内正常外推（F1 冷锚定语义保留）
+      expect(result.estimatedTokens).toBeLessThanOrEqual(baseline.estimatedTokens * 4);
+      expect(result.estimatedTokens, '极端样本不得原样 100× 驱动').toBeLessThan(baseline.estimatedTokens * 10);
     });
 
     it('decision readings shift with learned ratio (selector overflow boundary, R1)', () => {
@@ -1091,13 +1096,12 @@ describe('DefaultContextEngine', () => {
   });
 });
 
-// ── SmartRouter 测试 ──
 
 describe('Q2 B′ 连线', () => {
-  it('工具胖溢出出真摘要：不再「只打码不摘要」', async () => {
-    // 旧 truncate_tool_results_only 触发面：工具结果冗长 + 溢出 + 有 summarize。
-    // 关掉主动压缩隔离溢出路；旧实现 0ms 静默打码，B′ 后必须发真摘要并进视图。
-    // 胖结果必须落在**旧**区（选择器保留最近段，溢出的是最旧消息）。
+  it('工具胖溢出纯机械收敛：零 summarizeFn（Q1：超窗口 provider 无法做摘要）', async () => {
+    // overflow 语义换代（arch/overflow-redesign.md Q1/Q2）：纯机械收敛阶梯
+    // （第 0 轮 aging → 账本化+保护档 → L3），全程零 LLM、零转换记录。
+    // 旧语义「溢出出真摘要」被 Q1 反转——summarizeFn 一律不许被调。
     const messages: Message[] = [createMessage('user', 'go')];
     for (let i = 0; i < 6; i++) {
       messages.push(createToolCallMessage('read_file', { path: `/f${i}` }));
@@ -1122,16 +1126,19 @@ describe('Q2 B′ 连线', () => {
       contextWindow: 32000,
       summarize,
     });
-    expect(summarize).toHaveBeenCalled();
+    expect(summarize).not.toHaveBeenCalled();
+    // 收敛产物只可能是原文消息（aging 降级副本/账本化后仍为原对象身份子序列），
+    // 不得出现摘要文本
     const text = JSON.stringify(result.messages);
-    expect(text).toContain('SUMMARIZED-HANDOFF');
-    // 有 summarize 时不得以机械账本冒充压缩结果
-    expect(text).not.toContain(MECHANICAL_NOTICE_TRUNCATED);
+    expect(text).not.toContain('SUMMARIZED-HANDOFF');
+    // 视图必须收敛到预算内（守门判据=「装得下」）——与引擎同源估算式
+    const est = estimateLLMMessages(result.messages);
+    expect(est).toBeLessThanOrEqual(4000);
   });
 });
 
-describe('before_compaction deny 的 overflow 下游语义', () => {
-  it('拒绝压缩不逼出超窗请求：机械截断兜底 + kind:denied + start/end 配对', async () => {
+describe('before_compaction deny 对 overflow 无影响（Q1 纯机械）', () => {
+  it('overflow 不经摘要路径：deny/hook 无从触发，收敛照样完成', async () => {
     const messages: Message[] = [createMessage('user', 'go')];
     for (let i = 0; i < 6; i++) {
       messages.push(createToolCallMessage('read_file', { path: `/f${i}` }));
@@ -1140,108 +1147,41 @@ describe('before_compaction deny 的 overflow 下游语义', () => {
     messages.push(createMessage('user', 'wrap up'));
     const events: Array<{ type: string; kind?: string }> = [];
     const summarize = vi.fn();
+    const compactMessages = vi.fn(async () => ({
+      ok: true, compacted: false, fresh: false, summarizeAttempted: false,
+      reason: 'denied:before_compaction', tokensBefore: 0, view: [],
+    }));
+    const compactText = vi.fn(async () => ({
+      ok: true, compacted: false, fresh: false, summarizeAttempted: false,
+      reason: 'denied:before_compaction', tokensBefore: 0, view: '',
+    }));
     const engine = new DefaultContextEngine({
       protectFirstN: 1,
       protectLastN: 1,
       targetTokens: 0,
       proactiveCompactRatio: 0,
-      compactEngine: {
-        compactMessages: async () => ({
-          ok: true, compacted: false, fresh: false, summarizeAttempted: false,
-          reason: 'denied:before_compaction', tokensBefore: 0, view: [],
-        }),
-        compactText: async () => ({
-          ok: true, compacted: false, fresh: false, summarizeAttempted: false,
-          reason: 'denied:before_compaction', tokensBefore: 0, view: '',
-        }),
-      },
+      compactEngine: { compactMessages, compactText },
     });
     const result = await engine.assemble({
       sessionId: 'deny-overflow', messages, systemPrompt: 'sys', tools: [],
       tokenBudget: 4000, contextWindow: 32000, summarize,
       emit: (event) => { events.push(event); },
     });
-    // deny 阻止摘要与状态提交，但不得把超窗请求原样发给 Provider：机械截断兜底
+    // overflow 是纯机械收敛（aging→账本→L3），不经 compactEngine.summarize/compactMessages，
+    // before_compaction deny 无从触发——它只拦 LLM 摘要路径（proactive/manual）
     expect(summarize).not.toHaveBeenCalled();
-    expect(result.messages.length).toBeLessThan(messages.length);
-    expect(String(result.droppedSummary)).toContain('denied:');
-    expect(String(result.droppedSummary)).toContain('truncation');
-    // deny 是策略拒绝不是故障
-    expect(events.find((event) => event.type === 'context.compact.error')).toMatchObject({
-      type: 'context.compact.error', kind: 'denied',
-    });
-    // start/end 配对闭合
+    expect(compactMessages).not.toHaveBeenCalled();
+    expect(compactText).not.toHaveBeenCalled();
+    // 无 denied 事件（没有压缩动作可拒）；start/end 配对闭合照常
+    expect(events.find((event) => event.type === 'context.compact.error')).toBeUndefined();
     expect(events.filter((event) => event.type === 'context.compact.start')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'context.compact.end')).toHaveLength(1);
+    // 收敛判据=装得下
+    const est = estimateLLMMessages(result.messages);
+    expect(est).toBeLessThanOrEqual(4000);
   });
 });
 
-describe('SmartRouter', () => {
-  let router: SmartRouter;
-  let estimator: HeuristicTokenEstimator;
-
-  beforeEach(() => {
-    estimator = new HeuristicTokenEstimator();
-    router = new SmartRouter({ tokenEstimator: estimator });
-  });
-
-  describe('evaluate', () => {
-    it('should return fits when within budget', () => {
-      const messages = [
-        createMessage('user', 'Hello'),
-        createMessage('assistant', 'Hi'),
-      ];
-
-      const decision = router.evaluate(messages, 100000);
-
-      expect(decision.route).toBe('fits');
-      expect(decision.shouldCompact).toBe(false);
-      expect(decision.overflowTokens).toBe(0);
-    });
-
-    it('should return compact when overflow', () => {
-      const messages = Array.from({ length: 50 }, (_, i) =>
-        createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i} with some content`)
-      );
-
-      const decision = router.evaluate(messages, 100);
-
-      expect(decision.route).toBe('compact');
-      expect(decision.shouldCompact).toBe(true);
-      expect(decision.overflowTokens).toBeGreaterThan(0);
-    });
-
-    it('工具胖溢出也走 compact（B′：弃「只打码不摘要」路由）', () => {
-      // 原 truncate_tool_results_only 场景：工具结果冗长——现仍出真摘要（机械打码在降级阶梯里）
-      const messages = [
-        createMessage('user', 'Read files'),
-        createToolCallMessage('read_file', { path: '/test.txt' }),
-        createToolResultMessage('call_1', 'read_file', 'A'.repeat(5000)),
-        createMessage('assistant', 'Done'),
-      ];
-
-      const decision = router.evaluate(messages, 200);
-
-      expect(decision.route).toBe('compact');
-      expect(decision.shouldCompact).toBe(true);
-    });
-
-    it('should calculate overflow tokens correctly', () => {
-      const messages = [
-        createMessage('user', 'Hello'),
-        createMessage('assistant', 'Hi'),
-      ];
-
-      const rawEstimatedTokens = estimator.estimateMessages(messages);
-      // SmartRouter applies SAFETY_MARGIN (1.2x), so estimatedTokens is ceil(raw * 1.2)
-      const expectedEstimatedTokens = Math.ceil(rawEstimatedTokens * 1.2);
-      const decision = router.evaluate(messages, expectedEstimatedTokens - 10);
-
-      expect(decision.overflowTokens).toBeGreaterThan(0);
-      expect(decision.estimatedTokens).toBe(expectedEstimatedTokens);
-    });
-  });
-});
 
 // ── 集成测试 ──
 
@@ -1280,8 +1220,13 @@ describe('ContextEngine Integration', () => {
 
   it('should handle compression with summary', async () => {
     const engine = new DefaultContextEngine();
-    const messages = Array.from({ length: 100 }, (_, i) =>
-      createMessage(i % 2 === 0 ? 'user' : 'assistant', `Message ${i}: ${'x'.repeat(50)}`)
+    // 190 条工具执行（可账本化）+ 10 条瘦 user（不可再生）：账本化砍掉 tool 后
+    // user 段装得下 → 压缩真实发生（消息数减少）
+    // 350 条保证 est(view) 真超限（est≈9.7k > limit≈8k）进收敛——量少时早退不压缩
+    const messages = Array.from({ length: 350 }, (_, i) =>
+      i % 20 === 0
+        ? createMessage('user', `M${i}`)
+        : ({ role: 'tool', content: '', toolResults: [{ toolCallId: `c${i}`, name: 'r', result: 'x'.repeat(50) }], timestamp: Date.now() + i } as Message)
     );
 
     const result = await engine.assemble({
@@ -1289,7 +1234,7 @@ describe('ContextEngine Integration', () => {
       messages,
       systemPrompt: 'Test',
       tools: [],
-      tokenBudget: 2000, // Small budget
+      tokenBudget: 10000, // 可行预算（infeasible 地板 1000 下 notice 自身超限=Q3 正确 L3，非本测试语义）
     });
 
     // Should compress

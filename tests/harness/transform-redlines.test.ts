@@ -351,7 +351,7 @@ describe('红线 1 补充：overflow 路径的 degrade 同样永久', () => {
 
     const messages: Message[] = [userMsg('HEAD-0', 900)];
     for (let i = 0; i < 30; i++) {
-      messages.push(userMsg(`OLD-${String(i).padStart(2, '0')}-` + 'z'.repeat(200), 1000 + i));
+      messages.push({ role: 'tool', content: '', toolResults: [{ toolCallId: `old${i}`, name: 'r', result: 'z'.repeat(200) }], timestamp: 1000 + i } as Message);
     }
     messages.push(userMsg('TAIL-A', 2000), userMsg('TAIL-B', 2001));
 
@@ -394,7 +394,7 @@ describe('红线 7（评审 F1）：机械降级不得吞既有语义摘要', ()
     });
     const messages: Message[] = [userMsg('HEAD-0', 900)];
     for (let i = 0; i < 30; i++) {
-      messages.push(userMsg(`msg-${String(i).padStart(2, '0')}-` + 'z'.repeat(200), 1000 + i));
+      messages.push({ role: 'tool', content: '', toolResults: [{ toolCallId: `m${i}`, name: 'r', result: 'z'.repeat(200) }], timestamp: 1000 + i } as Message);
     }
     messages.push(userMsg('TAIL-A', 2000), userMsg('TAIL-B', 2001));
 
@@ -408,13 +408,13 @@ describe('红线 7（评审 F1）：机械降级不得吞既有语义摘要', ()
 
     // 再触发 overflow 机械降级（无 summarize、小预算、大量新增原文让 overflow 含真实消息）
     const grown = [...messages];
-    for (let i = 0; i < 30; i++) grown.push(userMsg(`new-${i}-` + 'w'.repeat(400), 3000 + i));
+    for (let i = 0; i < 30; i++) grown.push({ role: 'tool', content: '', toolResults: [{ toolCallId: `n${i}`, name: 'r', result: 'w'.repeat(200) }], timestamp: 3000 + i } as Message);
     const r = await engine.assemble({
       sessionId: 's-f1',
       messages: grown,
       systemPrompt: 'sys',
       tools: [],
-      tokenBudget: 800,
+      tokenBudget: 5000, // 触发 overflow 且砍满后「tail+账本」真装得下
     });
     const text = viewText(r);
     // 摘要不许被机械占位吞掉（评审 F1 的静默失忆回归）

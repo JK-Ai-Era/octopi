@@ -237,10 +237,18 @@ export class ContextSizeLedger {
     const trusted = (this.samplesByModel.get(modelKey) ?? 0) >= 2 && !this.isDegraded(modelKey);
     if (trusted) return { tokens: this.calibrate(modelKey, rawTokens), source: 'calibrated' };
     if (anchor && anchor.modelKey === modelKey && anchor.actual > 0 && anchor.raw > 0) {
-      // 锚卫生（2026-11-07）：锚是同请求实测对的外推（配对槽保证同源）。此处不做比率带
-      // 拒用——ratio 远离 1 可能是合法极端内容（图片/大 schema，F1 冷锚定语义），
-      // 带检查会把这种内容的决策砸回裸估算（低估 → 压缩触发漏报）。
-      return { tokens: Math.ceil((anchor.actual * rawTokens) / anchor.raw), source: 'anchored' };
+      // 锚卫生（2026-11-07）：锚是同请求实测对的外推（配对槽保证同源）。不做比率带拒用——
+      // ratio 远离 1 可能是合法极端内容（图片/大 schema，F1 冷锚定语义），带检查会把这种
+      // 内容的决策砸回裸估算（低估 → 压缩触发漏报）。
+      // 夹取（2026-11-08，生产现场 0.185 毒读数）：clamped 样本 EMA 吃夹取值而锚冻结的是
+      // 原始值——极端比率（大 tools schema 本地估算偏高 5×）以原始值外推会毒化读数。
+      // 与 EMA 同 guard 夹取 [RATIO_CLAMP_MIN, RATIO_CLAMP_MAX]：不拒极端锚（极端内容仍
+      // 锚定），但比率不越过与 EMA 相同的界——两把尺同界。
+      const anchorRatio = Math.min(
+        RATIO_CLAMP_MAX,
+        Math.max(RATIO_CLAMP_MIN, anchor.actual / anchor.raw),
+      );
+      return { tokens: Math.ceil(anchorRatio * rawTokens), source: 'anchored' };
     }
     return { tokens: rawTokens, source: 'raw' };
   }

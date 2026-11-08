@@ -175,14 +175,20 @@ Runner.handle
 - `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是窗口比例线系数。**`0` 禁止发起新的路径 A 压缩（不只禁 LLM），不丢弃已有粘滞压缩视图**（`previousSummary` / `lastProactiveMessageCount` 仍重建 `head + 摘要 + 覆盖点之后增量 + tail`）。turn 内（最近真实 user 之后已有工具活动）同样可以发起 LLM 摘要（方案 E 修订 2026-11-07：整 turn 禁令让 agent 长 turn 全程目标线失效）；活动工作记录改由活跃窗口保护——`contextEngine.midTurnProtectLastN`（默认 `50`，取 `max(protectLastN, midTurnProtectLastN)`），进行中的工具步骤/证据/推理链不进压缩选段
 - 视图超兜底线时，在硬溢出前压缩中间段（任意时刻；turn 内选段遵守活跃窗口 tail）
 - 增量很小（或 `proactiveCompactRatio=0`）时用 `previousSummary` + **`lastProactiveMessageCount` 之后的消息** + head/tail 重建，不重复打 LLM，也**绝不打回全量历史**
-- `fallbackTruncate` / 溢出降级是 **middle 替换体**：归档说明 + 工具调用账本（**每次调用只留 `name + purpose`**，error 附在对应调用行下逐字保留、永不省略）+ 近尾——禁止「只留 4 条」。账本是**单级**形态：已是最小（约 16x 压缩），仍超预算时如实上报 `overBudget`，**不得丢条目**（丢条目 = 静默失忆）
+- `fallbackTruncate` / 溢出降级是 **middle 替换体**：归档说明 + 工具调用账本（**每次调用只留 `name + purpose`**，error 附在对应调用行下逐字保留、永不省略）+ 近尾——禁止「只留 4 条」。账本是**单级**形态（约 16x 压缩）——下方 overflow 收敛阶梯可按更紧的近尾档重复修整为同一账本
 - LLM 摘要吃**原文**工具输出（F-b：机械降级只作用于丢弃体）；`error` 字段永不省略
 - 配置：`octopi.json` → `contextEngine.targetTokens` / `contextEngine.compactFallbackRatio` / `contextEngine.proactiveCompactRatio` / `contextEngine.midTurnProtectLastN`
 
 **主动 LLM 摘要冷却（`proactiveCooldownMs`，默认 30s，`0` 关闭）：**
 
 - 冷却期内即使增量达到再摘要阈值，也**优先缓存重建**，避免单 turn 主动摘要 + 硬溢出摘要双打 LLM
-- **overflow 每 turn 限次（2026-11-07 止血）**：overflow 每 turn 至多发起**一次 fresh LLM 摘要**（turn = 末条真实 user 消息之后的段）；失败/超时/denied 不烧名额（冷却后可重试），同 turn 后续溢出退机械降级。无记录且仍超预算的溢出轮发 `context.compact.error`（`cannot_help`）——必须可见，不得伪装缓存重建
+- **overflow = 纯机械收敛阶梯（Q1–Q3，2026-11-08，`arch/overflow-redesign.md`）**——零 LLM、无目标线、无每 turn 名额、无冷却（这些是「overflow 带 LLM 摘要」时代的止血补丁；Q1：请求装不进 provider 窗口时 provider 也做不了摘要）。阶梯逐级执行、有限三档（档间可能 no-op，靠档位而非缩减保证终止）请求：
+  1. **第 0 轮 overflow aging**：tool_result 长值降级（与历史老化同算法同阈值）只作用于**视图**（原文不动；豁免 turn 首窗与 freezeBatch 批次限定，全历史都是候选）——本轮装得下则不写任何转换记录
+  2. **第 1–3 轮工具执行账本化**：近尾保护档 **50 → 20 → 5** 递降。可账本化对象=**工具执行段**（`assistant(toolCalls)` + `tool(result)` 对，边界对齐）；user 消息（最不可再生）、assistant 文本、合成占位（contextLedger/contextSummary）跳过保留原位。每档对**原视图独立**重算（幂等；不累积截断吞掉前轮 purpose 账本）
+  3. **L3 终局**：连最小保底档都装不下（用户文本/在飞工作超预算（不可再生不可砍）预算）→ 发 `context.compact.error`（`context_overflow_unrecoverable`）——session 不再适合继续工作，或当前 model 不适合任务规模；换 session 或更大窗口模型。fail-loud，不得伪装
+  - 装得下判据 = 「**装得下**」（aged 视图估算 ≤ 决策预算），不是「selector 报溢出段」；provider 是唯一判据（无目标线——F 类 provider 400 反馈真窗口大小是副作用，P2）
+  - 收敛产物 = ledger/degrade 记录（covers 按原文对象身份定位）；无记录的轮保持 usage 锚（什么都没变 → 不打回裸估算）
+  - 中止语义：已中止的 run 跳过全部收敛写入（残缺产物污染历史），事件对仍以 `end{cancelled:true}` 闭合
 - **已知边界**：`protectLastN = 20` 时，若冷却窗口内新增消息数 > `protectLastN`，则中间新增消息既不在旧摘要覆盖范围、也不在当前 tail 中，需等冷却结束后的下一轮 assemble 才会进入 LLM 视图  
   - 30s 内刷 20+ 条不常见；自动化/子系统高频写会话时可把 `proactiveCooldownMs` 调小或设为 `0`
 - 配置：`octopi.json` → `contextEngine.proactiveCooldownMs`

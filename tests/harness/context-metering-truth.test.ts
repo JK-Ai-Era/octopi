@@ -14,6 +14,7 @@ import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/defau
 import { InMemoryTransformStore } from '@octopi-agent/engine/harness/session/transform-store.js';
 import { HeuristicTokenEstimator } from '@octopi-agent/engine/harness/context/token-estimator.js';
 import { JSON_CHARS_PER_TOKEN } from '@octopi-agent/engine/harness/context/token-constants.js';
+import { ContextSizeLedger, RATIO_CLAMP_MIN } from '@octopi-agent/engine/harness/context/context-size-ledger.js';
 
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
@@ -232,5 +233,60 @@ describe('④ 压缩 before/after 请求口径', () => {
     ).toBeLessThanOrEqual(1);
     expect(rFull.compacted).toBe(false); // too_short 无压缩，before=after 同口径
     expect(rFull.tokensAfter).toBe(rFull.tokensBefore);
+  });
+});
+
+describe('校准作用域与锚卫生（2026-11-08 生产毒读数回归钉）', () => {
+  it('复合键接线红线：同 modelKey 不同 session 的样本互不污染（calKey 引擎接线）', async () => {
+    const engine = new DefaultContextEngine({ transformStore: new InMemoryTransformStore() });
+    // session A 学到 2×；session B 冷启动——B 的读数不得吃到 A 的 ratio（裸估算）
+    const assemble = (sessionId: string) => engine.assemble({ sessionId, modelKey: 'mock/m', messages: [{ role: 'user', content: 'hi', timestamp: 1 } as Message], systemPrompt: 's', tools: [], tokenBudget: 100000 });
+    await assemble('cal-a');
+    await engine.afterStep!({ sessionId: 'cal-a', step: [], usage: { promptTokens: 200, completionTokens: 1 } as never });
+    await assemble('cal-a'); // A 样本入账
+    const b = await assemble('cal-b');
+    // B 冷启动（复合键隔离）：读数=裸估算（≈与 A 同请求的 raw 一致），不被 A 的 2× 拉走
+    const a2 = await assemble('cal-a');
+    // 隔离语义：B（冷启动）的读数=裸估算基线，不得被 A 的 ratio 抬高（跨 session 污染=生产 0.185 毒读数通道之一）
+    expect(b.estimatedTokens, 'session 校准隔离：B 不得吃到 A 的 ratio').toBeLessThanOrEqual(a2.estimatedTokens);
+    expect(b.estimatedTokens, 'B 冷启动读数=裸估算基线（无锚/无样本→raw）').toBeLessThan(100);
+  });
+
+  it('clamp 上界红线：>4.0 的锚比率外推被夹取到 4.0（病态样本限幅，精确值）', () => {
+    const ledger = new ContextSizeLedger();
+    ledger.observe('mock/m', 20, 1000); // raw=50 → clamped 4.0 入账
+    const reading = ledger.decisionTokensWithSource('mock/m', 200, { raw: 200, actual: 200 * 50, modelKey: 'mock/m' } as never);
+    expect(reading.tokens).toBe(800); // 50× 被夹到 4.0×
+    expect(reading.source).toBe('anchored');
+  });
+
+  it('红线：毒锚（clamped 极端比率）外推被夹取到 EMA 同界——0.185 毒读数不得复现', () => {
+    const ledger = new ContextSizeLedger();
+    // 毒锚：大 tools schema 场景 actual/view=0.185（本地估算偏高 5×）——clamped 入账但锚冻结原始对
+    const verdict = ledger.observe('m', 185, 1000, {});
+    expect(verdict).toBe('clamped'); // 极端样本被夹取
+    const d = ledger.decisionTokensWithSource('m', 1000, { actual: 185, raw: 1000, modelKey: 'm' });
+    // 锚外推夹取 [0.25, 4.0]：0.185 不得原样外推（生产实测：读数被毒到估算的 1/5）
+    expect(d.source).toBe('anchored');
+    expect(d.tokens, '锚比率越过 EMA 同界外推（毒读数回归）').toBeGreaterThanOrEqual(
+      250, // 精确值：0.185 被夹到 0.25
+    );
+  });
+
+  it('红线：校准分键 (session, modelKey)——同 modelKey 的多 session 样本互不污染', () => {
+    const ledger = new ContextSizeLedger();
+    // session A：稳定 ratio≈2.0 的内容
+    ledger.observe('sA::m', 200, 100, {});
+    ledger.observe('sA::m', 200, 100, {});
+    expect(ledger.ratio('sA::m')).toBeGreaterThan(1.5);
+    // session B：ratio≈1.0 的内容——不得拉动 A 的 ratio
+    ledger.observe('sB::m', 100, 100, {});
+    ledger.observe('sB::m', 100, 100, {});
+    expect(ledger.ratio('sA::m'), 'session B 的样本污染了 session A 的 EMA').toBeGreaterThan(1.5);
+    expect(ledger.ratio('sB::m')).toBeLessThan(1.5);
+    // 读数出口同样隔离
+    const dA = ledger.decisionTokensWithSource('sA::m', 100, undefined);
+    const dB = ledger.decisionTokensWithSource('sB::m', 100, undefined);
+    expect(dA.tokens).toBeGreaterThan(dB.tokens);
   });
 });

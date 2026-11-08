@@ -51,8 +51,6 @@ import {
 } from './tool-result-aging.js';
 import { DefaultMessageSelector } from './message-selector.js';
 import { DefaultBudgetAllocator } from './budget-allocator.js';
-import { SmartRouter } from './smart-router.js';
-import type { SmartRouterConfig } from './smart-router.js';
 import { compactStateKey } from './compact-key.js';
 import { HookedCompactEngine } from '../extension/plugin-ecosystem/hooks/compaction-integration.js';
 import { isTurnAnchor, isScheduleNotice } from './layer-types.js';
@@ -62,6 +60,7 @@ import {
   alignViewSplit,
   isMechanicalNotice,
   ledgerTruncate,
+  toolExecutionLedgerTrim,
   semanticHistory,
 } from './capabilities/compact/index.js';
 import { anchorRange } from './transform/anchors.js';
@@ -87,7 +86,6 @@ export interface DefaultContextEngineConfig {
   /** Token 估算器 */
   tokenEstimator?: TokenEstimator;
   /** 智能路由器配置 */
-  router?: SmartRouterConfig;
   /** 头部保护消息数（默认 5：交接快照的「任务前因」）。压缩时刻的选段策略。 */
   protectFirstN?: number;
   /** 尾部保护消息数（默认 20：进度锚，明确任务截止到哪）。压缩时刻的选段策略。 */
@@ -176,7 +174,6 @@ interface CompactState {
    * 连环触发的事故形态：冷却从完成起算+无增长门，一轮内反复削尖（200k→200k）。
    * 完整触发纪律（无进展熔断/冷却从发起计时/目标统一）待 overflow 重构讨论后定。
    */
-  overflowLlmTurnIndex?: number;
 }
 
 // ── 引擎实现 ──
@@ -195,7 +192,7 @@ export class DefaultContextEngine implements ContextEngine {
     historyAging: ToolResultAgingOptions;
     transformStore: TransformStore;
   };
-  private router: SmartRouter;
+
   private states: Map<string, CompactState> = new Map();
   /** 转换记录账本缓存（每 (sessionId, agentId) 加载一次；append 同步进缓存） */
   private ledgers: Map<string, TransformLedger> = new Map();
@@ -211,7 +208,6 @@ export class DefaultContextEngine implements ContextEngine {
       messageSelector: config?.messageSelector ?? new DefaultMessageSelector(),
       budgetAllocator: config?.budgetAllocator ?? new DefaultBudgetAllocator(),
       tokenEstimator,
-      router: config?.router ?? {},
       protectFirstN: config?.protectFirstN ?? 5,
       protectLastN: config?.protectLastN ?? 20,
       summaryBudget: config?.summaryBudget ?? {},
@@ -246,10 +242,6 @@ export class DefaultContextEngine implements ContextEngine {
       })(),
     };
 
-    this.router = new SmartRouter({
-      ...this.config.router,
-      tokenEstimator,
-    });
   }
 
   /**
@@ -296,7 +288,7 @@ export class DefaultContextEngine implements ContextEngine {
     // 校准分母（state.lastEstimatedTokens，「system+tools+视图」请求口径）。
     const rawEstimator = tokenEstimator ?? this.config.tokenEstimator;
     const modelKey = params.modelKey ?? 'unknown';
-    const estimator = this.sizeLedger.calibratedEstimator(modelKey, rawEstimator);
+    const estimator = this.sizeLedger.calibratedEstimator(this.calKey(stateKey, modelKey), rawEstimator);
 
     // 装配唯一实现：fold（原文 + 有效记录的确定性应用）
     let folded = this.foldView(messages, ledger);
@@ -342,7 +334,7 @@ export class DefaultContextEngine implements ContextEngine {
       const llmMessages = this.buildLlmMessages(folded.view, systemPrompt, tools, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       const decision = this.sizeLedger.decisionTokensWithSource(
-        modelKey,
+        this.calKey(stateKey, modelKey),
         rawEstimatedTokens,
         this.states.get(stateKey)?.lastUsageAnchor,
       );
@@ -387,7 +379,14 @@ export class DefaultContextEngine implements ContextEngine {
       stateKey,
       messages,
       ledger,
-      messagesBudget: budget.messagesBudget,
+      // 决策尺同源（与守门 fits 同一 effectiveMessagesLimit）：budget.messagesBudget 在
+      // infeasible 时为 0，会被窗口比例线读成「未知预算→Infinity→永不触发」——小预算
+      // （最该语义压缩的场景）反而只走 overflow 硬砍。unbounded 时 effectiveMessagesLimit
+      // 为 Infinity，比例线禁用语义不变。
+      // 决策尺同源（评审 R6）：与守门的 effectiveMessagesLimit 同一口径；但 infeasible
+      // （固定开销+输出预留就超窗）时比例线无意义——摘要请求同样装不下（Q1 同一物理理由），
+      // 保持禁用（0 → Infinity 线）交给 overflow 纯机械收敛，不唤醒注定失败的 LLM 摘要。
+      messagesBudget: budget.infeasible ? 0 : effectiveMessagesLimit,
       agingPlan,
       summarize,
       taskSnapshot,
@@ -423,12 +422,20 @@ export class DefaultContextEngine implements ContextEngine {
       estimator,
     );
 
-    // 3. 如果没有溢出，不需要压缩
-    if (selection.overflow.length === 0) {
+    // 3. 守门人判据 = 「装得下」（Q2 无目标线：与 selector 的溢出段概念无关）：
+    // 发送视图（fold+overflow aging）估算 ≤ 决策预算即无需压缩。
+    const overflowAgingOpts = resolveToolResultAgingOptions(this.config.historyAging);
+    const overflowAgingPlan = computeToolResultAgingPlan(messages, overflowAgingOpts, {
+      ignoreTurnBoundary: true,
+    });
+    const fits = (ms: Message[]): boolean =>
+      estimator.estimateMessages(applyAgingToMessages(ms, overflowAgingPlan, overflowAgingOpts)) <=
+      effectiveMessagesLimit;
+    if (selection.overflow.length === 0 && fits(view)) {
       const llmMessages = this.buildLlmMessages(view, systemPrompt, tools, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       const decision = this.sizeLedger.decisionTokensWithSource(
-        modelKey,
+        this.calKey(stateKey, modelKey),
         rawEstimatedTokens,
         this.states.get(stateKey)?.lastUsageAnchor,
       );
@@ -445,57 +452,14 @@ export class DefaultContextEngine implements ContextEngine {
       };
     }
 
-    // 4. 有溢出：SmartRouter 决定压缩策略（fits/compact 判定；摘要 vs 机械由 compact 能力决定）
-    const routing = this.router.evaluate(selection.overflow, 0, estimator);
-
-    // 5. 压缩溢出消息（产物经 appendRecordFromProduct 转换为持久记录）
+    // 4. 纯机械收敛阶梯（Q1–Q3，arch/overflow-redesign.md §3）：零 LLM、无目标线、
+    // 无冷却/名额（Q1：超窗口时 provider 无法做摘要，物理不可行）。丢弃次序原则
+    // （从最可再生到最不可再生）：数据细节（长值）→ 执行记录（工具执行→purpose 账本）
+    // → 工作窗口（tail 保护档 50→20→5）→ 放弃（L3 报错）。
     const state = this.states.get(stateKey);
-    const previousSummary = this.deriveSummary(ledger);
-
-    let productView: Message[];
     let droppedSummary: string | undefined;
-    let overflowFresh = false;
-    let overflowSummary: string | undefined;
-    // 是否真正发起过摘要 LLM 调用（成功/失败均算）——只有发起过才推进冷却时间戳
-    let overflowSummarizeAttempted = false;
+    let lastDroppedCount = 0; // MN4：droppedSummary 报实际账本化条数
 
-    // 计算溢出部分的压缩目标：head + selectedMiddle + tail 已占的 token
-    const keptTokens = selection.estimatedTokens;
-    const overflowTargetTokens = Math.max(500, effectiveMessagesLimit - keptTokens);
-    // 压缩无用判据：受保护的头尾本身就超预算时，中间段怎么压都无法让视图回到预算内。
-    // 走机械账本降级并保持零 LLM。
-    const protectedHeadTokens = estimator.estimateMessages(
-      view.slice(0, Math.min(this.config.protectFirstN, view.length)),
-    );
-    const compactionCannotHelp =
-      protectedHeadTokens + selection.tailTokens >= effectiveMessagesLimit;
-    // overflow 也必须守 proactive 的同一套纪律（增长门 + 冷却）：它是安全网，
-    // 不是「每轮增量摘要器」。
-    const overflowLastCount = state?.lastProactiveMessageCount;
-    const overflowNewSinceLast =
-      overflowLastCount === undefined ? messages.length : messages.length - overflowLastCount;
-    const overflowMinNew = Math.max(3, Math.floor(this.config.protectLastN * 0.25));
-    const overflowCooldownMs = this.config.proactiveCooldownMs;
-    const overflowInCooldown =
-      overflowCooldownMs > 0 &&
-      state?.lastProactiveLlmAt != null &&
-      Date.now() - state.lastProactiveLlmAt < overflowCooldownMs;
-    // 每 turn 至多一次 overflow LLM 摘要（2026-11-07 止血）：冷却从完成起算 + 无增长门时
-    // 一轮内会反复触发反复削尖（连环 200k→200k 事故）。turn key = 末条真实 user 下标——
-    // **下标身份不跨改写稳定**（可靠性 truncate_context/租约切片会改写数组，key 变化
-    // 视为新 turn，属已知宽松面，完整触发纪律待 overflow 重构）。key < 0（无真实 user）
-    // 不落名额、仅受冷却约束，防 -1 永久锁死。名额只在**产出 fresh 摘要**时消耗
-    // （评审 M5）：失败/超时不烧名额（冷却后可重试），denied 推冷却但不烧名额。
-    const overflowTurnKey = lastGenuineUserIndex(messages);
-    const overflowLlmDoneThisTurn =
-      overflowTurnKey >= 0 &&
-      state?.overflowLlmTurnIndex !== undefined &&
-      state.overflowLlmTurnIndex === overflowTurnKey;
-    const skipLlmCompaction =
-      compactionCannotHelp ||
-      overflowInCooldown ||
-      overflowNewSinceLast < overflowMinNew ||
-      overflowLlmDoneThisTurn;
     const overflowStart = Date.now();
     // 事件计量口径（P0-C M2）：compact 对 = messages-only 未校准、同一集合（全视图前后）。
     const compactTokensBefore = rawEstimator.estimateMessages(view);
@@ -506,145 +470,8 @@ export class DefaultContextEngine implements ContextEngine {
       tokensBefore: compactTokensBefore,
     });
 
-    try {
-      // 缓存前缀：本轮会话同形 system+history（与主动摘要同纪律）
-      const overflowLlmPrefix = this.buildLlmMessages(
-        view,
-        systemPrompt,
-        tools,
-        agingPlan,
-      );
-      // P3：溢出路径同样受 run abort 与摘要预算约束（此前三条路径都没有 signal）
-      const overflowBudget = this.createSummarizeSignal(params.signal);
-      // 上游已中止：跳过本轮全部压缩动作（含机械降级），不写任何记录。
-      // 中止代表本轮请求作废，此时写记录只会用残缺产物污染历史。
-      if (params.signal?.aborted) {
-        // M-1：中止收尾必须发终态事件，否则 store 的 compact.active 永久悬挂（UI 卡「进行中」）
-        emit?.({
-          type: 'context.compact.end',
-          sessionId,
-          reason: 'overflow',
-          durationMs: Date.now() - overflowStart,
-          cancelled: true,
-        });
-        const abortedLlmMessages = this.buildLlmMessages(view, systemPrompt, tools, agingPlan);
-        return {
-          messages: abortedLlmMessages,
-          estimatedTokens: rawEstimator.estimateMessages(view) + rawEstimator.estimateTools(tools),
-          readingSource: 'raw',
-          systemPrompt,
-          droppedSummary: proactiveDroppedSummary,
-          summary: this.deriveSummary(ledger),
-        };
-      }
-      switch (skipLlmCompaction ? 'cannot_help' : routing.route) {
-        // B′（2026-11-03 拍板）：溢出统一走真摘要（打码降为机械降级阶梯第一级）
-        case 'compact': {
-          emit?.({
-            type: 'context.compact.progress',
-            sessionId,
-            reason: 'overflow',
-            phase: 'summarize',
-            requestChars: JSON.stringify(overflowLlmPrefix).length,
-            requestMessages: overflowLlmPrefix.length,
-            timeoutMs: this.config.summarizeTimeoutMs || undefined,
-          });
-          const outcome = await this.config.compactEngine.compactMessages(selection.overflow, {
-            protectHead: 0,
-            protectTail: 0,
-            targetTokens: overflowTargetTokens,
-            // 无 requireSummary 语义：保持既有短路——预算内不压缩（auto）
-            mode: 'auto',
-            previousSummary,
-            summarizeFn: summarize,
-            // 摘要素材只随摘要请求走：无 summarize 的机械降级不携带（评审 L1）
-            taskSnapshot: summarize ? taskSnapshot : undefined,
-            estimator,
-            // F8 统一契约：预算/折叠区间/窗口/事件与 manual、proactive 同源
-            summaryBudget: this.config.summaryBudget,
-            foldRange: {
-              replacedCount: selection.overflow.length,
-              total: view.length,
-              preservedTail: selection.tail.length,
-            },
-            contextWindow: params.contextWindow,
-            maxOutputTokens: params.maxOutputTokens,
-            onSummarizeFail: 'truncate',
-            llmPrefix: overflowLlmPrefix,
-            signal: overflowBudget.signal,
-            emit: emit
-              ? (e) => {
-                  if (e.type === 'compact.summarize_fallback') {
-                    emit({
-                      type: 'context.compact.summarize_fallback',
-                      sessionId,
-                      reason: 'overflow',
-                      fallback: e.reason,
-                      cached: e.cached,
-                    });
-                  }
-                }
-              : undefined,
-          });
-          if (outcome.reason?.startsWith('denied:')) {
-            const reason = outcome.reason;
-            // before_compaction 策略拒绝：摘要被否，但 veto 不得强迫发出超窗请求——
-            // 与 summarize_failed 同姿势走机械截断兜底（after_compaction 不触发）。
-            emit?.({
-              type: 'context.compact.error', sessionId, reason: 'overflow', error: reason,
-              kind: 'denied',
-              durationMs: Date.now() - overflowStart,
-            });
-            productView = ledgerTruncate(selection.overflow, {
-              targetTokens: overflowTargetTokens,
-              estimator,
-            }).result;
-            droppedSummary = `${reason}; fell back to truncation`;
-            // denied 也计入「已尝试」推冷却（评审 M5）：否则策略钩子每轮重复触发
-            // （HITL 场景反复弹确认）。名额不在这里消耗——只认 fresh 摘要。
-            break;
-          }
-          overflowFresh =
-            outcome.fresh === true &&
-            Boolean(outcome.summary) &&
-            !isMechanicalNotice(outcome.summary!);
-          overflowSummarizeAttempted = outcome.summarizeAttempted === true;
-          overflowSummary = outcome.summary;
-          productView = Array.isArray(outcome.view) ? outcome.view : selection.overflow;
-          droppedSummary = outcome.droppedSummary;
-          break;
-        }
-
-        default: {
-          // 兜底：账本截断（统一截断兜底，禁止只留 4 条）
-          productView = ledgerTruncate(selection.overflow, {
-            targetTokens: overflowTargetTokens,
-            estimator,
-          }).result;
-          break;
-        }
-      }
-    } catch (err) {
-      emit?.({
-        type: 'context.compact.error',
-        sessionId,
-        reason: 'overflow',
-        error: err instanceof Error ? err.message : String(err),
-        durationMs: Date.now() - overflowStart,
-      });
-      // 压缩失败：账本截断降级，不中断本轮
-      productView = ledgerTruncate(selection.overflow, {
-        targetTokens: overflowTargetTokens,
-        estimator,
-      }).result;
-      droppedSummary = 'Context compact failed; fell back to truncation';
-      // 已尝试调用（无论失败在哪一步，冷却都应生效，防止每轮重试打爆）
-      overflowSummarizeAttempted = Boolean(summarize);
-    }
-
-    // M-2（2026-11-07 评审）：中止轮零写入——摘要可能在飞行中被 abort，错误被 compactCore
-    // catch 成降级产物**不抛出**，若不在此拦住，残缺产物（degrade/半截 summary）会落进
-    // 历史并在下一次 fold 生效（违反「中止轮不写记录」承诺）。与 proactive 的调用后检查同形。
+    // M-1：上游已中止 → 跳过本轮全部收敛动作、零写入；中止收尾必须发终态事件，
+    // 否则 store 的 compact.active 永久悬挂（UI 卡「进行中」）。
     if (params.signal?.aborted) {
       emit?.({
         type: 'context.compact.end',
@@ -654,91 +481,174 @@ export class DefaultContextEngine implements ContextEngine {
         cancelled: true,
       });
       return {
-        messages: this.buildLlmMessages(view, systemPrompt, tools, agingPlan),
-        estimatedTokens: rawEstimator.estimateMessages(view) + rawEstimator.estimateTools(tools),
-        readingSource: 'raw',
+        messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
+        estimatedTokens: this.sizeLedger.decisionTokensWithSource(
+          this.calKey(stateKey, modelKey),
+          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) +
+            rawEstimator.estimateTools(tools),
+          this.states.get(stateKey)?.lastUsageAnchor,
+        ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
+        readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
         systemPrompt,
         droppedSummary: proactiveDroppedSummary,
         summary: this.deriveSummary(ledger),
       };
     }
 
-    // 6. 产物 → 持久转换记录（记录先落盘，视图后发）
-    const overflowRecord = await this.appendRecordFromProduct({
-      sessionId,
-      agentId,
-      messages,
-      input: selection.overflow,
-      productView,
-      fold: folded,
-      // overflow 与主动路径同口径度量（viewTokens 供展示/恢复；overflow 不推进增长门）
-      agingPlan,
-      fresh: overflowFresh,
-      summarizeAttempted: overflowSummarizeAttempted,
-      reason: 'overflow',
-      summaryText: overflowSummary,
-      estimator,
-    });
-    // 7. 确定性重装配：fold 是唯一视图实现
-    folded = this.foldView(messages, ledger);
-    view = folded.view;
+    try {
+      // 第 0 轮 overflow aging：长值降级（与 historyAging 同算法同阈值；豁免 turn 首窗与
+      // freezeBatch 批次——全历史候选；视图级、原文不动、不进记录）。fits 判据已同源
+      // 应用 aging，aging 后装得下 = 本就不该砍（零记录、保持 usage 锚）。
+      let productView = view;
+      let overflowRound = 0; // 0 = aging 后即收敛（无账本化）
+      if (!fits(view)) {
+        // 第 1–3 轮：工具执行账本化（user/assistant 文本/合成占位跳过保留——用户输入
+        // 最不可再生；占位已是索引/交接形态不可再降），tail 保护档 50→20→5。**每档对
+        // 原 view 独立**账本化（不累积截断——累积会把前轮账本当普通消息吞掉，purpose
+        // 索引失忆）。产物与 foldTransformView 的「多 covers 单占位」同构（跳过保留项
+        // fold 原样保留）：守门量的与发送的是同一个产物。
+        // 终止性=有限三档（档间可能 no-op，**不是**「每步严格缩小」——勿据此改 while-fits）。
+        for (const tailKeep of [50, 20, 5]) {
+          overflowRound++;
+          const trimmed = toolExecutionLedgerTrim(view, { tailKeep });
+          lastDroppedCount = trimmed.droppedCount;
+          productView = trimmed.result;
+          console.warn(
+            `[overflow] session=${sessionId} converge round=${overflowRound} tailKeep=${tailKeep} ledgerDropped=${trimmed.droppedCount}`,
+          );
+          if (trimmed.droppedCount > 0 && fits(productView)) break;
+        }
+      }
+      const overflowConverged = fits(productView);
+      // droppedSummary 只说实际发生的事（档位 + 实际账本化条数，不虚报）
+      droppedSummary =
+        overflowConverged && overflowRound > 0
+          ? `Context overflow converged at round ${overflowRound} (tailKeep=${[50, 20, 5][overflowRound - 1]}, ledgerDropped=${lastDroppedCount})`
+          : undefined;
 
-    // overflow 不推进增长门基数/全量口径（与既有语义一致：overflow 每轮都会发生，
-    // 随之推进会饿死真摘要的增长门）。冷却推「已尝试」；本 turn 名额只认 fresh 摘要
-    // （失败/超时/ denied 不烧名额，冷却后可重试——评审 M5）；key<0 不落名额（M3）。
-    this.states.set(stateKey, {
-      ...state,
-      lastProactiveLlmAt: overflowSummarizeAttempted
-        ? Date.now()
-        : state?.lastProactiveLlmAt,
-      overflowLlmTurnIndex:
-        overflowFresh && overflowTurnKey >= 0
-          ? overflowTurnKey
-          : state?.overflowLlmTurnIndex,
-      // 锚卫生（评审 m4）：只有真产出转换记录（请求形状已变）才清锚；
-      // 什么都没变的轮清锚只会把下一轮决策打回裸估算
-      lastUsageAnchor: overflowRecord === undefined ? state?.lastUsageAnchor : undefined,
-    });
+      // M-2：落记录前再查中止（M-1 与本点之间无 await、实际不可达——保留为防御性检查）。
+      // 语义：中止轮零写入，残缺产物（degrade/半截 summary）不得落进历史。
+      if (params.signal?.aborted) {
+        emit?.({
+          type: 'context.compact.end',
+          sessionId,
+          reason: 'overflow',
+          durationMs: Date.now() - overflowStart,
+          cancelled: true,
+        });
+        return {
+          messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
+          estimatedTokens: this.sizeLedger.decisionTokensWithSource(
+          this.calKey(stateKey, modelKey),
+          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) +
+            rawEstimator.estimateTools(tools),
+          this.states.get(stateKey)?.lastUsageAnchor,
+        ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
+          readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+          systemPrompt,
+          droppedSummary: proactiveDroppedSummary,
+          summary: this.deriveSummary(ledger),
+        };
+      }
 
-    emit?.(
-      overflowRecord === undefined
-        ? rawEstimator.estimateMessages(view) > effectiveMessagesLimit
-          ? // 无记录且视图仍超预算 = 压缩救不了（cannot_help）：**必须可见**（评审 M4），
-            // 不得伪装成良性复用——「上下文已超窗」是需要暴露的异常
-            {
-              type: 'context.compact.error',
-              sessionId,
-              reason: 'overflow',
-              error: 'cannot_help: view remains over budget with nothing compressible',
-              durationMs: Date.now() - overflowStart,
-            }
-          : // 无记录且视图可装 = 真良性空转（auto 短路）：复用重建同形，cached 不入会话流；
-            // 计量对取同集合真实值（与 start 口径一致，不发 0/0 假计量）
-            {
-              type: 'context.compact.end',
-              sessionId,
-              reason: 'overflow',
-              tokensBefore: compactTokensBefore,
-              tokensAfter: compactTokensBefore,
-              durationMs: Date.now() - overflowStart,
-              cached: true,
-            }
-        : {
-            type: 'context.compact.end',
-            sessionId,
-            reason: 'overflow',
-            tokensBefore: compactTokensBefore,
-            tokensAfter: rawEstimator.estimateMessages(view),
-            durationMs: Date.now() - overflowStart,
-            cached: false,
-          },
-    );
+      // L3 终局：tail 5 之外的工具执行已全部账本化仍装不下——剩余为用户文本/在飞工作
+      //（不可再生不可砍）。fail-loud 提示换 session/model；可失败性由 provider 承担
+      //（P2 接 400 反馈），本轮照常返回超预算视图。不落记录、不伪装 compacted。
+      if (!overflowConverged) {
+        // L3 也发配对（请求照发、实测回来是最该学习的样本——不发则 afterStep 当「usage without pair」丢掉）
+        this.freezeUsagePair(stateKey, rawEstimator.estimateMessages(view), modelKey);
+        emit?.({
+          type: 'context.compact.error',
+          sessionId,
+          reason: 'overflow',
+          error:
+            'context_overflow_unrecoverable: tool executions beyond tail 5 are fully ledgerized yet the request still does not fit. ' +
+            'This session is no longer suitable for continued work, or the current model does not fit the task scale — start a new session or switch to a model with a larger context window.',
+          durationMs: Date.now() - overflowStart,
+        });
+        return {
+          messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan),
+          estimatedTokens: this.sizeLedger.decisionTokensWithSource(
+          this.calKey(stateKey, modelKey),
+          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) +
+            rawEstimator.estimateTools(tools),
+          this.states.get(stateKey)?.lastUsageAnchor,
+        ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
+          readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+          systemPrompt,
+          droppedSummary: proactiveDroppedSummary,
+          summary: this.deriveSummary(ledger),
+        };
+      }
 
-    // 8. 构建 LLM 消息（校准基 = 老化后 LLM 视图估算——尺子必须量实际请求）
-    const llmMessages = this.buildLlmMessages(view, systemPrompt, tools, agingPlan);
+      // 5. 产物 → 持久转换记录（记录先落盘，视图后发）。收敛产物 = 机械降级
+      //（type=degrade）：covers=被账本化的工具执行区间（跳过保留项不在 covers 内）。
+      const overflowRecord = await this.appendRecordFromProduct({
+        sessionId,
+        agentId,
+        messages,
+        input: view,
+        productView,
+        fold: folded,
+        agingPlan,
+        fresh: false,
+        summarizeAttempted: false,
+        reason: 'overflow',
+        estimator,
+      });
+      // 6. 确定性重装配：fold 是唯一视图实现
+      folded = this.foldView(messages, ledger);
+      view = folded.view;
+
+      // 锚卫生（评审 m4）：只有真产出转换记录（请求形状已变）才清锚，
+      // 什么都没变的轮清锚只会打回裸估算。
+      this.states.set(stateKey, {
+        ...state,
+        lastUsageAnchor: overflowRecord === undefined ? state?.lastUsageAnchor : undefined,
+      });
+
+      emit?.({
+        type: 'context.compact.end',
+        sessionId,
+        reason: 'overflow',
+        tokensBefore: compactTokensBefore,
+        tokensAfter: rawEstimator.estimateMessages(view),
+        durationMs: Date.now() - overflowStart,
+        // 无记录 = 未砍（第 0 轮 aging 后即收敛）：空转缓存语义
+        cached: overflowRecord === undefined,
+      });
+    } catch (err) {
+      // 守门人必须永远成功：收敛动作异常不得炸本轮；start 必须有终态事件
+      this.freezeUsagePair(stateKey, rawEstimator.estimateMessages(view), modelKey); // 异常轮请求仍会发出——配对照发
+      //（否则 store 的 compact.active 悬挂 + 诊断丢失）。降级返回原视图继续。
+      emit?.({
+        type: 'context.compact.error',
+        sessionId,
+        reason: 'overflow',
+        error: `overflow_convergence_failed: ${err instanceof Error ? err.message : String(err)}`,
+        durationMs: Date.now() - overflowStart,
+      });
+      return {
+        messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan),
+        estimatedTokens: this.sizeLedger.decisionTokensWithSource(
+          this.calKey(stateKey, modelKey),
+          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) +
+            rawEstimator.estimateTools(tools),
+          this.states.get(stateKey)?.lastUsageAnchor,
+        ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
+        readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+        systemPrompt,
+        droppedSummary: proactiveDroppedSummary,
+        summary: this.deriveSummary(ledger),
+      };
+    }
+
+    // 8. 构建 LLM 消息（发送视图带本轮 overflow aging——豁免版只影响本次请求，
+    // 下一 turn 正常规则照常（视图级、原文不动、天然可撤销）
+    const llmMessages = this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan);
     const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
     const decision = this.sizeLedger.decisionTokensWithSource(
-      modelKey,
+      this.calKey(stateKey, modelKey),
       rawEstimatedTokens,
       this.states.get(stateKey)?.lastUsageAnchor,
     );
@@ -1778,7 +1688,7 @@ export class DefaultContextEngine implements ContextEngine {
     // R1（评审 #5）：manual 压缩同样是决策路径（目标裁剪 / tokensBefore|After 读数），
     // 须与 assemble 同走校准口径；modelKey 复用会话最近一次 assemble 的分键。
     const estimator = this.sizeLedger.calibratedEstimator(
-      this.states.get(stateKey)?.lastModelKey ?? 'unknown',
+      this.calKey(stateKey, this.states.get(stateKey)?.lastModelKey ?? 'unknown'),
       this.config.tokenEstimator,
     );
     const result = await this.structuralCompact({
@@ -1820,7 +1730,17 @@ export class DefaultContextEngine implements ContextEngine {
    * @param rawEstimatedTokens 本请求「system+tools+视图」口径未校准估算
    * @param modelKey 校准分键
    */
+  /**
+   * 校准分键（取舍③落地 2026-11-08）：ratio/锚按 (session, modelKey) 复合键隔离——
+   * 同 modelKey 的多 session 内容形态各异，混学 EMA 互相毒化（生产实证：跨形态比率
+   * 0.185 vs 1.263 共存）。stateKey 即 session 维度（E4 compact key component）。
+   */
+  private calKey(stateKey: string, modelKey: string): string {
+    return `${stateKey}::${modelKey}`;
+  }
+
   private freezeUsagePair(stateKey: string, rawEstimatedTokens: number, modelKey: string): void {
+    const pairKey = this.calKey(stateKey, modelKey); // 配对/锚/EMA 同键隔离（取舍③）；lastModelKey 保持裸键
     const state = this.states.get(stateKey) ?? {};
     if (state.pendingUsagePair) {
       console.warn(
@@ -1835,7 +1755,7 @@ export class DefaultContextEngine implements ContextEngine {
       // 只在**实际发生覆盖**时标 orphaned；下一轮正常冻结（无覆盖不标）恢复收集。
       pendingUsagePair: {
         rawEstimatedTokens,
-        modelKey,
+        modelKey: pairKey,
         seq,
         ...(state.pendingUsagePair ? { orphaned: true } : {}),
       },

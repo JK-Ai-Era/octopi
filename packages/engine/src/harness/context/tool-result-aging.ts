@@ -135,11 +135,15 @@ interface CandidateEntry {
  *
  * @param messages - **完整**历史消息（按时间序；勿传裁剪后的装配视图）
  * @param opts - 老化配置（已解析）
+ * @param override - overflow 收敛阶梯第 0 轮（2026-11-08）：ignoreTurnBoundary=true 时
+ *   豁免 turn 首限定（不限 crossTurn、rawWindow 归 0）——守门兜底语境下「发得出去」
+ *   优先于「保护 turn 内工作数据/缓存前缀」；阈值（maxPointerChars/freezeBatch）不动
  * @returns 老化计划（enabled=false 或无候选时 agedIds 为空）
  */
 export function computeToolResultAgingPlan(
   messages: Message[],
   opts: ToolResultAgingOptions,
+  override?: { ignoreTurnBoundary?: boolean },
 ): ToolResultAgingPlan {
   const argsById = new Map<string, unknown>();
   const ordered: CandidateEntry[] = [];
@@ -167,10 +171,18 @@ export function computeToolResultAgingPlan(
   const agedIds = new Set<string>();
   if (!opts.enabled) return { agedIds, argsById };
 
-  // 边界 = 完整历史最后一个真实 user（两遍判定：旧轮结果在遇到后续 user 前不可下结论）
-  const crossTurn = ordered.filter((e) => e.msgIndex < lastGenuineUserIdx);
-  const candidates = crossTurn.slice(0, Math.max(0, crossTurn.length - opts.rawWindow));
-  const covered = candidates.length - (candidates.length % opts.freezeBatch);
+  // 边界 = 完整历史最后一个真实 user（两遍判定：旧轮结果在遇到后续 user 前不可下结论）。
+  // overflow 第 0 轮豁免（ignoreTurnBoundary）：全历史候选、rawWindow 归 0——
+  // turn 内工作数据的保护让位于「装得下去」（arch/overflow-redesign.md §3 第 0 轮细则）
+  const ignoreTurnBoundary = override?.ignoreTurnBoundary === true;
+  const crossTurn = ignoreTurnBoundary
+    ? ordered
+    : ordered.filter((e) => e.msgIndex < lastGenuineUserIdx);
+  const rawWindow = ignoreTurnBoundary ? 0 : opts.rawWindow;
+  // freezeBatch（冻结批次防抖）同属 turn 内保护——守门语境豁免：发不出去了不等批次
+  const freezeBatch = ignoreTurnBoundary ? 1 : opts.freezeBatch;
+  const candidates = crossTurn.slice(0, Math.max(0, crossTurn.length - rawWindow));
+  const covered = candidates.length - (candidates.length % freezeBatch);
   for (let i = 0; i < covered; i++) {
     const cand = candidates[i];
     if (cand.isError) continue; // 红线：error 结果永不降级（错误可追溯性优先）

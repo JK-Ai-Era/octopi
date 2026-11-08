@@ -93,7 +93,7 @@ describe('P0-4 记录覆盖终点 = tailStart', () => {
 });
 
 describe('P0-3 overflow 时间序', () => {
-  it('重组顺序为 protectHead → 旧 middle → 新 middle → tail', async () => {
+  it('收敛产物保序：幸存消息/占位符覆盖区间的相对时间序不乱（Q1 纯机械换代）', async () => {
     // 极小预算逼 overflow：kept=尾侧 middle+tail，overflow=旧 middle
     const engine = new DefaultContextEngine({
       protectFirstN: 1,
@@ -119,30 +119,18 @@ describe('P0-3 overflow 时间序', () => {
       tokenBudget: 800,
     });
 
+    // Q1 纯机械收敛后旧区内容可能被账本化（占位符），但幸存者必须保序：
+    // 幸存消息在视图里的顺序 = 原始序列里的顺序（收敛砍原对象、不重排）
     const texts = result.messages.map((m) => String(m.content ?? ''));
-    const text = texts.join('\n');
-    const head = text.indexOf('HEAD-0');
-    const tailA = text.indexOf('TAIL-A');
-    const tailB = text.indexOf('TAIL-B');
-
-    expect(head).toBeGreaterThanOrEqual(0);
-    expect(tailA).toBeGreaterThan(head);
-    expect(tailB).toBeGreaterThan(tailA);
-
-    // 时间序硬约束：HEAD 所在消息必须在 TAIL 之前，且任何 OLD-* 残迹不得出现在 TAIL-B 之后
-    const headIdx = texts.findIndex((t) => t.includes('HEAD-0'));
-    const tailBIdx = texts.findIndex((t) => t.includes('TAIL-B'));
-    expect(headIdx).toBeGreaterThanOrEqual(0);
-    expect(tailBIdx).toBeGreaterThan(headIdx);
-    for (let i = tailBIdx + 1; i < texts.length; i++) {
-      expect(texts[i]).not.toMatch(/OLD-\d\d/);
+    const origins = [ 'HEAD-0', ...Array.from({ length: 30 }, (_, i) => `OLD-${String(i).padStart(2, '0')}-`), 'TAIL-A', 'TAIL-B' ];
+    const survivorIdx = texts
+      .map((t) => origins.findIndex((o) => t.includes(o)))
+      .filter((i) => i >= 0);
+    expect(survivorIdx.length).toBeGreaterThan(1);
+    for (let i = 1; i < survivorIdx.length; i++) {
+      expect(survivorIdx[i]).toBeGreaterThan(survivorIdx[i - 1]!);
     }
-    // 压缩段（若有残迹）必须整段位于 TAIL-A 之前
-    const firstTail = texts.findIndex((t) => t.includes('TAIL-A'));
-    for (let i = 0; i < texts.length; i++) {
-      if (/OLD-\d\d/.test(texts[i]!)) {
-        expect(i).toBeLessThan(firstTail);
-      }
-    }
+    // 最后一条 user（锚，硬保护）必须幸存
+    expect(texts.some((t) => t.includes('TAIL-B'))).toBe(true);
   });
 });

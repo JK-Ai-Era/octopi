@@ -102,8 +102,6 @@ export {
 } from './context/index.js';
 export { DefaultMessageSelector } from './context/message-selector.js';
 export { DefaultBudgetAllocator } from './context/budget-allocator.js';
-export { SmartRouter } from './context/smart-router.js';
-export type { SmartRouterConfig, Route, RoutingDecision } from './context/smart-router.js';
 export {
   LAYER_ORDER,
   LAYER_PRIORITY,

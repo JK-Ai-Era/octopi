@@ -67,6 +67,12 @@ export function buildToolCallLedger(messages: Message[]): string {
       lineIndexByCallId.set(tc.id, lines.length - 1);
     }
     for (const tr of msg.toolResults ?? []) {
+      if (lineIndexByCallId.get(tr.toolCallId) === undefined && tr.error === undefined) {
+        // 孤儿 result（调用方消息不在本账本范围/未被砍）：结果被账本化也必须留痕——
+        // name 不可失忆，否则「做过什么」无从追溯（只留 error 行不够）
+        lines.push(`- ${tr.name ?? tr.toolCallId}: ${MISSING_PURPOSE}`);
+        lineIndexByCallId.set(tr.toolCallId, lines.length - 1);
+      }
       if (tr.error === undefined) continue;
       const err = tr.error.length > LEDGER_ERROR_MAX ? `${tr.error.slice(0, LEDGER_ERROR_MAX)}…` : tr.error;
       const errorLine = `  ! ${tr.name ?? tr.toolCallId}: ${err}`;
@@ -214,4 +220,83 @@ export function mechanicalDegrade(
     overBudget,
     droppedSummary: `Replaced ${messages.length} messages (${callCount} tool calls) with a purpose ledger`,
   };
+}
+
+/**
+ * 工具执行账本化（收敛阶梯第 1–3 轮专用，arch/overflow-redesign.md §3）。
+ *
+ * 语义（丢弃次序原则：数据细节 → 执行记录 → 工作窗口 → 放弃，从最可再生到最不可再生）：
+ * - **账本化对象 = 工具执行段**（assistant(toolCalls) + tool(result) 对，同进同出）——
+ *   执行记录可再生（可重执行/磁盘找回），先于工作窗口丢弃；
+ * - **跳过保留**：真 user 消息（最不可再生）、assistant 文本（非执行记录）、
+ *   合成消息（contextLedger/contextSummary 占位——已是索引/交接形态，不可再降）；
+ * - **tailKeep 近尾保护**（工作窗口）：近尾 tailKeep 条内的工具执行不账本化。
+ *
+ * 形态：被账本化 run 的原位移除，**第一个**被砍 run 的下标处放一个合并 notice
+ * （buildToolCallLedger 汇总全部被砍执行的 name+purpose+errors）——与 fold 同构：
+ * foldTransformView 对多 covers runs 渲染**一个**占位（firstIndex 处、区间内保护类原样），
+ * 本函数的产物即 fold 后视图，守门量的与发送的是同一个产物。
+ *
+ * 每档独立调用（幂等）：无候选时原样返回——天然支持「每档对原视图重算」，不累积吞账本。
+ *
+ * @param messages - 原始视图（收敛循环对同一 view 每档独立调用）
+ * @param opts - tailKeep 近尾保护档、估算器、targetTokens（缺省=砍掉全部候选）
+ * @returns 产物视图 + 被账本化条数（0=砍不动/无候选）
+ */
+export function toolExecutionLedgerTrim(
+  messages: Message[],
+  opts: { tailKeep: number },
+): { result: Message[]; droppedCount: number } {
+  if (messages.length === 0) return { result: [], droppedCount: 0 };
+  const isSynthetic = (m: Message): boolean =>
+    m.metadata?.source === 'contextLedger' || m.metadata?.source === 'contextSummary';
+  const isToolExec = (m: Message): boolean =>
+    !isSynthetic(m) && (hasToolCall(m) || isToolResultMessage(m));
+
+  // 档位即语义（B2 拍板 2026-11-08）：tailKeep 保护窗内的消息原样保留，
+  // **窗外工具执行全部账本化**（砍满候选窗）——砍量由档位定义，不在档内提前停；
+  // 「装得下吗」由外层 fits 判（校准+aging 同一把尺），砍量尺与验收尺不混。
+  const tailFloor = Math.max(0, messages.length - Math.max(0, opts.tailKeep));
+  // 候选 run：[0, tailFloor) 内的连续工具执行段（tool_call/result 对边界对齐——
+  // 整 run 同进同出，宁可少砍不可拆对）
+  interface ExecRun { start: number; end: number } // inclusive
+  const runs: ExecRun[] = [];
+  let i = 0;
+  while (i < tailFloor) {
+    if (!isToolExec(messages[i]!)) {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    while (i < tailFloor && isToolExec(messages[i]!)) i += 1;
+    let end = i - 1;
+    // 边界对齐（评审 B1）：run 尾是 tool_call 而其 result 在 tail 窗内/窗后时整对不砍——
+    // end 允许降到 start-1（单条 run 的 call 与 result 拆对正是孤儿 result 400 的来源）
+    while (end >= start && hasToolCall(messages[end]!) && end + 1 < messages.length && isToolResultMessage(messages[end + 1]!)) {
+      end -= 1;
+    }
+    if (end < start) continue; // 整对落在 tail 窗内 → 本 run 不砍（宁可少砍，不可拆对）
+    runs.push({ start, end });
+  }
+  if (runs.length === 0) return { result: [...messages], droppedCount: 0 };
+
+  // 砍满：全部候选 run 一次账本化（每档对原视图独立、幂等——累积截断会吞前轮账本）
+  const droppedIdx = new Set<number>();
+  for (const r of runs) for (let k = r.start; k <= r.end; k++) droppedIdx.add(k);
+  const droppedMsgs = runs.flatMap((r) => messages.slice(r.start, r.end + 1));
+  const ledger = buildToolCallLedger(droppedMsgs);
+  const notice = asLedgerMessage(ledger, droppedMsgs.length);
+  const result: Message[] = [];
+  let noticePlaced = false;
+  for (let idx = 0; idx < messages.length; idx++) {
+    if (droppedIdx.has(idx)) {
+      if (!noticePlaced) {
+        result.push(notice);
+        noticePlaced = true;
+      }
+      continue;
+    }
+    result.push(messages[idx]!);
+  }
+  return { result, droppedCount: droppedMsgs.length };
 }

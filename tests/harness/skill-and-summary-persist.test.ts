@@ -190,8 +190,10 @@ describe('压缩摘要 Session 持久化', () => {
     });
     expect(summarizeCalls).toBe(1);
     const after1 = await store.load('s-multi', '');
-    expect(after1.records).toHaveLength(1);
-    expect(after1.records[0]!.meta.messageCount).toBe(30);
+    // 换代：count/推进语义只认 summary 记录（overflow degrade 是同轮机械兜底副产物，不计入）
+    const summaries1 = after1.records.filter((r) => r.type === 'summary');
+    expect(summaries1).toHaveLength(1);
+    expect(summaries1[0]!.meta.messageCount).toBe(30);
     expect(r1.summary).toContain('v1');
 
     // 连续 4 次复用（每轮 +1）：不应再打 LLM，也不产新记录（count 基数保持 30）
@@ -207,12 +209,24 @@ describe('压缩摘要 Session 持久化', () => {
         summarize,
       });
       expect(summarizeCalls).toBe(1);
-      expect((await store.load('s-multi', '')).records).toHaveLength(1);
+      expect((await store.load('s-multi', '')).records.filter((rr) => rr.type === 'summary')).toHaveLength(1);
       expect(r.summary).toContain('v1');
     }
 
-    // 第 5 条增量：newSinceLast=5 → 再摘要
-    msgs = [...msgs, userMsg('t4-final')];
+    // 防摘要风暴（新红线）：视图超线但**无新增消息**（fold 视图天然粘滞）→
+    // 重压只会原样复述上一份交接书——零 LLM 复用
+    await engine.assemble({
+      sessionId: 's-multi',
+      messages: msgs,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 4000,
+      summarize,
+    });
+    expect(summarizeCalls).toBe(1);
+
+    // 溢出 tail 窗口（+25 条）：新消息进 middle → 再摘要 v2，summary 记录推进到 2
+    for (let i = 0; i < 25; i++) msgs = [...msgs, userMsg(`deep-${i} ` + 'x'.repeat(400))];
     const r2 = await engine.assemble({
       sessionId: 's-multi',
       messages: msgs,
@@ -223,8 +237,8 @@ describe('压缩摘要 Session 持久化', () => {
     });
     expect(summarizeCalls).toBe(2);
     const after2 = await store.load('s-multi', '');
-    expect(after2.records).toHaveLength(2);
-    expect(after2.records[1]!.meta.messageCount).toBe(35);
+    const summaries2 = after2.records.filter((r) => r.type === 'summary');
+    expect(summaries2).toHaveLength(2);
     expect(r2.summary).toContain('v2');
 
     // 模拟进程重启：同一账本恢复（增长门基数 35 从记录 meta 恢复）
@@ -251,7 +265,8 @@ describe('压缩摘要 Session 持久化', () => {
     // +1 条 → 复用（fold），不打 LLM、不产新记录
     expect(restartCalls).toBe(0);
     expect(r3.summary).toContain('v2');
-    expect((await store.load('s-multi', '')).records).toHaveLength(2);
+    // 重启后 summary 记录计数不变（degrade 为同轮机械兜底副产物，不计入）
+    expect((await store.load('s-multi', '')).records.filter((rr) => rr.type === 'summary')).toHaveLength(2);
   });
 
   it('Agent 桥：legacy 快照播种（迁移输入）在 convertToLlm 后不被改写', async () => {

@@ -110,6 +110,49 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.102.4 (2026-11-08)
+
+### refactor(context): overflow 改纯机械收敛阶梯（P1，Q1–Q3 拍板落地）
+
+overflow 语义换代（`arch/overflow-redesign.md`）：LLM 摘要路径整体拆除，改为单一收敛循环——**第 0 轮 overflow aging**（tool_result 长值降级，视图级不动原文，豁免 turn 首窗与 freezeBatch；本轮装得下则零记录）→ **第 1–3 轮账本化**（近尾保护 50→20→5 递降，锚点=末条真 user 及其后永不账本化，保底下限 `keep（每档砍满候选窗——tailKeep 是唯一档位旋钮）`）→ **L3 终局** `context_overflow_unrecoverable`（fail-loud 提示换 session/model）。
+
+- **为什么**：Q1（大哥拍板）「已经超 provider 窗口时 provider 也没法做摘要」——超窗口场景 LLM 摘要物理不可行；Q2 无目标线（「目标线是伪命题」）——装得下判据=「aged 视图估算 ≤ 决策预算」，provider 是唯一判据；Q3 保护档 50→20→5→报错。
+- **拆除**：每 turn fresh 名额、终局三分（cached/summary/error 三态）、overflow 侧冷却/增长门、overflow 的 summarizeTimeoutMs 分支——纯机械下无存在理由。proactive 侧机制全部保留（目标线/冷却/增长门/mid-turn 活跃窗口）。
+- **守门人判据修正**：从「selector 报溢出段」上移为「装得下」——「tool 链整体保留但视图超限」类溢出（T5）旧判据漏检。
+- **fix(context)**: proactive 触发线 `messagesBudget` 与守门决策尺同源（`effectiveMessagesLimit`）。旧值在预算不可行为 0 时被窗口比例线读成「未知预算→Infinity→永不触发」——小预算（最该语义压缩的场景）只走 overflow 硬砍。unbounded 语义不变（Infinity 禁用比例线）。
+- **锚卫生**：overflow 产出转换记录才清 `lastUsageAnchor`（请求形状已变）；第 0 轮 aging 收敛（无记录）保持锚，不打回裸估算。
+
+### fix(context): 复评 Must/Should 收口（del-bc7bee99）
+
+- **M1 红线空过**：红线 3 旧构造（4 条消息）tailFloor=0 三档全 no-op、条件式断言恒真——「删掉 B1 修复也全绿」。重造为真触发构造（12 条、候选窗内 5 个可砍+1 个边界对）+无条件双向钉（删「回退整对」/删「砍满」各挂一侧），并用摘修复法验证真钉；补 `toolExecutionLedgerTrim` 直接单测 4 条（砍满/边界对齐/幂等/孤儿账本行）。
+- **M3 文档矛盾**：CHANGELOG 首段/契约段（zh）残留旧语义（「锚点永不账本化」「max(keep, 锚段)」「每步严格缩小」）与「每档砍满」自相矛盾——已改。
+- **Should**：`readingSource` 与 tokens 同源（4 处 label 修正）；L3/catch 出口补 `freezeUsagePair`（请求照发的轮次实测回来是最该学习的样本，原先被当「usage without pair」丢掉）；clamp 上下界精确值红线（250/800）；复合键引擎接线红线；MJ2 语义改称「护栏」（infeasible 新地板不泄漏进比例线）；**SmartRouter 整体删除**（类/config 字段/公开导出/测试 describe——引擎不再消费，零兼容过渡）。
+- 遗留（下批）：弱化用例补强（context-window-unknown bodyCount、identity 保序、persist filter、cover-order）；锚定路径在引擎接线测试中未生效（生产实证工作）的构造差异调查；config.router schema 字段清理。
+
+### fix(context): B2 砍量尺定案（按批次砍满）+ 校准毒读数治理
+
+- **B2（blocking，del-5e6168b5）砍量尺与守门尺不同源**：trim 的停止判定用未校准估算、守门 fits 用校准+aging——ratio>1 时三档砍量逐字相同→假 L3。按设计原语义定案（大哥拍板）：**档位即语义**——`toolExecutionLedgerTrim` 每档砍满候选窗（tailKeep 保护窗外工具执行全部账本化），砍量由档位定义；「装得下」由外层 fits 单一判据决定。B1 孤儿 tool result（单条 call 落窗边界被拆对→provider 永久 400）同批修复。
+- **校准毒读数治理（生产现场 0.185 vs 真值 1.263）**：①**锚外推 clamp 同 guard**——clamped 极端样本（如大 tools schema 本地估算偏高 5×）锚冻结原始比率、外推无界→毒化读数；现与 EMA 同夹取 [0.25, 4.0]（F1 冷锚定保留：真实极端内容在界内正常外推，病态样本被限幅）。②**校准作用域收口 (session, modelKey)**（取舍③落地）——ratio/锚按复合键隔离，同 modelKey 多 session 不再互相毒化 EMA。③**estimatedTokens 口径统一**——早退/收敛/L3 路径的 return 与主路径同源（校准后全请求估算），修掉「视图估算 37.9k vs 实测 253.9k」的口径混显根源。
+- **红线补齐（MJ3）**：成对边界对齐（B1 回归钉）、purpose 账本幸存（丢弃次序）、start↔终态严格配对（R9-3）、毒锚 clamp、作用域隔离。孤儿 tool result 被账本化时补 name 留痕（原只留 error 行）。全量 4233 passed / 7 skipped + build + lint + arch-sync 四绿。
+
+### fix(context): 收敛阶梯评审修复（R1-R9，del-b1bb6e48）
+
+- **R1（blocking）锚点硬保护架空阶梯**：旧实现「锚后永不账本化」把 50→20→5 档全部顶死（长 turn 三轮零砍→假 L3）。按 arch/overflow-redesign.md §3 丢弃次序原则（数据细节→执行记录→工作窗口→放弃）裁决：账本化对象=**工具执行段**（tool_call/result 对）；user 消息（最不可再生）/assistant 文本/合成占位跳过保留；tail 档=工作窗口保护。新增 `toolExecutionLedgerTrim`（边界对齐、幂等）。
+- **R2 闸门=发送**：产物与 foldTransformView「多 covers 单占位」同构（跳过保留项 covers 不含占位→fold 不插回），守门量的与发送的是同一产物。
+- **R3 守门人永远成功**：收敛段恢复 try/catch——异常 emit error 终态+返回原视图，不炸本轮；M-2 标注为防御性检查（实际不可达）。
+- **R4 每档独立账本化**（对原 view 重算，不累积吞前轮 purpose 账本）；**R5 无真 user 锚语义**（user 跳过保留自然消解恒 L3）；**R6 messagesBudget**：infeasible（固定开销超窗）禁用比例线（摘要请求同样装不下，Q1 同一物理理由），不再唤醒注定失败的 LLM 摘要；**R7** 删 routing 死赋值；**R8** droppedSummary 只报实际档位与条数。
+- **R9 测试红线修复**：构造从 user 消息改 tool 执行段（user 永不账本化——旧构造砍不动全变 L3）；L3 用「user 文本自身超限」天然构造；防风暴红线改为真语义（newFoldCount=0 无新增重压）。全量 4228 passed / 7 skipped + build + lint + arch-sync 四绿。
+
+### test(context): 12 个「overflow=LLM 摘要」旧语义测试换代 + 红线 1/2/5/6
+
+行为换代测试随之更新（测试描述行为）：Q2 B′「溢出出真摘要」反转为零 summarizeFn、deny 下游语义（before_compaction 拦不住纯机械 overflow）、taskSnapshot（overflow 无摘要请求无素材可传）、cover-order（保序子序列）、abort×2（proactive cancelled 配对 + overflow 中止零写入）、compact-events（比率不变性）、selector integration×2（零 compactMessages+identity 契约）、pairing-anchor（双场景：有记录清锚/round 0 保持锚）、persist（summary 计数+防摘要风暴）。新红线：档位逐级 round↔tailKeep 对应、有限步终止（≤3 轮 L3 封顶）。全量 4228 passed / 7 skipped + lint + arch-sync 三绿。
+
+### docs(contracts): overflow 契约段换代（en/zh 同步）
+
+`docs/context-layer-contracts.md` overflow 段改为收敛阶梯规格（第 0 轮 aging/三档账本/L3 终局/装得下判据/abort 语义）；`arch/overflow-redesign.md` §5 拆除清单 5/5 打勾、红线 1/2/5/6 标注覆盖。
+
+---
+
 ## v0.102.3 (2026-11-08)
 
 ### fix(context): 计量四件套——校准配对同源、outputTokens 真值、L1 调表、压缩 before/after 报告尺

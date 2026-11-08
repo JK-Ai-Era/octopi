@@ -169,9 +169,10 @@ describe('方案 E 修订：turn 内 proactive 可触发', () => {
   });
 });
 
-describe('overflow 止血：每 turn 限 1 次 LLM 摘要', () => {
-  it('同 turn 连续溢出两次 → summarize 只发起一次', async () => {
+describe('overflow 收敛循环（Q1 纯机械，2026-11-08）', () => {
+  it('同 turn 连续溢出两次 → 零 summarizeFn（纯机械性质钉死）', async () => {
     const store = new InMemoryTransformStore();
+    const events: ContextCompactEvent[] = [];
     const summarize = vi.fn(async () => 'SUMMARY-MARK-OVF');
     const engine = new DefaultContextEngine({
       protectFirstN: 1,
@@ -179,6 +180,7 @@ describe('overflow 止血：每 turn 限 1 次 LLM 摘要', () => {
       proactiveCompactRatio: 0,
       targetTokens: 0,
       proactiveCooldownMs: 0,
+      historyAging: { enabled: true },
       transformStore: store,
     });
 
@@ -192,14 +194,14 @@ describe('overflow 止血：每 turn 限 1 次 LLM 摘要', () => {
       messages,
       systemPrompt: 'sys',
       tools: [],
-      tokenBudget: 3000,
+      tokenBudget: 6000,
       contextWindow: 32000,
       summarize,
+      emit: (e) => events.push(e),
     });
-    expect(summarize).toHaveBeenCalledTimes(1);
+    expect(summarize, 'overflow 纯机械：收敛循环零 LLM（Q1）').toHaveBeenCalledTimes(0);
 
-    // 第二轮：同 turn（append-only 追加 10 个大工具结果，末条真实 user 不变 → turn key 不变）
-    // 再溢出 → 不得再打 LLM，走机械
+    // 第二轮：同 turn（append-only 追加 10 个大工具结果）再溢出 → 依然零 LLM
     const grown = [...messages];
     for (let i = 100; i < 110; i++) grown.push(toolResult(i, 3000));
     await engine.assemble({
@@ -207,18 +209,30 @@ describe('overflow 止血：每 turn 限 1 次 LLM 摘要', () => {
       messages: grown,
       systemPrompt: 'sys',
       tools: [],
-      tokenBudget: 3000,
+      tokenBudget: 6000,
       contextWindow: 32000,
       summarize,
+      emit: (e) => events.push(e),
     });
-    expect(summarize, '同 turn 第二次溢出走机械，不得再发起 LLM 摘要').toHaveBeenCalledTimes(1);
-    // 防错断言：第二轮确实走了 overflow 机械路径（degrade 记录）——
-    // 否则「1 次」可能是因为根本没溢出（测了个寂寞）
-    const ledger = await store.load('s-ovf-limit', '');
+    expect(summarize, '连续溢出依然零 LLM（旧每 turn 名额已随 LLM 路径拆除）').toHaveBeenCalledTimes(0);
+    // 防错断言：返回视图含老化指针（真收敛证据）——第 0 轮 overflow aging 豁免 turn 首/
+    // freezeBatch 后把大 tool result 降为指针；未溢出或收敛失败都会与断言矛盾
+    const sent = await engine.assemble({
+      sessionId: 's-ovf-limit',
+      messages: grown,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 6000,
+      contextWindow: 32000,
+      summarize,
+      emit: (e) => events.push(e),
+    });
+    const sentText = JSON.stringify(sent.messages);
+    expect(sentText, '发送视图应含 aging 指针（overflow 第 0 轮收敛证据）').toContain('aged tool result · pointer');
     expect(
-      ledger.records.some((r) => r.type === 'degrade'),
-      '第二轮应有机械 degrade 记录（证明真溢出且被限次拦下）',
-    ).toBe(true);
+      events.some((e) => e.type === 'context.compact.error'),
+      '第 0 轮收敛成功不得有 error',
+    ).toBe(false);
   });
 });
 
@@ -263,61 +277,7 @@ describe('评审修复回归（del-ec61eb65）', () => {
     }
   });
 
-  it('limit 语义（状态级）：fresh 成功烧名额，失败不烧（M5）', async () => {
-    const store = new InMemoryTransformStore();
-    // fresh 成功 → 名额=turn key
-    const engine = new DefaultContextEngine({
-      protectFirstN: 1,
-      protectLastN: 1,
-      proactiveCompactRatio: 0,
-      targetTokens: 0,
-      proactiveCooldownMs: 0,
-      transformStore: store,
-    });
-    const messages = [userMsg('go')];
-    for (let i = 0; i < 8; i++) messages.push(toolResult(i, 3000));
-    messages.push(userMsg('wrap up'));
-    await engine.assemble({
-      sessionId: 's-quota-ok',
-      messages,
-      systemPrompt: 'sys',
-      tools: [],
-      tokenBudget: 3000,
-      contextWindow: 32000,
-      summarize: async () => 'SUMMARY-MARK',
-    });
-    const st = (engine as unknown as {
-      states: Map<string, { overflowLlmTurnIndex?: number }>;
-    }).states;
-    expect(st.get('s-quota-ok')?.overflowLlmTurnIndex, 'fresh 成功必须烧名额').toBe(9);
-
-    // 失败（summarize 抛错）→ 名额不烧（冷却后可重试——M5）
-    const engine2 = new DefaultContextEngine({
-      protectFirstN: 1,
-      protectLastN: 1,
-      proactiveCompactRatio: 0,
-      targetTokens: 0,
-      proactiveCooldownMs: 0,
-      transformStore: store,
-    });
-    await engine2.assemble({
-      sessionId: 's-quota-fail',
-      messages,
-      systemPrompt: 'sys',
-      tools: [],
-      tokenBudget: 3000,
-      contextWindow: 32000,
-      summarize: async () => {
-        throw new Error('provider exploded');
-      },
-    });
-    const st2 = (engine2 as unknown as {
-      states: Map<string, { overflowLlmTurnIndex?: number }>;
-    }).states;
-    expect(st2.get('s-quota-fail')?.overflowLlmTurnIndex, '失败不得烧名额').toBeUndefined();
-  });
-
-  it('T5 cannot_help 必须可见：无记录且仍超预算 → error 终态，不得伪装缓存重建', async () => {
+  it('T5 L3 终局必须可见：连 5 档都装不下 → context_overflow_unrecoverable，不得伪装缓存重建', async () => {
     const store = new InMemoryTransformStore();
     const events: ContextCompactEvent[] = [];
     const engine = new DefaultContextEngine({
@@ -328,12 +288,13 @@ describe('评审修复回归（del-ec61eb65）', () => {
       proactiveCooldownMs: 60_000,
       transformStore: store,
     });
-    const messages = [userMsg('go')];
-    messages.push(toolResult(0, 3000));
-    messages.push(toolResult(1, 3000));
-    messages.push(userMsg('tail'));
+    // L3 天然场景（丢弃次序原则）：user 文本自身远超预算（不可再生、永不账本化）——
+    // 工具执行全部账本化后仍装不下 → 换 session/model（Q3「连 5 都超」的真实语义）
+    const messages: Message[] = [];
+    for (let i = 0; i < 30; i++) messages.push(userMsg(`u-${i} ` + 'U'.repeat(500)));
+    for (let i = 20; i < 24; i++) messages.push(toolResult(i, 3000));
 
-    // 第一轮：摘要失败 → 降级账本（≈500tok）> 预算 200 → 视图仍超
+    // 第一轮：aging+砍档都救不了 → L3
     await engine.assemble({
       sessionId: 's-cannot-help',
       messages,
@@ -361,9 +322,11 @@ describe('评审修复回归（del-ec61eb65）', () => {
     });
 
     const errors = events.filter(
-      (e) => e.type === 'context.compact.error' && String(e.error).includes('cannot_help'),
+      (e) =>
+        e.type === 'context.compact.error' &&
+        String(e.error).includes('context_overflow_unrecoverable'),
     );
-    expect(errors.length, '压缩救不了必须 fail-loud').toBe(1);
+    expect(errors.length, 'L3 必须 fail-loud（换 session/model 语义）').toBe(1);
     const cachedEnds = events.filter(
       (e) => e.type === 'context.compact.end' && e.cached === true,
     );
@@ -392,6 +355,7 @@ describe('overflow 止血：无记录轮不发假 compacted', () => {
       proactiveCompactRatio: 0,
       targetTokens: 0,
       proactiveCooldownMs: 0,
+      historyAging: { enabled: true },
       transformStore: store,
     });
     // 小溢出：溢出段体量 ≤ overflow 目标预算 → mode auto 短路原样返回
@@ -422,4 +386,187 @@ describe('overflow 止血：无记录轮不发假 compacted', () => {
     const visibleEnds = ends.filter((e) => e.cached !== true);
     expect(visibleEnds, '1ms 假 compacted 回归').toEqual([]);
   });
+});
+
+// ── 红线 1/6：收敛档位逐级 + 成功即停 + 有限步终止 ─────────────────────────
+describe('收敛阶梯红线（arch/overflow-redesign.md §3）', () => {
+  function fatUser(n: number, chars: number): Message[] {
+    // 工具执行段=可账本化对象（user 消息永不账本化——最不可再生，丢弃次序原则）
+    return Array.from({ length: n }, (_, i) => ({
+      role: 'tool' as Message['role'],
+      content: '',
+      toolResults: [{ toolCallId: `f${i}`, name: 'r', result: 'y'.repeat(chars) }],
+      timestamp: Date.now() + i,
+    })) as Message[];
+  }
+
+  it('红线 1：档位逐级 50→20→5、成功即停（round↔tailKeep 对应）', async () => {
+    // 关 aging（第 0 轮不介入）+ 62 条 500 chars（4 chars/token）+ 预算 10000（limit≈5.5k）：
+    // 50 档剩 ≈6.3k 超限 → 20 档剩 ≈2.5k 装得下 → round=2 成功即停（不进第 3 档）。
+    // round↔tailKeep 对应（1↔50 / 2↔20 / 3↔5）：错位即跳档或过砍
+    const engine2 = new DefaultContextEngine({
+      protectFirstN: 1,
+      protectLastN: 1,
+      targetTokens: 0,
+      proactiveCompactRatio: 0,
+      historyAging: { enabled: false },
+    });
+    const result = await engine2.assemble({
+      sessionId: 'ladder-r2',
+      messages: fatUser(62, 500),
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 10000,
+      contextWindow: 32000,
+    });
+    const m = /converged at round (\d) \(tailKeep=(\d+)[,)]/.exec(String(result.droppedSummary));
+    expect(m, `收敛必须成功且带档位信息: ${result.droppedSummary}`).not.toBeNull();
+    expect(['50', '20', '5'][Number(m![1]) - 1]).toBe(m![2]);
+    expect(Number(m![1])).toBeLessThanOrEqual(3);
+  });
+
+  it('红线 1/6：三档都救不了 → L3 终局（overflowRound=3 封顶，不再有第 4 轮）', async () => {
+    const events: Array<{ type: string; error?: string }> = [];
+    const engine = new DefaultContextEngine({
+      protectFirstN: 1,
+      protectLastN: 1,
+      targetTokens: 0,
+      proactiveCompactRatio: 0,
+    });
+    // 锚后 12 条胖工具结果：anchorFloor=12 顶住全部保底档（砍不动）→ 有限步收敛失败 → L3
+    // L3 天然场景：user 文本自身远超预算（不可再生不可账本化）——砍光工具执行也装不下
+    const messages: Message[] = [];
+    for (let i = 0; i < 30; i++) {
+      messages.push({ role: 'user', content: `u-${i} ` + 'U'.repeat(500), timestamp: Date.now() + i } as Message);
+    }
+    for (let i = 0; i < 4; i++) {
+      messages.push({
+        role: 'tool',
+        content: '',
+        toolResults: [{ toolCallId: `c${i}`, name: 'r', result: 'R'.repeat(3000) }],
+        timestamp: Date.now() + i,
+      } as Message);
+    }
+    await engine.assemble({
+      sessionId: 'ladder-l3',
+      messages,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 200,
+      contextWindow: 32000,
+      emit: (e) => events.push(e),
+    });
+    // 有限步终止：一轮 start + 一个 error 终局（不是无限循环/不发多个 start）
+    expect(events.filter((e) => e.type === 'context.compact.start')).toHaveLength(1);
+    const err = events.find((e) => e.type === 'context.compact.error');
+    expect(err?.error).toContain('context_overflow_unrecoverable');
+  });
+
+  it('红线 3：成对边界对齐——tool_call 在窗内/result 在 tail 窗时整对不砍（B1 孤儿 result 回归钉）', async () => {
+    const engine = new DefaultContextEngine({
+      protectFirstN: 1,
+      protectLastN: 1,
+      proactiveCompactRatio: 0,
+      targetTokens: 0,
+      historyAging: { enabled: false },
+      transformStore: new InMemoryTransformStore(),
+    });
+    // 真触发构造（评审 M1：4 条构造 tailFloor=0 三档 no-op=空过）：n=12 > tailKeep 5，
+    // tailKeep=5 档 tailFloor=7。候选窗 [0,7)：T0..T4（5 个可砍工具执行）+ A(c1)（其 result
+    // T(c1) 在下标 7=tail 窗内 → 整对不砍）。双向钉：删「回退整对」→ A 被砍（孤儿 T）hasCall 挂；
+    // 删「砍满」→ T0..T4 不砍 ledgerDropped 挂。
+    const messages: Message[] = [{ role: 'user', content: 'go', timestamp: 1 } as Message];
+    for (let i = 0; i < 5; i++) {
+      messages.push({ role: 'tool', content: '', toolResults: [{ toolCallId: `t${i}`, name: 'r', result: 'x'.repeat(3000) }], timestamp: 10 + i } as Message);
+    }
+    messages.push({ role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: {} }], timestamp: 30 } as Message);
+    messages.push({ role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'read_file', result: 'x'.repeat(3000) }], timestamp: 31 } as Message);
+    for (let i = 0; i < 4; i++) messages.push({ role: 'user', content: `tail${i}`, timestamp: 40 + i } as Message);
+    const events: Array<{ type: string; error?: string }> = [];
+    const result = await engine.assemble({
+      sessionId: 's-pair',
+      messages,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 5000, // 收敛成功预算（200 下「tail+账本」超限=Q3 正确 L3，砍不落无法钉「砍满」）
+      contextWindow: 32000,
+      emit: (e) => events.push(e),
+    });
+    const texts = result.messages.map((m) => JSON.stringify(m));
+    // LLM 形态检测（result.messages 是 LLM 消息：tool_calls/tool content，非领域 toolResults）
+    const hasCall = texts.some((t) => t.includes('c1') && t.includes('tool_calls'));
+    const hasResult = texts.some((t) => t.includes('"role":"tool"') && t.includes('xxx'));
+    // 无条件断言（评审 M1：条件式断言=恒真空过）——孤儿 result → provider 400 永久复发
+    expect(hasCall, 'A(c1) 的 call 被砍而 result 幸存（孤儿）→ provider 400').toBe(hasResult);
+    expect(hasCall, 'B1 整对不砍：A(c1)+T(c1) 同进同出').toBe(true);
+    // 砍满生效：T0..T4（窗内可砍）必须已账本化（砍满语义钉——删「砍满」此断言挂）
+    const t0Survives = texts.some((t) => t.includes('t0') && t.includes('3000'));
+    expect(t0Survives, 'T0..T4 应被账本化（候选窗内砍满）').toBe(false);
+  });
+
+  it('红线 4：账本化产物保留 user 原文幸存 + purpose 账本索引在场（丢弃次序）', async () => {
+    const engine = new DefaultContextEngine({
+      protectFirstN: 1,
+      protectLastN: 5,
+      proactiveCompactRatio: 0,
+      targetTokens: 0,
+      historyAging: { enabled: false },
+      transformStore: new InMemoryTransformStore(),
+    });
+    // 中段：tool 成对执行、user 交错——tool 账本化、user 原位幸存
+    const messages: Message[] = [{ role: 'user', content: 'HEAD', timestamp: 1 }];
+    for (let i = 0; i < 8; i++) {
+      messages.push({ role: 'assistant', content: '', toolCalls: [{ id: `t${i}`, name: 'read_file', arguments: { purpose: `read file ${i}` } }], timestamp: 2 + i * 2 } as Message);
+      messages.push({ role: 'tool', content: '', toolResults: [{ toolCallId: `t${i}`, name: 'read_file', result: 'z'.repeat(2000) }], timestamp: 3 + i * 2 } as Message);
+      messages.push({ role: 'user', content: `mid-user-${i}`, timestamp: 4 + i * 2 });
+    }
+    const result = await engine.assemble({
+      sessionId: 's-order',
+      messages,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 200,
+      contextWindow: 32000,
+    });
+    const viewText = result.messages.map((m) => JSON.stringify(m)).join('\n');
+    // 丢弃次序：user 原文（最不可再生）幸存
+    for (let i = 0; i < 8; i++) {
+      expect(viewText, `mid-user-${i} 被账本化吞掉（user 原文不可再生，必须幸存）`).toContain(`mid-user-${i}`);
+    }
+    // 执行记录 → purpose 账本索引在场
+    expect(viewText, '被砍工具执行必须留 name+purpose 账本').toContain('read_file');
+    expect(viewText, 'purpose 索引必须可追溯').toContain('read file');
+  });
+
+  it('红线 7：overflow 收敛事件 start↔终态严格配对（R9-3）', async () => {
+    const engine = new DefaultContextEngine({
+      protectFirstN: 1,
+      protectLastN: 5,
+      proactiveCompactRatio: 0,
+      targetTokens: 0,
+      historyAging: { enabled: false },
+      transformStore: new InMemoryTransformStore(),
+    });
+    const messages: Message[] = [];
+    for (let i = 0; i < 40; i++) {
+      messages.push({ role: 'tool', content: '', toolResults: [{ toolCallId: `q${i}`, name: 'r', result: 'y'.repeat(500) }], timestamp: i } as Message);
+    }
+    const events: Array<{ type: string; cancelled?: boolean; error?: string }> = [];
+    await engine.assemble({
+      sessionId: 's-pair-events',
+      messages,
+      systemPrompt: 'sys',
+      tools: [],
+      tokenBudget: 200,
+      contextWindow: 32000,
+      emit: (e) => events.push(e),
+    });
+    const starts = events.filter((e) => e.type === 'context.compact.start');
+    const terminals = events.filter(
+      (e) => e.type === 'context.compact.end' || e.type === 'context.compact.error',
+    );
+    expect(starts.length).toBeGreaterThan(0);
+    expect(terminals.length, '每个 start 必须有配对终态（end 或 error），否则 store compact.active 悬挂').toBe(starts.length);
+  });
+
 });

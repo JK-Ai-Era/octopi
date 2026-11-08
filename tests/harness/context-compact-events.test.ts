@@ -12,6 +12,15 @@ import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
 import { HeuristicTokenEstimator } from '@octopi-agent/engine/harness/context/token-estimator.js';
 
+function toolMsg(id: string, chars: number): Message {
+  return {
+    role: 'tool',
+    content: '',
+    toolResults: [{ toolCallId: id, name: 'r', result: 'x'.repeat(chars) }],
+    timestamp: Date.now(),
+  } as Message;
+}
+
 function userMsg(text: string): Message {
   return { role: 'user', content: text, timestamp: Date.now() };
 }
@@ -121,7 +130,8 @@ describe('DefaultContextEngine emit', () => {
       });
       const msgs: Message[] = [];
       for (let i = 0; i < 30; i++) {
-        msgs.push(userMsg(`c-${i} ` + 'x'.repeat(400)));
+        // 工具执行段=可账本化对象（user 消息永不账本化——丢弃次序原则）
+        msgs.push(toolMsg(`e${i}`, 50)); // 缩小：校准 ratio=4 时最小 tail 档仍收敛（防 L3）
       }
       // 把校准 ratio 拉离 1.0（seedMult 决定拉到多少）——事件对若混 ratio，两次读数会不同
       const seed = await engine.assemble({
@@ -156,7 +166,12 @@ describe('DefaultContextEngine emit', () => {
     const a = await runGaugeScenario('s-gauge-a', 2); // ratio → 1.7
     const b = await runGaugeScenario('s-gauge-b', 4); // ratio → 3.1
     const rawBefore = new HeuristicTokenEstimator().estimateMessages(
-      Array.from({ length: 30 }, (_, i) => userMsg(`c-${i} ` + 'x'.repeat(400))),
+      Array.from({ length: 30 }, (_, i) => ({
+        role: 'tool',
+        content: '',
+        toolResults: [{ toolCallId: `e${i}`, name: 'r', result: 'x'.repeat(50) }],
+        timestamp: Date.now() + i,
+      })) as Message[],
     );
     // before = 全视图原始估算：不乘校准 ratio、不取溢出子集（事故的 142371 → 1243157 家族）
     expect(a.start?.tokensBefore).toBe(rawBefore);
@@ -178,14 +193,16 @@ describe('DefaultContextEngine emit', () => {
       const events: ContextCompactEvent[] = [];
       // 头尾保护区自身超预算 → proactive 判「压缩救不了」跳过 → MessageSelector 溢出路径
       const engine = new DefaultContextEngine({
-        proactiveCompactRatio: 0.5,
+        proactiveCompactRatio: 0, // 关 proactive——本场景纯测 overflow 收敛（proactive 摘要会先拦）
         targetTokens: 0,
         protectFirstN: 8,
         protectLastN: 8,
       });
       const msgs: Message[] = [];
-      for (let i = 0; i < 20; i++) {
-        msgs.push(userMsg(`o-${i} ` + 'y'.repeat(400)));
+      // 62 条：账本三档（50→20→5）都咬得动（>50 条），确定性收敛成功产出 end 计量对。
+      // 150 chars/条：seedMult 校准（×2/×4）后最小档仍放得下——校准尺下不误入 L3
+      for (let i = 0; i < 62; i++) {
+        msgs.push(toolMsg(`o${i}`, 50)); // 工具执行=可账本化对象（user 永不账本化）
       }
       const seed = await engine.assemble({
         sessionId,
@@ -206,7 +223,7 @@ describe('DefaultContextEngine emit', () => {
         messages: msgs,
         systemPrompt: 'sys',
         tools: [],
-        tokenBudget: 500,
+        tokenBudget: 5000, // 触发 overflow 且砍满后「tail+账本」在校准尺下真装得下
         summarize,
         emit: (e) => events.push(e),
       });
@@ -219,10 +236,14 @@ describe('DefaultContextEngine emit', () => {
     const a = await runOverflowScenario('s-ovf-a', 2);
     const b = await runOverflowScenario('s-ovf-b', 4);
     expect(a.end).toBeDefined(); // 场景确实走了 overflow 路径
-    expect(a.start?.tokensBefore).toBe(a.end?.tokensBefore); // 同集合
+    expect(a.start?.tokensBefore).toBe(a.end?.tokensBefore); // 同集合（计量对同一集合）
     expect(a.end?.tokensAfter).toBeLessThan(a.end?.tokensBefore!);
-    expect(b.start?.tokensBefore).toBe(a.start?.tokensBefore); // 比率不变性
-    expect(b.end?.tokensAfter).toBe(a.end?.tokensAfter);
+    // 比率不变性（口径）：计量对 = messages-only 未校准原始口径——同集合的 raw 读数
+    // 不随校准 ratio 变。注意：ratio 参与**决策**（fits 判档）后两 run 收敛档位/产物可不同，
+    // 产物的 tokensAfter 不要求相等；不变的是口径（raw 未校准），不是产物。
+    expect(b.start?.tokensBefore).toBe(a.start?.tokensBefore); // 口径不变
+    expect(b.end).toBeDefined();
+    expect(b.end?.tokensAfter).toBeLessThan(b.end?.tokensBefore!);
   });
 
   it('F3 锚原子对 + 出口顺序：降级/冷启动读数 = 实测 × raw_now/anchor.raw', async () => {

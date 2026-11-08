@@ -34,8 +34,8 @@ describe('C-1：主动路径 degrade 不吞既有语义摘要', () => {
       transformStore: store,
     });
     const messages: Message[] = [userMsg('HEAD-0 ' + 'h'.repeat(200))];
-    for (let i = 0; i < 30; i++) {
-      messages.push(userMsg(`msg-${String(i).padStart(2, '0')}-` + 'z'.repeat(300)));
+    for (let i = 0; i < 100; i++) {
+      messages.push({ role: 'tool', content: '', toolResults: [{ toolCallId: `c${i}`, name: 'r', result: 'z'.repeat(300) }], timestamp: Date.now() + i } as Message);
     }
     messages.push(userMsg('TAIL-A'), userMsg('TAIL-B'));
 
@@ -51,7 +51,7 @@ describe('C-1：主动路径 degrade 不吞既有语义摘要', () => {
     // 主动压缩且摘要失败（抛错 → compactCore 机械降级 → degrade 记录）
     // 新增消息让视图再超线、needNewCompaction 成立
     const grown = [...messages];
-    for (let i = 0; i < 10; i++) grown.push(userMsg(`new-${i}-` + 'w'.repeat(500)));
+    for (let i = 0; i < 200; i++) grown.push(userMsg(`new-${i}-` + 'w'.repeat(500))); // 真超窗口比例线
     const failingSummarize = vi.fn(async () => {
       throw new Error('provider exploded');
     });
@@ -60,7 +60,7 @@ describe('C-1：主动路径 degrade 不吞既有语义摘要', () => {
       messages: grown,
       systemPrompt: 'sys',
       tools: [],
-      tokenBudget: 1000,
+      tokenBudget: 30000,
       contextWindow: 1_048_576,
       summarize: failingSummarize,
     });
@@ -109,14 +109,16 @@ describe('M-1：中止必须发终态事件', () => {
       transformStore: store,
     });
     const messages: Message[] = [userMsg('HEAD ' + 'h'.repeat(200))];
-    for (let i = 0; i < 30; i++) messages.push(userMsg(`m-${i}-` + 'z'.repeat(400)));
+    // 300 条大消息：真超窗口比例线（R6 后 infeasible 小预算不再唤醒 proactive——本用例
+    // 验证的是「摘要飞行中 abort」，预算须可行且视图真超线）
+    for (let i = 0; i < 300; i++) messages.push(userMsg(`m-${i}-` + 'z'.repeat(400)));
 
     const pending = engine.assemble({
       sessionId: 's-m1',
       messages,
       systemPrompt: 'sys',
       tools: [],
-      tokenBudget: 2000,
+      tokenBudget: 30000,
       contextWindow: 1_048_576,
       summarize,
       signal: controller.signal,
@@ -136,24 +138,17 @@ describe('M-1：中止必须发终态事件', () => {
     const cancelledEnds = events.filter(
       (e) => e.type === 'context.compact.end' && e.cancelled === true,
     );
-    expect(cancelledEnds.length, '中止收尾必须有 end{cancelled:true}').toBe(1);
+    // 中止收尾存在（proactive 与 overflow 两段可各有配对 cancelled 终态，数量随 start 数）
+    expect(cancelledEnds.length, '中止收尾必须有 end{cancelled:true}').toBeGreaterThanOrEqual(1);
   });
 });
 
 describe('M-2：overflow 中止轮零写入', () => {
-  it('overflow 摘要飞行中 abort → 不落任何转换记录 + end{cancelled} 收尾', async () => {
+  it('overflow 收敛中 abort → 零 LLM + 零写入 + end{cancelled} 收尾（Q1 换代）', async () => {
     const store = new InMemoryTransformStore();
     const events: ContextCompactEvent[] = [];
     const controller = new AbortController();
-    const summarize = vi.fn(
-      (_m: unknown, opts?: { signal?: AbortSignal }): Promise<string> =>
-        new Promise<string>((_resolve, reject) => {
-          if (!opts?.signal) return;
-          opts.signal.addEventListener('abort', () => reject(new Error('Request aborted')), {
-            once: true,
-          });
-        }),
-    );
+    const summarize = vi.fn();
     const engine = new DefaultContextEngine({
       protectFirstN: 1,
       protectLastN: 1,
@@ -174,7 +169,9 @@ describe('M-2：overflow 中止轮零写入', () => {
     }
     messages.push(userMsg('wrap up'));
 
-    const pending = engine.assemble({
+    // 进入时已中止（M-1：本轮请求作废——收敛动作全部跳过、记录不写）
+    controller.abort();
+    await engine.assemble({
       sessionId: 's-m2',
       messages,
       systemPrompt: 'sys',
@@ -185,10 +182,9 @@ describe('M-2：overflow 中止轮零写入', () => {
       signal: controller.signal,
       emit: (e) => events.push(e),
     });
-    await vi.waitFor(() => expect(summarize).toHaveBeenCalledTimes(1));
-    controller.abort();
-    await pending;
 
+    // Q1 零 LLM：overflow 收敛全程不发摘要请求
+    expect(summarize).not.toHaveBeenCalled();
     // 红线：中止轮零写入（残缺产物不进历史）
     expect((await store.load('s-m2', '')).records).toEqual([]);
     // 中止收尾有终态事件
