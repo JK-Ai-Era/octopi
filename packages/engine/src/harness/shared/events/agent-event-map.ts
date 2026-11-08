@@ -196,6 +196,23 @@ export interface AgentEventMap {
     kind?: 'denied' | 'failed';
     durationMs?: number;
   };
+  /**
+   * overflow 症状告警（P3 红线 7）：守门人触发 = 罕见异常信号，每次触发打告警。
+   * proactive_failed=A 类（前馈溢出，proactive 失效症状）；config_drift/config_missing=F 类实证；
+   * structural_over_budget=D 类（保护段超限）；window_mismatch=F 类归因未定（收缩兜底）。
+   */
+  'context.overflow.alert': {
+    symptom:
+      | 'proactive_failed'
+      | 'config_drift'
+      | 'config_missing'
+      | 'structural_over_budget'
+      | 'window_mismatch';
+    message: string;
+    estimatedTokens?: number;
+    contextWindow?: number;
+    trigger?: 'T1' | 'T2' | 'T3';
+  };
   /** 摘要请求进行中（P3）：请求已发出、等 provider 返回——UI 据此显示「已发出 N 条 / 预算 Ms」而非只显示「进行中」 */
   'context.compact.progress': {
     reason?: 'proactive' | 'overflow';

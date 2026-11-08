@@ -122,7 +122,9 @@ describe('M-1：中止必须发终态事件', () => {
       contextWindow: 1_048_576,
       summarize,
       signal: controller.signal,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
     await vi.waitFor(() => expect(summarize).toHaveBeenCalledTimes(1));
     controller.abort();
@@ -180,7 +182,9 @@ describe('M-2：overflow 中止轮零写入', () => {
       contextWindow: 32000,
       summarize,
       signal: controller.signal,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
 
     // Q1 零 LLM：overflow 收敛全程不发摘要请求

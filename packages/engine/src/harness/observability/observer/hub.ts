@@ -116,6 +116,8 @@ const TIMELINE_TYPES = new Set([
   'context.compact.end',
   'context.compact.error',
   'context.compact.summarize_fallback',
+  // P3 红线 7：overflow 症状告警（proactive 失效 / 配置漂移缺失）——罕见异常信号必须落 timeline
+  'context.overflow.alert',
   'context.layers.assembled',
   'persona.resolve.failed',
   'injection.detected',
@@ -1096,6 +1098,9 @@ function stripLayerPayload(
 
 function toTimelineNode(event: AgentEvent): RunTimelineEventView | null {
   const data = (event.data ?? {}) as Record<string, unknown>;
+  // P3 告警可见性：symptom/message 原样带出（红线 7 展示层不得只剩裸 type）
+  const symptom = typeof data.symptom === 'string' ? data.symptom : undefined;
+  const message = typeof data.message === 'string' ? data.message : undefined;
   // F3 计时段：step.end 带 llmTiming（LLM 调用计时）；run.timing 带 wait/build/run_end 分段
   const timing: RunTimelineEventView['timing'] =
     (data.llmTiming as RunTimelineEventView['timing'] | undefined) ??
@@ -1123,5 +1128,7 @@ function toTimelineNode(event: AgentEvent): RunTimelineEventView | null {
     reason: (data.reason ?? data.fallbackError) as string | undefined,
     usage: data.usage as RunTimelineEventView['usage'],
     timing,
+    symptom,
+    message,
   };
 }

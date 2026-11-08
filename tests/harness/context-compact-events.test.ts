@@ -5,7 +5,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
-import type { ContextCompactEvent } from '@octopi-agent/engine/harness/context/types.js';
+import type {
+  ContextCompactEvent,
+  OverflowAlertEvent,
+} from '@octopi-agent/engine/harness/context/types.js';
 import type { ModelProvider, LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
@@ -68,7 +71,9 @@ describe('DefaultContextEngine emit', () => {
       tools: [],
       tokenBudget: 4000,
       summarize,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
 
     const types = events.map((e) => e.type);
@@ -102,7 +107,9 @@ describe('DefaultContextEngine emit', () => {
       tools: [],
       tokenBudget: 4000,
       summarize,
-      emit: (e: ContextCompactEvent) => events.push(e),
+      emit: (e: ContextCompactEvent | OverflowAlertEvent) => {
+        if (e.type !== 'context.overflow.alert') events.push(e as ContextCompactEvent);
+      },
     };
 
     await engine.assemble({ ...params, messages: base });
@@ -155,7 +162,9 @@ describe('DefaultContextEngine emit', () => {
         tools: [],
         tokenBudget: 4000,
         summarize,
-        emit: (e) => events.push(e),
+        emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
       });
       return {
         start: events.find((e) => e.type === 'context.compact.start'),
@@ -225,7 +234,9 @@ describe('DefaultContextEngine emit', () => {
         tools: [],
         tokenBudget: 5000, // 触发 overflow 且砍满后「tail+账本」在校准尺下真装得下
         summarize,
-        emit: (e) => events.push(e),
+        emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
       });
       return {
         start: events.find((e) => e.type === 'context.compact.start' && e.reason === 'overflow'),

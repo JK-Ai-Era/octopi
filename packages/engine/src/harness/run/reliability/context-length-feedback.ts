@@ -81,7 +81,20 @@ export function computeShrunkWindowBound(input: ShrinkInput): number | undefined
  */
 export function applyContextLengthFeedback(
   error: ClassifiedError,
-  opts: { lastSuccessActual?: number } = {},
+  opts: {
+    lastSuccessActual?: number;
+    /** 会话 ID（告警载荷；来自 run-agent state/harness） */
+    sessionId?: string;
+    /** P3 告警出口（T2 触发）：宿主接 Hub/EventBus；缺省仅日志 */
+    onAlert?: (alert: {
+      type: 'context.overflow.alert';
+      sessionId: string;
+      symptom: 'config_drift' | 'config_missing' | 'window_mismatch';
+      message: string;
+      contextWindow?: number;
+      trigger: 'T2';
+    }) => void;
+  } = {},
 ): ContextLengthFeedbackResult {
   const text = collectText(error);
 
@@ -90,12 +103,20 @@ export function applyContextLengthFeedback(
   const snapshot = getResolvedModel();
   if (measured != null && snapshot) {
     recordWindowTruth(snapshot.ref, measured);
-    // 「contextWindow 配置漂移/缺失」告警（T2⑥，正式告警通道 P3）：真值与
-    // 配置不一致或原配置缺失 = 配置病，必须运维可见
+    // 「contextWindow 配置漂移/缺失」告警（T2⑥/红线 7 同族）：真值与配置不一致
+    // 或原配置缺失 = 配置病，必须运维可见——每次触发打告警，不当日常
     if (snapshot.contextWindow !== measured) {
-      console.warn(
-        `[overflow] contextWindow truth backfill: ref=${snapshot.ref} configured=${snapshot.contextWindow ?? 'missing'} measured=${measured} (config drift/missing)`,
-      );
+      const symptom = snapshot.contextWindow == null ? 'config_missing' : 'config_drift';
+      const message = `[overflow] contextWindow ${symptom === 'config_missing' ? '配置缺失' : '配置漂移'}：ref=${snapshot.ref} configured=${snapshot.contextWindow ?? 'missing'} measured=${measured}（真值回填）`;
+      console.warn(message);
+      opts.onAlert?.({
+        type: 'context.overflow.alert',
+        sessionId: opts.sessionId ?? 'unknown',
+        symptom,
+        message,
+        contextWindow: measured,
+        trigger: 'T2',
+      });
     }
     updateResolvedModel({
       ...snapshot,
@@ -112,9 +133,19 @@ export function applyContextLengthFeedback(
     knownWindow: snapshot?.contextWindow,
   });
   if (shrunk != null && snapshot) {
-    console.warn(
-      `[overflow] contextWindow shrink: ref=${snapshot.ref} known=${snapshot.contextWindow ?? 'missing'} lastSuccessActual=${opts.lastSuccessActual ?? 'missing'} -> bound=${shrunk}`,
-    );
+    // 无实证（真值提取不到）不得断言配置漂移——配置可能正确、是尺子偏差（E 类）；
+    // 语义为「请求超真窗口但归因未定」，收缩只是保守兜底
+    const symptom = 'window_mismatch';
+    const message = `[overflow] contextWindow 归因未定：ref=${snapshot.ref} known=${snapshot.contextWindow ?? 'missing'} lastSuccessActual=${opts.lastSuccessActual ?? 'missing'} -> bound=${shrunk}（收缩上界，未提取到真值——配置或尺子偏差待查）`;
+    console.warn(message);
+    opts.onAlert?.({
+      type: 'context.overflow.alert',
+      sessionId: opts.sessionId ?? 'unknown',
+      symptom,
+      message,
+      contextWindow: shrunk,
+      trigger: 'T2',
+    });
     updateResolvedModel({
       ...snapshot,
       contextWindow: shrunk,

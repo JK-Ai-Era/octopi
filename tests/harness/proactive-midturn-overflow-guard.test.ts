@@ -197,7 +197,9 @@ describe('overflow 收敛循环（Q1 纯机械，2026-11-08）', () => {
       tokenBudget: 6000,
       contextWindow: 32000,
       summarize,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
     expect(summarize, 'overflow 纯机械：收敛循环零 LLM（Q1）').toHaveBeenCalledTimes(0);
 
@@ -212,7 +214,9 @@ describe('overflow 收敛循环（Q1 纯机械，2026-11-08）', () => {
       tokenBudget: 6000,
       contextWindow: 32000,
       summarize,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
     expect(summarize, '连续溢出依然零 LLM（旧每 turn 名额已随 LLM 路径拆除）').toHaveBeenCalledTimes(0);
     // 防错断言：返回视图含老化指针（真收敛证据）——第 0 轮 overflow aging 豁免 turn 首/
@@ -225,7 +229,9 @@ describe('overflow 收敛循环（Q1 纯机械，2026-11-08）', () => {
       tokenBudget: 6000,
       contextWindow: 32000,
       summarize,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
     const sentText = JSON.stringify(sent.messages);
     expect(sentText, '发送视图应含 aging 指针（overflow 第 0 轮收敛证据）').toContain('aged tool result · pointer');
@@ -305,7 +311,9 @@ describe('评审修复回归（del-ec61eb65）', () => {
       summarize: async () => {
         throw new Error('provider exploded');
       },
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
     // 第二轮：冷却中（LLM 被拦）+ 小溢出段（≤ floorKeep → ledgerTruncate 原样）
     // → 无记录且仍超预算 → 必须 fail-loud
@@ -318,7 +326,9 @@ describe('评审修复回归（del-ec61eb65）', () => {
       tokenBudget: 200,
       contextWindow: 32000,
       summarize: async () => 'SUMMARY-MARK',
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
 
     const errors = events.filter(
@@ -372,7 +382,9 @@ describe('overflow 止血：无记录轮不发假 compacted', () => {
       tokenBudget: 500,
       contextWindow: 32000,
       summarize: async () => 'SUMMARY-MARK',
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
 
     const ledger = await store.load('s-ovf-noop', '');
@@ -454,7 +466,9 @@ describe('收敛阶梯红线（arch/overflow-redesign.md §3）', () => {
       tools: [],
       tokenBudget: 200,
       contextWindow: 32000,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
     // 有限步终止：一轮 start + 一个 error 终局（不是无限循环/不发多个 start）
     expect(events.filter((e) => e.type === 'context.compact.start')).toHaveLength(1);
@@ -490,7 +504,9 @@ describe('收敛阶梯红线（arch/overflow-redesign.md §3）', () => {
       tools: [],
       tokenBudget: 5000, // 收敛成功预算（200 下「tail+账本」超限=Q3 正确 L3，砍不落无法钉「砍满」）
       contextWindow: 32000,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
     const texts = result.messages.map((m) => JSON.stringify(m));
     // LLM 形态检测（result.messages 是 LLM 消息：tool_calls/tool content，非领域 toolResults）
@@ -559,7 +575,9 @@ describe('收敛阶梯红线（arch/overflow-redesign.md §3）', () => {
       tools: [],
       tokenBudget: 200,
       contextWindow: 32000,
-      emit: (e) => events.push(e),
+      emit: (e) => {
+        if (e.type !== 'context.overflow.alert') events.push(e);
+      },
     });
     const starts = events.filter((e) => e.type === 'context.compact.start');
     const terminals = events.filter(

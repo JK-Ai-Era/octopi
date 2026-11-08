@@ -109,6 +109,32 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 | v0.1 | [changelog/v0.1.md](./changelog/v0.1.md) |
 
 ---
+## v0.102.8 (2026-11-08)
+
+### feat(context): P3 告警与观测——overflow 症状告警通道 + 红线 7
+
+**overflow 症状告警（arch/overflow-redesign.md §2.3 + 红线 7）**：新增 `context.overflow.alert`
+事件（`OverflowAlertEvent`，ContextEmitFn 参数扩为联合类型）——守门人触发 = 罕见异常信号，
+每次触发打告警、不当日常。症状五值：`proactive_failed`（A 类前馈溢出，message 含「proactive
+失效」语义）、`structural_over_budget`（D 类保护段超限，T3 在预算判定点发、不依赖收敛阶梯入口）、
+`config_drift`/`config_missing`（F 类实证，真值回填与配置不一致才造警）、`window_mismatch`
+（F 类归因未定，收缩兜底路径——无实证不造病名）。
+
+**双缝接入**：T1/T3 走 ContextEngine `emit`（Hub timeline + EventBus）；T2 走
+`ReliabilityHarness.onOverflowAlert` 新缝（builder 转发同路，data 形状与 emit 闭包同源）。
+可观测面：Hub timeline（`RunTimelineEventView` 增 `symptom`/`message` 字段，红线 7 展示层
+不得只剩裸 type）、产品事件词表（agent-event-map）、WebUI inspector（`overflowAlert`），
+并补 console.warn 对称（observer 关闭也留痕）。
+
+**红线 7 测试**（tests/harness/overflow-alerts.test.ts，10 条含 B1 回归）：T1 告警语义、
+emit 通道可见、每次触发都打（不去重）、T3 早退路径不漏发、T2 配置漂移/缺失/收缩语义、
+无病不造警、正常装配零告警。摘修复法验证真钉（摘 T1+T2 告警块 7 条挂）。
+
+**独立评审**（del-cd687c86）2 blocking + 5 major 全部修复：T3 早退漏发（告警上移预算判定点）、
+timeline 丢 message/symptom、收缩路径无证据报 drift（改 window_mismatch）、T3 无独立 trigger、
+`as never` 类型逃逸、词表/WebUI 未接、落库门禁。
+
+---
 ## v0.102.7 (2026-11-08)
 
 ### feat(context): F 类 400 反馈环——错误分类器 + 窗口真值回填 + 收缩上界 + 重发限 2

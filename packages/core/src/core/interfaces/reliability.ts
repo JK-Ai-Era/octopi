@@ -90,6 +90,26 @@ export interface ReliabilityHarness {
   sessionLedger?: unknown;
   /** P5: Context 压力回调（可选，用于 context wrap-up 判断） */
   getContextPressure?: (sessionId?: string) => { estimatedTokens: number; contextWindow?: number } | undefined;
+  /**
+   * P3: overflow 症状告警回调（可选，F 类反馈环的 T2 触发出路）。
+   *
+   * 与 ContextEngine 的 emit 同形态（结构等价 OverflowAlertEvent）：
+   * run 侧的窗口真值回填/收缩触发时调用，宿主接到 EventBus/Hub 做可见告警。
+   */
+  onOverflowAlert?: (alert: {
+    type: 'context.overflow.alert';
+    sessionId: string;
+    symptom:
+      | 'proactive_failed'
+      | 'config_drift'
+      | 'config_missing'
+      | 'structural_over_budget'
+      | 'window_mismatch';
+    message: string;
+    estimatedTokens?: number;
+    contextWindow?: number;
+    trigger?: 'T1' | 'T2' | 'T3';
+  }) => void;
   /** 校准状态快照（可选，持久化配套） */
   exportCalibration?: () => unknown;
   /** 校准状态恢复（可选） */

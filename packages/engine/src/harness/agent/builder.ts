@@ -2044,6 +2044,18 @@ export class AgentBuilder {
       },
       // high 风险确认：有则走人工审批，无则 run-agent 回退 reject
       confirmHighRisk: this._confirmHighRisk,
+      // P3 告警通道：F 类反馈环（T2）的症状告警，与 ContextEngine emit 同路（Hub + EventBus）
+      // data 形状与 emit 闭包同源（剥 type/sessionId，其余入 data）
+      onOverflowAlert: (alert) => {
+        const { type, sessionId: sid, ...data } = alert;
+        const event = { type, timestamp: Date.now(), sessionId: sid, data };
+        try {
+          this._observerHub?.ingestEvent(event);
+        } catch {
+          // 观测 fail-open
+        }
+        this._events?.emit(event);
+      },
     };
 
     // Agent.run() 需要 harness；Builder 组装期绑定

@@ -99,7 +99,36 @@ export interface ContextCompactEvent {
 }
 
 /** 事件回调（Builder 注入 → EventBus） */
-export type ContextEmitFn = (event: ContextCompactEvent) => void;
+export type ContextEmitFn = (event: ContextCompactEvent | OverflowAlertEvent) => void;
+
+/**
+ * overflow 症状告警（P3，arch/overflow-redesign.md §2.3 + 红线 7）
+ *
+ * 守门人触发 = 罕见异常信号，每次触发打告警（不当日常）：
+ * - `proactive_failed`（A 类症状）：前馈溢出——proactive 本该在到达窗口前压缩
+ * - `config_drift` / `config_missing`（F 类，有实证）：contextWindow 配置漂移/缺失
+ * - `structural_over_budget`（D 类）：保护段超限——窗口连固定面都放不下
+ * - `window_mismatch`（F 类，归因未定）：请求超真窗口但未提取到数字，配置或尺子偏差待查
+ */
+export interface OverflowAlertEvent {
+  type: 'context.overflow.alert';
+  sessionId: string;
+  /** 症状语义（红线 7：前馈溢出必须含 proactive 失效语义） */
+  symptom:
+    | 'proactive_failed'
+    | 'config_drift'
+    | 'config_missing'
+    | 'structural_over_budget'
+    | 'window_mismatch';
+  /** 人类可读告警（含症状语义关键词，UI/日志直接展示） */
+  message: string;
+  /** 触发时的估算 token（可选） */
+  estimatedTokens?: number;
+  /** 窗口值（配置或真值，可选） */
+  contextWindow?: number;
+  /** 触发入口：T1 前馈溢出 / T2 反馈溢出（F 类回填）/ T3 保护段超限 */
+  trigger?: 'T1' | 'T2' | 'T3';
+}
 
 export interface AssembleParams {
   /** Session ID */

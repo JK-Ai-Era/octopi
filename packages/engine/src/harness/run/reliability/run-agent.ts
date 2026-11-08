@@ -1109,6 +1109,8 @@ export async function* runAgentWithReliability(
         try {
           applyContextLengthFeedback(classified, {
             lastSuccessActual: ledger.snapshot().contextActualTokens,
+            sessionId: harness.sessionId,
+            onAlert: harness.onOverflowAlert,
           });
         } catch (feedbackErr) {
           // 反馈是 side effect：失败不得阻断错误决策链（retry/abort 照常）。

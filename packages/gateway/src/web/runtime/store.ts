@@ -137,6 +137,14 @@ export interface ToolRun {
   error?: string;
 }
 
+/** P3 overflow 症状告警（context.overflow.alert；红线 7 可见面） */
+export interface OverflowAlertState {
+  symptom: string;
+  message: string;
+  trigger?: string;
+  timestamp: number;
+}
+
 export interface CompactStatus {
   active: boolean;
   reason?: 'proactive' | 'overflow' | 'manual';
@@ -195,6 +203,8 @@ export interface InspectorState {
   lastModelRetryLabel?: string;
   /** 上下文压缩状态（context.compact.*） */
   compact?: CompactStatus;
+  /** P3：最近一次 overflow 症状告警（罕见异常信号，出现即异常） */
+  overflowAlert?: OverflowAlertState;
   /** System 装配快照（产品 L1–L7；context.layers.assembled / REST） */
   contextLayers?: ContextLayersSnapshot;
   /** Agent 数据面健康（产品 L1–L7 store 计数；REST） */
@@ -1995,6 +2005,23 @@ export class OctopiRuntimeStore extends EventTarget {
             active: false,
             error: String(d?.error ?? 'compact failed'),
             durationMs: typeof d?.durationMs === 'number' ? d.durationMs : undefined,
+          },
+        };
+        inspectorChanged = true;
+        break;
+      }
+      // P3 红线 7：overflow 症状告警可见面（proactive 失效/配置病——罕见，出现即异常）
+      case 'context.overflow.alert': {
+        const d = event.data as
+          | { symptom?: string; message?: string; trigger?: string }
+          | undefined;
+        this.chat.inspector = {
+          ...this.chat.inspector,
+          overflowAlert: {
+            symptom: String(d?.symptom ?? 'unknown'),
+            message: String(d?.message ?? ''),
+            trigger: d?.trigger,
+            timestamp: Date.now(),
           },
         };
         inspectorChanged = true;

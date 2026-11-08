@@ -372,6 +372,22 @@ export class DefaultContextEngine implements ContextEngine {
     // 如实标记（自定义 allocator / 上层可据此告警）；真实越界仍由 provider 拒绝暴露。
     const effectiveMessagesLimit = budget.infeasible ? 1000 : budget.messagesLimit;
 
+    // P3 红线 7 族：T3 保护段超限 = D 类结构性超预算（配置病）——不管视图大小、
+    // 不依赖是否进入收敛阶梯（早退路径也必须可见），每次触发打告警，不当日常。
+    if (budget.infeasible) {
+      console.warn(
+        `[overflow] contextWindow 配置病：保护段超限（窗口连 system+tools+输出预留都放不下）——换 model 或修配置`,
+      );
+      emit?.({
+        type: 'context.overflow.alert',
+        sessionId,
+        symptom: 'structural_over_budget',
+        message: `[overflow] contextWindow 配置病：保护段超限（窗口连 system+tools+输出预留都放不下）——换 model 或修配置`,
+        contextWindow,
+        trigger: 'T3',
+      });
+    }
+
     // 1b. 主动摘要：仅在有预算时启用（基于窗口/显式 target 的自动压缩）
     const proactive = await this.applyProactiveCompact({
       sessionId,
@@ -459,6 +475,24 @@ export class DefaultContextEngine implements ContextEngine {
     const state = this.states.get(stateKey);
     let droppedSummary: string | undefined;
     let lastDroppedCount = 0; // MN4：droppedSummary 报实际账本化条数
+
+    // P3 红线 7（arch/overflow-redesign.md §2.3）：守门人触发 = 罕见异常信号，每次
+    // 触发打告警、不当日常。前馈溢出（视图超已知窗口）= A 类症状——proactive 本该
+    // 在到达窗口前压缩而没做到。T3（infeasible）告警已在预算判定点发出，不重复。
+    if (!budget.infeasible) {
+      console.warn(
+        `[overflow] 前馈溢出触发收敛阶梯：proactive 失效（视图超已知窗口而未被提前压缩）——本信号罕见，出现即异常`,
+      );
+      emit?.({
+        type: 'context.overflow.alert',
+        sessionId,
+        symptom: 'proactive_failed',
+        message: `[overflow] 前馈溢出触发收敛阶梯：proactive 失效（视图超已知窗口而未被提前压缩）——本信号罕见，出现即异常`,
+        estimatedTokens: rawEstimator.estimateMessages(view),
+        contextWindow,
+        trigger: 'T1',
+      });
+    }
 
     const overflowStart = Date.now();
     // 事件计量口径（P0-C M2）：compact 对 = messages-only 未校准、同一集合（全视图前后）。
