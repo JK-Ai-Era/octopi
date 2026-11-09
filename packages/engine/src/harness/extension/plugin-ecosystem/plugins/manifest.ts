@@ -95,6 +95,11 @@ const manifestSchema = z
     enabledByDefault: z.boolean().optional(),
     engine: z.object({ octopi: z.string().min(1) }).strict(),
     configSchema: jsonSchemaSchema,
+    /**
+     * Option keys whose values are secrets (e.g. tokens). The Host redacts
+     * them in config echo surfaces (Web console) — values are never shown.
+     */
+    secretOptions: z.array(contributionName).optional(),
     contributes: z
       .object({
         tools: z.array(contributionName).optional(),
@@ -147,6 +152,8 @@ export interface PluginManifest {
   enabledByDefault?: boolean;
   engine: { octopi: string };
   configSchema: JsonSchema;
+  /** Option keys whose values are secrets; redacted in config echo surfaces. */
+  secretOptions?: string[];
   contributes?: PluginContributions;
   requiresPlugins?: string[];
   legacyPluginIds?: string[];

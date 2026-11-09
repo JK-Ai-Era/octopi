@@ -34,7 +34,7 @@ messages arrive over HTTP **long polling**.
 
 | Option | Meaning |
 |---|---|
-| `options.statePath` | Where `{bot_token, baseurl, get_updates_buf}` is persisted (chmod 600). Default `${OCTOPI_HOME}/credentials/weixin-clawbot-state.json`. |
+| `options.statePath` | Where `{baseurl, get_updates_buf}` is persisted (chmod 600). Default `<api.stateDir>/weixin-clawbot-state.json` (P6-4). `bot_token` lives in the Host credentials vault via `api.secrets`; without vault injection (standalone use) the token stays inline in this file (legacy mode). |
 | `options.verifyCode` | Numeric pairing code shown on the phone, when the flow asks for one. |
 | `options.loginTimeoutMs` | Pairing wait budget (default 5 minutes). |
 | `options.allowHosts` | Extra trusted host names beyond `*.weixin.qq.com` (server-provided `baseurl` / redirect hosts are validated). |
@@ -71,8 +71,14 @@ so an unattended dead token degrades to idle instead of churning.
 
 ## Security
 
-- The state file contains `bot_token` — it is written with mode 600. Keep it
-  out of backups you do not control.
+- Since P6-4 `bot_token` lives in the Host credentials vault (AES-GCM, bound
+  to this plugin via `api.secrets`); the state file only holds runtime state
+  (`baseurl`, cursor) and is written with mode 600 inside the plugin's 0700
+  stateDir. Deployments from earlier versions (single state file with the
+  token inline under `credentials/`) migrate automatically on first start
+  (`migrateLegacyState`); in standalone/legacy mode without vault injection
+  the token stays inline in the state file — keep such files out of backups
+  you do not control.
 - `context_token`, `bot_token`, and full media URLs must never be logged; the
   adapter's log lines are pre-redacted accordingly.
 - Server-provided hosts are validated against `https://*.weixin.qq.com` unless

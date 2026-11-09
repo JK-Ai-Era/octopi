@@ -12,6 +12,7 @@
  *     schedules.db                     ← SessionSchedule 作业表（timer_* / schedule_*）
  *     knowledge/                       ← Knowledge 服务数据面（knowledge.db 等）
  *     credentials/                     ← 集成凭证库（credentials.db；密文或 env 引用）
+ *     plugin-state/<id>/               ← 插件私有状态目录（0700；api.stateDir）
  *     agents/
  *       default/                       ← agent home（persona / skills）
  *         AGENTS.md                    ← 主 persona（loadPersona 最先加载）

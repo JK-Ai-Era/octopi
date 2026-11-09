@@ -1,6 +1,10 @@
 /** Public author API. Runtime ownership lives in PluginContributionRegistry. */
 
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { mkdir, chmod } from 'node:fs/promises';
+import { getOctopiHome } from '../../../../paths.js';
+import { CredentialStore } from '../../../governance/credentials/store.js';
+import type { CredentialConsumerRef } from '../../../governance/credentials/types.js';
 import { TOOL_CAPABILITIES, type ToolDefinition, type ToolHandler } from '@octopi-agent/core/types.js';
 import { CONTRIBUTION_NAME_RE, type PluginHookName, type PluginSessionOpName } from './manifest.js';
 import { COMMAND_KIND, CHANNEL_KIND, HOOK_KIND, PROVIDER_KIND, SERVICE_KIND, TOOL_KIND, stageContribution } from './contribution-kinds.js';
@@ -28,6 +32,89 @@ export interface PluginCommandContext {
   args: string[];
   raw: string;
   principal: { actorId?: string; actorType?: string; tenantId?: string };
+}
+
+/**
+ * Per-plugin secret storage backed by the Host credentials vault
+ * (`OCTOPI_HOME/credentials/credentials.db`, AES-GCM). Values live in the
+ * plugin's own namespace (`plugin:<id>:<key>`) and are bound to the plugin as
+ * consumer — no other consumer can resolve them. Plaintext returned by `get`
+ * is short-lived: never log or persist it.
+ */
+export interface PluginSecrets {
+  /**
+   * Read a secret value in this plugin's namespace.
+   *
+   * @param key - Secret key (`[A-Za-z0-9._-]+`)
+   * @returns Plaintext value, or null when absent
+   */
+  get(key: string): Promise<string | null>;
+  /**
+   * Write or rotate a secret in this plugin's namespace.
+   *
+   * @param key - Secret key (`[A-Za-z0-9._-]+`)
+   * @param value - Plaintext value (encrypted at rest, never echoed)
+   */
+  set(key: string, value: string): Promise<void>;
+  /**
+   * Delete a secret from this plugin's namespace.
+   *
+   * @param key - Secret key
+   * @returns Whether a stored secret was removed
+   */
+  delete(key: string): Promise<boolean>;
+}
+
+const SECRET_KEY_RE = /^[A-Za-z0-9._-]+$/;
+
+/** Vault-backed secrets scoped to one plugin (`plugin:<id>:<key>` namespace). */
+function createPluginSecrets(
+  pluginId: string,
+  storeOf: () => Promise<CredentialStore>,
+): PluginSecrets {
+  const consumer = { kind: 'plugin' as const, id: pluginId };
+  const nameOf = (key: string): string => {
+    if (typeof key !== 'string' || !SECRET_KEY_RE.test(key)) {
+      throw new Error(
+        `Plugin "${pluginId}" invalid secret key "${String(key)}": expected [A-Za-z0-9._-]+`,
+      );
+    }
+    return `plugin:${pluginId}:${key}`;
+  };
+  return {
+    async get(key) {
+      const store = await storeOf();
+      return store.reveal(nameOf(key), consumer);
+    },
+    async set(key, value) {
+      if (typeof value !== 'string' || value === '') {
+        throw new Error(`Plugin "${pluginId}" secret "${key}" value must be a non-empty string`);
+      }
+      const store = await storeOf();
+      const name = nameOf(key);
+      store.set({
+        name,
+        kind: 'api_key',
+        description: `plugin:${pluginId} secret`,
+        secretMode: 'encrypted',
+        secretValue: value,
+        scope: { level: 'plugin', key: pluginId },
+      });
+      // Own-or-revoke: a secret written here belongs to this plugin only —
+      // bindings left over from a hand-provisioned row are revoked so the
+      // "only resolvable consumer" claim cannot be silently falsified.
+      for (const bound of store.listBindings(name)) {
+        if (bound.kind !== 'plugin' || bound.id !== pluginId) {
+          store.unbind({ kind: bound.kind as CredentialConsumerRef['kind'], id: bound.id }, name);
+        }
+      }
+      store.bind(consumer, name);
+    },
+    async delete(key) {
+      const store = await storeOf();
+      return store.delete(nameOf(key));
+    },
+  };
 }
 
 export interface PluginCommandRegistration {
@@ -193,7 +280,11 @@ export class PluginApi {
   readonly rootDir: string;
   readonly pluginConfig: Record<string, unknown>;
   readonly logger: PluginLogger;
-
+  /** Per-plugin secret storage backed by the Host credentials vault. */
+  readonly secrets: PluginSecrets;
+  private readonly stateDirPath: string;
+  private credentialStore?: CredentialStore;
+  private readonly injectedCredentialStore?: CredentialStore;
 
   constructor(opts: {
     id: string;
@@ -203,6 +294,10 @@ export class PluginApi {
     source: string;
     rootDir: string;
     pluginConfig: Record<string, unknown>;
+    /** Override for the per-plugin state directory (tests / custom layouts). */
+    stateDir?: string;
+    /** Shared credentials vault; falls back to `CredentialStore.openDefault`. */
+    credentialStore?: CredentialStore;
   }) {
     this.id = opts.id;
     this.name = opts.name;
@@ -211,6 +306,9 @@ export class PluginApi {
     this.source = opts.source;
     this.rootDir = opts.rootDir;
     this.pluginConfig = opts.pluginConfig;
+    this.stateDirPath = opts.stateDir ?? join(getOctopiHome(), 'plugin-state', opts.id);
+    this.injectedCredentialStore = opts.credentialStore;
+    this.secrets = createPluginSecrets(opts.id, () => this.getCredentialStore());
     createStaging(this);
     createInstanceTable(this);
     const prefix = `[plugin:${opts.id}]`;
@@ -220,6 +318,37 @@ export class PluginApi {
       warn: (message, ...args) => console.warn(`${prefix} ${message}`, ...args),
       error: (message, ...args) => console.error(`${prefix} ${message}`, ...args),
     };
+  }
+
+  /**
+   * Per-plugin private state directory (`OCTOPI_HOME/plugin-state/<id>`).
+   * Created on first access with mode 0700 (and tightened to 0700 when the
+   * directory already looser). Runtime state goes here — secrets go through
+   * {@link PluginApi.secrets}, never into files.
+   */
+  get stateDir(): string {
+    return this.stateDirPath;
+  }
+
+  /** Ensure the state directory exists with 0700. Called by stateDir consumers. */
+  async ensureStateDir(): Promise<string> {
+    await mkdir(this.stateDirPath, { recursive: true, mode: 0o700 });
+    // mkdir's mode is masked by umask and does not tighten existing dirs.
+    try {
+      await chmod(this.stateDirPath, 0o700);
+    } catch (error) {
+      // Degraded, explicit: a state dir that cannot be tightened is a real
+      // security downgrade, never a silent one.
+      this.logger.warn(
+        `Plugin "${this.id}" stateDir ${this.stateDirPath}: cannot enforce mode 0700 (${String(error)}); state files rely on their own mode`,
+      );
+    }
+    return this.stateDirPath;
+  }
+
+  private async getCredentialStore(): Promise<CredentialStore> {
+    this.credentialStore ??= this.injectedCredentialStore ?? (await CredentialStore.openDefault(getOctopiHome()));
+    return this.credentialStore;
   }
 
   /**

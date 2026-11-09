@@ -10,8 +10,8 @@
  * startup blocker or a request storm.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
@@ -20,6 +20,7 @@ import {
   encodeClientVersion,
   isTrustedHost,
   makeWechatUin,
+  migrateLegacyState,
   parseOptions,
   toChannelMessage,
 } from '../examples/plugins/weixin-clawbot/index.mjs';
@@ -596,5 +597,123 @@ describe('weixin plugin — login QR state machine via pair()', () => {
     // Business calls DO carry it.
     const notify = t.calls.find((c) => c.url.includes('notifystart'));
     expect(notify?.headers.Authorization).toBe('Bearer tok-1');
+  });
+});
+
+describe('weixin state + vault (P6-4)', () => {
+  const statePath = () => join(root, 'state.json');
+
+  function pairDrive(statuses: Array<Record<string, unknown>>, qr = 'qr-1') {
+    const t = fakeTransport();
+    let i = 0;
+    t.on((url) => {
+      if (url.includes('get_bot_qrcode')) return { ret: 0, qrcode: qr, qrcode_img_content: 'QRDATA' };
+      if (url.includes('get_qrcode_status')) return { ret: 0, ...(statuses[Math.min(i++, statuses.length - 1)]) };
+      return { ret: 0 };
+    });
+    return t;
+  }
+
+  function fakeSecrets() {
+    const store = new Map<string, string>();
+    return {
+      store,
+      secrets: {
+        async get(key: string) { return store.get(key) ?? null; },
+        async set(key: string, value: string) { store.set(key, value); },
+        async delete(key: string) { return store.delete(key); },
+      },
+    };
+  }
+
+  it('stores bot_token in the injected vault and runtime state in the file', async () => {
+    const { store, secrets } = fakeSecrets();
+    const t = pairDrive([{ status: 'confirmed', bot_token: 'tok-v', baseurl: BASEURL }]);
+    const sp = statePath();
+    const adapter = createWeixinChannelAdapter(ctxFor(sp), { ...fastDeps(t), secrets }) as ReturnType<typeof createWeixinChannelAdapter> & { pairingPromise: Promise<void> | null };
+    await adapter.start(async () => {});
+    await adapter.pair();
+    await adapter.pairingPromise;
+
+    expect(store.get('bot_token')).toBe('tok-v');
+    const onDisk = JSON.parse(readFileSync(sp, 'utf8')) as Record<string, unknown>;
+    expect(onDisk.bot_token).toBeUndefined();
+    expect(onDisk.baseurl).toBe(BASEURL);
+    await adapter.stop();
+  });
+
+  it('restores the session from vault token + runtime file across restarts', async () => {
+    const { store, secrets } = fakeSecrets();
+    const sp = statePath();
+    const t1 = pairDrive([{ status: 'confirmed', bot_token: 'tok-v', baseurl: BASEURL }]);
+    const first = createWeixinChannelAdapter(ctxFor(sp), { ...fastDeps(t1), secrets }) as ReturnType<typeof createWeixinChannelAdapter> & { pairingPromise: Promise<void> | null };
+    await first.start(async () => {});
+    await first.pair();
+    await first.pairingPromise;
+    await first.stop();
+
+    // Restart: the file has no token — the session must come back from the vault.
+    const t2 = fakeTransport();
+    const second = createWeixinChannelAdapter(ctxFor(sp), { ...fastDeps(t2), secrets });
+    await second.start(async () => {});
+    const notify = t2.calls.find((c) => c.url.includes('notifystart'));
+    expect(notify?.headers.Authorization).toBe('Bearer tok-v');
+    await second.stop();
+  });
+
+  it('moves an inline bot_token from the state file into the vault on first save', async () => {
+    const { store, secrets } = fakeSecrets();
+    const sp = statePath();
+    writeFileSync(sp, JSON.stringify({ bot_token: 'legacy-tok', baseurl: BASEURL }));
+    const t = fakeTransport();
+    const adapter = createWeixinChannelAdapter(ctxFor(sp), { ...fastDeps(t), secrets });
+
+    await adapter.start(async () => {});
+    expect(store.get('bot_token')).toBe('legacy-tok');
+    const onDisk = JSON.parse(readFileSync(sp, 'utf8')) as Record<string, unknown>;
+    expect(onDisk.bot_token).toBeUndefined();
+    await adapter.stop();
+  });
+
+  it('vault write failure keeps the token inline and logs loudly (no silent token loss)', async () => {
+    const errLog: string[] = [];
+    const logger = { log() {}, error(...a: unknown[]) { errLog.push(String(a[0])); } };
+    const secrets = {
+      async get() { return null; },
+      async set() { throw new Error('credential master key not configured'); },
+      async delete() { return true; },
+    };
+    const t = pairDrive([{ status: 'confirmed', bot_token: 'tok-keep', baseurl: BASEURL }]);
+    const sp = statePath();
+    const adapter = createWeixinChannelAdapter(ctxFor(sp), { ...fastDeps(t), logger, secrets }) as ReturnType<typeof createWeixinChannelAdapter> & { pairingPromise: Promise<void> | null };
+    await adapter.start(async () => {});
+    await adapter.pair();
+    await adapter.pairingPromise;
+
+    // The token survives on disk (inline form) and the failure is loud.
+    const onDisk = JSON.parse(readFileSync(sp, 'utf8')) as Record<string, unknown>;
+    expect(onDisk.bot_token).toBe('tok-keep');
+    expect(errLog.some((l) => l.includes('vault write failed') && l.includes('master key'))).toBe(true);
+    await adapter.stop();
+  });
+
+  it('migrateLegacyState adopts the old credentials/ location exactly once', () => {
+    const savedHome = process.env.OCTOPI_HOME;
+    process.env.OCTOPI_HOME = root;
+    try {
+      const legacy = join(root, 'credentials', 'weixin-clawbot-state.json');
+      mkdirSync(dirname(legacy), { recursive: true });
+      writeFileSync(legacy, JSON.stringify({ bot_token: 'old', baseurl: BASEURL }));
+      const target = join(root, 'plugin-state', 'weixin', 'weixin-clawbot-state.json');
+
+      expect(migrateLegacyState(target)).toBe(true);
+      expect(existsSync(legacy)).toBe(false);
+      expect(JSON.parse(readFileSync(target, 'utf8')).bot_token).toBe('old');
+      // Idempotent: a present target is never overwritten.
+      expect(migrateLegacyState(target)).toBe(false);
+    } finally {
+      if (savedHome === undefined) delete process.env.OCTOPI_HOME;
+      else process.env.OCTOPI_HOME = savedHome;
+    }
   });
 });

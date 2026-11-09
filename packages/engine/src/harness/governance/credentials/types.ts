@@ -8,14 +8,14 @@ export type CredentialKind = 'bearer' | 'basic' | 'api_key' | 'header_map' | 'oa
 
 export type SecretMode = 'env' | 'encrypted' | 'file';
 
-export type CredentialScopeLevel = 'global' | 'project' | 'agent';
+export type CredentialScopeLevel = 'global' | 'project' | 'agent' | 'plugin';
 
 export interface CredentialScopeRef {
   level: CredentialScopeLevel;
   key: string;
 }
 
-export type CredentialConsumerKind = 'knowledge_source' | 'tool' | 'agent' | 'connector';
+export type CredentialConsumerKind = 'knowledge_source' | 'tool' | 'agent' | 'connector' | 'plugin';
 
 export interface CredentialConsumerRef {
   kind: CredentialConsumerKind;

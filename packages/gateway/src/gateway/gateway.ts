@@ -2036,6 +2036,16 @@ export class Gateway {
     this.pluginManager.discardInstance(instance);
   }
 
+  /**
+   * manifest `secretOptions` 声明的插件旋钮键（config 回显脱敏用）。
+   *
+   * @param kind - 贡献种类（provider / channel）
+   * @param ref - 贡献 id（非插件贡献或未声明时返回空）
+   */
+  getPluginSecretOptions(kind: 'provider' | 'channel', ref: string): string[] | null {
+    return this.pluginManager.getContributionSecretOptions(kind, ref);
+  }
+
   registerProvider(provider: ModelProvider): void {
     // 本收口不退役旧实例：热更走 replaceProvider/removeProvider（那里的旧实例进
     // retireProvider() 延迟窗口回收），进程级收口由 stop() 兜底。

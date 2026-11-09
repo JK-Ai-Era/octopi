@@ -133,6 +133,8 @@ export default definePlugin({
 - `api.registerProvider` 暂存 Provider 工厂，且必须同时在 `contributes.providers` 声明；宿主按 `models.providers[].plugin` 引用逐实例化（见「Provider 贡献（P5）」）。
 - `api.registerChannel` 暂存 Channel 工厂，且必须同时在 `contributes.channels` 声明；宿主按 `channels[].plugin` 引用逐实例化（见「Channel 贡献（P5b）」）。
 - `api.getContributionInstance(kind, id)` 返回本插件被宿主服务中的 provider/channel 存活实例，恰好一个语义（见「贡献实例（P6-3）」）。
+- `api.stateDir` / `api.ensureStateDir()` —— 每插件私有状态目录，0700 创建（chmod 失败经插件 logger 报告、目录保持文件系统默认——见「宿主存储原语（P6-4）」）。
+- `api.secrets.get/set/delete` —— 宿主凭证金库上的每插件 secret 命名空间（AES-GCM、消费者绑定）；返回的明文绝不记录或持久化。
 - ContextEngine 与媒体 Provider 注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
 
 ## 插件 Command 与 Session 效应
@@ -311,6 +313,27 @@ api.registerTool({ name: 'weixin_pair', /* ... */ }, async () => {
   - 不是本插件的贡献：跨插件查询不在 v1 契约内。
 - 退役无法跟踪的实例（冻结/封闭对象）**不予登记**，宿主会显式告警；宿主自己的契约校验负责报告残缺适配器，注册表从不给对象打补丁。
 - 声明的返回类型是 SPI 结构视图（`ModelProvider`、`PluginChannelAdapterLike`）。SPI 之外的插件自有方法（如 weixin 适配器的 `pair()`）运行时真实存在；TypeScript 作者可转换到自己的适配器接口。
+
+## 宿主存储原语（P6-4）
+
+插件从宿主获得两个存储原语——这是唯一受支持的持久化面；绝不写插件安装目录。
+
+- **`api.stateDir`** —— 每插件私有状态目录（`OCTOPI_HOME/plugin-state/<id>`，`api.ensureStateDir()` 首次使用时以 0700 创建）。运行时状态（游标、会话文件）放这里。
+- **`api.secrets`** —— 宿主凭证金库的 `get/set/delete`（`OCTOPI_HOME/credentials/credentials.db`，落盘 AES-GCM）。值存放在插件自己的命名空间（`plugin:<id>:<key>`），并绑定该插件为唯一可解析消费者（写入时撤销遗留的他人绑定）。`get` 返回的明文是短命的：绝不记录或持久化。**secret 不进状态文件、不进 options、不进日志。**
+  前置条件：必须配置金库加密主密钥（`OCTOPI_CREDENTIALS_KEY` 或 `OCTOPI_CREDENTIALS_KEY_FILE`）——否则 `set` 抛真实错误。插件如需在此类失败下降级，必须显式降级（如 weixin 示例把 token 保留在状态文件 inline 形态并记录金库错误，而不是丢 token）。
+
+```js
+register(api) {
+  const stateDir = await api.ensureStateDir(); // 0700
+  await api.secrets.set('bot_token', token);   // 落盘加密
+  const token = await api.secrets.get('bot_token');
+}
+```
+
+- secret 键为 `[A-Za-z0-9._-]+`；空值以真实错误拒绝。元数据（名字、模式、时间戳）不含明文。
+- manifest **`secretOptions`**（可选 `string[]`）声明 `options` 中哪些键是 secret（如配对码）。宿主在配置回显面（Web 控制台 `GET /config/models`）把这些值替换为与 `apiKey` 相同的 `RedactedSecret` 视图（`{configured, ref}`），绝不回显明文。回显占位符可安全回写：upsert 时声明键上的 `RedactedSecret` 形状值表示「客户端未改动」——保留存储值（与 `apiKey` 留空规则同义）。插件贡献不在有效注册表时宿主 fail-closed，整个 `options` 全量打码。范围说明：当前脱敏面只有 `models.providers` 回显——尚无 channel 配置回显端点，channel manifest 上的 `secretOptions` 是先行声明。
+
+真实示例：`examples/plugins/weixin-clawbot` —— 运行时状态（`baseurl`、游标）在 `api.stateDir`，`bot_token` 在金库（`api.secrets`），并提供一次性 `migrateLegacyState()` 收编 P6-4 之前的单文件状态（内联 token 首次保存时移入金库）。
 
 ## 配置
 

@@ -133,6 +133,8 @@ export default definePlugin({
 - `api.registerProvider` stages a Provider factory that must also be declared in `contributes.providers`; the Host instantiates it per `models.providers[].plugin` reference (see Provider contributions (P5)).
 - `api.registerChannel` stages a Channel factory that must also be declared in `contributes.channels`; the Host instantiates it per `channels[].plugin` reference (see Channel contributions (P5b)).
 - `api.getContributionInstance(kind, id)` returns this plugin's live provider/channel instance as served by the Host, with exactly-one semantics (see Contribution instances (P6-3)).
+- `api.stateDir` / `api.ensureStateDir()` — per-plugin private state directory, created 0700 (a chmod failure is reported via the plugin logger and the directory keeps the filesystem default — see Host storage primitives (P6-4)).
+- `api.secrets.get/set/delete` — per-plugin secret namespace over the Host credentials vault (AES-GCM, consumer-bound); never log or persist returned plaintext.
 - ContextEngine and media-provider registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
 
 ## Plugin Commands and Session effects
@@ -410,6 +412,55 @@ Contract:
   `PluginChannelAdapterLike`). Plugin-specific methods beyond the SPI (like
   `pair()` on the weixin adapter) exist at runtime; TypeScript authors cast to
   their own adapter interface.
+
+## Host storage primitives (P6-4)
+
+Plugins get two storage primitives from the Host — the only supported
+persistence surface; never write into the plugin install directory.
+
+- **`api.stateDir`** — per-plugin private state directory
+  (`OCTOPI_HOME/plugin-state/<id>`, created with mode 0700 on first use via
+  `api.ensureStateDir()`). Runtime state (cursors, session files) goes here.
+- **`api.secrets`** — `get/set/delete` over the Host credentials vault
+  (`OCTOPI_HOME/credentials/credentials.db`, AES-GCM at rest). Values live in
+  the plugin's own namespace (`plugin:<id>:<key>`) and are bound to the plugin
+  as the only resolvable consumer (any leftover foreign binding is revoked on
+  write). Plaintext returned by `get` is short-lived: never log or persist it.
+  **Secrets never go into state files, options or logs.**
+  Prerequisite: the vault encryption key must be configured
+  (`OCTOPI_CREDENTIALS_KEY` or `OCTOPI_CREDENTIALS_KEY_FILE`) — `set` throws a
+  real error otherwise. Plugins that degrade on such a failure must do so
+  explicitly (e.g. the weixin example keeps the token inline in its state file
+  and logs the vault error instead of losing it).
+
+```js
+register(api) {
+  const stateDir = await api.ensureStateDir(); // 0700
+  await api.secrets.set('bot_token', token);   // encrypted at rest
+  const token = await api.secrets.get('bot_token');
+}
+```
+
+- Secret keys are `[A-Za-z0-9._-]+`; empty values are rejected with a real
+  error. Metadata (name, mode, timestamps) never contains plaintext.
+- Manifest **`secretOptions`** (optional `string[]`) declares which
+  `options` keys hold secrets (e.g. pairing codes). The Host redacts those
+  values in config echo surfaces (Web console `GET /config/models`): the value
+  is replaced with the same `RedactedSecret` view as `apiKey`
+  (`{configured, ref}`) and never echoed. Echo placeholders are write-safe:
+  on upsert a `RedactedSecret`-shaped value for a declared key means "client
+  did not change it" — the stored value is kept (same rule as a blank `apiKey`).
+  When the plugin contribution is not in the live registry the Host fails
+  closed and masks the whole `options` object. Scope note: the redaction
+  surface today is `models.providers` echo only — there is no channel config
+  echo endpoint yet, so `secretOptions` on a channel manifest is declarative
+  ahead of its consumer.
+
+Real example: `examples/plugins/weixin-clawbot` — runtime state
+(`baseurl`, cursor) in `api.stateDir`, `bot_token` in the vault
+(`api.secrets`), and a one-shot `migrateLegacyState()` that adopts
+deployments from the pre-P6-4 single-file state (inline token is moved into
+the vault on first save).
 
 ## Configuration
 

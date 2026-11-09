@@ -199,6 +199,25 @@ export class CredentialStore {
   }
 
   /**
+   * 用时解析为明文 secret（短命；调用方禁止日志/持久化）。
+   * 消费约束与 {@link resolve} 相同（SEC-3c 绑定检查、过期返回 null）。
+   * 供插件 secret 原语（api.secrets）等非 header 形态的消费者使用。
+   *
+   * @param name - 凭证名
+   * @param consumer - 消费方；绑定非空时必填
+   * @param options - requireBindings 覆盖
+   * @returns 明文 secret；无档、无密钥材料或过期时 null
+   * @throws 绑定策略拒绝时抛错（勿静默降级）
+   */
+  async reveal(
+    name: string,
+    consumer?: import('./types.js').CredentialConsumerRef | null,
+    options?: import('./types.js').ResolveCredentialOptions,
+  ): Promise<string | null> {
+    return this.revealSecret(name, consumer, options);
+  }
+
+  /**
    * 用时解析为请求头（短命；调用方禁止日志）。
    * 消费侧强制 `credential_bindings`（SEC-3c）：绑定非空须命中 consumer；
    * 绑定为空且 requireBindings 时拒绝。
@@ -220,6 +239,37 @@ export class CredentialStore {
     if (!row) return null;
 
     const meta = rowToMeta(row);
+    const secret = await this.revealSecret(name, consumer, options, meta, row);
+    if (!secret) return null;
+
+    return {
+      name: meta.name,
+      headers: defaultCredentialHeaders({
+        kind: meta.kind,
+        username: meta.username,
+        headerName: meta.headerName,
+        headerPrefix: meta.headerPrefix,
+        secret,
+      }),
+    };
+  }
+
+  /** 明文解析单一实现点（reveal/resolve 共用）：材料解析 + 绑定检查 + last_used_at。 */
+  private async revealSecret(
+    name: string,
+    consumer?: import('./types.js').CredentialConsumerRef | null,
+    options?: import('./types.js').ResolveCredentialOptions,
+    knownMeta?: CredentialMeta,
+    knownRow?: Record<string, unknown>,
+  ): Promise<string | null> {
+    const row =
+      knownRow ??
+      (this.db.raw.prepare(`SELECT * FROM credentials WHERE name = ?`).get(name) as
+        | Record<string, unknown>
+        | undefined);
+    if (!row) return null;
+
+    const meta = knownMeta ?? rowToMeta(row);
     if (meta.expiresAt != null && meta.expiresAt < Date.now()) {
       return null;
     }
@@ -247,7 +297,6 @@ export class CredentialStore {
         );
       }
     }
-    const kind = meta.kind;
     let secret: string | null = null;
 
     if (meta.secretMode === 'env' && meta.secretEnv) {
@@ -278,16 +327,7 @@ export class CredentialStore {
       .prepare(`UPDATE credentials SET last_used_at = ? WHERE id = ?`)
       .run(Date.now(), meta.id);
 
-    return {
-      name: meta.name,
-      headers: defaultCredentialHeaders({
-        kind,
-        username: meta.username,
-        headerName: meta.headerName,
-        headerPrefix: meta.headerPrefix,
-        secret,
-      }),
-    };
+    return secret;
   }
 
   bind(consumer: CredentialConsumerRef, name: string): void {

@@ -70,6 +70,25 @@ export class PluginManager {
   }
 
   /**
+   * Secret-marked option keys declared by a contribution's manifest
+   * (`secretOptions`), for config echo redaction.
+   *
+   * @param kind - 'provider' or 'channel'
+   * @param ref - Contribution id
+   * @returns Declared secret option keys (empty when undeclared/unknown)
+   */
+  getContributionSecretOptions(kind: 'provider' | 'channel', ref: string): string[] | null {
+    const record =
+      kind === 'provider'
+        ? this.resolveProviderFactory(ref)
+        : this.resolveChannelFactory(ref);
+    // Unknown contribution → null: the caller must fail closed (mask all)
+    // instead of echoing options whose secret keys cannot be determined.
+    if (!record) return null;
+    return this.loader.contributions.getPlugin(record.pluginId)?.manifest.secretOptions ?? [];
+  }
+
+  /**
    * Roll back an accepted-but-never-installed instance (config-apply abort);
    * resurrects the instance it superseded in the instance tables.
    *

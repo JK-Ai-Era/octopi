@@ -1,7 +1,7 @@
 import type { ChannelMessage, ChannelReply } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/channel-types.js';
 
 export interface WeixinOptions {
-  /** Where to persist { bot_token, baseurl, cursor } (chmod 600). Default: ${OCTOPI_HOME}/weixin-clawbot-state.json */
+  /** Where to persist { baseurl, cursor } (chmod 600). bot_token lives in the Host credentials vault (api.secrets) unless no vault is injected (legacy standalone mode). Default: <api.stateDir>/weixin-clawbot-state.json */
   statePath?: string;
   /** Numeric pairing code shown on the phone, when the flow requires one. */
   verifyCode?: string;
@@ -25,6 +25,10 @@ export interface WeixinFetchDeps {
   randomId?: () => string;
   /** Injectable timer (tests use setImmediate to keep loops turnable). */
   sleep?: (ms: number) => Promise<void>;
+  /** P6-4: vault-backed secret namespace. With it, bot_token is stored in the vault; without it, inline in the state file (legacy mode). */
+  secrets?: { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; delete(key: string): Promise<boolean> };
+  /** P6-4: host-provided default state file path (api.stateDir). */
+  defaultStatePath?: string;
 }
 
 export interface WeixinPairResult {
@@ -81,6 +85,17 @@ export function toChannelMessage(
  */
 export function createWeixinChannelAdapter(ctx: WeixinAdapterContext, deps?: WeixinFetchDeps): WeixinChannelAdapter;
 
+/**
+ * One-shot deployment migration (P6-4): adopt a pre-P6-4 single-file state
+ * (inline bot_token under ${OCTOPI_HOME}/credentials/) into the target state
+ * path. Idempotent — a present target is never overwritten. The vault move of
+ * the inline token happens on the next loadState()/saveState() cycle.
+ *
+ * @param targetStatePath - The new default state file path
+ * @returns Whether a legacy state file was adopted
+ */
+export function migrateLegacyState(targetStatePath: string): boolean;
+
 declare const plugin: {
   id: string;
   register(api: {
@@ -93,6 +108,14 @@ declare const plugin: {
       handler: () => Promise<unknown>,
     ): void;
     getContributionInstance(kind: 'channel', id: string): WeixinChannelAdapter;
+    /** P6-4: per-plugin 0700 state directory (created on first use). */
+    ensureStateDir(): Promise<string>;
+    /** P6-4: per-plugin secret namespace over the Host credentials vault. */
+    secrets: {
+      get(key: string): Promise<string | null>;
+      set(key: string, value: string): Promise<void>;
+      delete(key: string): Promise<boolean>;
+    };
   }): void;
 };
 export default plugin;

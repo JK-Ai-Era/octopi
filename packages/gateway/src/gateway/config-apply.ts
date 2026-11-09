@@ -33,7 +33,7 @@ import {
 import { expandEnvPlaceholders, expandEnvValues } from '@octopi-agent/engine/config-admin/env.js';
 import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { expandHomePath } from '@octopi-agent/engine/paths.js';
-import { redactProvider } from '@octopi-agent/engine/config-admin/redact.js';
+import { redactProvider, resolveEchoPlaceholders } from '@octopi-agent/engine/config-admin/redact.js';
 import {
   discoverProviderModels,
   type DiscoverModelsResult,
@@ -273,7 +273,15 @@ export class ConfigApplyService {
     const models = (raw.models ?? {}) as Record<string, unknown>;
     const providers = (models.providers ?? {}) as Record<string, Record<string, unknown>>;
     return {
-      providers: Object.entries(providers).map(([name, pc]) => redactProvider(name, pc)),
+      providers: Object.entries(providers).map(([name, pc]) =>
+        redactProvider(
+          name,
+          pc,
+          // undefined (built-in) keeps verbatim echo; a plugin contribution
+          // resolves its manifest declaration or fails closed (mask all).
+          typeof pc.plugin === 'string' ? this.deps.gateway.getPluginSecretOptions('provider', pc.plugin) : undefined,
+        ),
+      ),
       level: (models.level ?? {}) as Record<string, unknown>,
       hash,
     };
@@ -303,14 +311,28 @@ export class ConfigApplyService {
       providerConfig.apiKey === undefined && existing && typeof existing === 'object'
         ? { ...providerConfig, apiKey: existing.apiKey }
         : providerConfig;
-    const provider = await this.deps.providerFactory(name, expandEnvValues(appliedConfig));
+    // options 中的回显占位符（RedactedSecret 形状）= 「客户端未改动」：还原
+    // 存储值（与 apiKey「留空保留」同一处理点），无存储值则丢键——占位符
+    // 绝不落盘，否则一次表单保存就会用 {configured,ref} 覆盖真 secret。
+    const secretOptionKeys =
+      typeof providerConfig.plugin === 'string'
+        ? (this.deps.gateway.getPluginSecretOptions('provider', providerConfig.plugin) ?? [])
+        : [];
+    const finalConfig = resolveEchoPlaceholders(
+      appliedConfig,
+      existing && typeof existing === 'object'
+        ? (existing as { options?: Record<string, unknown> })
+        : undefined,
+      secretOptionKeys,
+    );
+    const provider = await this.deps.providerFactory(name, expandEnvValues(finalConfig));
 
     // 2) 写盘（乐观锁 + 全量校验 + 备份）；失败 → 运行时未动 + 撤销预构建实例的
     //    验收（live 必须始终等于宿主路由集）
     let refsAfter: string[] = [];
     const written = await this.deps.configAdmin
       .write((raw) => {
-        setJsonPath(raw, ['models', 'providers', name], appliedConfig);
+        setJsonPath(raw, ['models', 'providers', name], finalConfig);
         refsAfter = findProviderReferences(raw, name);
       }, expectedHash)
       .catch((err: unknown) => {
@@ -320,7 +342,7 @@ export class ConfigApplyService {
 
     // 3) 热应用
     const affected = extractAgentIds(refsAfter);
-    await this.deps.gateway.replaceProvider(provider, expandEnvValues(appliedConfig), affected);
+    await this.deps.gateway.replaceProvider(provider, expandEnvValues(finalConfig), affected);
     this.audit('provider.upsert', `upsert provider（${appliedConfig.baseUrl ?? ''}）`, {
       target: name,
       hashBefore: expectedHash,

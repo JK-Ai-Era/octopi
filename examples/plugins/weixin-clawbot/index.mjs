@@ -20,7 +20,7 @@
  * file. Nothing sensitive is logged.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -57,7 +57,7 @@ export function isTrustedHost(urlString) {
 const OPTION_KEYS = ['statePath', 'verifyCode', 'loginTimeoutMs', 'allowHosts'];
 
 /** Parse and validate `options` from one channels entry. Fails loud. */
-export function parseOptions(raw) {
+export function parseOptions(raw, defaultStatePath = join(process.env.OCTOPI_HOME ?? join(homedir(), '.octopi'), 'credentials', 'weixin-clawbot-state.json')) {
   const opts = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const unknown = Object.keys(opts).filter((k) => !OPTION_KEYS.includes(k));
   if (unknown.length > 0) {
@@ -80,7 +80,7 @@ export function parseOptions(raw) {
     }
   }
   return {
-    statePath: opts.statePath ?? join(process.env.OCTOPI_HOME ?? join(homedir(), '.octopi'), 'credentials', 'weixin-clawbot-state.json'),
+    statePath: opts.statePath ?? defaultStatePath,
     verifyCode: opts.verifyCode,
     loginTimeoutMs: opts.loginTimeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
     allowHosts: opts.allowHosts ?? [],
@@ -134,7 +134,8 @@ export function toChannelMessage(channelName, msg, contextTokens) {
  * @returns Host ChannelAdapter bound to ctx.channelName
  */
 export function createWeixinChannelAdapter(ctx, deps) {
-  const options = parseOptions(ctx.options);
+  const options = parseOptions(ctx.options, deps?.defaultStatePath);
+  const secrets = deps?.secrets ?? null;
   const doFetch = deps?.fetch ?? globalThis.fetch;
   if (typeof doFetch !== 'function') {
     throw new Error('weixin-channel: no fetch implementation available (Node.js 18+ required)');
@@ -172,7 +173,13 @@ export function createWeixinChannelAdapter(ctx, deps) {
   /** @type {{bot_token: string, baseurl: string, ilink_bot_id?: string, ilink_user_id?: string, get_updates_buf?: string} | null} */
   let session = null;
 
-  // ── state persistence (chmod 600; contains bot_token — see README) ──
+  // ── state persistence ──
+  // Runtime state (baseurl, ids, cursor) lives in the state file (chmod 600).
+  // bot_token lives in the Host credentials vault via `deps.secrets`
+  // (api.secrets); without secrets injection the token stays in the file
+  // (legacy single-file mode, e.g. standalone testing).
+  /** Token currently persisted in the vault — skipped on cursor-only saves. */
+  let persistedToken = null;
   /** Trusted-host gate used everywhere a server-provided URL is adopted. */
   function isAcceptableHost(urlString) {
     let url;
@@ -185,7 +192,7 @@ export function createWeixinChannelAdapter(ctx, deps) {
     return isTrustedHost(url.toString()) || options.allowHosts.includes(url.hostname);
   }
   /** Adopt server-provided credentials; validates BOTH token and host (review #6). */
-  function adoptCredentials(data, fallbackBuf) {
+  async function adoptCredentials(data, fallbackBuf) {
     if (!data || typeof data.bot_token !== 'string' || data.bot_token.length === 0) {
       throw new Error('weixin-channel: pairing response missing bot_token');
     }
@@ -202,15 +209,30 @@ export function createWeixinChannelAdapter(ctx, deps) {
           : typeof data.get_updates_buf === 'string' ? data.get_updates_buf
             : '',
     };
-    saveState();
+    await saveState();
   }
-  function loadState() {
+  async function loadState() {
     try {
       const parsed = JSON.parse(readFileSync(options.statePath, 'utf8'));
-      if (parsed && typeof parsed.bot_token === 'string' && typeof parsed.baseurl === 'string') {
+      // Legacy single-file state carries bot_token inline; vault state keeps
+      // it in the secrets namespace (the migrate path below adopts and rewrites).
+      const fileToken = typeof parsed?.bot_token === 'string' ? parsed.bot_token : null;
+      let vaultToken = null;
+      if (secrets) {
+        try {
+          vaultToken = await secrets.get('bot_token');
+        } catch (error) {
+          // Vault unreadable (e.g. master key not configured): surface the real
+          // cause instead of pretending "not paired", and fall back to an
+          // inline token so the channel keeps working.
+          log.error(`weixin: vault read failed (${String(error)}); falling back to inline state token`);
+        }
+      }
+      const token = vaultToken ?? fileToken;
+      if (parsed && typeof token === 'string' && typeof parsed.baseurl === 'string') {
         // A tampered state file must never point the bot token at an
         // arbitrary host — validate before trusting (review #6/#24).
-        adoptCredentials(parsed);
+        await adoptCredentials({ ...parsed, bot_token: token });
         return session;
       }
     } catch (error) {
@@ -219,10 +241,27 @@ export function createWeixinChannelAdapter(ctx, deps) {
     }
     return null;
   }
-  function saveState() {
+  async function saveState() {
     if (!session) return;
-    mkdirSync(dirname(options.statePath), { recursive: true });
-    writeFileSync(options.statePath, `${JSON.stringify(session, null, 2)}\n`, { mode: 0o600 });
+    const { bot_token: token, ...runtime } = session;
+    // Vault first: only after the vault has accepted the token may the file
+    // drop it. If the vault write fails, the token stays inline (legacy form)
+    // and the failure is logged loudly — never a silent token loss.
+    if (secrets && token !== persistedToken) {
+      try {
+        await secrets.set('bot_token', token);
+        persistedToken = token;
+      } catch (error) {
+        log.error(`weixin: vault write failed (${String(error)}); keeping bot_token inline in the state file`);
+      }
+    }
+    const vaulted = Boolean(secrets) && persistedToken === token;
+    mkdirSync(dirname(options.statePath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      options.statePath,
+      `${JSON.stringify(vaulted ? runtime : session, null, 2)}\n`,
+      { mode: 0o600 },
+    );
     try {
       chmodSync(options.statePath, 0o600);
     } catch {
@@ -349,14 +388,14 @@ export function createWeixinChannelAdapter(ctx, deps) {
         case 'binded_redirect': {
           // Already bound on this client: reuse existing credentials.
           if (st.bot_token && st.baseurl) {
-            adoptCredentials(st, session?.get_updates_buf);
+            await adoptCredentials(st, session?.get_updates_buf);
             log.log?.('[weixin] paired (existing binding)');
             return 'paired';
           }
           throw new Error('weixin-channel: binded_redirect without credentials; clear the state file and log in again');
         }
         case 'confirmed': {
-          adoptCredentials(st, session?.get_updates_buf);
+          await adoptCredentials(st, session?.get_updates_buf);
           log.log?.('[weixin] paired');
           return 'paired';
         }
@@ -430,7 +469,7 @@ export function createWeixinChannelAdapter(ctx, deps) {
     }
     if (typeof data.get_updates_buf === 'string') {
       session.get_updates_buf = data.get_updates_buf;
-      saveState();
+      await saveState();
     } else if (msgs.length > 0) {
       // The same "absent field" envelope class as the ret bug: without a new
       // cursor this batch would re-deliver forever (review #7). Fail loud and
@@ -471,7 +510,20 @@ export function createWeixinChannelAdapter(ctx, deps) {
               // No infinite re-login churn on an unattended dead token.
               log.error?.('[weixin] pairing not completed — channel dormant; call the weixin_pair tool to pair again');
               session = null;
-              try { unlinkSync(options.statePath); } catch { /* already gone */ }
+              // Vault mode: the dead token lives in the secrets namespace —
+              // clear it so the next loadState() cannot re-adopt it. Steps are
+              // independent: one failure must not keep the dead token alive.
+              if (secrets) {
+                try {
+                  await secrets.delete('bot_token');
+                } catch (error) {
+                  log.error(`weixin: vault delete failed during parking (${String(error)}); dead token may re-adopt on restart`);
+                }
+                persistedToken = null;
+              }
+              try {
+                unlinkSync(options.statePath);
+              } catch { /* already gone */ }
               break;
             }
             // Transient re-login failure (network): back off and retry.
@@ -561,7 +613,7 @@ export function createWeixinChannelAdapter(ctx, deps) {
     async start(handle) {
       if (running) throw new Error(`weixin-channel: channel "${ctx.channelName}" already started`);
       handler = handle;
-      session = loadState();
+      session = await loadState();
       pollAbort = new AbortController();
       running = true;
       if (session) {
@@ -610,10 +662,61 @@ export function createWeixinChannelAdapter(ctx, deps) {
   };
 }
 
+/**
+ * One-shot deployment migration (P6-4): earlier versions kept the single-file
+ * state (bot_token inline) under `${OCTOPI_HOME}/credentials/`. When the new
+ * state location is still empty and the legacy file exists, adopt it — the
+ * first loadState() then moves bot_token into the credentials vault and
+ * rewrites the file with runtime state only.
+ *
+ * @param targetStatePath - New state file location
+ * @returns Whether a legacy state file was migrated
+ */
+export function migrateLegacyState(targetStatePath) {
+  if (existsSync(targetStatePath)) return false;
+  const legacyPath = join(
+    process.env.OCTOPI_HOME ?? join(homedir(), '.octopi'),
+    'credentials',
+    'weixin-clawbot-state.json',
+  );
+  if (legacyPath === targetStatePath) return false;
+  let raw;
+  try {
+    raw = readFileSync(legacyPath, 'utf8');
+  } catch {
+    return false; // no legacy state to migrate
+  }
+  mkdirSync(dirname(targetStatePath), { recursive: true, mode: 0o700 });
+  writeFileSync(targetStatePath, raw, { mode: 0o600 });
+  try {
+    chmodSync(targetStatePath, 0o600);
+  } catch {
+    /* best effort on platforms without POSIX modes */
+  }
+  unlinkSync(legacyPath);
+  return true;
+}
+
 export default {
   id: 'weixin',
   register(api) {
-    api.registerChannel('weixin', async (context) => createWeixinChannelAdapter(context, {}));
+    api.registerChannel('weixin', async (context) => {
+      // Host storage primitives (P6-4): runtime state lives under the
+      // plugin's own 0700 stateDir; bot_token lives in the credentials vault
+      // (api.secrets). Legacy single-file deployments migrate on first use.
+      const stateDir = await api.ensureStateDir();
+      const defaultStatePath = join(stateDir, 'weixin-clawbot-state.json');
+      // Adopt the pre-P6-4 default location only when the operator did not
+      // explicitly configure statePath — a configured path is their choice
+      // and must never be moved away from under them.
+      if (typeof context.options?.statePath !== 'string') {
+        migrateLegacyState(defaultStatePath);
+      }
+      return createWeixinChannelAdapter(context, {
+        secrets: api.secrets,
+        defaultStatePath,
+      });
+    });
 
     api.registerTool(
       {

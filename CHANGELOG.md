@@ -115,6 +115,65 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.105.4 (2026-11-10)
+
+### feat(plugin): host storage primitives — api.stateDir + api.secrets vault, manifest secretOptions (P6-4)
+
+Plugins get the two persistence primitives the three real plugins were
+hand-rolling: **`api.stateDir`** (per-plugin private state directory
+`OCTOPI_HOME/plugin-state/<id>`, created 0700 via `api.ensureStateDir()`;
+plugin-state is now part of the documented home layout) and **`api.secrets`**
+(`get/set/delete` over the Host credentials vault — AES-GCM, values in the
+`plugin:<id>:<key>` namespace bound to the plugin as the only resolvable
+consumer; plaintext is short-lived and never echoed by meta surfaces). The
+governance layer gained `CredentialStore.reveal()` (plaintext resolution with
+the same SEC-3c binding rules; `resolve` now shares one implementation point)
+and `plugin` scope/consumer kinds. Invalid keys and empty values are rejected
+with real errors.
+
+**M4 secret echo**: manifests declare `secretOptions` (option keys holding
+secrets); `GET /config/models` redacts those values to the same
+`RedactedSecret` view as `apiKey` (`{configured, ref}`) instead of echoing
+them — previously `options` was passed through verbatim.
+
+**weixin example adopted**: runtime state (`baseurl`, cursor) now lives under
+`api.stateDir`; `bot_token` lives in the vault (skipped-write on cursor-only
+saves; dead-token parking clears the vault entry too). Standalone use without
+vault injection keeps the legacy inline-token file. Deployments migrate with
+`migrateLegacyState()` (one-shot: the pre-P6-4 `credentials/` single file is
+adopted, its inline token moved into the vault on first save). Manifest
+`engine: >=0.105.4` + `secretOptions: ["verifyCode"]` (first real declarant).
+
+- Independent review (del-03c100bd) caught a silent-destruction blocker in the
+  first cut: the persistence split wrote the token-less file BEFORE the vault
+  write, so on an unprovisioned master key the pairing token was lost across
+  file, vault and the unlinked legacy file while the channel only showed
+  "not paired". Fixed by inverting the ordering (the vault must accept the
+  token before the file drops it; vault failures keep the token inline and log
+  loudly), surfacing vault read failures instead of masking them as
+  "unpaired", and making dead-token parking delete steps independent.
+  Also from review: echo placeholders are write-safe — a `RedactedSecret`-
+  shaped value for a declared key on upsert restores the stored value (same
+  rule as blank apiKey), so a web-console edit can no longer overwrite a real
+  secret with `{configured, ref}`; redaction fails closed (whole `options`
+  masked) when the plugin contribution is not in the live registry; legacy
+  migration only adopts the default location (an explicitly configured
+  statePath is never moved); `secrets.set` revokes leftover foreign bindings;
+  `ensureStateDir` reports chmod failures instead of swallowing them;
+  `redactSecret` is the single masking implementation (`${VAR:-fallback}`
+  form preserved).
+- Verified: build/lint/full suite (430 files, 4472 tests at land time)/arch-
+  check-sync green; 20 new cases cover 0700 stateDir creation/tightening,
+  vault round-trip, namespace privacy (cross-plugin read/overwrite/delete
+  rejected), meta no-plaintext, master-key fail-loud, default stateDir
+  derivation, expiry parity, manifest secretOptions validation, key-level
+  echo redaction + fail-closed masking + placeholder round-trip, weixin
+  vault/file split, cross-restart restore, inline-token self-migration, vault-
+  failure token retention (the blocker's regression case), and one-shot legacy
+  adoption.
+
+---
+
 ## v0.105.3 (2026-11-10)
 
 ### feat(plugin): contribution instance registry + api.getContributionInstance (P6-3)

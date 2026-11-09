@@ -29,7 +29,7 @@ const ModelProviderConfigSchema = z.object({
   plugin: z.string().min(1).optional(),
   models: z.array(ModelCapabilitySchema).min(1),
   timeoutSeconds: z.number().positive().optional(),
-  /** 插件自定义旋钮（非密钥；密钥只走 apiKey） */
+  /** 插件自定义旋钮（secret 键由 manifest secretOptions 声明并在回显面脱敏；长期密钥仍只走 apiKey） */
   options: z.record(z.string(), z.unknown()).optional(),
 }).superRefine((v, ctx) => {
   // api | plugin 恰好其一：schema/写盘校验与工厂路由同闸（工厂是第二道闸）
