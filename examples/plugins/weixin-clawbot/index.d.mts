@@ -37,6 +37,8 @@ export interface WeixinChannelAdapter {
   name: string;
   /** Resolves when background pairing completes (null before pair()). */
   pairingPromise: Promise<void> | null;
+  /** Health probe (P6-2): dormant (unpaired/not started) | degraded (poll failing) | running. */
+  status(): { state: 'running' | 'dormant' | 'degraded' | 'retiring'; detail?: string };
   /** On-demand pairing: fetch a QR code and return immediately. */
   pair(): Promise<WeixinPairResult>;
   start(handler: (msg: ChannelMessage) => Promise<void>): Promise<void>;

@@ -176,6 +176,49 @@ describe('weixin plugin — dormant start and on-demand pairing', () => {
     await adapter.stop(); // must not crash on a null session (regression)
   });
 
+  it('status() reports dormant when unpaired and running after pairing', async () => {
+    const t = fakeTransport();
+    const adapter = createWeixinChannelAdapter(ctxFor(statePath()), fastDeps(t));
+    expect(adapter.status()).toEqual({ state: 'dormant', detail: 'not started' });
+    await adapter.start(async () => {});
+    expect(adapter.status()).toEqual({ state: 'dormant', detail: 'not paired — call the weixin_pair tool to pair' });
+    t.on((url) => {
+      if (url.includes('get_bot_qrcode')) return { ret: 0, qrcode: 'qr-1', qrcode_img_content: 'QRDATA' };
+      if (url.includes('get_qrcode_status')) return { ret: 0, status: 'confirmed', bot_token: 'tok-1', baseurl: BASEURL, ilink_bot_id: 'b1', ilink_user_id: 'u1' };
+      return { ret: 0 };
+    });
+    await adapter.pair();
+    await adapter.pairingPromise;
+    expect(adapter.status().state).toBe('running');
+    await adapter.stop();
+    expect(adapter.status()).toEqual({ state: 'dormant', detail: 'not started' });
+  });
+
+  it('status() reports degraded with the poll error while backing off', async () => {
+    const t = fakeTransport();
+    let polls = 0;
+    t.on((url) => {
+      if (url.includes('get_bot_qrcode')) return { ret: 0, qrcode: 'qr-1', qrcode_img_content: 'QRDATA' };
+      if (url.includes('get_qrcode_status')) return { ret: 0, status: 'confirmed', bot_token: 'tok-1', baseurl: BASEURL, ilink_bot_id: 'b1', ilink_user_id: 'u1' };
+      if (url.includes('getupdates')) {
+        polls += 1;
+        throw new Error('ECONNRESET');
+      }
+      return { ret: 0 };
+    });
+    const adapter = createWeixinChannelAdapter(ctxFor(statePath()), fastDeps(t));
+    await adapter.start(async () => {});
+    await adapter.pair();
+    await adapter.pairingPromise;
+    // Let at least one failing poll tick happen, then the loop backs off.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(polls).toBeGreaterThan(0);
+    const s = adapter.status();
+    expect(s.state).toBe('degraded');
+    expect(s.detail).toContain('ECONNRESET');
+    await adapter.stop();
+  });
+
   it('pair() returns a QR immediately and activates polling after confirmation', async () => {
     const t = fakeTransport();
     t.on((url) => {

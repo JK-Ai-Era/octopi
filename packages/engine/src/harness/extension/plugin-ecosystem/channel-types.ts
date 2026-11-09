@@ -46,9 +46,26 @@ export interface ChannelReply {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Adapter runtime state for health aggregation. `retiring` marks the drain
+ * window before a hot-reload swap or shutdown; `degraded` means the adapter is
+ * alive but impaired (e.g. backing off after repeated failures).
+ */
+export interface ChannelAdapterStatus {
+  state: 'running' | 'dormant' | 'degraded' | 'retiring';
+  /** Human-readable elaboration, e.g. why the adapter is degraded. */
+  detail?: string;
+}
+
 export interface ChannelAdapter {
   name: string;
   start(handler: (msg: ChannelMessage) => Promise<void>): Promise<void>;
   send(reply: ChannelReply): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Optional health probe. Adapters that do not implement it are reported as
+   * `running` after a successful start() — the contract guarantees start/stop
+   * symmetry, so "started" is the truthful default, not a placeholder.
+   */
+  status?(): ChannelAdapterStatus;
 }

@@ -275,6 +275,7 @@ api.registerChannel('feishu', async (context) => {
 - `plugin` 与 `type` 二选一恰好其一。`type: "http"` 选择内置 HTTP/WebSocket 通道；`plugin` 指向 channel 贡献。引用未注册/被禁用的贡献、或未知的内置 `type`，都在 daemon 启动时以真实原因失败（fail closed）。
 - 工厂按 `channels` 条目在启动时调用（绝不在注册时）。贡献 id 全局唯一且兼作通道标签：宿主拒绝 `adapter.name` ≠ 贡献 id，`registerChannel` 拒绝重名，内置通道 id（`http`）为保留名。v1 每个 channel 贡献 id 只支持一个实例。
 - 适配器契约即 Channel SPI（`start(handler)` 接收规范化 `ChannelMessage`，`send(reply)` 投递 `ChannelReply`，`stop()` 释放传输面）。宿主按 Gateway 生命周期驱动 `start`/`stop`：服务先于通道启动、通道按注册逆序停止。单个通道 `start()` 失败会记日志、上报 issue、best-effort `stop()`（因此 `stop()` **必须容忍在 `start()` 失败后被调用**）并移出路由表——启动继续而该通道缺席；仅当**全部**通道失败或内置 `http` 通道失败（HTTP/WS 监听器缺失时不得报 Ready）才以真实原因 `AggregateError` 终止启动。
+- 适配器可实现可选的 `status()`（`{ state: 'running' | 'dormant' | 'degraded' | 'retiring', detail? }`）参与健康聚合：gateway `/health` 端点逐通道上报状态。未实现 `status()` 的适配器在 `start()` 成功后按 `running` 报告（start/stop 契约使"已启动"即真实缺省）；`status()` 抛错只降级该通道的健康项，不影响其余。
 - 消息携带 `channel === adapter.name`；回复与命令短回复经同一适配器路由。`channelBindings` 以通道标签为键；`session.dmScope: "per-conversation"` 按会话聚合（群聊全员共享一个会话）。
 - 通道等于让能触达它的人驱动一个带真实工具的 agent。超出个人使用的部署必须配置传输面自身的准入闸（如飞书示例的 `policy` 白名单）。
 - `options` 原样落盘；**禁止在 `options` 里放任何凭据**（密钥走 `apiKey`）。`octopi.schema.json` 的 JSON Schema 无法表达 `type | plugin` 互斥（与 `models.providers[].api|plugin` 相同）；运行时强校验。

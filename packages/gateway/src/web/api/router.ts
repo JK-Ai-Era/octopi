@@ -73,6 +73,8 @@ export class WebApiRouter {
             // WebUI 生命周期标记 mount/WS 重连时以此为准，事件仅作低延迟增量
             knowledge: this.gateway.getKnowledgeState(),
             effectPolicy: this.gateway.getEffectPolicyStatus(),
+            // 缺口2：channel adapter 健康聚合（status?() 可选契约）
+            channels: this.gateway.getChannelStatuses(),
             // ops P4：常驻 PRIVILEGED 标记（不是一次性 toast）的数据源
             privileged: await this.gateway.getPrivilegedStatus(),
           },

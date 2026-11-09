@@ -597,6 +597,47 @@ describe('Gateway channel lifecycle — startup buffer + reverse stop (P5b revie
     expect(order).toEqual(['chan-b', 'chan-a']);
   });
 
+  it('getChannelStatuses: adapters without status() default to running after start', async () => {
+    const gateway = new Gateway(gatewayConfig(), new InMemorySessionStore());
+    gateway.registerChannel({ name: 'plain', start: async () => {}, send: async () => {}, stop: async () => {} });
+    expect(gateway.getChannelStatuses()).toEqual([{ name: 'plain', state: 'dormant', detail: 'not started' }]);
+    await gateway.start();
+    expect(gateway.getChannelStatuses()).toEqual([{ name: 'plain', state: 'running' }]);
+    await gateway.stop();
+  });
+
+  it('getChannelStatuses: adapters with status() surface their own state verbatim', async () => {
+    const gateway = new Gateway(gatewayConfig(), new InMemorySessionStore());
+    gateway.registerChannel({
+      name: 'sick',
+      start: async () => {},
+      send: async () => {},
+      stop: async () => {},
+      status: () => ({ state: 'degraded', detail: 'poll failing (3 in a row): ECONNRESET' }),
+    });
+    await gateway.start();
+    expect(gateway.getChannelStatuses()).toEqual([
+      { name: 'sick', state: 'degraded', detail: 'poll failing (3 in a row): ECONNRESET' },
+    ]);
+    await gateway.stop();
+  });
+
+  it('getChannelStatuses: a throwing status() degrades that channel without breaking health', async () => {
+    const gateway = new Gateway(gatewayConfig(), new InMemorySessionStore());
+    gateway.registerChannel({
+      name: 'bad-probe',
+      start: async () => {},
+      send: async () => {},
+      stop: async () => {},
+      status: () => { throw new Error('probe exploded'); },
+    });
+    await gateway.start();
+    const statuses = gateway.getChannelStatuses();
+    expect(statuses[0]?.state).toBe('degraded');
+    expect(statuses[0]?.detail).toContain('probe exploded');
+    await gateway.stop();
+  });
+
   it('partial channel failure degrades: failed adapter is stopped and dropped, others proceed', async () => {
     const stopCalls: string[] = [];
     const gateway = new Gateway(gatewayConfig(), new InMemorySessionStore());

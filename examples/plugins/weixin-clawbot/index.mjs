@@ -164,6 +164,9 @@ export function createWeixinChannelAdapter(ctx, deps) {
   let pairingActive = false;
   let pollAbort = null;
   let pollLoopPromise = null;
+  /** Consecutive poll failures and last error — surfaced by status() (P6-2). */
+  let pollFailures = 0;
+  let lastPollError = null;
   /** Server-adaptive long-poll timeout hint (review #16). */
   let pollHintMs = undefined;
   /** @type {{bot_token: string, baseurl: string, ilink_bot_id?: string, ilink_user_id?: string, get_updates_buf?: string} | null} */
@@ -444,12 +447,16 @@ export function createWeixinChannelAdapter(ctx, deps) {
       try {
         await pollOnce(pollAbort.signal);
         backoffMs = 1000;
+        pollFailures = 0;
+        lastPollError = null;
         // Server normally holds the call (long polling). An instant return is
         // abnormal — pad to a 500ms floor so a misbehaving server cannot busy-loop us.
         const elapsed = now() - startedAt;
         if (running && elapsed < 500) await sleep(500 - elapsed, pollAbort.signal);
       } catch (error) {
         if (!running || pollAbort.signal.aborted) break;
+        pollFailures += 1;
+        lastPollError = error instanceof Error ? error.message : String(error);
         if (error.code === 'TOKEN_EXPIRED') {
           log.error?.('weixin-channel: token expired — re-pairing (scan the QR that appears in the log)');
           try {
@@ -484,6 +491,21 @@ export function createWeixinChannelAdapter(ctx, deps) {
     name: ctx.channelName,
     /** Resolves when background pairing completes (or null if not started). For testing. */
     pairingPromise: null,
+
+    /**
+     * Health probe (P6-2): truthful state from the adapter's own lifecycle.
+     * dormant = unpaired or dead-token parking; degraded = backing off after
+     * poll failures; running = paired with a healthy poll loop.
+     */
+    status() {
+      if (!running) return { state: 'dormant', detail: 'not started' };
+      if (pairingActive) return { state: 'dormant', detail: 'pairing in progress — scan the QR code' };
+      if (!session) return { state: 'dormant', detail: 'not paired — call the weixin_pair tool to pair' };
+      if (pollFailures > 0) {
+        return { state: 'degraded', detail: `poll failing (${pollFailures} in a row): ${lastPollError ?? 'unknown error'}` };
+      }
+      return { state: 'running' };
+    },
 
     /**
      * On-demand pairing: fetch a QR code and return it immediately.

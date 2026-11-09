@@ -319,6 +319,12 @@ api.registerChannel('feishu', async (context) => {
   aborts with a real-reason `AggregateError` only when **all** channels fail or
   when the built-in `http` channel fails (a gateway without its HTTP/WS
   listener must not report Ready).
+- Adapters may implement an optional `status()`
+  (`{ state: 'running' | 'dormant' | 'degraded' | 'retiring', detail? }`) for
+  health aggregation: the gateway `/health` endpoint reports each channel's
+  state. Adapters without `status()` are reported as `running` after a
+  successful `start()` (the start/stop contract makes "started" the truthful
+  default); a `status()` that throws degrades only that channel's health entry.
 - Messages carry `channel === adapter.name`; replies and command short-replies
   route back through the same adapter. `channelBindings` key on the channel
   label, and `session.dmScope: "per-conversation"` keys sessions per chat (one

@@ -1196,6 +1196,35 @@ export class Gateway {
   }
 
   /**
+   * Channel adapter health snapshot (供 /health)。Adapters without status()
+   * fall back to the truthful default: started adapters are `running` (the
+   * start/stop contract is symmetric), not-yet-started ones are `dormant`. A
+   * throwing status() is degraded, not fatal — health must not break on one
+   * sick adapter.
+   *
+   * @returns Per-channel state in registration order
+   */
+  getChannelStatuses(): Array<{ name: string; state: string; detail?: string }> {
+    return [...this.channels.entries()].map(([name, adapter]) => {
+      if (typeof adapter.status !== 'function') {
+        return this.activeChannels.has(adapter)
+          ? { name, state: 'running' }
+          : { name, state: 'dormant', detail: 'not started' };
+      }
+      try {
+        const status = adapter.status();
+        return { name, state: status.state, ...(status.detail === undefined ? {} : { detail: status.detail }) };
+      } catch (error) {
+        return {
+          name,
+          state: 'degraded',
+          detail: `status() failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    });
+  }
+
+  /**
    * EffectPolicy visibility (SEC-4): configured vs engine default vs warnings.
    * Engine default is workspace when `mode` is omitted; scaffold sets host explicitly.
    */

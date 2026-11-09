@@ -115,6 +115,27 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.105.2 (2026-11-10)
+
+### feat(plugin): optional ChannelAdapter.status() + gateway health (P6-2)
+
+The Channel SPI gains an optional `status()` probe
+(`{ state: 'running' | 'dormant' | 'degraded' | 'retiring', detail? }`). The
+gateway `/health` endpoint reports every channel's state via
+`getChannelStatuses()`: adapters without `status()` truthfully default to
+`running` after a successful `start()` (the start/stop contract makes "started"
+the real state), a `status()` that throws degrades only that channel's entry,
+and adapters not yet started report `dormant`. The weixin plugin implements
+`status()` with its real lifecycle semantics (dormant when unpaired or after
+dead-token parking, degraded with the poll error while backing off, running
+when paired and polling). Public docs updated in both languages.
+
+- Verified: build/lint/428 files 4418 tests/arch-check-sync green; new tests
+  cover the gateway default/verbatim/throwing paths and weixin
+  dormant/running/degraded transitions.
+
+---
+
 ## v0.105.1 (2026-11-10)
 
 ### refactor(plugin): contribution-kind descriptor table (P6-1)
