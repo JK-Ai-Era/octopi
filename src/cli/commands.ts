@@ -251,7 +251,7 @@ export async function pluginCommand(args: CliArgs): Promise<void> {
   };
 
   if (args.subcommand === 'doctor') {
-    const { doctorPlugin } = await import('./plugin-tools.js');
+    const { doctorPlugin, findDeployedCopy } = await import('./plugin-tools.js');
     const targetDir = positional[2] ?? '.';
     const pluginsRoot = flagValue('--into');
     // The deployed copy is resolved AFTER the manifest parses — same single
@@ -261,7 +261,7 @@ export async function pluginCommand(args: CliArgs): Promise<void> {
     if (probe.id !== undefined) {
       const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
       const { join } = await import('node:path');
-      deployedDir = join(pluginsRoot ?? join(getOctopiHome(), 'plugins'), probe.id);
+      deployedDir = findDeployedCopy(pluginsRoot ?? join(getOctopiHome(), 'plugins'), probe.id) ?? undefined;
     }
     const result = probe.id !== undefined ? doctorPlugin(targetDir, deployedDir ? { deployedDir } : undefined) : probe;
     if (args.json === true) {

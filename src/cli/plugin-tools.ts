@@ -161,6 +161,32 @@ function stateDirFindings(pluginId: string): PluginFinding[] {
 }
 
 /**
+ * Find a deployed copy of a plugin by manifest id under the plugins root,
+ * regardless of the directory name (hand-copied deployments may use any
+ * directory name). Falls back to `<root>/<id>` semantics when nothing matches.
+ *
+ * @param pluginsRoot - Deployment root (e.g. OCTOPI_HOME/plugins)
+ * @param id - Manifest id
+ * @returns The deployed directory, or null when no copy carries that id
+ */
+export function findDeployedCopy(pluginsRoot: string, id: string): string | null {
+  const exact = join(pluginsRoot, id);
+  if (existsSync(join(exact, 'octopi.plugin.json'))) return exact;
+  if (!existsSync(pluginsRoot)) return null;
+  for (const entry of readdirSync(pluginsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const dir = join(pluginsRoot, entry.name);
+    try {
+      const manifest = parseManifest(readFileSync(join(dir, 'octopi.plugin.json'), 'utf8'));
+      if (manifest.id === id) return dir;
+    } catch {
+      continue; // not a plugin dir (or unreadable) — discovery is best-effort here
+    }
+  }
+  return null;
+}
+
+/**
  * Inspect one plugin directory: manifest schema, engine compatibility, entry
  * resolution (the loader's own root-escape rule), state-dir permissions and
  * deployment-copy drift. Scope note: runtime policy (allow/block lists,
@@ -241,6 +267,8 @@ export function doctorPlugin(sourceDir: string, opts?: { deployedDir?: string })
     try {
       if (!statSync(opts.deployedDir).isDirectory()) {
         findings.push({ id: 'PLG006', severity: 'error', message: `deployed path ${opts.deployedDir} exists but is not a directory` });
+      } else if (realpathSync(opts.deployedDir) === realpathSync(sourceDir)) {
+        findings.push({ id: 'PLG006', severity: 'info', message: 'checking the deployed copy itself — no source/deployment drift to compare' });
       } else {
         const drifted = diffPluginCopy(sourceDir, opts.deployedDir);
         findings.push(

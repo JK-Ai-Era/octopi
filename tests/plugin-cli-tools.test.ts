@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { doctorPlugin, syncPlugin, diffPluginCopy, listPluginFiles, collectPluginFiles, swapIn } from '../src/cli/plugin-tools.js';
+import { doctorPlugin, syncPlugin, diffPluginCopy, listPluginFiles, collectPluginFiles, swapIn, findDeployedCopy } from '../src/cli/plugin-tools.js';
 import { resolvePluginEntry } from '../packages/engine/src/harness/extension/plugin-ecosystem/plugins/loader.js';
 
 let root: string;
@@ -355,6 +355,36 @@ describe('plugin sync (P6-5)', () => {
     const findings = doctorPlugin(dir).findings.filter((f) => f.id === 'PLG005' && f.severity === 'warn');
     expect(findings.some((f) => f.message.includes('cache'))).toBe(true);
     expect(findings.some((f) => f.message.includes('notes.test.ts'))).toBe(true);
+  });
+
+  it('findDeployedCopy locates a deployment by manifest id regardless of directory name', () => {
+    const src = join(root, 'src-plugin');
+    writePlugin(src, goodManifest());
+    // Hand-copied deployment under a directory name that differs from the id.
+    const odd = join(octopiHome, 'plugins', 'weixin-clawbot');
+    mkdirSync(odd, { recursive: true });
+    writeFileSync(join(odd, 'octopi.plugin.json'), JSON.stringify(goodManifest()));
+    writeFileSync(join(odd, 'index.mjs'), 'export default { drifted: true };\n');
+
+    expect(findDeployedCopy(join(octopiHome, 'plugins'), 'demo')).toBe(odd);
+    expect(findDeployedCopy(join(octopiHome, 'plugins'), 'missing')).toBeNull();
+
+    // Doctor diff now reaches the oddly named copy.
+    const result = doctorPlugin(src, { deployedDir: findDeployedCopy(join(octopiHome, 'plugins'), 'demo')! });
+    const drift = result.findings.find((f) => f.id === 'PLG006')!;
+    expect(drift.severity).toBe('warn');
+    expect(drift.message).toContain('index.mjs');
+  });
+
+  it('PLG006 is info when the checked directory IS the deployed copy', () => {
+    const src = join(root, 'src-plugin');
+    writePlugin(src, goodManifest());
+    const result = doctorPlugin(src, { deployedDir: src });
+
+    const finding = result.findings.find((f) => f.id === 'PLG006')!;
+    expect(finding.severity).toBe('info');
+    expect(finding.message).toMatch(/deployed copy itself/);
+    expect(result.healthy).toBe(true);
   });
 
   it('a state dir of 0700 survives the doctor round-trip after sync', () => {

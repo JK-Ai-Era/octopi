@@ -115,6 +115,32 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.105.6 (2026-11-10)
+
+### fix(plugin): plugin doctor finds deployed copies by manifest id (P6-5 follow-up)
+
+Production acceptance ([ ok ] PLG001 octopi.plugin.json parsed
+[ ok ] PLG002 manifest schema valid (id weixin)
+[ ok ] PLG003 engine 0.105.6 satisfies >=0.105.4
+[ ok ] PLG004 entry index.mjs resolves inside the plugin root
+[ ok ] PLG005 plugin-state/weixin is not group/other-accessible (mode 700)
+[INFO] PLG007 secretOptions declared (verifyCode); cannot compare — configSchema declares no top-level properties
+
+Plugin "/Users/jk/.octopi/plugins/weixin-clawbot": source-side checks pass. Runtime policy (allow/block lists, entries.<id>.enabled, contribution conflicts) is enforced by the loader at discovery.)
+surfaced that the deployed-copy check located the deployment only as
+`<pluginsRoot>/<manifestId>`, while hand-copied deployments may use any
+directory name (the live one is `weixin-clawbot`, id `weixin`) — PLG006 was
+silently skipped and a future `plugin sync` would have created a second
+copy. `findDeployedCopy(pluginsRoot, id)` now scans the root for any
+directory whose manifest carries that id (dot-dirs and unreadable dirs
+skipped); checking the deployed copy itself reports PLG006 as info instead
+of a tautological ok. Note: `plugin sync` still deploys to `plugins/<id>`
+(canonical layout) — migrate a hand-copied dir via sync + remove the old one.
+
+- Verified: build/lint/full suite (431 files, 4492 tests)/arch-check-sync
+  green; 2 new cases cover odd-directory-name discovery and the
+  self-comparison info semantics.
+
 ## v0.105.5 (2026-11-10)
 
 ### feat(plugin): plugin tooling — octopi plugin doctor/sync (P6-5)
