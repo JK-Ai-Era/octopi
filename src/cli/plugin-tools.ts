@@ -12,6 +12,8 @@
  */
 
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import semverModule from 'semver';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { getOctopiHome } from '@octopi-agent/engine/paths.js';
@@ -186,6 +188,138 @@ export function findDeployedCopy(pluginsRoot: string, id: string): string | null
   return null;
 }
 
+/** Whether a dependency spec is a plain semver range (verifiable by satisfies). */
+function isSemverRange(range: string): boolean {
+  try {
+    // satisfiesEngineRange already routes through semver.validRange; probe via
+    // it would conflate — use the same semantics explicitly here.
+    const { validRange } = semverModule;
+    return validRange(range) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Locate an installed dependency the way Node resolves modules: local
+ * node_modules first, then each ancestor (workspace hoisting). Returns the
+ * installed version, or 'missing'/'unreadable'.
+ */
+function resolveInstalledDependency(from: string, name: string): string | 'missing' | 'unreadable' {
+  let dir = resolve(from);
+  for (;;) {
+    const manifestPath = join(dir, 'node_modules', name, 'package.json');
+    if (existsSync(manifestPath)) {
+      try {
+        const dep = JSON.parse(readFileSync(manifestPath, 'utf8')) as { version?: string };
+        return String(dep.version ?? '');
+      } catch {
+        return 'unreadable';
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return 'missing';
+    dir = parent;
+  }
+}
+
+/** Whether the plugin declares runtime npm dependencies (deployment-relevant). */
+export function hasRuntimeDependencies(dir: string): boolean {
+  const manifestPath = join(dir, 'package.json');
+  if (!existsSync(manifestPath)) return false; // nothing to install
+  // A corrupt package.json is a real defect — never silently "nothing to install".
+  const pkg = JSON.parse(readFileSync(manifestPath, 'utf8')) as { dependencies?: Record<string, string> };
+  return Object.keys(pkg.dependencies ?? {}).length > 0;
+}
+
+/**
+ * Install a plugin's runtime dependencies into its directory (deployment
+ * completeness: a deployable plugin copy = files + the dependency closure).
+ * No-op for dependency-free plugins. Lifecycle scripts are skipped unless
+ * explicitly allowed (`manifest.installScripts`) — npm install scripts are an
+ * automatic code-execution surface.
+ *
+ * @param dir - Plugin directory holding package.json
+ * @param opts.allowScripts - Permit npm lifecycle scripts
+ * @param opts.run - Installer implementation (injectable for tests)
+ * @throws When npm is unavailable or the install fails
+ */
+export function ensureDependencies(
+  dir: string,
+  opts?: { allowScripts?: boolean; run?: (dir: string, allowScripts: boolean) => void },
+): void {
+  if (!hasRuntimeDependencies(dir)) return;
+  const run = opts?.run ?? runNpmInstall;
+  run(dir, opts?.allowScripts === true);
+}
+
+/**
+ * Resolve install-script consent. The OPERATOR authorizes scripts (CLI
+ * `--allow-scripts`) — a package can never self-authorize by declaring
+ * `installScripts` in its own manifest; the declaration only states that
+ * scripts are REQUIRED, in which case installing without consent is refused
+ * (a skipped postinstall would deploy a silently broken plugin).
+ *
+ * @param manifest - The plugin manifest being deployed
+ * @param allowScripts - Operator consent (CLI --allow-scripts)
+ * @throws When the plugin requires install scripts and consent is absent
+ * @returns Whether npm lifecycle scripts may run
+ */
+export function resolveScriptConsent(manifest: PluginManifest, allowScripts: boolean): boolean {
+  if (allowScripts) return true;
+  if (manifest.installScripts === true) {
+    throw new Error(
+      `plugin "${manifest.id}" declares installScripts (its dependencies run npm lifecycle scripts); ` +
+        'if you trust this plugin, re-run with --allow-scripts',
+    );
+  }
+  return false;
+}
+
+const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const SPAWN_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * npm argv for dependency installation — the security anchor: lifecycle
+ * scripts are skipped unless the OPERATOR allows them (never self-authorized
+ * by the package). Exported for tests so the flags cannot silently regress.
+ *
+ * @param allowScripts - Operator consent (CLI --allow-scripts)
+ * @returns npm argv
+ */
+export function npmInstallArgs(allowScripts: boolean): string[] {
+  const args = ['install', '--omit=dev', '--no-audit', '--no-fund'];
+  if (!allowScripts) args.push('--ignore-scripts');
+  return args;
+}
+
+/**
+ * npm argv for fetching a distribution tarball — pack/prepare lifecycle
+ * scripts are always skipped: the publisher's code must not run before the
+ * manifest gate. Exported for tests.
+ *
+ * @param spec - npm install spec
+ * @param dest - Pack destination
+ * @returns npm argv
+ */
+export function npmPackArgs(spec: string, dest: string): string[] {
+  return ['pack', spec, '--pack-destination', dest, '--ignore-scripts', '--loglevel=error'];
+}
+
+function runNpmInstall(target: string, allowScripts: boolean): void {
+  const res = spawnSync(NPM_BIN, npmInstallArgs(allowScripts), {
+    cwd: target,
+    encoding: 'utf8',
+    timeout: SPAWN_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  if (res.error) throw new Error(`dependency install failed in ${target}: ${res.error.message}`);
+  if (res.status !== 0) {
+    const detail = `${res.stderr ?? ''}${res.stdout ?? ''}`.trim().split('\n').slice(-8).join('\n');
+    throw new Error(`dependency install failed in ${target} (npm exit ${res.status})${detail ? `:\n${detail}` : ''}`);
+  }
+}
+
 /**
  * Inspect one plugin directory: manifest schema, engine compatibility, entry
  * resolution (the loader's own root-escape rule), state-dir permissions and
@@ -254,6 +388,63 @@ export function doctorPlugin(sourceDir: string, opts?: { deployedDir?: string })
     }
   }
 
+  try {
+    const pkg = JSON.parse(readFileSync(join(sourceDir, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> };
+    const deps = Object.entries(pkg.dependencies ?? {});
+    if (deps.length === 0) {
+      findings.push({ id: 'PLG009', severity: 'ok', message: 'no runtime dependencies' });
+    } else {
+      const missing: string[] = [];
+      const mismatched: string[] = [];
+      const unverifiable: string[] = [];
+      for (const [name, range] of deps) {
+        const installed = resolveInstalledDependency(sourceDir, name);
+        if (installed === 'missing') {
+          missing.push(name);
+          continue;
+        }
+        if (installed === 'unreadable') {
+          unverifiable.push(`${name} (installed but unreadable)`);
+          continue;
+        }
+        // Non-semver specs (workspace:, file:, git+, npm:, dist-tags) cannot be
+        // range-verified — presence is all we honestly know.
+        if (!isSemverRange(String(range))) {
+          unverifiable.push(`${name} (${range})`);
+          continue;
+        }
+        if (!satisfiesEngineRange(String(installed), String(range))) mismatched.push(`${name} ${String(installed)} ∉ ${range}`);
+      }
+      if (missing.length > 0) {
+        findings.push({ id: 'PLG009', severity: 'error', message: `runtime dependencies not installed (checked the Node resolution chain): ${missing.join(', ')} — run "octopi plugin sync" (or npm install) before loading; the loader will fail on import` });
+      } else if (mismatched.length > 0) {
+        findings.push({ id: 'PLG009', severity: 'error', message: `runtime dependency versions do not satisfy package.json: ${mismatched.join('; ')} — reinstall` });
+      } else {
+        findings.push({
+          id: 'PLG009',
+          severity: unverifiable.length > 0 ? 'info' : 'ok',
+          message: unverifiable.length > 0
+            ? `runtime dependencies present; version not verifiable for ${unverifiable.join(', ')} (non-semver spec or unreadable)`
+            : `runtime dependencies installed (${deps.length})`,
+        });
+      }
+    }
+  } catch {
+    findings.push({ id: 'PLG009', severity: 'info', message: 'no package.json — nothing to install' });
+  }
+
+  {
+    const pluginsRoot = join(getOctopiHome(), 'plugins');
+    if (existsSync(pluginsRoot)) {
+      const orphans = readdirSync(pluginsRoot).filter(
+        (name) => SYNC_SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix)) || name.startsWith(FETCH_SCRATCH_PREFIX),
+      );
+      if (orphans.length > 0) {
+        findings.push({ id: 'PLG010', severity: 'info', message: `stale sync scratch dirs in plugins root (${orphans.length}): safe to remove manually — they hold no live deployment` });
+      }
+    }
+  }
+
   const inventory = collectPluginFiles(sourceDir);
   for (const link of inventory.symlinks) {
     findings.push(
@@ -296,6 +487,24 @@ export function doctorPlugin(sourceDir: string, opts?: { deployedDir?: string })
  * @param backup - Scratch path for the displaced copy
  * @param rename - Rename implementation (injectable for failure tests)
  */
+/**
+ * Whether the source's runtime dependency set matches the deployed copy's —
+ * when it does, the existing node_modules is reused (offline, instant) instead
+ * of re-running npm.
+ */
+function depsUnchanged(sourceDir: string, targetDir: string): boolean {
+  const depsOf = (dir: string): string | null => {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> };
+      return JSON.stringify(Object.entries(pkg.dependencies ?? {}).sort());
+    } catch {
+      return null;
+    }
+  };
+  const sourceDeps = depsOf(sourceDir);
+  return sourceDeps !== null && sourceDeps === depsOf(targetDir) && existsSync(join(targetDir, 'node_modules'));
+}
+
 export function swapIn(
   staging: string,
   targetDir: string,
@@ -332,10 +541,12 @@ export function swapIn(
  * @param sourceDir - Plugin directory to deploy
  * @param pluginsRoot - Deployment root (default OCTOPI_HOME/plugins)
  * @param rename - Rename implementation (injectable for failure tests)
+ * @param opts.skipInstall - Skip dependency installation (--skip-install)
+ * @param opts.install - Installer implementation (injectable for tests)
  * @returns Sync result incl. the restart notice
  * @throws When the manifest is invalid, the source is the deployment slot, or the swap cannot be completed
  */
-export function syncPlugin(sourceDir: string, pluginsRoot?: string, rename?: (from: string, to: string) => void): PluginSyncResult {
+export function syncPlugin(sourceDir: string, pluginsRoot?: string, rename?: (from: string, to: string) => void, opts?: { skipInstall?: boolean; allowScripts?: boolean; install?: (dir: string, allowScripts: boolean) => void }): PluginSyncResult {
   const root = pluginsRoot ?? join(getOctopiHome(), 'plugins');
   const manifestPath = join(sourceDir, 'octopi.plugin.json');
   if (!existsSync(manifestPath)) {
@@ -360,13 +571,6 @@ export function syncPlugin(sourceDir: string, pluginsRoot?: string, rename?: (fr
   }
 
   mkdirSync(root, { recursive: true });
-  // Sweep scratch dirs left by interrupted runs (they contain manifests and
-  // would otherwise be picked up as duplicate-id candidates by the loader).
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (SYNC_SCRATCH_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) {
-      rmSync(join(root, entry.name), { recursive: true, force: true });
-    }
-  }
 
   const staging = join(root, `.sync-tmp-${manifest.id}-${process.pid}-${Date.now()}`);
   const backup = join(root, `.sync-old-${manifest.id}-${process.pid}-${Date.now()}`);
@@ -383,6 +587,21 @@ export function syncPlugin(sourceDir: string, pluginsRoot?: string, rename?: (fr
       copyFileSync(join(sourceDir, rel), dest); // follows symlinks: content copy
     }
 
+    // Deployment completeness: files + the runtime dependency closure, all
+    // staged before the swap so the deployed slot is never half-installed.
+    // The closure is (a) reused from the current deployment when the dependency
+    // set is unchanged (fast, offline), (b) freshly installed otherwise, or
+    // (c) preserved as-is under --skip-install (never silently dropped).
+    if (opts?.skipInstall) {
+      const deployedModules = join(targetDir, 'node_modules');
+      if (existsSync(deployedModules)) renameSync(deployedModules, join(staging, 'node_modules'));
+    } else if (!depsUnchanged(sourceDir, targetDir)) {
+      ensureDependencies(staging, { allowScripts: resolveScriptConsent(manifest, opts?.allowScripts === true), run: opts?.install });
+    } else {
+      const deployedModules = join(targetDir, 'node_modules');
+      if (existsSync(deployedModules)) renameSync(deployedModules, join(staging, 'node_modules'));
+    }
+
     const changed = existsSync(targetDir) ? diffPluginCopy(staging, targetDir) : [...inventory.files];
     swapIn(staging, targetDir, backup, rename);
     return {
@@ -396,5 +615,101 @@ export function syncPlugin(sourceDir: string, pluginsRoot?: string, rename?: (fr
     // Only the staging dir is swept here — `backup` is swapIn's responsibility
     // (deleting it unconditionally is how a failed rollback loses the last copy).
     rmSync(staging, { recursive: true, force: true });
+  }
+}
+
+/** Scratch prefix for npm fetch dirs (swept like staging/backup). */
+const FETCH_SCRATCH_PREFIX = '.sync-fetch-';
+
+function npmFetchPackage(spec: string, dest: string): string {
+  mkdirSync(dest, { recursive: true });
+  const pack = spawnSync(NPM_BIN, npmPackArgs(spec, dest), { encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS, windowsHide: true });
+  if (pack.error) throw new Error(`plugin install: npm pack "${spec}" failed: ${pack.error.message}`);
+  if (pack.status !== 0) {
+    throw new Error(`plugin install: npm pack "${spec}" failed: ${(pack.stderr || pack.stdout || `npm exit ${pack.status}`).trim()}`);
+  }
+  const tarball = pack.stdout.trim().split('\n').pop()?.trim();
+  if (!tarball) throw new Error(`plugin install: npm pack "${spec}" produced no tarball name`);
+  const extractDir = join(dest, 'extract');
+  mkdirSync(extractDir, { recursive: true });
+  const untar = spawnSync('tar', ['-xzf', join(dest, tarball), '-C', extractDir], { encoding: 'utf8', timeout: SPAWN_TIMEOUT_MS, windowsHide: true });
+  if (untar.error) throw new Error(`plugin install: cannot extract ${tarball}: ${untar.error.message}`);
+  if (untar.status !== 0) {
+    throw new Error(`plugin install: cannot extract ${tarball}: ${(untar.stderr || `tar exit ${untar.status}`).trim()}`);
+  }
+  return join(extractDir, 'package'); // npm tarballs unpack into package/
+}
+
+/**
+ * Install a plugin from the npm distribution channel (registry, git spec or
+ * local tarball): fetch the package, verify its manifest, install its runtime
+ * dependencies and atomically deploy into the plugins root. The npm package
+ * is the distribution unit — `octopi plugin init` scaffolds one.
+ *
+ * @param spec - npm install spec (package name, name@version, git URL, tarball)
+ * @param pluginsRoot - Deployment root (default OCTOPI_HOME/plugins)
+ * @param opts.fetch - Package fetcher (injectable for tests) → content dir
+ * @param opts.install - Installer implementation (injectable for tests)
+ * @returns Sync result incl. the restart notice
+ * @throws When the package is not a valid plugin or installation fails
+ */
+export function installPluginFromNpm(
+  spec: string,
+  pluginsRoot?: string,
+  opts?: { fetch?: (spec: string, dest: string) => string; install?: (dir: string, allowScripts: boolean) => void; allowScripts?: boolean },
+): PluginSyncResult {
+  const root = pluginsRoot ?? join(getOctopiHome(), 'plugins');
+  mkdirSync(root, { recursive: true });
+
+  const scratch = join(root, `${FETCH_SCRATCH_PREFIX}${process.pid}-${Date.now()}`);
+  const staging = join(root, `.sync-tmp-install-${process.pid}-${Date.now()}`);
+  const backup = join(root, `.sync-old-install-${process.pid}-${Date.now()}`);
+  try {
+    const contentDir = (opts?.fetch ?? npmFetchPackage)(spec, scratch);
+    const manifestPath = join(contentDir, 'octopi.plugin.json');
+    if (!existsSync(manifestPath)) {
+      throw new Error(`plugin install: octopi.plugin.json not found in package "${spec}" — not an Octopi plugin`);
+    }
+    const manifest = parseManifest(readFileSync(manifestPath, 'utf8'));
+    const targetDir = join(root, manifest.id);
+
+    // Deployment completeness includes loadability: entry must resolve and the
+    // engine range must hold, or we would deploy a plugin the loader refuses.
+    if (!satisfiesEngineRange(getEngineVersion(), manifest.engine.octopi)) {
+      throw new Error(
+        `plugin install: "${manifest.id}" requires Octopi ${manifest.engine.octopi}; this host is ${getEngineVersion()}`,
+      );
+    }
+
+    mkdirSync(staging, { recursive: true });
+    const inventory = collectPluginFiles(contentDir);
+    const escaping = inventory.symlinks.filter((symlink) => symlink.escapes);
+    if (escaping.length > 0) {
+      throw new Error(`plugin install: refusing symlink(s) escaping the package root: ${escaping.map((symlink) => symlink.rel).join(', ')}`);
+    }
+    for (const rel of inventory.files) {
+      const dest = join(staging, rel);
+      mkdirSync(dirname(dest), { recursive: true });
+      copyFileSync(join(contentDir, rel), dest);
+    }
+    try {
+      resolvePluginEntry(staging, manifest.entry);
+    } catch (error) {
+      throw new Error(`plugin install: "${manifest.id}" is not loadable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    ensureDependencies(staging, { allowScripts: resolveScriptConsent(manifest, opts?.allowScripts === true), run: opts?.install });
+
+    const changed = existsSync(targetDir) ? diffPluginCopy(staging, targetDir) : [...inventory.files];
+    swapIn(staging, targetDir, backup);
+    return {
+      id: manifest.id,
+      targetDir,
+      changedFiles: changed,
+      restartRequired:
+        'Restart the gateway to load the installed plugin (in-process plugins have no hot reload in v1: octopi serve stop && octopi serve start).',
+    };
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+    rmSync(scratch, { recursive: true, force: true });
   }
 }

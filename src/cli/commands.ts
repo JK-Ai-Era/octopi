@@ -38,7 +38,12 @@ Commands:
   plugin doctor [dir]  Check a plugin (manifest/schema, engine range, entry,
                        state-dir permissions, deployed-copy drift); --into <root>, --json
   plugin sync [dir]  Atomically deploy a plugin into OCTOPI_HOME/plugins
-                       (--into <dir> to override); prints the restart notice
+                       (--into <dir>; --skip-install keeps existing deps;
+                        --allow-scripts permits npm lifecycle scripts);
+                       installs runtime dependencies; prints the restart notice
+  plugin install <pkg>  Deploy a plugin from npm (registry/git/tarball) into
+                       OCTOPI_HOME/plugins (--into <dir>; --allow-scripts
+                       permits npm lifecycle scripts)
   ops kill <id>     Kill switch: stop ALL execution of an agent (host-side, immediate)
   ops revive <id>   Release the kill switch and resume execution
   ops status [id]   Show kill-switch state for one or all agents
@@ -281,12 +286,35 @@ export async function pluginCommand(args: CliArgs): Promise<void> {
     return;
   }
 
+  if (args.subcommand === 'install') {
+    const { installPluginFromNpm } = await import('./plugin-tools.js');
+    const spec = positional[2];
+    if (!spec) {
+      console.error('Usage: octopi plugin install <npm-spec> [--into <plugins-root>]');
+      process.exitCode = 1;
+      return;
+    }
+    const pluginsRoot = flagValue('--into');
+    try {
+      const result = installPluginFromNpm(spec, pluginsRoot, { allowScripts: rawArgs.includes('--allow-scripts') });
+      console.log(`🐙 Plugin "${result.id}" installed to ${result.targetDir} (from ${spec})`);
+      if (result.changedFiles.length > 0) {
+        console.log(`Files (${result.changedFiles.length}): ${result.changedFiles.slice(0, 10).join(', ')}${result.changedFiles.length > 10 ? ', …' : ''}`);
+      }
+      console.log(`\n⚠ ${result.restartRequired}`);
+    } catch (error) {
+      console.error(`plugin install failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (args.subcommand === 'sync') {
     const { syncPlugin } = await import('./plugin-tools.js');
     const targetDir = positional[2] ?? '.';
     const pluginsRoot = flagValue('--into');
     try {
-      const result = syncPlugin(targetDir, pluginsRoot);
+      const result = syncPlugin(targetDir, pluginsRoot, undefined, { skipInstall: rawArgs.includes('--skip-install'), allowScripts: rawArgs.includes('--allow-scripts') });
       console.log(`🐙 Plugin "${result.id}" synced to ${result.targetDir}`);
       if (result.changedFiles.length > 0) {
         console.log(`Changed (${result.changedFiles.length}): ${result.changedFiles.slice(0, 10).join(', ')}${result.changedFiles.length > 10 ? ', …' : ''}`);
@@ -304,7 +332,8 @@ export async function pluginCommand(args: CliArgs): Promise<void> {
   if (args.subcommand !== 'init') {
     console.error('Usage: octopi plugin init <plugin-name> [--dir <path>]');
     console.error('       octopi plugin doctor [dir] [--into <plugins-root>] [--json]');
-    console.error('       octopi plugin sync [dir] [--into <plugins-root>]');
+    console.error('       octopi plugin sync [dir] [--into <plugins-root>] [--skip-install] [--allow-scripts]');
+    console.error('       octopi plugin install <npm-spec> [--into <plugins-root>] [--allow-scripts]');
     process.exit(1);
   }
 

@@ -5,10 +5,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { doctorPlugin, syncPlugin, diffPluginCopy, listPluginFiles, collectPluginFiles, swapIn, findDeployedCopy } from '../src/cli/plugin-tools.js';
+import { doctorPlugin, syncPlugin, diffPluginCopy, listPluginFiles, collectPluginFiles, swapIn, findDeployedCopy, installPluginFromNpm, ensureDependencies, hasRuntimeDependencies, npmInstallArgs, npmPackArgs, resolveScriptConsent } from '../src/cli/plugin-tools.js';
 import { resolvePluginEntry } from '../packages/engine/src/harness/extension/plugin-ecosystem/plugins/loader.js';
 
 let root: string;
@@ -259,14 +259,19 @@ describe('plugin sync (P6-5)', () => {
     expect(existsSync(join(deployed, 'notes.test.mjs'))).toBe(true);
   });
 
-  it('sweeps stale scratch dirs from interrupted runs before staging', () => {
+  it('preserves stale scratch dirs (no sweep) — a failed rollback backup must survive', () => {
     const src = join(root, 'src-plugin');
     writePlugin(src, goodManifest());
-    mkdirSync(join(octopiHome, 'plugins', '.sync-tmp-demo-1-1'), { recursive: true });
-    writeFileSync(join(octopiHome, 'plugins', '.sync-tmp-demo-1-1', 'octopi.plugin.json'), '{}');
+    // A backup left by a failed-rollback swap: the error message tells the
+    // operator it is preserved there — a later sync must NOT delete it.
+    const preserved = join(octopiHome, 'plugins', '.sync-old-demo-1-1');
+    mkdirSync(preserved, { recursive: true });
+    writeFileSync(join(preserved, 'keep.txt'), 'the only surviving copy');
 
     syncPlugin(src);
-    expect(existsSync(join(octopiHome, 'plugins', '.sync-tmp-demo-1-1'))).toBe(false);
+    expect(existsSync(join(preserved, 'keep.txt'))).toBe(true);
+    // Doctor points the operator at the leftovers instead of deleting them.
+    expect(doctorPlugin(src).findings.find((f) => f.id === 'PLG010')!.message).toMatch(/safe to remove manually/);
   });
 
   it('refuses to deploy symlinks that escape the plugin root and reports them', () => {
@@ -398,5 +403,266 @@ describe('plugin sync (P6-5)', () => {
     expect(result.healthy).toBe(true);
     expect(result.findings.find((f) => f.id === 'PLG005')!.severity).toBe('ok');
     expect(statSync(stateDir).mode & 0o777).toBe(0o700);
+  });
+});
+
+describe('plugin dependency lifecycle (P6-6)', () => {
+  function writePluginWithDeps(dir: string, deps: Record<string, string>, manifestExtra: Record<string, unknown> = {}): void {
+    writePlugin(dir, goodManifest(manifestExtra));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: deps }, null, 2));
+  }
+
+  it('sync installs runtime dependencies in staging before the swap (default, ignore-scripts)', () => {
+    const src = join(root, 'src-plugin');
+    writePluginWithDeps(src, { 'fake-sdk': '^1.0.0' });
+    const calls: Array<{ dir: string; allowScripts: boolean }> = [];
+
+    const result = syncPlugin(src, undefined, undefined, {
+      install: (dir, allowScripts) => {
+        calls.push({ dir, allowScripts });
+        mkdirSync(join(dir, 'node_modules', 'fake-sdk'), { recursive: true });
+        writeFileSync(join(dir, 'node_modules', 'fake-sdk', 'package.json'), JSON.stringify({ name: 'fake-sdk', version: '1.2.0' }));
+      },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].allowScripts).toBe(false);
+    // Installed in staging (not in the source) and deployed with the swap.
+    expect(calls[0].dir).not.toBe(src);
+    expect(existsSync(join(result.targetDir, 'node_modules', 'fake-sdk', 'package.json'))).toBe(true);
+  });
+
+  it('dependency-free plugins skip installation and --skip-install opts out', () => {
+    const src = join(root, 'src-plugin');
+    writePlugin(src, goodManifest());
+    let calls = 0;
+    syncPlugin(src, undefined, undefined, { install: () => { calls += 1; } });
+    expect(calls).toBe(0);
+
+    const withDeps = join(root, 'with-deps');
+    writePluginWithDeps(withDeps, { 'fake-sdk': '^1.0.0' });
+    syncPlugin(withDeps, undefined, undefined, { skipInstall: true, install: () => { calls += 1; } });
+    expect(calls).toBe(0);
+  });
+
+  it('installScripts is a requirement declaration — the OPERATOR consents (never the package)', () => {
+    const src = join(root, 'src-plugin');
+    writePluginWithDeps(src, { 'native-mod': '^1.0.0' }, { installScripts: true });
+
+    // Without consent: deployment is refused (a skipped postinstall would be a
+    // silently broken plugin) — the package cannot self-authorize.
+    expect(() => syncPlugin(src, undefined, undefined, { install: () => {} })).toThrow(/declares installScripts/);
+    expect(() => syncPlugin(src, undefined, undefined, { install: () => {}, skipInstall: true })).not.toThrow();
+
+    // With operator consent: scripts run.
+    let allow: boolean | undefined;
+    syncPlugin(src, undefined, undefined, { install: (_dir, allowScripts) => { allow = allowScripts; }, allowScripts: true });
+    expect(allow).toBe(true);
+  });
+
+  it('npm argv builders are security anchors (scripts never run without consent)', () => {
+    expect(npmInstallArgs(false)).toContain('--ignore-scripts');
+    expect(npmInstallArgs(true)).not.toContain('--ignore-scripts');
+    expect(npmInstallArgs(false)).toContain('--omit=dev');
+    // The fetch stage always skips publisher scripts (pack/prepare surface).
+    expect(npmPackArgs('x', '/tmp/y')).toContain('--ignore-scripts');
+    expect(npmPackArgs('x', '/tmp/y')).not.toContain('--silent');
+    expect(npmPackArgs('x', '/tmp/y')).toContain('--loglevel=error');
+
+    const manifest = { id: 'p', apiVersion: '1', version: '1.0.0', name: 'p', entry: 'index.mjs', engine: { octopi: '>=0' }, configSchema: { type: 'object' }, installScripts: true };
+    expect(() => resolveScriptConsent(manifest as never, false)).toThrow(/--allow-scripts/);
+    expect(resolveScriptConsent(manifest as never, true)).toBe(true);
+  });
+
+  it('a failing dependency install leaves the previous deployment untouched', () => {
+    const src = join(root, 'src-plugin');
+    writePluginWithDeps(src, { 'fake-sdk': '^1.0.0' });
+    syncPlugin(src, undefined, undefined, { install: () => {} }); // initial deploy
+    const deployed = join(octopiHome, 'plugins', 'demo');
+    writeFileSync(join(src, 'index.mjs'), 'export default { v2: true };\n');
+    // Change the dependency set — otherwise the unchanged-deps fast path
+    // reuses the deployed node_modules and never runs the installer.
+    writeFileSync(join(src, 'package.json'), JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: { 'fake-sdk': '^1.0.0', 'extra': '^2.0.0' } }, null, 2));
+
+    expect(() =>
+      syncPlugin(src, undefined, undefined, {
+        install: () => {
+          throw new Error('injected npm failure');
+        },
+      }),
+    ).toThrow(/injected npm failure/);
+    // Old deployment intact (initial content, not v2), staging swept.
+    expect(readFileSync(join(deployed, 'index.mjs'), 'utf8')).not.toContain('v2');
+    expect(readdirSync(join(octopiHome, 'plugins')).filter((e) => e.startsWith('.sync-'))).toEqual([]);
+  });
+
+  it('PLG009 reports missing and version-mismatched runtime dependencies as errors', () => {
+    const src = join(root, 'src-plugin');
+    writePluginWithDeps(src, { 'fake-sdk': '^1.0.0', 'other': '~2.0.0' });
+
+    let result = doctorPlugin(src);
+    let finding = result.findings.find((f) => f.id === 'PLG009')!;
+    expect(finding.severity).toBe('error');
+    expect(finding.message).toContain('fake-sdk');
+    expect(finding.message).toContain('other');
+    expect(result.healthy).toBe(false);
+
+    mkdirSync(join(src, 'node_modules', 'fake-sdk'), { recursive: true });
+    writeFileSync(join(src, 'node_modules', 'fake-sdk', 'package.json'), JSON.stringify({ version: '1.2.0' }));
+    mkdirSync(join(src, 'node_modules', 'other'), { recursive: true });
+    writeFileSync(join(src, 'node_modules', 'other', 'package.json'), JSON.stringify({ version: '2.5.0' }));
+
+    result = doctorPlugin(src);
+    finding = result.findings.find((f) => f.id === 'PLG009')!;
+    expect(finding.severity).toBe('error'); // 2.5.0 ∉ ~2.0.0
+    expect(finding.message).toContain('other 2.5.0');
+
+    writeFileSync(join(src, 'node_modules', 'other', 'package.json'), JSON.stringify({ version: '2.0.7' }));
+    result = doctorPlugin(src);
+    expect(result.findings.find((f) => f.id === 'PLG009')!.severity).toBe('ok');
+  });
+
+  it('hasRuntimeDependencies distinguishes dependency-free plugins', () => {
+    const bare = join(root, 'bare');
+    writePlugin(bare, goodManifest());
+    expect(hasRuntimeDependencies(bare)).toBe(false);
+
+    const deps = join(root, 'deps');
+    writePluginWithDeps(deps, { x: '^1' });
+    expect(hasRuntimeDependencies(deps)).toBe(true);
+    // ensureDependencies is a no-op for bare plugins even with a throwing runner.
+    expect(() => ensureDependencies(bare, { run: () => { throw new Error('must not run'); } })).not.toThrow();
+  });
+
+  it('installPluginFromNpm deploys a fetched package and installs its dependencies', () => {
+    const calls: Array<{ dir: string; allowScripts: boolean }> = [];
+    const result = installPluginFromNpm('@scope/demo', join(octopiHome, 'plugins'), {
+      fetch: (_spec, dest) => {
+        const content = join(dest, 'content');
+        mkdirSync(content, { recursive: true });
+        writeFileSync(join(content, 'octopi.plugin.json'), JSON.stringify(goodManifest(), null, 2));
+        writeFileSync(join(content, 'index.mjs'), 'export default {};');
+        writeFileSync(join(content, 'package.json'), JSON.stringify({ name: 'demo', version: '0.1.0', dependencies: { 'fake-sdk': '^1.0.0' } }));
+        return content;
+      },
+      install: (dir, allowScripts) => {
+        calls.push({ dir, allowScripts });
+        mkdirSync(join(dir, 'node_modules', 'fake-sdk'), { recursive: true });
+        writeFileSync(join(dir, 'node_modules', 'fake-sdk', 'package.json'), JSON.stringify({ version: '1.0.0' }));
+      },
+    });
+
+    expect(result.id).toBe('demo');
+    expect(result.targetDir).toBe(join(octopiHome, 'plugins', 'demo'));
+    expect(calls).toHaveLength(1);
+    expect(existsSync(join(result.targetDir, 'octopi.plugin.json'))).toBe(true);
+    expect(existsSync(join(result.targetDir, 'node_modules', 'fake-sdk'))).toBe(true);
+    expect(result.restartRequired).toMatch(/restart the gateway/i);
+  });
+
+  it('skip-install preserves the deployed node_modules instead of dropping the closure', () => {
+    const src = join(root, 'src-plugin');
+    writePluginWithDeps(src, { 'fake-sdk': '^1.0.0' });
+    syncPlugin(src, undefined, undefined, {
+      install: (dir) => {
+        mkdirSync(join(dir, 'node_modules', 'fake-sdk'), { recursive: true });
+        writeFileSync(join(dir, 'node_modules', 'fake-sdk', 'package.json'), JSON.stringify({ version: '1.0.0' }));
+      },
+    });
+    const deployed = join(octopiHome, 'plugins', 'demo');
+    writeFileSync(join(src, 'index.mjs'), 'export default { v2: true };\n');
+
+    syncPlugin(src, undefined, undefined, { skipInstall: true });
+    // The dependency closure survives the file-only update.
+    expect(existsSync(join(deployed, 'node_modules', 'fake-sdk', 'package.json'))).toBe(true);
+    expect(readFileSync(join(deployed, 'index.mjs'), 'utf8')).toContain('v2');
+  });
+
+  it('unchanged dependency set reuses the deployed node_modules (offline fast path)', () => {
+    const src = join(root, 'src-plugin');
+    writePluginWithDeps(src, { 'fake-sdk': '^1.0.0' });
+    let installs = 0;
+    const install = (dir: string) => {
+      installs += 1;
+      mkdirSync(join(dir, 'node_modules', 'fake-sdk'), { recursive: true });
+      writeFileSync(join(dir, 'node_modules', 'fake-sdk', 'package.json'), JSON.stringify({ version: '1.0.0' }));
+    };
+    syncPlugin(src, undefined, undefined, { install });
+    expect(installs).toBe(1);
+
+    writeFileSync(join(src, 'index.mjs'), 'export default { v2: true };\n');
+    syncPlugin(src, undefined, undefined, { install });
+    expect(installs).toBe(1); // dep set unchanged → node_modules reused, no npm run
+    expect(existsSync(join(octopiHome, 'plugins', 'demo', 'node_modules', 'fake-sdk'))).toBe(true);
+  });
+
+  it('installPluginFromNpm refuses a plugin the loader would not load (entry/engine)', () => {
+    // Missing entry.
+    expect(() =>
+      installPluginFromNpm('no-entry', join(octopiHome, 'plugins'), {
+        fetch: (_spec, dest) => {
+          const content = join(dest, 'content');
+          mkdirSync(content, { recursive: true });
+          writeFileSync(join(content, 'octopi.plugin.json'), JSON.stringify(goodManifest({ entry: 'dist/missing.js' })));
+          writeFileSync(join(content, 'package.json'), JSON.stringify({ name: 'demo', version: '0.1.0' }));
+          return content;
+        },
+      }),
+    ).toThrow(/not loadable/);
+    // Engine range the host cannot satisfy.
+    expect(() =>
+      installPluginFromNpm('future', join(octopiHome, 'plugins'), {
+        fetch: (_spec, dest) => {
+          const content = join(dest, 'content');
+          mkdirSync(content, { recursive: true });
+          writeFileSync(join(content, 'octopi.plugin.json'), JSON.stringify(goodManifest({ engine: { octopi: '>=999' } })));
+          writeFileSync(join(content, 'index.mjs'), 'export default {};');
+          return content;
+        },
+      }),
+    ).toThrow(/requires Octopi >=999/);
+    expect(readdirSync(join(octopiHome, 'plugins')).filter((e) => e.startsWith('.sync-'))).toEqual([]);
+  });
+
+  it('PLG009: non-semver specs are presence-only and hoisted deps resolve', () => {
+    const src = join(root, 'src-plugin');
+    writePluginWithDeps(src, { 'workspace-pkg': 'workspace:*', 'file-pkg': 'file:../shared', 'hoisted-pkg': '^3.0.0' });
+
+    // Hoisted at the workspace root (a parent of sourceDir — Node resolution finds it).
+    mkdirSync(join(root, 'node_modules', 'hoisted-pkg'), { recursive: true });
+    writeFileSync(join(root, 'node_modules', 'hoisted-pkg', 'package.json'), JSON.stringify({ version: '3.1.0' }));
+    // Non-semver specs are installed too (npm links them) — presence checked,
+    // version not comparable.
+    for (const name of ['workspace-pkg', 'file-pkg']) {
+      mkdirSync(join(src, 'node_modules', name), { recursive: true });
+      writeFileSync(join(src, 'node_modules', name, 'package.json'), JSON.stringify({ version: '0.0.0' }));
+    }
+
+    const result = doctorPlugin(src);
+    const finding = result.findings.find((f) => f.id === 'PLG009')!;
+    expect(finding.severity).toBe('info'); // two non-verifiable, one hoisted-ok → no lie, no false error
+    expect(finding.message).toContain('workspace-pkg');
+    expect(finding.message).toContain('file-pkg');
+  });
+
+  it('a corrupt package.json is a real error, not "nothing to install"', () => {
+    const src = join(root, 'src-plugin');
+    writePlugin(src, goodManifest());
+    writeFileSync(join(src, 'package.json'), '{ not json');
+    expect(() => hasRuntimeDependencies(src)).toThrow();
+  });
+
+  it('installPluginFromNpm rejects a package that is not a valid plugin', () => {
+    expect(() =>
+      installPluginFromNpm('not-a-plugin', join(octopiHome, 'plugins'), {
+        fetch: (_spec, dest) => {
+          const content = join(dest, 'content');
+          mkdirSync(content, { recursive: true });
+          writeFileSync(join(content, 'package.json'), JSON.stringify({ name: 'nope', version: '1.0.0' }));
+          return content;
+        },
+      }),
+    ).toThrow(/octopi.plugin.json not found/);
+    expect(readdirSync(join(octopiHome, 'plugins')).filter((e) => e.startsWith('.sync-'))).toEqual([]);
   });
 });

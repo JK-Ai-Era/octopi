@@ -100,6 +100,14 @@ const manifestSchema = z
      * them in config echo surfaces (Web console) — values are never shown.
      */
     secretOptions: z.array(contributionName).optional(),
+    /**
+     * Declare that this plugin's dependencies require npm lifecycle scripts
+     * (preinstall/postinstall). This is a requirement declaration, NOT a
+     * permission: scripts run only when the OPERATOR consents (CLI
+     * --allow-scripts); without consent deployment is refused so a skipped
+     * postinstall cannot silently produce a broken plugin.
+     */
+    installScripts: z.boolean().optional(),
     contributes: z
       .object({
         tools: z.array(contributionName).optional(),
@@ -154,6 +162,8 @@ export interface PluginManifest {
   configSchema: JsonSchema;
   /** Option keys whose values are secrets; redacted in config echo surfaces. */
   secretOptions?: string[];
+  /** Dependencies require npm lifecycle scripts (requirement, not permission — the operator consents via CLI --allow-scripts). */
+  installScripts?: boolean;
   contributes?: PluginContributions;
   requiresPlugins?: string[];
   legacyPluginIds?: string[];

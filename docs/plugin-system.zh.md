@@ -340,8 +340,21 @@ register(api) {
 `octopi plugin` 命令组覆盖运行时之外的插件生命周期（v1 刻意不做 dev-mode watch/热重载——sync 直接提示重启而不是假装生效）：
 
 - **`octopi plugin init <name> [--dir <path>]`** —— 脚手架一个插件工程（manifest + TS 入口 + package/tsconfig）。`npm run build` 之后（entry 指向 `dist/`）产物通过 `plugin doctor` 全绿；首次构建前 doctor 会按 loader 同样规则报 entry 缺失（PLG004）。
-- **`octopi plugin doctor [dir] [--json]`** —— 单插件目录的本地体检（无 LLM，有错 exit 1）：manifest JSON/schema（`PLG001/2`）、engine 范围与已装 engine（`PLG003`，与 loader 同一条规则）、entry 文件存在（`PLG004`）、`plugin-state/<id>` 权限（`PLG005`，不可 group/other 访问）、与 `OCTOPI_HOME/plugins/<id>` 的部署副本漂移（`PLG006`）、`secretOptions` 键与 `configSchema.properties` 对照（`PLG007`）。warn 不阻断加载；error 意味着 loader 会拒绝该插件。
-- **`octopi plugin sync [dir] [--into <plugins-root>]`** —— 原子部署插件到 `OCTOPI_HOME/plugins`：文件先在目标旁暂存再 rename 交换（swap 失败回滚旧副本；回滚也失败时旧副本保留在盘上并报告路径——部署位绝不会新旧混杂；仅 rename 原子性、无 fsync，断电仍可能丢最新写入）；dev-only 文件（`node_modules`、`.git`、`*.test.*`）不入部署；目标里的陈旧文件会被清掉；中断运行遗留的 `.sync-*` 暂存目录先行清扫（loader 从不把点开头目录当插件候选）。打印重启提示——进程内插件 v1 无热重载。
+- **`octopi plugin doctor [dir] [--json]`** —— 单插件目录的本地体检（无 LLM，有错 exit 1）：manifest JSON/schema（`PLG001/2`）、engine 范围与已装 engine（`PLG003`，与 loader 同一条规则）、entry 文件存在（`PLG004`）、`plugin-state/<id>` 权限（`PLG005`，不可 group/other 访问）、与 `OCTOPI_HOME/plugins/<id>` 的部署副本漂移（`PLG006`）、`secretOptions` 键与 `configSchema.properties` 对照（`PLG007`）、运行时依赖存在性/版本（`PLG009`，沿 Node 解析链——hoisting 的 workspace 依赖能找到；非 semver spec 只验存在性）、陈旧 sync 暂存目录（`PLG010`，info）。warn 不阻断加载；error 意味着 loader 会拒绝该插件。
+## 插件分发与部署（P6-6）
+
+可部署的插件副本 = **文件 + 运行时依赖闭包**——Node 的模块解析在加载时需要 entry 旁的 `node_modules`，所以依赖安装是部署的一部分、不是用户差事。三种形态、两条管道、同一语义（「文件到位、依赖到位」）：
+
+| 形态 | 是什么 | 怎么部署 |
+|------|--------|----------|
+| 开发态 | 源码目录（git repo） | `plugins.loadPaths` 可直指它；`npm install` 一次 |
+| 分发态 | **npm 包**（内含 `octopi.plugin.json`+entry） | `octopi plugin install <spec>` |
+| 部署态 | `plugins/<id>/` = 文件 + `node_modules`（仅生产依赖） | `plugin sync` / `plugin install` |
+
+npm 包就是分发单元（`octopi plugin init` 产出的就是它）；将来的插件市场可以走同一通道。生命周期脚本（`preinstall`/`postinstall`）是自动代码执行面，**授权者是操作者、绝不是包自己**：安装默认 `--ignore-scripts`，除非 CLI 带 `--allow-scripts`。manifest 的 `installScripts: true` 是需求声明、不是权限——无操作者同意时部署被拒（跳过 postinstall 会得到静默损坏的插件）。拉包阶段（`npm pack`）一律跳过发布者脚本；npm 的 git 依赖准备在 npm 自身内运行、受你 npm 版本自身的脚本策略约束。通道不带完整性锁定：请以固定版本 spec（`name@version`）安装，并把 `plugin install` 理解为信任该 registry。
+
+- **`octopi plugin install <npm-spec> [--into <plugins-root>]`** —— 从 npm 通道（registry、git URL、tarball）部署插件：拉包、验 manifest、装运行时依赖、原子换入 plugins 根、打印重启提示。包内没有 `octopi.plugin.json` 的按「不是 Octopi 插件」拒绝；entry 不可解析（或 engine 范围本机不满足）的插件同样拒绝部署——部署完整性包含可加载性。
+- **`octopi plugin sync [dir] [--into <plugins-root>] [--skip-install] [--allow-scripts]`** —— 原子部署插件到 `OCTOPI_HOME/plugins`：文件先在目标旁暂存再 rename 交换（swap 失败回滚旧副本；回滚也失败时旧副本保留在盘上并报告路径——部署位绝不会新旧混杂；仅 rename 原子性、无 fsync，断电仍可能丢最新写入）；dev-only 文件（`node_modules`、`.git`、`*.test.*`）不入部署；**运行时依赖在暂存区安装（`npm install --omit=dev`，换入前完成），依赖集未变时直接复用现有 `node_modules`（离线瞬时）；`--skip-install` 保留已部署的 `node_modules`（绝不静默丢弃）**；目标里的陈旧文件会被清掉；中断运行遗留的 `.sync-*` 暂存目录先行清扫（loader 从不把点开头目录当插件候选）。打印重启提示——进程内插件 v1 无热重载。
 
 ## 配置
 

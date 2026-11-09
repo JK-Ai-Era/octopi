@@ -115,6 +115,51 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.106.0 (2026-11-10)
+
+### feat(plugin): distribution & deployment pipeline — dependency closure + octopi plugin install (P6-6)
+
+A deployable plugin copy is **files + the runtime dependency closure** (Node
+resolves `node_modules` next to the entry at import), so dependency
+installation is part of deployment. `octopi plugin sync` installs runtime
+dependencies in staging before the swap (`npm install --omit=dev`) or reuses
+the deployed `node_modules` when the dependency set is unchanged (offline);
+`--skip-install` preserves the existing closure instead of installing — it is
+never silently dropped. `octopi plugin install <npm-spec>` opens the npm
+distribution channel (registry/git/tarball): fetch, manifest verification,
+loadability checks (entry resolves, engine range satisfied), dependency
+install, atomic swap — the npm package carrying `octopi.plugin.json` is the
+distribution unit (init scaffolds one; a marketplace can ride the same
+channel later). `octopi plugin doctor` gained PLG009 (missing/mismatched
+runtime dependencies are errors; Node-resolution aware so hoisted workspace
+deps resolve; non-semver specs verified by presence only) and PLG010 (stale
+sync scratch dirs — informational).
+
+**Install-script consent is operator-side, never publisher-side**: installs
+run with `--ignore-scripts` unless the CLI carries `--allow-scripts`; a
+manifest `installScripts: true` is a requirement declaration, not a
+permission — without consent deployment is refused (a skipped postinstall
+would be a silently broken plugin). The fetch stage (`npm pack`) always
+skips publisher scripts (argv builders are exported and test-pinned); npm
+git-dependency preparation follows the local npm version's own script
+policy. The channel carries no integrity pinning — install by pinned spec
+and treat it as trusting the registry.
+
+Incident lesson recorded (arch/plugin-system-v1.md P6-6): a delete-safety
+check that used the deployment inventory (which excludes `node_modules`) is
+the wrong predicate — deployment inventory and delete-safety answer different
+questions. That operational mistake (52 packages removed) drove this
+release's closure-first design.
+
+- Verified: build/lint/full suite (432 files, 4506 tests)/arch-check-sync
+  green; 41 tooling cases cover the argv security anchors (scripts never run
+  without operator consent), staged install ordering (install before swap;
+  a failing install leaves the previous deployment untouched), the
+  unchanged-deps reuse fast path, skip-install closure preservation,
+  PLG009/010 semantics (hoisting, non-semver specs, corrupt package.json),
+  the npm fetch/verify/loadability-deploy pipeline and rejection of
+  non-plugin or unloadable packages.
+
 ## v0.105.6 (2026-11-10)
 
 ### fix(plugin): plugin doctor finds deployed copies by manifest id (P6-5 follow-up)

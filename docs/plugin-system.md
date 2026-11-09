@@ -478,16 +478,57 @@ instead of pretending):
   engine range vs the installed engine (`PLG003`, the loader's own rule),
   entry file presence (`PLG004`), `plugin-state/<id>` permissions (`PLG005`,
   no group/other access), deployed-copy drift against `OCTOPI_HOME/plugins/<id>`
-  (`PLG006`), and `secretOptions` keys vs `configSchema.properties`
-  (`PLG007`). Warnings do not block loading; errors mean the loader will
-  refuse the plugin.
-- **`octopi plugin sync [dir] [--into <plugins-root>]`** — atomically deploy a
+  (`PLG006`), `secretOptions` keys vs `configSchema.properties` (`PLG007`),
+  runtime dependency presence/versions (`PLG009`, Node-resolution aware —
+  hoisted workspace deps resolve; non-semver specs verified by presence only)
+  and stale sync scratch dirs (`PLG010`, informational). Warnings do not block
+  loading; errors mean the loader will refuse the plugin.
+
+## Plugin distribution & deployment (P6-6)
+
+A deployable plugin copy is **files + the runtime dependency closure** —
+Node's module resolution needs `node_modules` next to the entry at load time,
+so dependency installation is part of deployment, not a user chore. Three
+shapes, two pipelines, one semantics ("files in place, dependencies in
+place"):
+
+| Shape | What it is | How it deploys |
+|-------|-----------|----------------|
+| Development | source dir (git repo) | `plugins.loadPaths` can point at it; `npm install` once |
+| Distribution | **npm package** carrying `octopi.plugin.json` + entry | `octopi plugin install <spec>` |
+| Deployment | `plugins/<id>/` = files + `node_modules` (runtime deps only) | `octopi plugin sync` / `plugin install` |
+
+The npm package is the distribution unit (`octopi plugin init` scaffolds one);
+a dedicated plugin marketplace can come later on the same channel. Lifecycle
+scripts (`preinstall`/`postinstall`) are an automatic code-execution surface
+and **the operator, never the package, consents to them**: installs run with
+`--ignore-scripts` unless the CLI carries `--allow-scripts`. A manifest
+`installScripts: true` is a requirement declaration, not a permission —
+without operator consent deployment is refused (a skipped postinstall would be
+a silently broken plugin). The fetch stage (`npm pack`) always skips
+publisher scripts; npm's git-dependency preparation runs inside npm itself and
+follows your npm version's own script policy. The channel carries no built-in
+integrity pinning: install by pinned spec (`name@version`) and treat
+`plugin install` as trusting the registry.
+
+- **`octopi plugin install <npm-spec> [--into <plugins-root>]`** — deploy a
+  plugin from the npm channel (registry, git URL, tarball): fetch, verify the
+  manifest, install runtime dependencies, atomically swap into the plugins
+  root, print the restart notice. A package without `octopi.plugin.json` is
+  rejected as "not an Octopi plugin", and a plugin whose entry would not
+  resolve (or whose engine range this host cannot satisfy) is refused —
+  deployment completeness includes loadability.
+- **`octopi plugin sync [dir] [--into <plugins-root>] [--skip-install] [--allow-scripts]`** — atomically deploy a
   plugin into `OCTOPI_HOME/plugins`: files are staged beside the target and
   swapped in with renames (a failed swap restores the previous copy; a failed
   rollback preserves the backup on disk and reports its path — the deployed
   plugin is never left a partial mix; rename-atomicity only, no fsync, so a
   power loss can still lose the newest write); dev-only files (`node_modules`,
-  `.git`, `*.test.*`) are excluded; stale deployed files are removed; stale
+  `.git`, `*.test.*`) are excluded; **runtime dependencies are installed
+  (`npm install --omit=dev`, staged before the swap) or reused from the
+  current deployment when the dependency set is unchanged (offline-fast);
+  `--skip-install` PRESERVES the deployed node_modules instead of installing
+  (never silently dropped)**; stale deployed files are removed; stale
   `.sync-*` scratch dirs from interrupted runs are swept first (the loader
   never treats dot-dirs as plugin candidates). Prints the restart notice —
   in-process plugins have no hot reload in v1.
