@@ -35,6 +35,10 @@ Commands:
   webui restart     Restart the Web UI server
   webui status      Show Web UI server status
   plugin init       Scaffold a new plugin project
+  plugin doctor [dir]  Check a plugin (manifest/schema, engine range, entry,
+                       state-dir permissions, deployed-copy drift); --into <root>, --json
+  plugin sync [dir]  Atomically deploy a plugin into OCTOPI_HOME/plugins
+                       (--into <dir> to override); prints the restart notice
   ops kill <id>     Kill switch: stop ALL execution of an agent (host-side, immediate)
   ops revive <id>   Release the kill switch and resume execution
   ops status [id]   Show kill-switch state for one or all agents
@@ -219,13 +223,91 @@ export async function healthCommand(args: CliArgs): Promise<void> {
 }
 
 export async function pluginCommand(args: CliArgs): Promise<void> {
+  const rawArgs = process.argv.slice(2);
+  // Value-taking flags are consumed with their value so they never leak into
+  // positionals (requireFlagValue semantics: a missing value is an error).
+  const VALUE_FLAGS = new Set(['--dir', '--into', '--config', '-c']);
+  const positional: string[] = [];
+  for (let i = 0; i < rawArgs.length; i += 1) {
+    const arg = rawArgs[i];
+    if (arg.startsWith('-')) {
+      if (VALUE_FLAGS.has(arg)) {
+        const value = rawArgs[i + 1];
+        if (value === undefined || value.startsWith('-')) {
+          console.error(`plugin: ${arg} requires a value`);
+          process.exit(1);
+        }
+        i += 1;
+      }
+      continue;
+    }
+    positional.push(arg);
+  }
+  const flagValue = (flag: string): string | undefined => {
+    const inline = rawArgs.find((a) => a.startsWith(`${flag}=`));
+    if (inline !== undefined) return inline.slice(flag.length + 1);
+    const idx = rawArgs.indexOf(flag);
+    return idx >= 0 ? rawArgs[idx + 1] : undefined;
+  };
+
+  if (args.subcommand === 'doctor') {
+    const { doctorPlugin } = await import('./plugin-tools.js');
+    const targetDir = positional[2] ?? '.';
+    const pluginsRoot = flagValue('--into');
+    // The deployed copy is resolved AFTER the manifest parses — same single
+    // source as the doctor checks (no second parse path here).
+    let deployedDir: string | undefined;
+    const probe = doctorPlugin(targetDir);
+    if (probe.id !== undefined) {
+      const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+      const { join } = await import('node:path');
+      deployedDir = join(pluginsRoot ?? join(getOctopiHome(), 'plugins'), probe.id);
+    }
+    const result = probe.id !== undefined ? doctorPlugin(targetDir, deployedDir ? { deployedDir } : undefined) : probe;
+    if (args.json === true) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      for (const f of result.findings) {
+        const tag = f.severity === 'ok' ? ' ok ' : f.severity.toUpperCase().padEnd(4);
+        console.log(`[${tag}] ${f.id} ${f.message}`);
+      }
+      console.log(
+        result.healthy
+          ? `\nPlugin "${positional[2] ?? '.'}": source-side checks pass. Runtime policy (allow/block lists, entries.<id>.enabled, contribution conflicts) is enforced by the loader at discovery.`
+          : '\nPlugin has errors — the loader will refuse it (see above).',
+      );
+    }
+    if (!result.healthy) process.exitCode = 1;
+    return;
+  }
+
+  if (args.subcommand === 'sync') {
+    const { syncPlugin } = await import('./plugin-tools.js');
+    const targetDir = positional[2] ?? '.';
+    const pluginsRoot = flagValue('--into');
+    try {
+      const result = syncPlugin(targetDir, pluginsRoot);
+      console.log(`🐙 Plugin "${result.id}" synced to ${result.targetDir}`);
+      if (result.changedFiles.length > 0) {
+        console.log(`Changed (${result.changedFiles.length}): ${result.changedFiles.slice(0, 10).join(', ')}${result.changedFiles.length > 10 ? ', …' : ''}`);
+      } else {
+        console.log('No content changes (copy already up to date).');
+      }
+      console.log(`\n⚠ ${result.restartRequired}`);
+    } catch (error) {
+      console.error(`plugin sync failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (args.subcommand !== 'init') {
     console.error('Usage: octopi plugin init <plugin-name> [--dir <path>]');
+    console.error('       octopi plugin doctor [dir] [--into <plugins-root>] [--json]');
+    console.error('       octopi plugin sync [dir] [--into <plugins-root>]');
     process.exit(1);
   }
 
-  const rawArgs = process.argv.slice(2);
-  const positional = rawArgs.filter((a) => !a.startsWith('-'));
   const pluginName = positional[2];
   const dirIdx = rawArgs.indexOf('--dir');
   const dirFlag = dirIdx >= 0 ? rawArgs[dirIdx + 1] : undefined;

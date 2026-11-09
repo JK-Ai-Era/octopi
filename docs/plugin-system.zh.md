@@ -335,6 +335,14 @@ register(api) {
 
 真实示例：`examples/plugins/weixin-clawbot` —— 运行时状态（`baseurl`、游标）在 `api.stateDir`，`bot_token` 在金库（`api.secrets`），并提供一次性 `migrateLegacyState()` 收编 P6-4 之前的单文件状态（内联 token 首次保存时移入金库）。
 
+## 插件工具链（P6-5）
+
+`octopi plugin` 命令组覆盖运行时之外的插件生命周期（v1 刻意不做 dev-mode watch/热重载——sync 直接提示重启而不是假装生效）：
+
+- **`octopi plugin init <name> [--dir <path>]`** —— 脚手架一个插件工程（manifest + TS 入口 + package/tsconfig）。`npm run build` 之后（entry 指向 `dist/`）产物通过 `plugin doctor` 全绿；首次构建前 doctor 会按 loader 同样规则报 entry 缺失（PLG004）。
+- **`octopi plugin doctor [dir] [--json]`** —— 单插件目录的本地体检（无 LLM，有错 exit 1）：manifest JSON/schema（`PLG001/2`）、engine 范围与已装 engine（`PLG003`，与 loader 同一条规则）、entry 文件存在（`PLG004`）、`plugin-state/<id>` 权限（`PLG005`，不可 group/other 访问）、与 `OCTOPI_HOME/plugins/<id>` 的部署副本漂移（`PLG006`）、`secretOptions` 键与 `configSchema.properties` 对照（`PLG007`）。warn 不阻断加载；error 意味着 loader 会拒绝该插件。
+- **`octopi plugin sync [dir] [--into <plugins-root>]`** —— 原子部署插件到 `OCTOPI_HOME/plugins`：文件先在目标旁暂存再 rename 交换（swap 失败回滚旧副本；回滚也失败时旧副本保留在盘上并报告路径——部署位绝不会新旧混杂；仅 rename 原子性、无 fsync，断电仍可能丢最新写入）；dev-only 文件（`node_modules`、`.git`、`*.test.*`）不入部署；目标里的陈旧文件会被清掉；中断运行遗留的 `.sync-*` 暂存目录先行清扫（loader 从不把点开头目录当插件候选）。打印重启提示——进程内插件 v1 无热重载。
+
 ## 配置
 
 ```jsonc

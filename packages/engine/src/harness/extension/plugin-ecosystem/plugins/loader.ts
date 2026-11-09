@@ -28,6 +28,30 @@ export interface PluginEntryConfig {
   };
 }
 
+/**
+ * Resolve a manifest entry to its real path inside the plugin root. Shared
+ * single source for the loader and `octopi plugin doctor`: rejects entries
+ * that escape the plugin root (before and after symlink resolution).
+ *
+ * @param rootDir - Plugin directory
+ * @param entry - Manifest `entry` (relative path)
+ * @returns The real path of the entry file
+ * @throws When the entry is missing, escapes its root, or is not a file
+ */
+export function resolvePluginEntry(rootDir: string, entry: string): string {
+  const root = realpathSync(rootDir);
+  const candidate = resolve(root, entry);
+  if (relative(root, candidate).startsWith(`..${sep}`) || relative(root, candidate) === '..') {
+    throw new Error(`Plugin entry escapes its root: ${entry}`);
+  }
+  const real = realpathSync(candidate);
+  const rel = relative(root, real);
+  if (rel === '..' || rel.startsWith(`..${sep}`)) {
+    throw new Error(`Plugin entry realpath escapes its root: ${entry}`);
+  }
+  return real;
+}
+
 export interface PluginLoaderConfig {
   loadPaths: string[];
   allowList?: string[];
@@ -177,7 +201,8 @@ export class PluginLoader {
       const stat = readdirSync(root, { withFileTypes: true });
       if (existsSync(join(root, PLUGIN_MANIFEST_FILENAME))) return [root];
       return stat
-        .filter((entry) => entry.isDirectory() && existsSync(join(root, entry.name, PLUGIN_MANIFEST_FILENAME)))
+        // Dot-dirs are never plugin candidates (sync scratch `.sync-*`, VCS, hidden).
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && existsSync(join(root, entry.name, PLUGIN_MANIFEST_FILENAME)))
         .map((entry) => join(root, entry.name));
     } catch (error) {
       this.diagnostics.push({ id: root, status: 'failed', stage: 'manifest', reason: errorMessage(error), path: root });
@@ -254,7 +279,7 @@ export class PluginLoader {
 
   private prepareCandidate(candidate: Candidate): void {
     try {
-      candidate.entryPoint = this.resolveEntry(candidate.rootDir, candidate.manifest.entry);
+      candidate.entryPoint = resolvePluginEntry(candidate.rootDir, candidate.manifest.entry);
       candidate.pluginConfig = validatePluginConfig(candidate.manifest, candidate.config?.config);
       const engineVersion = this.config.engineVersion ?? getEngineVersion();
       if (!satisfiesEngineRange(engineVersion, candidate.manifest.engine.octopi)) {
@@ -344,20 +369,6 @@ export class PluginLoader {
       this.fail(manifest.id, 'register', error, rootDir);
       return null;
     }
-  }
-
-  private resolveEntry(rootDir: string, entry: string): string {
-    const root = realpathSync(rootDir);
-    const candidate = resolve(root, entry);
-    if (relative(root, candidate).startsWith(`..${sep}`) || relative(root, candidate) === '..') {
-      throw new Error(`Plugin entry escapes its root: ${entry}`);
-    }
-    const real = realpathSync(candidate);
-    const rel = relative(root, real);
-    if (rel === '..' || rel.startsWith(`..${sep}`)) {
-      throw new Error(`Plugin entry realpath escapes its root: ${entry}`);
-    }
-    return real;
   }
 
   private assertActualContributions(manifest: PluginManifest, api: PluginApi): void {

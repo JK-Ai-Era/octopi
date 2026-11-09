@@ -462,6 +462,36 @@ Real example: `examples/plugins/weixin-clawbot` — runtime state
 deployments from the pre-P6-4 single-file state (inline token is moved into
 the vault on first save).
 
+## Plugin tooling (P6-5)
+
+The `octopi plugin` command group covers the plugin lifecycle outside the
+runtime (v1 deliberately has no dev-mode watch / hot reload — sync says so
+instead of pretending):
+
+- **`octopi plugin init <name> [--dir <path>]`** — scaffold a plugin project
+  (manifest + TS entry + package/tsconfig). After `npm run build` (the entry
+  points at `dist/`), the scaffolded plugin passes `plugin doctor` clean;
+  before the first build, doctor reports the missing entry (PLG004) exactly
+  as the loader would refuse it.
+- **`octopi plugin doctor [dir] [--json]`** — local health check of one plugin
+  directory (no LLM, exit 1 on errors): manifest JSON/schema (`PLG001/2`),
+  engine range vs the installed engine (`PLG003`, the loader's own rule),
+  entry file presence (`PLG004`), `plugin-state/<id>` permissions (`PLG005`,
+  no group/other access), deployed-copy drift against `OCTOPI_HOME/plugins/<id>`
+  (`PLG006`), and `secretOptions` keys vs `configSchema.properties`
+  (`PLG007`). Warnings do not block loading; errors mean the loader will
+  refuse the plugin.
+- **`octopi plugin sync [dir] [--into <plugins-root>]`** — atomically deploy a
+  plugin into `OCTOPI_HOME/plugins`: files are staged beside the target and
+  swapped in with renames (a failed swap restores the previous copy; a failed
+  rollback preserves the backup on disk and reports its path — the deployed
+  plugin is never left a partial mix; rename-atomicity only, no fsync, so a
+  power loss can still lose the newest write); dev-only files (`node_modules`,
+  `.git`, `*.test.*`) are excluded; stale deployed files are removed; stale
+  `.sync-*` scratch dirs from interrupted runs are swept first (the loader
+  never treats dot-dirs as plugin candidates). Prints the restart notice —
+  in-process plugins have no hot reload in v1.
+
 ## Configuration
 
 ```jsonc

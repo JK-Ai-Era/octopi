@@ -115,6 +115,52 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.105.5 (2026-11-10)
+
+### feat(plugin): plugin tooling — octopi plugin doctor/sync (P6-5)
+
+P6 closes its five gaps with the plugin lifecycle tooling. `octopi plugin
+doctor [dir]` (local, no LLM, exit 1 on errors) checks manifest JSON/schema,
+the engine range against the installed engine (the loader's own rule via
+`satisfiesEngineRange`), entry presence, `plugin-state/<id>` permissions
+(0700/0600), deployed-copy drift against `OCTOPI_HOME/plugins/<id>`, and
+`secretOptions` keys vs `configSchema.properties` — findings use stable ids
+(PLG001-007) with warn-not-block vs error-refused severity. `octopi plugin
+sync [dir] [--into <root>]` deploys atomically (staged beside the target,
+renames swapped with rollback on failure — never half-written), excludes
+dev-only files, removes stale deployed files, and prints the restart notice:
+in-process plugins have no hot reload in v1 (no dev-mode watch — decided
+boundary), so sync says restart instead of pretending. `plugin init`
+scaffolds a project that passes doctor clean after its first
+`npm run build` (before it, doctor reports the missing `dist/` entry exactly
+as the loader would refuse it).
+
+- Independent review (del-a0b2e41e) falsified the first cut's "atomic
+  deployment" claim and every finding was verified and fixed: a failed
+  rollback used to delete BOTH copies (now `swapIn` keeps the backup on disk
+  and reports its path — injectable rename, failure-tested); interrupted runs
+  left `.sync-*` scratch dirs whose manifests poisoned loader discovery (now
+  swept first, and the loader never treats dot-dirs as plugin candidates);
+  `plugin sync` onto its own deployed copy destroyed dev artifacts (now
+  refused); symlinks were silently dropped yet certified as matching (now
+  inventoried explicitly — internal links deploy by content, root-escaping
+  links are refused); doctor certified entry paths the loader rejects (the
+  entry check now shares the loader's own root-escape rule, exported as
+  `resolvePluginEntry`); `--into` before the positional consumed the flag
+  value as the source dir (value-flag parsing now follows requireFlagValue
+  semantics); doctor no longer crashes on a non-directory deployed path.
+  Also: PLG007 reports "cannot compare" (info) instead of a false ok when
+  `configSchema` has no properties and uses `Object.hasOwn`; PLG005 walks
+  state subdirectories with its own rules; the docs state the
+  rename-atomicity (no fsync) boundary.
+- Verified: build/lint/full suite (431 files, 4490 tests)/arch-check-sync
+  green; 25 cases cover every doctor check (healthy/error/warn states),
+  drift→sync→drift-clear, sync change reporting, invalid-manifest
+  non-disturbance of the existing deployment, self-sync refusal, scratch
+  sweeping, symlink content-copy and refusal, loader-rule entry checks,
+  swapIn rollback preservation (injected rename failures) and stale-file
+  removal/dev-file exclusion.
+
 ## v0.105.4 (2026-11-10)
 
 ### feat(plugin): host storage primitives — api.stateDir + api.secrets vault, manifest secretOptions (P6-4)
