@@ -8,7 +8,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.104 | this file (current) |
+| v0.105 | this file (current) |
+| v0.104 | [changelog/v0.104.md](./changelog/v0.104.md) |
 | v0.103 | [changelog/v0.103.md](./changelog/v0.103.md) |
 | v0.102 | [changelog/v0.102.md](./changelog/v0.102.md) |
 | v0.101 | [changelog/v0.101.md](./changelog/v0.101.md) |
@@ -114,16 +115,13 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.104.0 (2026-11-09)
+## v0.105.0 (2026-11-09)
 
-### feat(plugin): Channel contributions (P5b) — feishu real plugin
+### feat(plugin): weixin channel (WeChat ClawBot) + live-traffic fixes
 
-- **贡献面**：`contributes.channels`（全局唯一，同 providers）+ `PluginApi.registerChannel(id, factory)`（暂存→manifest↔register 双向一致→原子发布；内置消息标签 `http`/`ws` 为保留名拒绝注册——回复路由按 `msg.channel` 标签查注册表，同名标签会劫持内置回复）。`channels[].plugin|options` 路由：`type`（内置）与 `plugin`（贡献 id）二选一恰好其一（Zod superRefine + 装配第二闸）；未知内置 type、未注册/禁用贡献在 daemon 启动报真实原因——**行为变更**：此前非 `http` 通道条目被静默丢弃，现在 fail-loud。工厂上下文 `{channelName, apiKey, options}`（apiKey 走凭证通道、options 非密钥原样透传）；最小契约校验（start/send/stop）+ `adapter.name` 硬绑定贡献 id；`gateway.registerChannel` 拒绝重名（原静默覆盖）。
-- **真实插件** `examples/plugins/feishu-channel`：飞书机器人走官方 `@larksuiteoapi/node-sdk`（供应链已核，lockfile 全部解析至官方 registry）长连接（WebSocket，免公网回调/域名/证书）；SDK 承担重连、事件去重、@ 检测与 DM/群 policy 准入（`dmMode`/`dmAllowlist`/`groupAllowlist`/`requireMention`；`dmMode: 'pair'` 显式拒绝——SDK 尚未实现该模式、会静默按开放处理，不允许安全误表述）。插件只做 ChannelMessage 规范化：**只转发 text/post 真实文字**（媒体/卡片的 SDK 合成占位文本如 `![image](key)` 绝不转发，防伪造用户输入）、handler 异常隔离（不倒 WS）、`send`→replyTo 回帖、停后陈旧 SDK 回调显式忽略、`stop()` disconnect 成功才清态（失败可重试、绝不产生第二连接）。`apiKey` = App Secret（推荐 `${ENV_VAR}`）；README 含飞书后台配置指引（事件订阅长连接、权限、发布版本）与安全警示。
-- **Gateway 生命周期加固**（独立评审发现的既有缺口，IM 场景放大）：**启动窗口期入站消息缓冲后按序回放**（容量上限 100 拒收 fail-loud；启动失败显式丢弃并计数——IM 用户无法像 HTTP 客户端重试，此前窗口期消息直接报 `gateway_not_ready` 丢失）；正常停止改**逆序**（对称回滚，与文档承诺一致，原为顺序）；启动窗口中 `session.dmScope: main` 多用户共享会话在 daemon 装配时显式告警。
-- **会话作用域**：`session.dmScope` 新增 `per-conversation`（IM 群聊全员共享一个会话，按 chat 聚合；P2P 每 chat 一个会话）。注意作用域是全局的：启用后无 `conversationId` 的 HTTP 调用会落到同一 `default` 会话（文档已注明）。
-- **测试**：`tests/plugin-channel.test.ts` 35 条——loader 契约 7（双向一致/跨插件冲突/保留名 http+ws/invalid id/重复）、工厂路由 6（二选一闸/缺贡献 fail-closed/坏形状/name 键绑定/上下文透传）、Gateway 发现链路 1、选项校验 3（appId 必填/pair 拒绝/策略默认值）、飞书适配器行为 12（消息映射/媒体跳过真实 SDK 形状/异常隔离/replyTo/幂等 stop/启动失败自清理/停后忽略/stop 失败可重试）、消息映射单测 1、Zod 闸 1、buildSessionKey 四作用域 2、Gateway 生命周期 2（启动缓冲回放/逆序停止）。SDK 以注入 fake 驱动：提交套件不依赖示例目录的 node_modules。
-- **独立评审**（del-bb625281：1 blocker / 5 major / 14 minor / 6 nit）逐条对码核实后**全部处置**（1 项驳回为文档已覆盖）：处置记录 `p5b-review-disposition.md`。JSON Schema 层面 `type|plugin` 互斥无法序列化（与 `models.providers[].api|plugin` 同待遇，M3 已记 P6 候选）；`octopi chat`/TUI 依赖 http 通道的既有行为记 NEXT-STEPS 延期。
-- **待续**：真流量实测（真实飞书应用、私聊+群 @ 双路、命令短回复、失败路径）待环境配合后收尾，见 `arch/NEXT-STEPS.md`；ContextEngine 讨论在其后。
-
----
+- **新贡献插件** `examples/plugins/weixin-clawbot`（Channel 贡献 `weixin`）：腾讯官方 iLink Bot API（微信 ClawBot，`ilinkai.weixin.qq.com`）直连零依赖实现。**dormant start**（未配对不阻塞启动、不打配对接口）+ **`weixin_pair` 工具按需配对**（返回 QR 供扫码，后台确认后自动激活）；登录 8 态状态机（redirect/baseurl 全部经可信域校验，凭证采纳统一入口防 token 外泄）；长轮询收（server-hint 自适应看门狗、空轮询防抖、指数退避）；`context_token` 仅存内存映射（不进 session 持久化/日志）；状态文件 `${OCTOPI_HOME}/credentials/weixin-clawbot-state.json`（chmod 600）；媒体/群消息显式跳过不伪造。19 条测试；真流量实测通过（配对/私聊/回复）。
+- **feishu 回复升级 markdown 渲染**（post `md` 元素；SDK 格式被拒自动降级纯文本）。
+- **Gateway 通道启动语义**（部分由维护者贡献）：单通道启动失败不再连坐——记日志、上报 issue（`channel.start.failed`）、best-effort `stop()` 并移出路由表，启动继续而该通道缺席。**语义变更**：`stop()` 此后可能在 `start()` 失败后被调用（适配器契约已文档化）；`start()` 失败不再回滚整个 Gateway 启动。全部通道失败、或内置 `http` 通道失败（无监听器不得报 Ready）时以真实原因 `AggregateError` 终止。`Ready` 计数改用实际启动数。
+- **实测踩坑修复**：iLink 成功响应省略 `ret` 字段即成功、`errcode` 显式非 0 即失败（对齐社区参考实现并双向锁定）；响应缺新游标时 fail-loud 防同批无限重投；`errcode=-14` 死 token 重配对耗尽后通道休眠（`weixin_pair` 为唯一恢复入口，杜绝无人值守的 QR 风暴）；配对竞态修复（`pair()` 同步占锁，双调不再产生双轮询双投递）。
+- **评审处置**：独立评审 del-3b60a9ef（1 blocker/10 major/15 minor/7 测试保真）逐条核实全部修复（含探针实证的双跑竞态与无限重投）；处置记录 `v0105-review-disposition.md`。
+- **决策**：cordis 不作为插件系统运行时垫底（评估记录 `arch/plugin-system-v1.md`）。

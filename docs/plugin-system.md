@@ -312,9 +312,13 @@ api.registerChannel('feishu', async (context) => {
 - The adapter contract is the Channel SPI (`start(handler)` receives normalized
   `ChannelMessage`s, `send(reply)` delivers a `ChannelReply`, `stop()` releases
   the transport). The Host drives `start`/`stop` with the Gateway lifecycle:
-  services start before channels, channels stop in reverse registration order,
-  and a channel whose `start()` fails rolls back Gateway startup with the real
-  reason.
+  services start before channels, channels stop in reverse registration order.
+  A channel whose `start()` fails is logged, reported as an issue, best-effort
+  `stop()`-ed (so `stop()` **must tolerate being called after a failed
+  `start()`**) and dropped from routing — startup proceeds without it. Startup
+  aborts with a real-reason `AggregateError` only when **all** channels fail or
+  when the built-in `http` channel fails (a gateway without its HTTP/WS
+  listener must not report Ready).
 - Messages carry `channel === adapter.name`; replies and command short-replies
   route back through the same adapter. `channelBindings` key on the channel
   label, and `session.dmScope: "per-conversation"` keys sessions per chat (one

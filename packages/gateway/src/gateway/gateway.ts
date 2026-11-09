@@ -1082,26 +1082,73 @@ export class Gateway {
     }
     await this.pluginServices.start(this.pluginManager.getServices());
     const startedChannels: ChannelAdapter[] = [];
-    try {
-      for (const [name, adapter] of this.channels) {
-        console.log(`[Gateway] Starting channel: ${name}`);
+    const failedChannels: Array<{ name: string; error: unknown }> = [];
+    for (const [name, adapter] of this.channels) {
+      console.log(`[Gateway] Starting channel: ${name}`);
+      try {
         await adapter.start(async (msg) => {
           await this.handleInboundMessage(msg);
         });
         startedChannels.push(adapter);
         this.activeChannels.add(adapter);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.error(`[Gateway] Channel "${name}" failed to start: ${reason}`);
+        failedChannels.push({ name, error });
+        // A dead channel must stay visible after startup (review #5/#12): the
+        // issue is broadcast to WS and stays queryable, unlike a console line.
+        this.issueRegistry.report({
+          id: `other:channel.start.failed:${name}`,
+          domain: 'other',
+          code: 'channel.start.failed',
+          severity: 'error',
+          title: `Channel ${name} failed to start`,
+          detail: reason,
+        });
+        // Drop the adapter from the routing tables so replayed startup-window
+        // messages and event broadcasts cannot reach a dead adapter (review #13).
+        this.channels.delete(name);
+        this.streamingAdapters = this.streamingAdapters.filter((a) => a !== adapter);
+        try {
+          // Note the contract: stop() may be called after a failed start().
+          await adapter.stop();
+        } catch (stopError) {
+          this.issueRegistry.report({
+            id: `other:channel.stop.failed:${name}`,
+            domain: 'other',
+            code: 'channel.stop.failed',
+            severity: 'error',
+            title: `Channel ${name} failed to stop during rollback`,
+            detail: stopError instanceof Error ? stopError.message : String(stopError),
+          });
+        }
       }
-    } catch (error) {
-      for (const adapter of startedChannels.reverse()) {
-        this.activeChannels.delete(adapter);
+    }
+    // Fatal when everything failed (original semantics) or when the built-in
+    // http channel failed — a gateway "Ready" with no HTTP/WS listener is a
+    // lie (review #5). Fail with the real reasons attached (review #4).
+    const httpFailed = failedChannels.some((f) => f.name === 'http');
+    if (httpFailed || (startedChannels.length === 0 && failedChannels.length > 0)) {
+      await this.pluginServices.stop(this.pluginManager.getServices());
+      const names = failedChannels
+        .map((f) => `${f.name} (${f.error instanceof Error ? f.error.message : String(f.error)})`)
+        .join('; ');
+      for (const adapter of startedChannels) {
         try {
           await adapter.stop();
         } catch {
-          // Preserve the startup failure; the failing adapter owns its partial-start rollback.
+          // Best-effort teardown on the fatal path; the startup failure is what we surface.
         }
       }
-      await this.pluginServices.stop(this.pluginManager.getServices());
-      throw error;
+      this.activeChannels.clear();
+      if (this.pendingInbound.length > 0) {
+        console.error(`[Gateway] Dropping ${this.pendingInbound.length} inbound message(s) queued during failed startup`);
+        this.pendingInbound = [];
+      }
+      throw new AggregateError(
+        failedChannels.map((f) => f.error),
+        `Channel startup failed (${failedChannels.length} of ${failedChannels.length + startedChannels.length}): ${names}`,
+      );
     }
     await this.pluginManager.getHookPort().observe('gateway_start', {
       sessionId: 'system', agentId: 'host', phase: 'started',
@@ -1120,7 +1167,7 @@ export class Gateway {
         );
       }
     }
-    console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${this.channels.size} channel(s)`);
+    console.log(`[Gateway] Ready. ${this.agents.size} agent(s), ${startedChannels.length} channel(s)`);
   }
 
   /** 拉起 Knowledge Service（manageLocal / 远程）；失败只降级，不拖死 Gateway */

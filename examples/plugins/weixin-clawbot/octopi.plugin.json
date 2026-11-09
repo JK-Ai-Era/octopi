@@ -1,0 +1,11 @@
+{
+  "id": "weixin",
+  "apiVersion": "1",
+  "version": "0.1.0",
+  "name": "WeChat ClawBot Channel",
+  "description": "Channel contribution `weixin`: WeChat personal-account bot via Tencent's official iLink Bot API (ClawBot, ilinkai.weixin.qq.com), dependency-free. Long-polling receive, scan-to-pair login, text messages in v1. Per-instance config lives in channels[].options (non-secret).",
+  "entry": "index.mjs",
+  "engine": { "octopi": ">=0.104.0" },
+  "configSchema": { "type": "object" },
+  "contributes": { "channels": ["weixin"], "tools": ["weixin_pair"] }
+}

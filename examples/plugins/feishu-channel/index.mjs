@@ -173,9 +173,11 @@ export function createFeishuChannelAdapter(ctx, lark) {
 
     async send(reply) {
       if (!channel) throw new Error('feishu-channel: channel not started');
+      // markdown → post 消息（tag:'md' 原生渲染）；SDK 的 sendOneWithFallback
+      // 在格式被拒时自动降级纯文本。
       await channel.send(
         reply.conversationId,
-        { text: reply.content },
+        { markdown: reply.content },
         reply.replyToId ? { replyTo: reply.replyToId } : undefined,
       );
     },

@@ -1,0 +1,7 @@
+{
+  "name": "octopi-plugin-weixin-clawbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "WeChat ClawBot (iLink) channel contribution for Octopi — zero runtime dependencies (Node.js 18+ fetch)"
+}

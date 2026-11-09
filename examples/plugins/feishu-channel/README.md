@@ -88,8 +88,9 @@ REST port); a plugin-only `channels` setup has no listener to poll — keep a
   skipped (logged) — the SDK normalizes them into placeholder text
   (`![image](key)`, `[file]`, …) which would fabricate user input; they are
   never forwarded as text.
-- Replies are sent as text messages (model markdown arrives as literal `**`);
-  rendered markdown messages are a possible future option.
+- Replies are sent as Feishu **markdown** messages (post `md` element: bold /
+  code / links / headings / lists / code fences render natively; the SDK falls
+  back to plain text automatically if the format is rejected).
 - One channel instance per contribution id (`feishu`) in v1. A second Feishu
   app needs a separate plugin copy with its own contribution id (or a separate
   gateway deployment).

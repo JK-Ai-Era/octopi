@@ -425,13 +425,13 @@ describe('feishu example plugin — adapter behavior', () => {
     expect(() => handlers.get('error')?.(Object.assign(new Error('ws down'), { code: 'unknown' }))).not.toThrow();
   });
 
-  it('send maps ChannelReply to (chat, text, replyTo)', async () => {
+  it('send maps ChannelReply to (chat, markdown, replyTo)', async () => {
     const { lark, calls } = fakeLark();
     const adapter = createFeishuChannelAdapter(ctx, lark);
     await adapter.start(async () => {});
-    const reply: ChannelReply = { channel: 'feishu', conversationId: 'oc_chat', content: 'line1\nline2', replyToId: 'om-1' };
+    const reply: ChannelReply = { channel: 'feishu', conversationId: 'oc_chat', content: '**line1**\nline2', replyToId: 'om-1' };
     await adapter.send(reply);
-    expect(calls.send).toEqual([{ to: 'oc_chat', input: { text: 'line1\nline2' }, opts: { replyTo: 'om-1' } }]);
+    expect(calls.send).toEqual([{ to: 'oc_chat', input: { markdown: '**line1**\nline2' }, opts: { replyTo: 'om-1' } }]);
     await adapter.send({ channel: 'feishu', conversationId: 'oc_chat', content: 'plain' });
     expect(calls.send[1]?.opts).toBeUndefined();
   });
@@ -453,7 +453,7 @@ describe('feishu example plugin — adapter behavior', () => {
     await expect(adapter.start(async () => {})).rejects.toThrow(/already started/);
   });
 
-  it('connect failure cleans up the SDK side and rethrows (Host never reaches stop)', async () => {
+  it('connect failure cleans up the SDK side and rethrows (stop() after failed start is safe)', async () => {
     const { lark, calls, channel } = fakeLark();
     channel.connect = async () => { calls.connect += 1; throw new Error('handshake failed'); };
     const adapter = createFeishuChannelAdapter(ctx, lark);
@@ -595,6 +595,51 @@ describe('Gateway channel lifecycle — startup buffer + reverse stop (P5b revie
     await gateway.start();
     await gateway.stop();
     expect(order).toEqual(['chan-b', 'chan-a']);
+  });
+
+  it('partial channel failure degrades: failed adapter is stopped and dropped, others proceed', async () => {
+    const stopCalls: string[] = [];
+    const gateway = new Gateway(gatewayConfig(), new InMemorySessionStore());
+    gateway.registerChannel({
+      name: 'chan-bad',
+      start: async () => { throw new Error('boom'); },
+      send: async () => {},
+      stop: async () => { stopCalls.push('chan-bad'); },
+    });
+    gateway.registerChannel({
+      name: 'chan-good',
+      start: async () => {},
+      send: async () => {},
+      stop: async () => { stopCalls.push('chan-good'); },
+    });
+    await gateway.start();
+    expect(stopCalls).toEqual(['chan-bad']); // failed one got best-effort stop
+    await gateway.stop();
+    expect(stopCalls).toEqual(['chan-bad', 'chan-good']);
+  });
+
+  it('all channels failing aborts startup with AggregateError (real reasons attached)', async () => {
+    const gateway = new Gateway(gatewayConfig(), new InMemorySessionStore());
+    gateway.registerChannel({ name: 'a', start: async () => { throw new Error('ea'); }, send: async () => {}, stop: async () => {} });
+    gateway.registerChannel({ name: 'b', start: async () => { throw new Error('eb'); }, send: async () => {}, stop: async () => {} });
+    const err = await gateway.start().then(() => null, (e: unknown) => e as AggregateError);
+    expect(err).toBeInstanceOf(AggregateError);
+    expect((err as AggregateError).message).toContain('a (ea)');
+    expect((err as AggregateError).message).toContain('b (eb)');
+    expect((err as AggregateError).errors).toHaveLength(2);
+    await gateway.stop();
+  });
+
+  it('a failed built-in http channel is fatal even when others start', async () => {
+    const gateway = new Gateway(gatewayConfig(), new InMemorySessionStore());
+    const goodStopped: string[] = [];
+    gateway.registerChannel({ name: 'http', start: async () => { throw new Error('EADDRINUSE'); }, send: async () => {}, stop: async () => {} });
+    gateway.registerChannel({ name: 'chan-good', start: async () => {}, send: async () => {}, stop: async () => { goodStopped.push('x'); } });
+    const err = await gateway.start().then(() => null, (e: unknown) => e as AggregateError);
+    expect(err).toBeInstanceOf(AggregateError);
+    expect((err as AggregateError).message).toContain('EADDRINUSE');
+    expect(goodStopped).toEqual(['x']); // fatal path stops what did start
+    await gateway.stop();
   });
 
   it('buffers inbound messages during startup and replays them after ready', async () => {
