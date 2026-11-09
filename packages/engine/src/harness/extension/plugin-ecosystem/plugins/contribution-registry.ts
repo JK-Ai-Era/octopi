@@ -8,6 +8,8 @@ export interface PluginServiceRecord extends HookServiceRegistration {
 }
 import type { PluginApi, PluginProviderFactory, PluginChannelFactory } from './api.js';
 import type { PluginCommandRegistration, PluginToolContribution, OrderedHookEntry } from './api.js';
+import type { ContributionSink } from './contribution-kinds.js';
+import { CONTRIBUTION_KINDS } from './contribution-kinds.js';
 import { readStaging } from './staging.js';
 
 export interface RegisteredPlugin {
@@ -39,15 +41,14 @@ export interface PluginChannelRecord {
   factory: PluginChannelFactory;
 }
 
+function emptySink(): ContributionSink {
+  return { tools: [], commands: [], hooks: [], services: [], providers: [], channels: [] };
+}
+
 /** An immutable published contribution set. Mutations are staged by PluginLoader. */
 export class PluginContributionRegistry {
   private plugins = new Map<string, RegisteredPlugin>();
-  private tools: PluginToolRecord[] = [];
-  private commands: PluginCommandRecord[] = [];
-  private hooks: OrderedHookEntry[] = [];
-  private services: PluginServiceRecord[] = [];
-  private providers: PluginProviderRecord[] = [];
-  private channels: PluginChannelRecord[] = [];
+  private records: ContributionSink = emptySink();
   private owners = new Map<string, string>();
 
   /** Replace the effective set only after all staged registrations validate. */
@@ -56,39 +57,19 @@ export class PluginContributionRegistry {
     for (const plugin of plugins) {
       next.plugins.set(plugin.manifest.id, plugin);
       const staged = readStaging(plugin.api);
-      for (const tool of staged.tools) {
-        next.addOwner('tool', tool.definition.name, plugin.manifest.id);
-        next.tools.push({ pluginId: plugin.manifest.id, ...tool });
-      }
-      for (const command of staged.commands) {
-        next.addOwner('command', command.name, plugin.manifest.id);
-        next.commands.push({ pluginId: plugin.manifest.id, ...command });
-      }
-      for (const entries of staged.hooks.values()) next.hooks.push(...entries);
-      for (const service of staged.services) {
-        next.addOwner('service', service.serviceId, plugin.manifest.id);
-        next.services.push({ pluginId: plugin.manifest.id, ...service });
-      }
-      for (const provider of staged.providers) {
-        next.addOwner('provider', provider.id, plugin.manifest.id);
-        next.providers.push({ pluginId: plugin.manifest.id, ...provider });
-      }
-      for (const channel of staged.channels) {
-        next.addOwner('channel', channel.id, plugin.manifest.id);
-        next.channels.push({ pluginId: plugin.manifest.id, ...channel });
+      for (const kind of CONTRIBUTION_KINDS) {
+        kind.forEachStaged(staged, (key, entry) => {
+          if (kind.globallyUnique) next.addOwner(kind.label, key, plugin.manifest.id);
+          kind.collect(next.records, plugin.manifest.id, entry);
+        });
       }
     }
-    const replyOwners = next.hooks.filter((entry) => entry.hookName === 'before_agent_reply');
+    const replyOwners = next.records.hooks.filter((entry) => entry.hookName === 'before_agent_reply');
     if (replyOwners.length > 1) {
       throw new Error(`Override hook before_agent_reply has multiple owners: ${replyOwners.map((entry) => entry.pluginId).join(', ')}`);
     }
     this.plugins = next.plugins;
-    this.tools = next.tools;
-    this.commands = next.commands;
-    this.hooks = next.hooks;
-    this.services = next.services;
-    this.providers = next.providers;
-    this.channels = next.channels;
+    this.records = next.records;
     this.owners = next.owners;
   }
 
@@ -108,10 +89,10 @@ export class PluginContributionRegistry {
 
   getPlugins(): RegisteredPlugin[] { return [...this.plugins.values()]; }
   getPlugin(id: string): RegisteredPlugin | undefined { return this.plugins.get(id); }
-  getTools(): PluginToolRecord[] { return [...this.tools]; }
-  getCommands(): PluginCommandRecord[] { return [...this.commands]; }
-  getHooks(): OrderedHookEntry[] { return [...this.hooks]; }
-  getServices(): PluginServiceRecord[] { return [...this.services]; }
-  getProviders(): PluginProviderRecord[] { return [...this.providers]; }
-  getChannels(): PluginChannelRecord[] { return [...this.channels]; }
+  getTools(): PluginToolRecord[] { return [...this.records.tools]; }
+  getCommands(): PluginCommandRecord[] { return [...this.records.commands]; }
+  getHooks(): OrderedHookEntry[] { return [...this.records.hooks]; }
+  getServices(): PluginServiceRecord[] { return [...this.records.services]; }
+  getProviders(): PluginProviderRecord[] { return [...this.records.providers]; }
+  getChannels(): PluginChannelRecord[] { return [...this.records.channels]; }
 }

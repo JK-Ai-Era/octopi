@@ -5,6 +5,7 @@
 
 import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv';
 import { z } from 'zod';
+import { assertManifestKeysUnique, assertUnique } from './contribution-kinds.js';
 
 export const PLUGIN_API_VERSION = '1' as const;
 
@@ -168,24 +169,9 @@ export function validateManifest(raw: unknown): PluginManifest {
   if (manifest.legacyPluginIds?.includes(manifest.id)) {
     throw new Error(`Plugin "${manifest.id}" cannot list itself in legacyPluginIds`);
   }
-  assertUnique(manifest.contributes?.tools ?? [], 'contributes.tools');
-  assertUnique(manifest.contributes?.hooks ?? [], 'contributes.hooks');
-  assertUnique(manifest.contributes?.services ?? [], 'contributes.services');
-  assertUnique(manifest.contributes?.providers ?? [], 'contributes.providers');
-  assertUnique(manifest.contributes?.channels ?? [], 'contributes.channels');
-  const commands = manifest.contributes?.commands ?? [];
-  assertUnique(commands.map((command) => command.name), 'contributes.commands');
-  for (const command of commands) {
-    assertUnique(command.sessionOps ?? [], `contributes.commands.${command.name}.sessionOps`);
-  }
+  assertManifestKeysUnique(manifest);
   createConfigValidator(manifest.configSchema);
   return manifest;
-}
-
-function assertUnique(values: readonly string[], field: string): void {
-  if (new Set(values).size !== values.length) {
-    throw new Error(`Plugin manifest ${field} contains duplicate entries`);
-  }
 }
 
 /**

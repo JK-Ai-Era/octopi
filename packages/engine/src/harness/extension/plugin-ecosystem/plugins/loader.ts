@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PluginApi } from './api.js';
+import { CONTRIBUTION_KINDS, assertManifestCoverage, declaredClaims } from './contribution-kinds.js';
 import {
   parseManifest,
   validatePluginConfig,
@@ -298,24 +299,19 @@ export class PluginLoader {
     const claims = new Map<string, string>();
     for (const candidate of candidates.values()) {
       if (!candidate.eligible) continue;
-      const entries = [
-        ...(candidate.manifest.contributes?.tools ?? []).map((name) => `tool:${name}`),
-        ...(candidate.manifest.contributes?.commands ?? []).map((command) => `command:${command.name}`),
-        ...(candidate.manifest.contributes?.services ?? []).map((name) => `service:${name}`),
-        ...(candidate.manifest.contributes?.providers ?? []).map((name) => `provider:${name}`),
-        ...(candidate.manifest.contributes?.channels ?? []).map((name) => `channel:${name}`),
-      ];
-      for (const claim of entries) {
-        const owner = claims.get(claim);
-        if (owner) {
-          this.fail(candidate.id, 'register', new Error(`Declared ${claim} conflicts with "${owner}"`), candidate.rootDir);
-          candidate.eligible = false;
-          const first = candidates.get(owner);
-          if (first) {
-            first.eligible = false;
-            this.fail(owner, 'register', new Error(`Declared ${claim} conflicts with "${candidate.id}"`), first.rootDir);
-          }
-        } else claims.set(claim, candidate.id);
+      for (const kind of CONTRIBUTION_KINDS) {
+        for (const claim of declaredClaims(kind, candidate.manifest)) {
+          const owner = claims.get(claim);
+          if (owner) {
+            this.fail(candidate.id, 'register', new Error(`Declared ${claim} conflicts with "${owner}"`), candidate.rootDir);
+            candidate.eligible = false;
+            const first = candidates.get(owner);
+            if (first) {
+              first.eligible = false;
+              this.fail(owner, 'register', new Error(`Declared ${claim} conflicts with "${candidate.id}"`), first.rootDir);
+            }
+          } else claims.set(claim, candidate.id);
+        }
       }
     }
   }
@@ -366,59 +362,8 @@ export class PluginLoader {
 
   private assertActualContributions(manifest: PluginManifest, api: PluginApi): void {
     const staged = readStaging(api);
-    const declaredTools = new Set(manifest.contributes?.tools ?? []);
-    const actualTools = new Set(staged.tools.map((tool) => tool.definition.name));
-    const declaredCommands = new Map((manifest.contributes?.commands ?? []).map((command) => [command.name, command.sessionOps ?? []]));
-    for (const tool of actualTools) {
-      if (!declaredTools.has(tool)) throw new Error(`Tool "${tool}" is not declared in manifest`);
-    }
-    for (const tool of declaredTools) {
-      if (!actualTools.has(tool)) throw new Error(`Declared tool "${tool}" was not registered`);
-    }
-    const actualCommands = new Set(staged.commands.map((command) => command.name));
-    for (const command of actualCommands) {
-      if (!declaredCommands.has(command)) throw new Error(`Command "${command}" is not declared in manifest`);
-    }
-    for (const command of declaredCommands.keys()) {
-      if (!actualCommands.has(command)) throw new Error(`Declared command "${command}" was not registered`);
-    }
-    for (const command of staged.commands) {
-      const declared = declaredCommands.get(command.name) ?? [];
-      const actual = command.sessionOps ?? [];
-      if (JSON.stringify([...declared].sort()) !== JSON.stringify([...actual].sort())) {
-        throw new Error(`Command "${command.name}" sessionOps differ from manifest`);
-      }
-    }
-    const declaredHooks = new Set(manifest.contributes?.hooks ?? []);
-    for (const hook of staged.hooks.keys()) {
-      if (!declaredHooks.has(hook)) throw new Error(`Hook "${hook}" is not declared in manifest`);
-    }
-    for (const hook of declaredHooks) {
-      if (!staged.hooks.has(hook)) throw new Error(`Declared hook "${hook}" was not registered`);
-    }
-    const declaredServices = new Set(manifest.contributes?.services ?? []);
-    const actualServices = new Set(staged.services.map((service) => service.serviceId));
-    for (const service of actualServices) {
-      if (!declaredServices.has(service)) throw new Error(`Service "${service}" is not declared in manifest`);
-    }
-    for (const service of declaredServices) {
-      if (!actualServices.has(service)) throw new Error(`Declared service "${service}" was not registered`);
-    }
-    const declaredProviders = new Set(manifest.contributes?.providers ?? []);
-    const actualProviders = new Set(staged.providers.map((provider) => provider.id));
-    for (const provider of actualProviders) {
-      if (!declaredProviders.has(provider)) throw new Error(`Provider "${provider}" is not declared in manifest`);
-    }
-    for (const provider of declaredProviders) {
-      if (!actualProviders.has(provider)) throw new Error(`Declared provider "${provider}" was not registered`);
-    }
-    const declaredChannels = new Set(manifest.contributes?.channels ?? []);
-    const actualChannels = new Set(staged.channels.map((channel) => channel.id));
-    for (const channel of actualChannels) {
-      if (!declaredChannels.has(channel)) throw new Error(`Channel "${channel}" is not declared in manifest`);
-    }
-    for (const channel of declaredChannels) {
-      if (!actualChannels.has(channel)) throw new Error(`Declared channel "${channel}" was not registered`);
+    for (const kind of CONTRIBUTION_KINDS) {
+      assertManifestCoverage(kind, manifest, staged);
     }
   }
 

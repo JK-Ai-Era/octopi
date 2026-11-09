@@ -3,7 +3,7 @@
 import { resolve } from 'node:path';
 import { TOOL_CAPABILITIES, type ToolDefinition, type ToolHandler } from '@octopi-agent/core/types.js';
 import { CONTRIBUTION_NAME_RE, type PluginHookName, type PluginSessionOpName } from './manifest.js';
-import { BUILTIN_CHANNEL_IDS } from '../channel-types.js';
+import { COMMAND_KIND, CHANNEL_KIND, HOOK_KIND, PROVIDER_KIND, SERVICE_KIND, TOOL_KIND, stageContribution } from './contribution-kinds.js';
 import { createStaging, readStaging } from './staging.js';
 import type {
   ExtensionHookHandler,
@@ -233,12 +233,9 @@ export class PluginApi {
       tool.capabilities.some((capability) => !TOOL_CAPABILITIES.includes(capability))) {
       throw new Error(`Plugin tool "${tool.name}" has unknown or duplicate capabilities`);
     }
-    if (readStaging(this).tools.some((entry) => entry.definition.name === tool.name)) {
-      throw new Error(`Plugin "${this.id}" registered duplicate tool "${tool.name}"`);
-    }
     const executionMode = opts?.executionMode ??
       (tool.capabilities.includes('fs-write') ? 'sequential' : undefined);
-    readStaging(this).tools.push({
+    stageContribution(this.id, TOOL_KIND, readStaging(this), {
       definition: tool,
       handler,
       optional: opts?.optional ?? false,
@@ -276,9 +273,7 @@ export class PluginApi {
       priority: opts?.priority ?? 0,
       ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
     };
-    const entries: OrderedHookEntry[] = [...(readStaging(this).hooks.get(hookName) ?? []), entry];
-    entries.sort((a, b) => b.priority - a.priority);
-    readStaging(this).hooks.set(hookName, entries);
+    stageContribution(this.id, HOOK_KIND, readStaging(this), entry);
   }
 
   /** Register a parameter Transform or admission Vote for before_tool_call. */
@@ -303,13 +298,13 @@ export class PluginApi {
 
   /** Stage a Host-owned background service; start/stop is driven by Gateway. */
   registerService(registration: HookServiceRegistration): void {
-    if (!registration.serviceId.trim() || readStaging(this).services.some((item) => item.serviceId === registration.serviceId)) {
-      throw new Error(`Plugin "${this.id}" registered an empty or duplicate service id`);
+    if (!registration.serviceId.trim()) {
+      throw new Error(`Plugin "${this.id}" registered an empty service id`);
     }
     if (registration.timeoutMs !== undefined && (!Number.isFinite(registration.timeoutMs) || registration.timeoutMs <= 0)) {
       throw new Error(`Plugin "${this.id}" registered an invalid service timeout`);
     }
-    readStaging(this).services.push({ ...registration });
+    stageContribution(this.id, SERVICE_KIND, readStaging(this), { ...registration });
   }
 
   /**
@@ -324,10 +319,7 @@ export class PluginApi {
     if (!CONTRIBUTION_NAME_RE.test(normalized) || typeof factory !== 'function') {
       throw new Error(`Plugin "${this.id}" registered an invalid provider contribution "${id}"`);
     }
-    if (readStaging(this).providers.some((entry) => entry.id === normalized)) {
-      throw new Error(`Plugin "${this.id}" registered duplicate provider "${normalized}"`);
-    }
-    readStaging(this).providers.push({ id: normalized, factory });
+    stageContribution(this.id, PROVIDER_KIND, readStaging(this), { id: normalized, factory });
   }
 
   /**
@@ -342,13 +334,7 @@ export class PluginApi {
     if (!CONTRIBUTION_NAME_RE.test(normalized) || typeof factory !== 'function') {
       throw new Error(`Plugin "${this.id}" registered an invalid channel contribution "${id}"`);
     }
-    if ((BUILTIN_CHANNEL_IDS as readonly string[]).includes(normalized)) {
-      throw new Error(`Plugin "${this.id}" cannot register channel "${normalized}": reserved by built-in adapters`);
-    }
-    if (readStaging(this).channels.some((entry) => entry.id === normalized)) {
-      throw new Error(`Plugin "${this.id}" registered duplicate channel "${normalized}"`);
-    }
-    readStaging(this).channels.push({ id: normalized, factory });
+    stageContribution(this.id, CHANNEL_KIND, readStaging(this), { id: normalized, factory });
   }
 
   /**
@@ -369,10 +355,8 @@ export class PluginApi {
     )) {
       throw new Error(`Plugin "${this.id}" registered invalid invocableBy for command "${name}"`);
     }
-    if (readStaging(this).commands.some((entry) => entry.name === name)) {
-      throw new Error(`Plugin "${this.id}" registered duplicate command "${definition.name}"`);
-    }
-    readStaging(this).commands.push({ ...definition, name });
+    const staging = readStaging(this);
+    stageContribution(this.id, COMMAND_KIND, staging, { ...definition, name });
   }
 
   /**

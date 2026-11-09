@@ -115,6 +115,41 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.105.1 (2026-11-10)
+
+### refactor(plugin): contribution-kind descriptor table (P6-1)
+
+The six contribution kinds (tools/commands/hooks/services/providers/channels) now
+share one declarative descriptor table (`plugins/contribution-kinds.ts`). The
+staging write path (`stageContribution`: reserved-id check, per-plugin
+uniqueness, kind-owned insert — including hooks' priority-sorted Map insert) and
+the read path (`forEachStaged`, which pairs entries with their keys) live on the
+descriptor, so the table owns every pipeline semantic: staging uniqueness,
+reserved-id rejection, publish ownership conflicts, manifest claims, manifest
+key uniqueness, and manifest↔registration reconciliation. The previous four
+hand-copied pipeline sites (PluginApi register dedupe, registry publish loop,
+loader claims + bidirectional check, manifest assertUnique block) all read from
+this table; adding a new contribution kind is now one descriptor plus typed
+surfaces (register signature, staging slot, record type, manifest schema
+field) instead of four copied pipeline blocks.
+
+- **Behavior preserved**: atomic publish, `{pluginId, ...entry}` record shape,
+  public getters, and all pinned error wordings (all 159 pre-existing plugin
+  tests pass unchanged). Hooks remain the deliberate semantic exception
+  (multi-handler per name, no cross-plugin ownership) while their staging write
+  path is table-owned like every other kind.
+- **Diagnostics**: service empty-id and duplicate errors are now two precise
+  messages; command duplicate reports the normalized name; when a service
+  registration is both a duplicate and carries an invalid timeout, the timeout
+  error now reports first (shape validation uniformly precedes staging checks,
+  matching tools/commands/providers/channels).
+- Verified: build/lint/428 files 4409 tests/arch-check-sync green;
+  `tests/plugin-contribution-kinds.test.ts` locks the table semantics, including
+  publish-time owner-conflict atomicity and the `before_agent_reply` single-owner
+  rule (independent review del-bd446d3b: 0 blocker/major; all findings fixed).
+
+---
+
 ## v0.105.0 (2026-11-09)
 
 ### feat(plugin): weixin channel (WeChat ClawBot) + live-traffic fixes
