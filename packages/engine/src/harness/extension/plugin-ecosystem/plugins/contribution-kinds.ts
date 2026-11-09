@@ -17,6 +17,7 @@
  */
 
 import { BUILTIN_CHANNEL_IDS } from '../channel-types.js';
+import type { ContributionInstanceTable } from './contribution-instances.js';
 import type {
   OrderedHookEntry,
   PluginChannelRegistration,
@@ -44,6 +45,20 @@ export interface ContributionSink {
   services: ({ pluginId: string } & HookServiceRegistration)[];
   providers: ({ pluginId: string } & PluginProviderRegistration)[];
   channels: ({ pluginId: string } & PluginChannelRegistration)[];
+}
+
+/** Host-private hook that factory-backed records carry (see record.acceptInstance). */
+export interface ContributionInstanceHostHook {
+  /**
+   * Register the Host-accepted instance (birth) with its config identity.
+   *
+   * @param instance - The accepted factory product
+   * @param label - Config identity of this instantiation
+   * @returns Whether the instance is retirement-trackable; false means it was
+   *   not registered (frozen/sealed) and the Host should surface the
+   *   degradation — lookup will report it as never instantiated
+   */
+  acceptInstance(instance: object, label: string): boolean;
 }
 
 export interface ContributionKind<TEntry extends object> {
@@ -75,6 +90,14 @@ export interface ContributionKind<TEntry extends object> {
   push(slot: StagedContributions, entry: TEntry): void;
   /** Append one published record to the registry sink. */
   collect(sink: ContributionSink, pluginId: string, entry: TEntry): void;
+  /**
+   * Factory-backed kinds only: extend the staged entry with the host-private
+   * `acceptInstance` hook so the Host can register the instance it accepted
+   * (birth) and the table can track its retirement. The wiring lives here,
+   * like `push`, so a new factory kind cannot silently produce untracked
+   * instances — the return type makes the hook mandatory at compile time.
+   */
+  bindInstances?(entry: TEntry, instances: ContributionInstanceTable): TEntry & ContributionInstanceHostHook;
   /** Kind-specific manifest checks beyond per-kind key uniqueness. */
   assertManifestExtras?(manifest: PluginManifest): void;
   /** Kind-specific manifest↔registration reconciliation beyond key matching. */
@@ -197,6 +220,22 @@ const providers: ContributionKind<PluginProviderRegistration> = {
   collect: (sink, pluginId, entry) => {
     sink.providers.push({ pluginId, ...entry });
   },
+  bindInstances: (entry, instances) => ({
+    ...entry,
+    // The Host calls acceptInstance after validating the factory product
+    // (config.ts::createProviderFromConfig) — birth means Host acceptance.
+    acceptInstance: (instance, label) =>
+      instances.attach({
+        kind: 'provider',
+        key: entry.id,
+        label,
+        instance,
+        retireMethod: 'dispose',
+        // dispose is optional on ModelProvider — define it as a retirement
+        // marker so Host teardown always retires the registry entry.
+        defineRetire: true,
+      }),
+  }),
 };
 
 const channels: ContributionKind<PluginChannelRegistration> = {
@@ -216,6 +255,22 @@ const channels: ContributionKind<PluginChannelRegistration> = {
   collect: (sink, pluginId, entry) => {
     sink.channels.push({ pluginId, ...entry });
   },
+  bindInstances: (entry, instances) => ({
+    ...entry,
+    // The Host calls acceptInstance after validating the factory product
+    // (config.ts::createChannelAdapterFromConfig) — birth means Host acceptance.
+    acceptInstance: (instance, label) =>
+      instances.attach({
+        kind: 'channel',
+        key: entry.id,
+        label,
+        instance,
+        retireMethod: 'stop',
+        // stop is mandatory on ChannelAdapter — never add it here, or the
+        // Host's contract validation would stop reporting broken adapters.
+        defineRetire: false,
+      }),
+  }),
 };
 
 /**

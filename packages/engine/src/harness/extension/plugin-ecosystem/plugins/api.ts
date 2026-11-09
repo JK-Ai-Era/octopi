@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 import { TOOL_CAPABILITIES, type ToolDefinition, type ToolHandler } from '@octopi-agent/core/types.js';
 import { CONTRIBUTION_NAME_RE, type PluginHookName, type PluginSessionOpName } from './manifest.js';
 import { COMMAND_KIND, CHANNEL_KIND, HOOK_KIND, PROVIDER_KIND, SERVICE_KIND, TOOL_KIND, stageContribution } from './contribution-kinds.js';
+import { createInstanceTable, readInstanceTable, type ContributionInstanceKind } from './contribution-instances.js';
 import { createStaging, readStaging } from './staging.js';
+
+export type { ContributionInstanceKind } from './contribution-instances.js';
 import type {
   ExtensionHookHandler,
   HookEvent,
@@ -209,6 +212,7 @@ export class PluginApi {
     this.rootDir = opts.rootDir;
     this.pluginConfig = opts.pluginConfig;
     createStaging(this);
+    createInstanceTable(this);
     const prefix = `[plugin:${opts.id}]`;
     this.logger = {
       debug: (message, ...args) => console.debug(`${prefix} ${message}`, ...args),
@@ -335,6 +339,62 @@ export class PluginApi {
       throw new Error(`Plugin "${this.id}" registered an invalid channel contribution "${id}"`);
     }
     stageContribution(this.id, CHANNEL_KIND, readStaging(this), { id: normalized, factory });
+  }
+
+  /**
+   * Look up the live runtime instance the Host serves for one of this
+   * plugin's own factory-backed contributions (providers, channels). The
+   * instance is registered when the Host accepts the factory product (after
+   * contract validation) and retires when its lifecycle method runs (`stop()`
+   * for channels, `dispose()` for providers — recorded when the call is
+   * requested, regardless of the outcome) or when a newer instance for the
+   * same config identity supersedes it (hot-reload replace; the superseded
+   * instance may still serve draining in-flight work).
+   *
+   * Exactly-one semantics: the lookup succeeds only while exactly one live
+   * instance exists. It throws a real error when the contribution was never
+   * instantiated, when its instance was retired, when several instances are
+   * live at once (multi-instance providers must capture per-instance handles
+   * in their factory closure instead), or when the key is not a contribution
+   * of this plugin (cross-plugin lookup is not part of the v1 contract).
+   *
+   * @param kind - 'provider' or 'channel'
+   * @param id - Contribution key (the id passed to registerProvider/registerChannel)
+   * @returns The live instance the Host serves for this contribution
+   */
+  getContributionInstance(kind: 'provider', id: string): ModelProvider;
+  getContributionInstance(kind: 'channel', id: string): PluginChannelAdapterLike;
+  getContributionInstance(kind: ContributionInstanceKind, id: string): object;
+  getContributionInstance(kind: ContributionInstanceKind, id: string): object {
+    if (kind !== 'provider' && kind !== 'channel') {
+      throw new Error(
+        `Plugin "${this.id}" cannot look up instances of kind "${String(kind)}": expected "provider" or "channel"`,
+      );
+    }
+    if (typeof id !== 'string') {
+      throw new Error(`Plugin "${this.id}" cannot look up ${kind} instance "${String(id)}": id must be a string`);
+    }
+    const key = id.trim();
+    const staging = readStaging(this);
+    const owns = kind === 'provider'
+      ? staging.providers.some((entry) => entry.id === key)
+      : staging.channels.some((entry) => entry.id === key);
+    if (!owns) {
+      throw new Error(`Plugin "${this.id}" cannot look up ${kind} "${key}": not a contribution of this plugin`);
+    }
+    const entries = readInstanceTable(this).find(kind, key);
+    const live = entries.filter((entry) => entry.state === 'live');
+    if (live.length === 1) return live[0].instance;
+    if (live.length > 1) {
+      const labels = live.map((entry) => `"${entry.label}"`).join(', ');
+      throw new Error(
+        `Plugin "${this.id}" ${kind} "${key}" has ${live.length} live instances (${labels}): getContributionInstance requires exactly one`,
+      );
+    }
+    if (entries.length > 0) {
+      throw new Error(`Plugin "${this.id}" ${kind} "${key}" has no live instance (its instance was retired)`);
+    }
+    throw new Error(`Plugin "${this.id}" ${kind} "${key}" has no live instance (the Host has not instantiated it)`);
   }
 
   /**

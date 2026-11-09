@@ -305,12 +305,18 @@ export class ConfigApplyService {
         : providerConfig;
     const provider = await this.deps.providerFactory(name, expandEnvValues(appliedConfig));
 
-    // 2) 写盘（乐观锁 + 全量校验 + 备份）；失败 → 运行时未动
+    // 2) 写盘（乐观锁 + 全量校验 + 备份）；失败 → 运行时未动 + 撤销预构建实例的
+    //    验收（live 必须始终等于宿主路由集）
     let refsAfter: string[] = [];
-    const written = await this.deps.configAdmin.write((raw) => {
-      setJsonPath(raw, ['models', 'providers', name], appliedConfig);
-      refsAfter = findProviderReferences(raw, name);
-    }, expectedHash);
+    const written = await this.deps.configAdmin
+      .write((raw) => {
+        setJsonPath(raw, ['models', 'providers', name], appliedConfig);
+        refsAfter = findProviderReferences(raw, name);
+      }, expectedHash)
+      .catch((err: unknown) => {
+        this.deps.gateway.discardProviderInstance?.(provider);
+        throw err;
+      });
 
     // 3) 热应用
     const affected = extractAgentIds(refsAfter);
@@ -757,23 +763,44 @@ export class ConfigApplyService {
       (k) => JSON.stringify(backupRaw[k] ?? null) !== JSON.stringify(beforeRaw[k] ?? null),
     );
 
-    // 预构造全量（失败不动盘）
+    // 预构造全量（失败不动盘 + 撤销已预构建实例的验收——live 必须始终等于宿主路由集）
     const modelsSection = (backupRaw.models ?? {}) as Record<string, unknown>;
     const providersSection = (modelsSection.providers ?? {}) as Record<string, Record<string, unknown>>;
     const providerInstances: Array<{ name: string; config: Record<string, unknown>; instance: ModelProvider }> = [];
+    const discardUninstalled = (): void => {
+      for (const p of providerInstances) this.deps.gateway.discardProviderInstance?.(p.instance);
+    };
     for (const [name, cfg] of Object.entries(providersSection)) {
       // 展开形态给实例与影子（blocker#1/#5）；盘上备份保持 raw
       const runtimeCfg = expandEnvValues(cfg);
-      providerInstances.push({ name, config: runtimeCfg, instance: await this.deps.providerFactory(name, runtimeCfg) });
+      providerInstances.push({
+        name,
+        config: runtimeCfg,
+        instance: await this.deps.providerFactory(name, runtimeCfg).catch((err: unknown) => {
+          discardUninstalled();
+          throw err;
+        }),
+      });
     }
     const agentEntries = Array.isArray(backupRaw.agents) ? (backupRaw.agents as Array<Record<string, unknown>>) : [];
-    const agentDefs = agentEntries.map((entry) => this.deps.agentDefFactory(entry, backupRaw));
+    let agentDefs: ReturnType<ConfigApplyServiceDeps['agentDefFactory']>[];
+    try {
+      agentDefs = agentEntries.map((entry) => this.deps.agentDefFactory(entry, backupRaw));
+    } catch (err) {
+      discardUninstalled();
+      throw err;
+    }
     const levels = modelsSection.level as Record<string, { primary: string; fallback?: string[] }> | undefined;
 
-    const written = await this.deps.configAdmin.write((raw) => {
-      for (const key of Object.keys(raw)) delete raw[key];
-      Object.assign(raw, backupRaw);
-    }, expectedHash);
+    const written = await this.deps.configAdmin
+      .write((raw) => {
+        for (const key of Object.keys(raw)) delete raw[key];
+        Object.assign(raw, backupRaw);
+      }, expectedHash)
+      .catch((err: unknown) => {
+        discardUninstalled();
+        throw err;
+      });
 
     // M3 + S1：署名紧跟写盘。顶层安全段（effectPolicy/security/plugins）随回滚变化时
     // **不重锚**——运行时顶层策略不随 resetRuntimeConfig 更新，重锚会掩盖「文件已回滚、

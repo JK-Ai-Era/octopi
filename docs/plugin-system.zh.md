@@ -132,6 +132,7 @@ export default definePlugin({
 - `api.registerService` 暂存后台服务，且必须同时在 `contributes.services` 声明；启停生命周期由宿主管理（见「后台服务」）。
 - `api.registerProvider` 暂存 Provider 工厂，且必须同时在 `contributes.providers` 声明；宿主按 `models.providers[].plugin` 引用逐实例化（见「Provider 贡献（P5）」）。
 - `api.registerChannel` 暂存 Channel 工厂，且必须同时在 `contributes.channels` 声明；宿主按 `channels[].plugin` 引用逐实例化（见「Channel 贡献（P5b）」）。
+- `api.getContributionInstance(kind, id)` 返回本插件被宿主服务中的 provider/channel 存活实例，恰好一个语义（见「贡献实例（P6-3）」）。
 - ContextEngine 与媒体 Provider 注册方法，在各自具备完整生产消费者和生命周期契约之前，故意不开放。
 
 ## 插件 Command 与 Session 效应
@@ -280,6 +281,36 @@ api.registerChannel('feishu', async (context) => {
 - 通道等于让能触达它的人驱动一个带真实工具的 agent。超出个人使用的部署必须配置传输面自身的准入闸（如飞书示例的 `policy` 白名单）。
 - `options` 原样落盘；**禁止在 `options` 里放任何凭据**（密钥走 `apiKey`）。`octopi.schema.json` 的 JSON Schema 无法表达 `type | plugin` 互斥（与 `models.providers[].api|plugin` 相同）；运行时强校验。
 - 真实示例：`examples/plugins/feishu-channel`——飞书机器人，走官方 SDK 长连接（WebSocket），带 DM/群准入策略与 @ 检测。
+
+## 贡献实例（P6-3）
+
+工厂型贡献（providers、channels）暂存的是工厂；配置引用到它们时由宿主创建运行时实例。每个**被宿主验收**的实例都登记在按插件隔离的实例注册表中，插件通过窄接口
+`api.getContributionInstance(kind, id)` 取回自己的存活实例——这是模块闭包桥（工厂与工具共享 `let adapter`）的官方替代：闭包在多实例化与退役后都会错位。
+
+```js
+api.registerChannel('weixin', async (context) => createWeixinChannelAdapter(context, {}));
+api.registerTool({ name: 'weixin_pair', /* ... */ }, async () => {
+  const adapter = api.getContributionInstance('channel', 'weixin');
+  // TypeScript 作者：调用 SPI 之外的方法时转换到自己的适配器接口
+  return adapter.pair();
+});
+```
+
+契约：
+
+- **种类**：仅 `'provider'` 与 `'channel'` —— 只有工厂型贡献的实例与其注册可分离。tools、commands、hooks、services 本身就是其注册。其他 kind 字符串会被真实错误拒绝（该 API 从纯 JS 也能调到）。
+- **诞生**：实例在宿主**验收**工厂产物时登记（契约校验之后），注册表的 "live" 与宿主路由集一致。被拒绝的工厂产物永不入表；预构建后因配置应用中止而从未装机的实例也不入表（宿主会撤销其验收）。登记的对象是**工厂产物本身**：插件私有方法只存在于产物上。开启 `observability.llmRequestDump` 时宿主经装饰副本路由——副本只带 SPI 成员并把调用转发给产物（其 `dispose` 转发闭合退役链；验收先于装饰执行）。
+- **退役**——两个触发点，都幂等：
+  - 物理：实例的生命周期方法被调用——channel 是 `stop()`，provider 是 `dispose()`（provider 没有 dispose 时定义为退役标记）。在**发起**调用时记录，不论成败。
+  - 逻辑：宿主停止路由到该实例——同贡献键与配置身份的新实例被验收（热更替换），或实例被摘出路由（provider 删除/配置重置即刻标记）。实例可能仍在为排空中的在途请求服务直到被 dispose——热更时 provider 的 dispose 由 gateway 宽限窗口延迟，但 lookup 在退役时（而非 dispose 时）即停止返回该实例。
+  - 再次验收同一产物（单例工厂）会将其条目复活为 live。正常操作是宿主调用生命周期方法（停机、回滚、热更）；插件自己也可以调——方法就长在它自己的实例上。
+- **恰好一个语义**：仅当恰好存在一个存活实例时查询成功，否则抛真实错误：
+  - 从未实例化：`has no live instance (the Host has not instantiated it)`；
+  - 已退役：`has no live instance (its instance was retired)`；
+  - 多个同时存活：错误会列出实例标签——此时应在工厂闭包中按实例捕获句柄（每次工厂调用都可闭包自己的）。provider 的标签是 `models.providers` 配置键；channel 的标签是贡献 id（gateway 每个 channel id 最多一个实例）；
+  - 不是本插件的贡献：跨插件查询不在 v1 契约内。
+- 退役无法跟踪的实例（冻结/封闭对象）**不予登记**，宿主会显式告警；宿主自己的契约校验负责报告残缺适配器，注册表从不给对象打补丁。
+- 声明的返回类型是 SPI 结构视图（`ModelProvider`、`PluginChannelAdapterLike`）。SPI 之外的插件自有方法（如 weixin 适配器的 `pair()`）运行时真实存在；TypeScript 作者可转换到自己的适配器接口。
 
 ## 配置
 

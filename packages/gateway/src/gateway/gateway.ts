@@ -1812,8 +1812,15 @@ export class Gateway {
     agentDefs: AgentDefinition[],
     levels: Record<string, { primary: string; fallback?: string[] }> | undefined,
   ): void {
+    // 位移实例必须退役（与 replaceProvider/removeProvider 同语义）：
+    // 裸删/裸覆盖会让旧实例既不 dispose 也不进退役窗口（资源泄漏）
     for (const name of [...this.providers.keys()]) {
-      if (!providers.some((p) => p.name === name)) this.providers.delete(name);
+      const existing = this.providers.get(name);
+      const replacement = providers.find((p) => p.name === name);
+      if (existing && (!replacement || replacement.instance !== existing)) {
+        this.retireProvider(existing);
+      }
+      if (!replacement) this.providers.delete(name);
     }
     for (const p of providers) {
       this.providers.set(p.name, p.instance);
@@ -2019,6 +2026,16 @@ export class Gateway {
     }
   }
 
+  /**
+   * 撤销「已验收但从未装机」的 provider 实例（config-apply 预构建后中止）：
+   * 移除其实例登记并复活被它顶替的在役实例，保持「live = 宿主路由」不变量。
+   *
+   * @param instance - 预构建后被丢弃的实例
+   */
+  discardProviderInstance(instance: object): void {
+    this.pluginManager.discardInstance(instance);
+  }
+
   registerProvider(provider: ModelProvider): void {
     // 本收口不退役旧实例：热更走 replaceProvider/removeProvider（那里的旧实例进
     // retireProvider() 延迟窗口回收），进程级收口由 stop() 兜底。
@@ -2077,6 +2094,8 @@ export class Gateway {
    * 进程级收口由 stop() 全量排空。
    */
   private retireProvider(provider: ModelProvider): void {
+    // 逻辑退役即刻生效（路由已摘除）；dispose 宽限窗口是物理兜底
+    this.pluginManager.retireInstance(provider);
     this.retiredProviders.push(provider);
     const timer = setTimeout(() => {
       const idx = this.retiredProviders.indexOf(provider);

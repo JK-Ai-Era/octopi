@@ -1412,6 +1412,14 @@ export async function createProviderFromConfig(
     if (built.name !== name) {
       throw new Error(`Provider "${name}": plugin provider "${pc.plugin}" factory returned provider.name "${built.name}"; it must equal the config key "${name}"`);
     }
+    // 出生 = 宿主验收：校验通过后登记工厂产物本身（先于 decorate——wire-dump
+    // 副本的 dispose 转发链要闭合到退役标记上）。查询返回产物，插件私有方法
+    // 只存在于产物上；宿主路由可能经装饰副本（仅 SPI 成员）转发到它。
+    if (record.acceptInstance && !record.acceptInstance(built, name)) {
+      console.warn(
+        `Provider "${name}": plugin provider instance cannot be retirement-tracked (frozen/sealed); contribution lookup will report it as never instantiated`,
+      );
+    }
     return decorate(built);
   }
 
@@ -1470,6 +1478,12 @@ export async function createChannelAdapterFromConfig(
   }
   if (built.name !== ref) {
     throw new Error(`Channel "${ref}": plugin channel factory returned adapter.name "${built.name}"; it must equal the contribution id "${ref}"`);
+  }
+  // 出生 = 宿主验收：校验通过后登记实例，与 provider 同语义
+  if (record.acceptInstance && !record.acceptInstance(built, ref)) {
+    console.warn(
+      `Channel "${ref}": plugin channel instance cannot be retirement-tracked (frozen); contribution lookup will report it as never instantiated`,
+    );
   }
   return built;
 }

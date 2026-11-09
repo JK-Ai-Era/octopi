@@ -92,6 +92,7 @@ declare const plugin: {
       definition: { name: string; description: string; parameters?: Record<string, unknown>; capabilities?: string[] },
       handler: () => Promise<unknown>,
     ): void;
+    getContributionInstance(kind: 'channel', id: string): WeixinChannelAdapter;
   }): void;
 };
 export default plugin;

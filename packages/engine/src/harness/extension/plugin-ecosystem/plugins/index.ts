@@ -19,6 +19,7 @@ export type {
   PluginChannelFactoryContext,
   PluginChannelRegistration,
   PluginChannelAdapterLike,
+  ContributionInstanceKind,
 } from './api.js';
 export {
   PLUGIN_API_VERSION,

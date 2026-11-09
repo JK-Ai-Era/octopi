@@ -613,13 +613,7 @@ export function createWeixinChannelAdapter(ctx, deps) {
 export default {
   id: 'weixin',
   register(api) {
-    // Shared adapter reference: the channel factory stores it, the tool reads it.
-    let adapter = null;
-
-    api.registerChannel('weixin', async (context) => {
-      adapter = createWeixinChannelAdapter(context, {});
-      return adapter;
-    });
+    api.registerChannel('weixin', async (context) => createWeixinChannelAdapter(context, {}));
 
     api.registerTool(
       {
@@ -632,7 +626,9 @@ export default {
         capabilities: ['egress'],
       },
       async () => {
-        if (!adapter) throw new Error('weixin_pair: weixin channel is not configured or failed to initialize');
+        // Host instance registry (not a module closure): survives multiple
+        // factory calls and reports real lifecycle state after retirement.
+        const adapter = api.getContributionInstance('channel', 'weixin');
         return adapter.pair();
       },
     );

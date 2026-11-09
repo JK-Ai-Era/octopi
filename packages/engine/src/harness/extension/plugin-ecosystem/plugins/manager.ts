@@ -69,6 +69,26 @@ export class PluginManager {
     return this.loader.contributions.getChannels().find((channel) => channel.id === ref);
   }
 
+  /**
+   * Roll back an accepted-but-never-installed instance (config-apply abort);
+   * resurrects the instance it superseded in the instance tables.
+   *
+   * @param instance - The instance the Host validated but never routed to
+   */
+  discardInstance(instance: object): void {
+    this.loader.contributions.discardInstance(instance);
+  }
+
+  /**
+   * Logical instance retirement at Host routing removal (physical dispose
+   * remains the backstop).
+   *
+   * @param instance - The instance the Host stopped routing to
+   */
+  retireInstance(instance: object): void {
+    this.loader.contributions.retireInstance(instance);
+  }
+
   getCommandSessionOps(pluginId: string, name: string): PluginCommandRecord['sessionOps'] | undefined {
     const command = this.loader.contributions.getCommands().find(
       (candidate) => candidate.pluginId === pluginId &&

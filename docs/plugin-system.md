@@ -132,6 +132,7 @@ export default definePlugin({
 - `api.registerService` stages a background service that must also be declared in `contributes.services`; the Host owns its start/stop lifecycle (see Background services).
 - `api.registerProvider` stages a Provider factory that must also be declared in `contributes.providers`; the Host instantiates it per `models.providers[].plugin` reference (see Provider contributions (P5)).
 - `api.registerChannel` stages a Channel factory that must also be declared in `contributes.channels`; the Host instantiates it per `channels[].plugin` reference (see Channel contributions (P5b)).
+- `api.getContributionInstance(kind, id)` returns this plugin's live provider/channel instance as served by the Host, with exactly-one semantics (see Contribution instances (P6-3)).
 - ContextEngine and media-provider registration methods are intentionally absent until each has a complete production consumer and lifecycle contract.
 
 ## Plugin Commands and Session effects
@@ -339,6 +340,76 @@ api.registerChannel('feishu', async (context) => {
 - Real example: `examples/plugins/feishu-channel` — a Feishu (Lark) bot over the
   official SDK's long connection (WebSocket), with policy-gated DM/group
   admission and mention detection.
+
+## Contribution instances (P6-3)
+
+Factory-backed contributions (providers, channels) are staged as factories; the
+Host creates the runtime instances when configuration references them. Every
+accepted instance is recorded in a per-plugin instance registry, and the plugin
+reaches its own live instance through the narrow lookup
+`api.getContributionInstance(kind, id)` — the supported replacement for
+module-closure bridges (a `let adapter` shared between a factory and a tool
+breaks under multiple instantiations and after retirement).
+
+```js
+api.registerChannel('weixin', async (context) => createWeixinChannelAdapter(context, {}));
+api.registerTool({ name: 'weixin_pair', /* ... */ }, async () => {
+  const adapter = api.getContributionInstance('channel', 'weixin');
+  // TS authors: cast to their own adapter interface for SPI-external methods
+  return adapter.pair();
+});
+```
+
+Contract:
+
+- **Kinds**: `'provider'` and `'channel'` — only factory-backed contributions
+  have instances separable from their registrations. Tools, commands, hooks and
+  services *are* their registrations. Any other kind string is rejected with a
+  real error (the API is reachable from plain JS).
+- **Birth**: an instance is registered when the Host *accepts* the factory
+  product — after contract validation — so the registry's notion of "live"
+  matches what the Host routes to. A rejected factory product never becomes a
+  tracked instance, and neither does a pre-built instance whose config apply
+  aborted before install (the Host rolls the acceptance back). The registered
+  object is the factory product itself: plugin-specific methods live only
+  there. With `observability.llmRequestDump` the Host routes through a
+  decorator copy that carries only SPI members and forwards calls to the
+  product (its `dispose` forwarding closes the retirement chain — acceptance
+  runs before decoration).
+- **Retirement** — two triggers, both idempotent:
+  - physical: the instance's lifecycle method runs — `stop()` for channels,
+    `dispose()` for providers (defined as a retirement marker when the provider
+    has none). Recorded when the call is *requested*, regardless of outcome.
+  - logical: the Host stops routing to the instance — a newer instance is
+    accepted for the same contribution key and config identity (hot-reload
+    replace), or the instance is removed from routing (provider removal /
+    config reset marks it immediately). The instance may still serve draining
+    in-flight work until disposed — provider disposal is deferred by the
+    gateway's grace window on hot-reload, but lookup stops returning the
+    instance at retirement, not at disposal.
+  - Re-accepting the same product (singleton factories) revives its entry as
+    live; in normal operation the Host calls the lifecycle methods (shutdown,
+    rollback, hot-reload), and the plugin can call them too — the method sits
+    on its own instance.
+- **Exactly-one semantics**: the lookup succeeds only while exactly one live
+  instance exists, and throws a real error otherwise:
+  - never instantiated: `has no live instance (the Host has not instantiated it)`;
+  - retired: `has no live instance (its instance was retired)`;
+  - several live at once: the error names the instance labels — capture
+    per-instance handles in the factory closure instead (each factory call may
+    close over its own). For providers the label is the `models.providers`
+    config key; for channels it is the contribution id (the gateway allows at
+    most one instance per channel id).
+  - not a contribution of this plugin: cross-plugin lookup is not part of the
+    v1 contract.
+- An instance whose retirement cannot be tracked (a frozen/sealed object) is
+  **not registered** and the Host logs an explicit warning; the Host's own
+  contract validation reports broken adapters and the registry never patches
+  the objects it is given.
+- The declared return types are the SPI structural views (`ModelProvider`,
+  `PluginChannelAdapterLike`). Plugin-specific methods beyond the SPI (like
+  `pair()` on the weixin adapter) exist at runtime; TypeScript authors cast to
+  their own adapter interface.
 
 ## Configuration
 

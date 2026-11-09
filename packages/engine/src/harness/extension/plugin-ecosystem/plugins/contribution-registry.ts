@@ -10,6 +10,7 @@ import type { PluginApi, PluginProviderFactory, PluginChannelFactory } from './a
 import type { PluginCommandRegistration, PluginToolContribution, OrderedHookEntry } from './api.js';
 import type { ContributionSink } from './contribution-kinds.js';
 import { CONTRIBUTION_KINDS } from './contribution-kinds.js';
+import { readInstanceTable } from './contribution-instances.js';
 import { readStaging } from './staging.js';
 
 export interface RegisteredPlugin {
@@ -32,6 +33,13 @@ export interface PluginProviderRecord {
   pluginId: string;
   id: string;
   factory: PluginProviderFactory;
+  /**
+   * Host-private instance-registration hook (see contribution-kinds
+   * `bindInstances`). Hosts MUST call it with the accepted factory product —
+   * after contract validation, before any Host-side decorator wraps it — so
+   * the instance registry's notion of "live" matches what the Host routes to.
+   */
+  acceptInstance?(instance: object, label: string): boolean;
 }
 
 /** A published channel factory contribution; globally unique id, like providers. */
@@ -39,6 +47,8 @@ export interface PluginChannelRecord {
   pluginId: string;
   id: string;
   factory: PluginChannelFactory;
+  /** Host-private instance-registration hook; see PluginProviderRecord.acceptInstance. */
+  acceptInstance?(instance: object, label: string): boolean;
 }
 
 function emptySink(): ContributionSink {
@@ -60,7 +70,11 @@ export class PluginContributionRegistry {
       for (const kind of CONTRIBUTION_KINDS) {
         kind.forEachStaged(staged, (key, entry) => {
           if (kind.globallyUnique) next.addOwner(kind.label, key, plugin.manifest.id);
-          kind.collect(next.records, plugin.manifest.id, entry);
+          const bound = kind.bindInstances?.(entry, readInstanceTable(plugin.api)) ?? entry;
+          if (kind.bindInstances !== undefined && typeof (bound as { acceptInstance?: unknown }).acceptInstance !== 'function') {
+            throw new Error(`contribution kind "${kind.label}" is factory-backed but bindInstances did not wire acceptInstance`);
+          }
+          kind.collect(next.records, plugin.manifest.id, bound);
         });
       }
     }
@@ -95,4 +109,25 @@ export class PluginContributionRegistry {
   getServices(): PluginServiceRecord[] { return [...this.records.services]; }
   getProviders(): PluginProviderRecord[] { return [...this.records.providers]; }
   getChannels(): PluginChannelRecord[] { return [...this.records.channels]; }
+
+  /**
+   * Roll back an accepted-but-never-installed instance across all plugin
+   * instance tables (see ContributionInstanceTable.discardByInstance).
+   *
+   * @param instance - The instance the Host validated but never routed to
+   */
+  discardInstance(instance: object): void {
+    for (const plugin of this.plugins.values()) readInstanceTable(plugin.api).discardByInstance(instance);
+  }
+
+  /**
+   * Logical retirement by instance identity across all plugin instance tables
+   * (see ContributionInstanceTable.retireByInstance) — called when the Host
+   * stops routing to an instance.
+   *
+   * @param instance - The instance the Host stopped routing to
+   */
+  retireInstance(instance: object): void {
+    for (const plugin of this.plugins.values()) readInstanceTable(plugin.api).retireByInstance(instance);
+  }
 }

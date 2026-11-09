@@ -115,6 +115,62 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.105.3 (2026-11-10)
+
+### feat(plugin): contribution instance registry + api.getContributionInstance (P6-3)
+
+Factory-backed contributions (providers, channels) now register the runtime
+instances the Host serves. **Birth = Host acceptance**: `record.acceptInstance`
+runs after contract validation and records the factory product itself (plugin-
+specific methods live only there; with `observability.llmRequestDump` the Host
+routes through a decorator copy that forwards SPI calls to it — acceptance runs
+before decoration so the copy's `dispose` forwarding closes the retirement
+chain). The registry's "live" set matches what the Host routes to: rejected
+factory products are never tracked, and a pre-built instance whose config
+apply aborts before install is rolled back (`discardInstance` resurrects the
+instance it superseded). Retirement has two idempotent triggers: physical (the
+instance's `stop()`/`dispose()` runs — recorded on request regardless of
+outcome; `dispose` is defined as a marker when the provider has none) and
+logical (routing removal — hot-reload replace supersedes, provider removal /
+config reset marks immediately; deferred disposal is only the physical
+backstop, lookup stops returning at retirement). Re-accepting a retired
+singleton revives its entry. Instances whose retirement cannot be tracked
+(frozen/sealed) are never registered and never patched — the Host logs an
+explicit warning and its contract validation stays the authority on broken
+adapters.
+
+Plugins reach their own live instance through the narrow lookup
+`api.getContributionInstance(kind, id)` with exactly-one semantics: one live
+instance is returned; otherwise a real error distinguishes never-instantiated /
+retired / ambiguous multi-live (naming the instance labels) / not a
+contribution of this plugin; unknown kinds and non-string ids are rejected at
+runtime (the API is reachable from plain JS). This replaces module-closure
+bridges — the weixin example's `weixin_pair` tool now queries the registry
+instead of a shared `let adapter`. Cross-plugin lookup is deliberately outside
+the v1 contract. Public docs updated in both languages.
+
+### fix(gateway): provider teardown paths retire displaced instances
+
+`resetRuntimeConfig` rebuilt the provider map with bare delete/overwrite —
+displaced instances were neither disposed nor retired (a pre-existing resource
+leak); they now go through `retireProvider` like `replaceProvider` /
+`removeProvider`. `retireProvider` additionally marks logical retirement in
+the plugin instance tables at routing removal, so lookups never hand out an
+instance the Host no longer routes to during the 30-minute dispose grace
+window.
+
+- Verified: build/lint/429 files 4444 tests/arch-check-sync green; 26 cases
+  cover acceptance births and rollbacks (incl. the real
+  `createProviderFromConfig` / `createChannelAdapterFromConfig` paths, the
+  no-phantom-on-rejection invariant, and wire-dump dispose forwarding),
+  physical + logical retirement, supersession and revival of singletons,
+  aborted-acceptance rollback with resurrection, kind/id validation,
+  frozen/broken adapter non-tracking, repeated publish, a real weixin plugin
+  bridge round-trip incl. post-retirement state, and gateway
+  `resetRuntimeConfig` grace-window disposal (fake timers).
+
+---
+
 ## v0.105.2 (2026-11-10)
 
 ### feat(plugin): optional ChannelAdapter.status() + gateway health (P6-2)
