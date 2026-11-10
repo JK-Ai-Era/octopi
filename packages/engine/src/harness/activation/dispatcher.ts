@@ -48,6 +48,10 @@ export class SessionRunnerDispatcher implements RunDispatcher {
       sessionId: req.sessionId,
       model: req.modelOverride,
       modelProvider: req.modelProvider,
+      // per-run 覆盖（委派子 run）：显式值后置胜出；rightsCeiling 由 Runner
+      // 与模板天花板取交集（D3 只能收紧），此处透传不放宽。
+      ...(req.systemPrompt === undefined ? {} : { systemPrompt: req.systemPrompt }),
+      ...(req.rightsCeiling === undefined ? {} : { rightsCeiling: req.rightsCeiling }),
       ...(req.actorId === undefined && req.actorType === undefined && req.tenantId === undefined ? {} : {
         principal: {
           ...(req.actorId === undefined ? {} : { actorId: req.actorId }),

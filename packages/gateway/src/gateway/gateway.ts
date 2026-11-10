@@ -93,7 +93,14 @@ import {
 } from '@octopi-agent/engine/harness/agent/tool-purpose.js';
 import { AgentRuntime, ExplicitRouter } from '@octopi-agent/engine/harness/activation/index.js';
 import type { InProcessAgentHandle } from '@octopi-agent/engine/harness/activation/run-backend.js';
-import { InProcessRunBackend } from './run-backend.js';
+import { RemoteRunBackend } from './remote-run-backend.js';
+import type {
+  ClientToolVisibilitySnapshot,
+  ClientToolWireSpec,
+  RunHostNotify,
+} from '@octopi-agent/engine/harness/activation/run-protocol.js';
+import { InProcessSessionLock } from '@octopi-agent/engine/harness/run/concurrency/session-lease.js';
+import { RunAssembly, toolApprovalToRequestInput, approvalOutcomeToHitlAskResult } from './run-assembly.js';
 import { dispatchChannelMessage } from '@octopi-agent/engine/integration/agent-runtime/channel-message-source.js';
 import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
 import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
@@ -162,102 +169,12 @@ export interface PendingQuestionView {
  */
 export const ASK_USER_CANCELLED = '__ask_user_cancelled__';
 
-/** Normalized risk level for approval display (unknown severity → high, fail-safe) */
-function normalizeRiskLevel(
-  severity: string | undefined,
-): PendingApprovalRequest['riskLevel'] {
-  switch (severity) {
-    case 'low':
-    case 'medium':
-    case 'high':
-    case 'critical':
-    case 'unknown':
-      return severity;
-    default:
-      return 'high';
-  }
-}
+/** Normalized risk level for approval display（已迁 run-assembly.ts，随 confirmHighRisk 尾部） */
 
-/** RegisteredTool → AgentTool（热更新已 build Agent 的 client tool） */
-/**
- * 将 RegisteredTool 转换为 Loop AgentTool（与 builder.convertToAgentTool、think.buildAgentTools 同构）。
- * 导出供测试覆盖三处映射的 executionMode 透传一致性。
- */
-export function registeredToolToAgentTool(tool: RegisteredTool): {
-  name: string;
-  description: string;
-  executionMode?: 'parallel' | 'sequential';
-  source?: import('@octopi-agent/core/types.js').ToolSource;
-  parameters?: Record<string, unknown>;
-  execute: (
-    toolCallId: string,
-    args: unknown,
-    signal?: AbortSignal,
-    onUpdate?: (partial: { content?: unknown }) => void,
-  ) => Promise<{
-    toolCallId: string;
-    name: string;
-    content: unknown;
-    isError?: boolean;
-    durationMs?: number;
-    purpose?: string;
-    source?: import('@octopi-agent/core/types.js').ToolSource;
-  }>;
-} {
-  return {
-    name: tool.definition.name,
-    description: tool.definition.description,
-    // 与 convertToAgentTool 同构：purpose 统一装配（arch/tool-call-purpose.md）
-    ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
-    ...(tool.source === undefined ? {} : { source: tool.source }),
-    parameters: buildToolLlmParameters(tool.definition.parameters),
-    execute: async (toolCallId, args, signal, onUpdate) => {
-      const startTime = Date.now();
-      try {
-        const rawArgs = (args ?? {}) as Record<string, unknown>;
-        // schema 已 required purpose；模型漏填时推导，不中断调用
-        const purpose = resolveToolCallPurpose(tool.definition.name, rawArgs);
-        const handlerArgs = prepareHandlerArgs(rawArgs, tool.definition);
-        const scope = getRunScope();
-        const { isPluginToolPermitted } = await import('@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/plugin-tool.js');
-        if (!isPluginToolPermitted(tool, scope?.toolRuntime?.agentToolPolicy)) {
-          throw new Error(`Plugin tool "${tool.definition.name}" is not allowed for this agent`);
-        }
-        const result = await tool.handler(handlerArgs, {
-          sessionId: scope?.sessionId ?? 'unknown',
-          agentId: scope?.agentId ?? 'unknown',
-          messages: scope?.toolRuntime?.messages ?? [],
-          abortSignal: signal,
-          // 工具部分输出通道（展示用途）；无转发器时不给工具假通道
-          ...(onUpdate ? { onUpdate } : {}),
-          fileEffects:
-            scope?.toolRuntime?.fileEffects
-            ?? (await import('@octopi-agent/engine')).createUnconfiguredFileEffects(),
-          memoryEffects:
-            scope?.toolRuntime?.memoryEffects
-            ?? (await import('@octopi-agent/engine')).createUnconfiguredMemoryEffects(),
-        });
-        return {
-          toolCallId,
-          name: tool.definition.name,
-          content: result,
-          purpose,
-          ...(tool.source === undefined ? {} : { source: tool.source }),
-          durationMs: Date.now() - startTime,
-        };
-      } catch (error) {
-        return {
-          toolCallId,
-          name: tool.definition.name,
-          content: `Error: ${error instanceof Error ? error.message : String(error)}`,
-          isError: true,
-          ...(tool.source === undefined ? {} : { source: tool.source }),
-          durationMs: Date.now() - startTime,
-        };
-      }
-    },
-  };
-}
+/** RegisteredTool → AgentTool（热更新已 build Agent 的 client tool）。
+ * 实现已迁 engine（harness/agent/registered-tool-adapter.ts，客户端工具面随 run 节点，
+ * P0b）；此处保留导出面供既有测试。 */
+export { registeredToolToAgentTool } from '@octopi-agent/engine/harness/agent/registered-tool-adapter.js';
 
 /**
  * knowledge.required 准入判定（纯函数）：`required: true` 且知识运行时未达 `ready`
@@ -278,6 +195,26 @@ export function knowledgeRequiredAdmissionError(
   return state === 'ready'
     ? undefined
     : `knowledge_required: Knowledge Service is not ready (state=${state}); run refused by knowledge.required`;
+}
+
+/**
+ * Knowledge 准入闸门闭包工厂（单源：run-serve-child 与测试共用，勿再手抄包装形状）。
+ *
+ * @param required - `knowledge.required` 政策（缺省 fail-open）
+ * @param getState - 运行时状态读取（boot 快照 / syncKnowledgeState 镜像）
+ * @returns RunHost.admissionGate 闭包（拒因含稳定前缀 `knowledge_required:`）
+ */
+export function makeKnowledgeAdmissionGate(
+  required: boolean | undefined,
+  getState: () => import('./knowledge-runtime.js').KnowledgeRuntimeState | 'starting',
+): NonNullable<
+  import('@octopi-agent/engine/harness/run/run-host.js').RunHostOptions['admissionGate']
+> {
+  return () => {
+    const state = getState();
+    const error = knowledgeRequiredAdmissionError(required, state);
+    return error ? { event: 'ops.knowledge.run_refused', error, state } : undefined;
+  };
 }
 
 /** WebUI 模型目录条目（与 harness/run/model ModelCatalogEntry 对齐） */
@@ -472,13 +409,14 @@ export class Gateway {
   private delegationSkippedLogged = false;
   /**
    * run 托管契约缝（arch/service-topology.md §4）：挂载槽 / in-flight 计数 /
-   * 退役回收 / 会话锁经 InProcessRunBackend（P0a 脚手架）。
+   * P0b 起执行面在 run 实例进程（RemoteRunBackend；InProcess 脚手架已删）。
    * 已注记旁路（P0b 收口，见 §9）：构建期 Runner 装配（buildAgent 内
    * setObserverHub/setModelResolver）与 delegation 子 run（attach 持裸 runner）。
    */
-  private runBackend: InProcessRunBackend;
-  /** 单飞构建：同 agent 并发首建合流为一次（防 mount 冲突 + 构建产物泄漏） */
-  private buildInFlight = new Map<string, Promise<InProcessAgentHandle>>();
+  /** run 实例后端（P0b：执行面唯一 remote 实现；start() 时 fork run 实例子进程） */
+  private runBackend?: RemoteRunBackend;
+  /** 装配测试缝专用会话锁（生产锁在 run 实例进程内；见 assembly getSessionLock） */
+  private readonly seamSessionLock = new InProcessSessionLock();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** RUN_EVENT 已广播的 Loop 事件对象（总线原始副本去重，防双投） */
@@ -541,6 +479,67 @@ export class Gateway {
   /** user/skill 命令是否已装载（启动时装载，不依赖 buildAgent） */
   private commandSourcesReady = false;
 
+  /** run 侧执行装配（P0b 自 buildAgent 抽出；面接线经 hooks）。懒建：首次构建时全部字段已就绪 */
+  private assemblyInstance?: RunAssembly;
+  private get assembly(): RunAssembly {
+    this.assemblyInstance ??= new RunAssembly({
+      config: this.config,
+      providers: this.providers,
+      getCircuitBreaker: (name) => this.getCircuitBreaker(name),
+      store: this.store,
+      events: this.gatewayBus,
+      getPluginTools: () => this.pluginManager.getTools(),
+      getHookPort: () => this.pluginManager.getHookPort(),
+      globalTools: this.tools,
+      getObserverHub: () => this.observerHub,
+      getSessionLock: () => this.seamSessionLock,
+      getSessionAcl: () => this.sessionAcl,
+      getSessionSchedules: () => this.sessionSchedules,
+      getCurrentAgentDefinition: (agentId) => this.agents.get(agentId),
+      getKnowledgeClient: () => this.getKnowledgeClient(),
+      getKnowledgeRuntime: async () => ({ state: this.getKnowledgeState() }),
+      requestApproval: (input) => this.requestApproval(input),
+      registerSkillCommands: (agentId, skillManager) => this.registerSkillCommands(skillManager),
+      registerUserCommands: (agentId, commandsDir) => this.registerUserCommands(agentId, commandsDir),
+      registerMemoryRestorer: (agentId, restorer) => {
+        this.memoryRestorers.set(agentId, restorer as never);
+      },
+      onBuilt: async ({ agent, built }) => {
+        // 会话任务事件 → WebSocket（UI 只读实时面板）
+        const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown; agentId?: string }) => {
+          if (!event.sessionId) return;
+          for (const adapter of this.streamingAdapters) {
+            adapter.broadcastEvent(event.sessionId, event as never, event.agentId);
+          }
+        };
+        for (const type of ['session.task.created', 'session.task.updated', 'session.task.snapshot']) {
+          built.events.on(type, forwardTaskEvent);
+        }
+
+        // Client Tool 会话可见性：无 live client 的 tool 不进该 session 的 LLM tool 面
+        built.agent.setToolVisibilityFilter(this.clientTools.createVisibilityFilter());
+
+        // 委派编排（arch/delegation.md §7/§14）：惰性构建，attach 后该 agent 可被委派/可发委派。
+        // notify 通道：接收端 AgentSignalSource 默认随委派接线补挂（ensureDelegationRuntime），
+        // 与 notifier 同源同生命周期；显式 agentSignal:false 时退化为 poll + 状态提示。
+        // TODO(P0b 脚手架缝): 本缝（gateway buildAgent 测试缝）无 RunHost 可路由，子 run
+        // 仍持裸 runner——生产路径已收口（run-serve-child S1，arch/service-topology.md §9.5）；
+        // 本债务随 buildAgent 脚手架删除时一并处置（§9 已注记）。
+        (await this.ensureDelegationRuntime())?.attach({
+          agentId: agent.id,
+          agent: built.agent,
+          runner: built.runner,
+          store: this.store,
+          traits: agent.traits,
+          delegation: agent.delegation,
+          persona: typeof agent.persona === 'string' ? agent.persona : undefined,
+          registerTools: built.registerTools,
+        });
+      },
+    });
+    return this.assemblyInstance;
+  }
+
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
     this.commandAudit = new CommandAuditJournal(() => join(getOctopiHome(), 'audit'));
@@ -552,56 +551,18 @@ export class Gateway {
       ...(config.plugins?.entries === undefined ? {} : { entries: config.plugins.entries }),
     });
     this.pluginManager.setToolApprovalSink(async (event, request) => {
-      const outcome = await this.requestApproval({
-        sessionId: event.sessionId,
-        agentId: event.agentId,
-        request: {
-          kind: 'high_risk',
-          toolName: event.toolName,
-          arguments: event.params,
-          riskLevel: request.severity === 'critical' ? 'critical' : request.severity === 'info' ? 'low' : 'high',
-          riskDescription: request.description,
-          actionDescription: request.title,
-        },
-        ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
-      });
+      const outcome = await this.requestApproval(toolApprovalToRequestInput(event, request));
       // Express the raw HitlDecision (scopes included) so the engine cache can honor
       // approve_session / approve_always; the Host never caches (SEC-7 single model).
-      const decision = typeof outcome === 'string' ? outcome : outcome.decision;
-      const attribution = typeof outcome === 'object'
-        ? {
-            ...(outcome.approver === undefined ? {} : { approver: outcome.approver }),
-            ...(outcome.channel === undefined ? {} : { channel: outcome.channel }),
-          }
-        : {};
-      if (decision !== 'deny') return { decision, ...attribution };
-      // deny: preserve the real source — timeout / cancelled / late ≠ human rejection.
-      const source = typeof outcome === 'object' ? outcome.reason : 'late';
-      return {
-        decision: 'deny',
-        ...(source === 'timeout' || source === 'late' ? { timedOut: true } : {}),
-        ...(source === 'cancelled' ? { denyReason: 'cancelled' as const } : {}),
-        denyDetail: `Host approval was not granted: ${source ?? decision}`,
-        ...attribution,
-      };
+      return approvalOutcomeToHitlAskResult(outcome);
     });
     this.pluginServices = new PluginServiceSupervisor((service, error) => {
       this.reportPluginServiceFailure(service, error);
     }, this.pluginManager.getHookAudit());
     this.sessionAcl = new SessionAclService(config.sessionAcl);
-    this.runBackend = new InProcessRunBackend({
-      redispatch: (trigger, options) => this.runtime.dispatch(trigger, options),
-      // run 起点准入闸门政策（knowledge.required）在 gateway；执行在 backend 包装层。
-      // state 单次快照同时用于判定与账本（原实现两次调用取态；有意收敛——账本与
-      // 判定状态必然一致，见 CHANGELOG）
-      admissionGate: (req) => {
-        const state = this.getKnowledgeState();
-        const error = knowledgeRequiredAdmissionError(this.config.knowledge?.required, state);
-        return error
-          ? { event: 'ops.knowledge.run_refused', error, state }
-          : undefined;
-      },
-    });
+    // run 实例执行腿随 start() 起（RemoteRunBackend fork run 实例子进程；§5.4 分离）：
+    // 准入闸门/compact 解析/审批桥/重投等执行面接线全部在 run 侧（run-serve-child），
+    // gateway 只保留触发面与控制面（control op + notify 处理）。
     this.issueRegistry = new IssueRegistry();
     this.commandRouter = this.createCommandRouter();
     this.clientStreamTransport = new ClientStreamTransport({
@@ -931,6 +892,7 @@ export class Gateway {
       }
     }
     await this.pluginServices.stop(this.pluginManager.getServices());
+    this.clientTools.stopVisibilityRefresh();
     this.sessionSchedules?.dispose();
     this.sessionSchedules = undefined;
     try {
@@ -983,6 +945,7 @@ export class Gateway {
     // 会话日程：Service open() 惰性建库；wakeup 接 AgentRuntime（arch/session-schedules.md）
     {
       // start 重试时先拆掉旧实例，避免双 writer / 双 timer
+      this.clientTools.stopVisibilityRefresh();
       this.sessionSchedules?.dispose();
       this.sessionSchedules = undefined;
       const { SessionScheduleService } = await import(
@@ -1023,28 +986,29 @@ export class Gateway {
         // 语义：通知不打断当前 Run，延迟到 Run 结束才落库（大哥 2026-11-04 确认）。
         // setNotify 调用方是 `void Promise.resolve(...)`，不会堵 tick；多个待写
         // 通知按 FIFO 排队，各自独立完成。
-        const release = await this.runBackend.sessionLock.acquire(schedule.sessionId);
-        try {
-          const session = await this.store.load(schedule.sessionId);
-          if (!session) return;
-          session.messages.push({
-            role: 'user',
-            content,
-            timestamp: Date.now(),
-            agentId: schedule.agentId,
-            metadata: {
-              source: 'runtime',
-              origin: 'session_schedule',
-              scheduleId: schedule.id,
-              delivery: 'notify',
-              triggerType: 'schedule',
+        // 通知写路径归 run 节点（写者单点 §3）：与 Runner.handle 共 sessionLock 的
+        // 语义由 RunHost.sessionAppendMessage 承接（无锁写会被增量同步判漂移整包抹除）。
+        await this.getRunBackend()
+          .control({
+            type: 'sessionAppendMessage',
+            sessionId: schedule.sessionId,
+            message: {
+              role: 'user',
+              content,
+              timestamp: Date.now(),
+              agentId: schedule.agentId,
+              metadata: {
+                source: 'runtime',
+                origin: 'session_schedule',
+                scheduleId: schedule.id,
+                delivery: 'notify',
+                triggerType: 'schedule',
+              },
             },
+          })
+          .catch((err: unknown) => {
+            console.error('[Gateway] schedule notify append failed:', err);
           });
-          session.meta.updatedAt = Date.now();
-          await this.store.save(schedule.sessionId, session);
-        } finally {
-          release();
-        }
       });
       console.log('[Gateway] SessionScheduleService ready (schedules.db)');
     }
@@ -1068,6 +1032,34 @@ export class Gateway {
 
     const knowledgeBoot = this.bootKnowledgeRuntime();
 
+    // ── run 实例进程（P0b：执行面唯一 remote 实现；§5.4 触发面/执行面分离）──
+    // boot 纯数据交接（config + agentDefinitions + knowledge 端点）；执行腿随注册进触发面。
+    let knowledgeInfo: { baseUrl?: string; token?: string; state: string } = {
+      state: this.getKnowledgeState(),
+    };
+    try {
+      const kc = await this.getKnowledgeClient();
+      knowledgeInfo = { baseUrl: kc.baseUrl, token: kc.token, state: this.getKnowledgeState() };
+    } catch {
+      // knowledge 未配置：run 侧 knowledge 工具跳过（state: disabled/starting）
+    }
+    this.runBackend = await RemoteRunBackend.start(
+      {
+        octopiHome: getOctopiHome(),
+        config: this.config,
+        agentDefinitions: [...this.agents.values()] as unknown as Array<Record<string, unknown>>,
+        knowledge: {
+          ...(knowledgeInfo.baseUrl === undefined ? {} : { baseUrl: knowledgeInfo.baseUrl }),
+          ...(knowledgeInfo.token === undefined ? {} : { token: knowledgeInfo.token }),
+          state: knowledgeInfo.state as never,
+        },
+      },
+      { onNotify: (n) => void this.handleRunHostNotify(n) },
+    );
+    for (const agent of this.agents.values()) {
+      this.registerRuntimeAgent(agent);
+    }
+
     // Plugin 已注册命令合入 + user/skill 命令装载（必须在收消息前）
     try {
       this.registerPluginCommands();
@@ -1079,6 +1071,15 @@ export class Gateway {
     await this.runtime.start();
     // Ready 前必须拿到 Knowledge 终态，保证启动日志与 /health 一致
     await knowledgeBoot;
+    // M2：run 侧准入态同步（syncKnowledgeState 生产点）。镜像契约三段缺一漏事件：
+    // ① getKnowledgeRuntime() 内 rt.onStateChange 先于 rt.start 订阅（迁移全捕）；
+    // ② RemoteRunBackend.start 的 boot 快照（attach 时点态）；
+    // ③ 此处 knowledgeBoot 后补推（封 ②快照读取→runBackend 赋值间的窗口）。
+    // 教训（2026-11-10 错层事故）：本对象是 AgentRuntime（执行面）——知识态镜像的
+    // 迁移源头是 GatewayKnowledgeRuntime，不得挂错层。
+    this.pushKnowledgeStateToRun();
+    // M2-5：可见性周期刷（run 侧镜像的新鲜度生产者；unref timer，stop() 兜底清）
+    this.clientTools.startVisibilityRefresh();
     // knowledge.required 与知识终态核对：未达 ready 显式告警（fail-closed——此后拒一切新 run）
     if (this.config.knowledge?.required === true && this.getKnowledgeState() !== 'ready') {
       console.warn(
@@ -1646,6 +1647,7 @@ export class Gateway {
     this.cancelAllPendingHitl();
     this.gitStatusCache.clear();
     this.gitStatusInflight.clear();
+    this.clientTools.stopVisibilityRefresh();
     this.sessionSchedules?.dispose();
     this.sessionSchedules = undefined;
     // 委派运行时持有送达回执订阅（常驻 gatewayBus）：停机回收 + 清缓存，
@@ -1726,7 +1728,7 @@ export class Gateway {
     }
 
     // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）+ 退役回收
-    this.runBackend.disposeAll();
+    void this.runBackend?.stop().catch(() => undefined);
 
     // 释放 provider transport（keep-alive dispatcher 的连接池）；
     // 经 Promise 桥接，dispose 的同步/异步异常都落进 catch，不阻断关闭
@@ -1773,7 +1775,11 @@ export class Gateway {
   removeAgent(agentId: string): void {
     this.agents.delete(agentId);
     this.runtime.unregisterAgent(agentId);
-    this.runBackend.retire(agentId);
+    void this.getRunBackend()
+      .control({ type: 'retireAgent', agentId })
+      .catch((err: unknown) => {
+        console.error('[Gateway] retire agent failed:', err);
+      });
   }
 
   /**
@@ -1836,17 +1842,17 @@ export class Gateway {
    * @param agentId - 失效的 agent id
    */
   async invalidateAgentBuild(agentId: string): Promise<void> {
-    this.runBackend.retire(agentId);
-    // 立即重建（新 provider/level/定义）+ 覆盖注册
+    // 热重建归 run 节点（reloadAgent = 退役旧体 + 重建 + 重挂；并发单飞在 RunHost.ensureMounted）。
+    // 执行腿是稳定 remote dispatcher（按 agentId 现查路由）：无需重注册，零窗口不变。
     const def = this.agents.get(agentId);
     if (!def) return;
     try {
-      // 等在飞构建收敛后强制重建（新配置必须生效）：等待期间若有并发挂载（旧配置
-      // 产物）则再退役一次丢弃，随后单飞 get-or-mount 保证新构建
-      await this.buildInFlight.get(agentId)?.catch(() => undefined);
-      this.runBackend.retire(agentId);
-      const handle = await this.getOrMountHandle(def);
-      await this.registerRuntimeAgent(def, handle);
+      const res = await this.getRunBackend().control({
+        type: 'reloadAgent',
+        agentId,
+        definition: def as unknown as Record<string, unknown>,
+      });
+      if (!res.ok) throw new Error(res.error.message);
       console.log(`[Gateway] Rebuilt agent after config change: ${agentId}`);
     } catch (err) {
       // 构建失败降级（#6 fail-honest）：注册表仍保留新 def，缓存留空由下一条消息
@@ -1857,7 +1863,7 @@ export class Gateway {
 
   /** 热失效全部 agent 构建（level 路由变更等影响面难精确枚举时） */
   async invalidateAllAgentBuilds(): Promise<void> {
-    for (const agentId of this.runBackend.mountedAgentIds()) {
+    for (const agentId of this.agents.keys()) {
       await this.invalidateAgentBuild(agentId);
     }
   }
@@ -2820,135 +2826,14 @@ export class Gateway {
 
     // E4：compact 键使用调用方 agentId（缺省 primary）；不静默改键
     const effectiveAgentId = agentId ?? session.primaryAgentId ?? session.agentId;
-    const cached = await this.ensureBuiltForControl(effectiveAgentId);
-
-    const engine = cached.contextEngine;
-    type StructuralEngine = {
-      compactStructural?: (input: {
-        sessionId: string;
-        agentId?: string;
-        messages: import('@octopi-agent/core/types.js').Message[];
-        summarize?: (messages: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[], opts?: { maxTokens?: number }) => Promise<string>;
-        compactTargetTokens?: number;
-        taskSnapshot?: string;
-        /** 请求口径计量原料（2026-11-08 B1）：与会话下一请求同源的 system/tools */
-        systemPrompt?: string;
-        tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
-        contextWindow?: number;
-        maxOutputTokens?: number;
-        /** 旧压缩快照读口（迁移输入） */
-        loadCompactState?: (sessionId: string) => Promise<import('@octopi-agent/engine/harness/context/types.js').ContextCompactSnapshot | undefined> | import('@octopi-agent/engine/harness/context/types.js').ContextCompactSnapshot | undefined;
-        /** F22：cache-miss 旁路事件出口（ContextEmitFn 形状，经 observerHub 直采进 timeline） */
-        emit?: (event: {
-          type: string;
-          sessionId?: string;
-          reason?: string;
-          fallback?: string;
-          cached?: boolean;
-        }) => void;
-      }) => Promise<import('@octopi-agent/engine').CompactOutcome>;
-    };
-    const structural = engine as StructuralEngine | undefined;
-
-    if (!structural?.compactStructural) {
-      return {
-        ok: false,
-        compacted: false,
-        reason: 'context engine does not support structural compact',
-        tokensBefore: 0,
-        summarizeAttempted: false,
-      };
-    }
-
-    const agentDef = this.agents.get(effectiveAgentId);
-    const modelRef = this.readSessionModelId(session.metadata);
-    const { createProviderSummarize } = await import('@octopi-agent/engine/harness/context/summarize.js');
-    const { resolveModelRef } = await import('@octopi-agent/engine/harness/run/model/index.js');
-
-    let summarize: import('@octopi-agent/engine').SummarizeFunction | undefined;
-    const bound = modelRef
-      ? resolveModelRef(modelRef, {
-          providers: this.providers,
-          defaultProvider: agentDef?.model.provider,
-          isOverride: true,
-        })
-      : agentDef
-        ? resolveModelRef(`${agentDef.model.provider}/${agentDef.model.model}`, {
-            providers: this.providers,
-            isOverride: false,
-          })
-        : null;
-    if (bound) {
-      // 会话模型绑定（评审 F6）：摘要必须走当前会话模型——丢了 modelName 会走 provider 默认
-      // 模型，既违背「走当前会话模型」拍板，也让同形前缀缓存（per provider+model）彻底失效
-      summarize = createProviderSummarize(bound.provider, {
-        model: bound.modelName,
-        maxOutputTokens: bound.maxOutputTokens,
-      });
-    }
-
-    const compactTargetTokens =
-      this.config.context?.contextAssembler?.compactTargetTokens;
-
-    // 请求口径计量原料（评审 B1，2026-11-08）：manual 压缩的 before/after 须与会话
-    // 下一请求同源——tools 缺失会让 toast 少算整个 tool schema（tools「从来没有」）。
-    // 换算与 builder.convertToLlm 同式（sanitizeToolJsonSchema 同一实现，禁手抄）。
-    const { sanitizeToolJsonSchema } = await import(
-      '@octopi-agent/engine/harness/agent/tool-purpose.js'
-    );
-    const manualTools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] =
-      (cached.agent.context.tools ?? []).map((t) => ({
-        type: 'function' as const,
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: sanitizeToolJsonSchema(
-            t.parameters ?? { type: 'object', properties: {} },
-          ) as never,
-        },
-      }));
-
-    // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 键）
-    return this.runBackend.compactSession(sessionId, effectiveAgentId, {
-      systemPrompt: cached.agent.context.systemPrompt,
-      tools: manualTools,
-      compactStructural: (input) =>
-        structural.compactStructural!({
-          sessionId: input.sessionId,
-          agentId: input.agentId,
-          messages: input.messages,
-          summarize: input.summarize,
-          compactTargetTokens: input.compactTargetTokens,
-          taskSnapshot: input.taskSnapshot,
-          systemPrompt: input.systemPrompt,
-          tools: input.tools,
-          loadCompactState: input.loadCompactState,
-          // 摘要请求窗口护栏（评审 F5）：窗口/输出上限随会话模型绑定注入，防最满时压缩被 400
-          contextWindow: bound?.contextWindow,
-          maxOutputTokens: bound?.maxOutputTokens,
-          // F22：manual 路 cache-miss 旁路事件直采 Hub（同 Builder ContextEngine emit 合同：
-          // ContextEngine 侧事件不经 Runner emitObserved，不直采 timeline 就永远看不到）。
-          // m-2：Builder 合同是**双缝**（Hub timeline + gatewayBus → WS/store）——只进 Hub
-          // 会让 manual 的 progress 在 store 侧成为死事件（用户点了压缩后卡在哪无人知道）。
-          emit: (e) => {
-            const { type, sessionId: sid, ...data } = e;
-            const event = {
-              type,
-              timestamp: Date.now(),
-              sessionId: sid ?? input.sessionId,
-              data,
-            };
-            try {
-              this.observerHub.ingestEvent(event);
-            } catch {
-              // 观测 fail-open
-            }
-            this.gatewayBus.emit(event);
-          },
-        }),
-      summarize,
-      compactTargetTokens,
+    // 解析（systemPrompt/tools/摘要绑定/进度双缝）在 run 侧（RunHost）；未挂载即懒建。
+    const res = await this.getRunBackend().control({
+      type: 'compact',
+      sessionId,
+      agentId: effectiveAgentId,
     });
+    if (!res.ok) throw new Error(res.error.message);
+    return res.result as import('@octopi-agent/engine').CompactTransportOutcome;
   }
 
   getProviderSummaries(): Array<{ name: string; circuitBreaker: { state: string; failureCount: number } }> {
@@ -3345,62 +3230,20 @@ export class Gateway {
     messageCount: number;
     fileEffects: import('@octopi-agent/engine').DiscardFileEffectsResult;
   }> {
-    const release = await this.runBackend.sessionLock.acquire(sessionId);
-    try {
-      const session = await this.store.load(sessionId);
-      if (!session) {
-        throw new Error(`Session "${sessionId}" not found`);
-      }
-      // 仅服务「最后一轮进行中 → 回到本轮起点」；效应是整轮 discard，不是按 index 定点回滚
-      const aborted = session.metadata?.abortedTurn as
-        | { userMessageIndex?: number }
-        | undefined;
-      const allowed = aborted && typeof aborted.userMessageIndex === 'number'
-        ? aborted.userMessageIndex
-        : undefined;
-      if (allowed === undefined || fromIndex !== allowed) {
-        throw new Error(
-          `edit_resend_only_last_aborted_turn: fromIndex must equal abortedTurn.userMessageIndex`,
-        );
-      }
-      if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex > session.messages.length) {
-        throw new Error(`fromIndex out of range: ${fromIndex}`);
-      }
-      // 与 view 同口径的写路径守卫：截断锚点必须是该 turn 的用户输入。
-      // legacy/损坏的 abortedTurn 元数据可能指向引擎载体/notify，切在错误位置会把
-      // 真正的中止残片留在历史里，重发叠出重复用户轮
-      const anchor = session.messages[fromIndex];
-      if (!this.isTurnInput(anchor)) {
-        throw new Error(
-          `edit_resend_only_last_aborted_turn: abortedTurn anchor is not a turn user message`,
-        );
-      }
-      session.messages = session.messages.slice(0, fromIndex);
-      // 租约下标必须随 messages 重写收缩，否则下一轮 LLM 窗口被裁空
-      if (typeof session.contextDetachIndex === 'number') {
-        session.contextDetachIndex = Math.min(session.contextDetachIndex, fromIndex);
-      }
-      session.meta.updatedAt = Date.now();
-      // abortedTurn 是 metadata 键：save 浅合并删不掉，必须 updateMetadata
-      await this.store.save(sessionId, session);
-      await this.patchSessionMetadata(sessionId, (meta) => {
-        delete meta.abortedTurn;
-      });
-      // L3: edit-resend reverses this turn's agent file effects (user hand-edits survive)
-      const { discardSessionFileUndo } = await import('@octopi-agent/engine');
-      const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
-      const { join } = await import('node:path');
-      const agentId = session.primaryAgentId ?? session.agentId;
-      const memoryRestorer = this.memoryRestorers.get(agentId);
-      const fileEffects = await discardSessionFileUndo(
-        join(getOctopiHome(), 'sessions'),
-        sessionId,
-        memoryRestorer,
-      );
-      return { messageCount: session.messages.length, fileEffects };
-    } finally {
-      release();
+    // 语义整体在 run 节点（RunHost.truncateMessagesFrom：校验/租约下标/abortedTurn/
+    // 文件效应逆放）；写者单点 §3，与 Runner.handle 共 sessionLock。
+    const res = await this.getRunBackend().control({
+      type: 'truncateMessagesFrom',
+      sessionId,
+      fromIndex,
+    });
+    if (!res.ok) {
+      throw new Error(res.error.message);
     }
+    return res.result as {
+      messageCount: number;
+      fileEffects: import('@octopi-agent/engine').DiscardFileEffectsResult;
+    };
   }
 
   /**
@@ -3893,6 +3736,9 @@ export class Gateway {
       this.knowledgeRuntimePromise = (async () => {
         const { GatewayKnowledgeRuntime } = await import('./knowledge-runtime.js');
         const rt = new GatewayKnowledgeRuntime();
+        // 知识态镜像 ①：订阅先于 rt.start——任何迁移（含 boot 期 ready/degraded）都推送；
+        // runBackend 未起时推送安全 no-op，attach 快照 + attach 后补推封剩余窗口。
+        rt.onStateChange(() => this.pushKnowledgeStateToRun());
         const kn = this.config.knowledge;
         const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
         const { resolveKnowledgePaths, knowledgeTuningFromConfig } = await import(
@@ -3929,6 +3775,27 @@ export class Gateway {
       })();
     }
     return this.knowledgeRuntimePromise;
+  }
+
+  /**
+   * run 侧准入态推送（syncKnowledgeState 生产实现，单一出口）。
+   * 失败不让调用方崩：run 侧保留旧态，warn 显式可见不静默。
+   */
+  private pushKnowledgeStateToRun(): void {
+    const state = this.getKnowledgeState() as never;
+    try {
+      void this.runBackend?.control({ type: 'syncKnowledgeState', state }).catch((err: unknown) => {
+        console.warn(
+          '[Gateway] syncKnowledgeState failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+    } catch (err) {
+      console.warn(
+        '[Gateway] syncKnowledgeState failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   /**
@@ -4716,9 +4583,10 @@ export class Gateway {
    * @returns 健康快照
    */
   async getAgentContextHealth(agentId: string): Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth> {
-    const cached = this.runBackend.get(agentId);
-    if (cached?.contextHealth) {
-      return cached.contextHealth(agentId);
+    // run 侧探针（control contextHealth）；未装载/无探针走下方文件扫描回退（同旧语义）
+    const res = await this.getRunBackend().control({ type: 'contextHealth', agentId });
+    if (res.ok && res.result) {
+      return res.result as import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth;
     }
     const def = this.agents.get(agentId);
     if (def?.home) {
@@ -5320,22 +5188,28 @@ export class Gateway {
   private syncClientToolsToAgents(
     ops: Array<{ op: 'add'; tool: RegisteredTool } | { op: 'remove'; name: string }>,
   ): void {
-    const visibility = this.clientTools.createVisibilityFilter();
-    for (const { agent } of this.runBackend.handles()) {
-      agent.setToolVisibilityFilter(visibility);
-      if (ops.length === 0) continue;
-      const current = agent.tools;
-      let next = [...current];
-      for (const op of ops) {
-        if (op.op === 'add') {
-          next = next.filter((t) => t.name !== op.tool.definition.name);
-          next.push(registeredToolToAgentTool(op.tool));
-        } else {
-          next = next.filter((t) => t.name !== op.name);
-        }
-      }
-      agent.setTools(next);
-    }
+    // 客户端工具面随 run 节点（setClientTools wire）：definition+source 序列化（handler
+    // 不可传输，run 侧桥接回执行）；可见性谓词以快照数据化（run 侧本地求值）。
+    const wireOps = ops.map((op) =>
+      op.op === 'add'
+        ? {
+            op: 'add' as const,
+            tool: {
+              definition: op.tool.definition,
+              ...(op.tool.source === undefined ? {} : { source: op.tool.source }),
+            },
+          }
+        : { op: 'remove' as const, name: op.name },
+    );
+    void this.getRunBackend()
+      .control({
+        type: 'setClientTools',
+        ops: wireOps,
+        visibility: this.clientTools.visibilitySnapshot(),
+      })
+      .catch((err: unknown) => {
+        console.error('[Gateway] client tools sync failed:', err);
+      });
   }
 
   // ================================================================
@@ -5482,8 +5356,8 @@ export class Gateway {
       }
     }
 
-    // 3. 获取或构建执行体（经 RunBackend 挂载）并确保 Runtime 已注册 dispatcher
-    await this.ensureAgentHandle(agent);
+    // 3. 确保 Runtime 已注册远程执行腿（构建/挂载在 run 实例进程内懒建 get-or-mount）
+    this.ensureRuntimeAgent(agent);
 
     // 4–5. 经激活宿主执行（模型 A）；onEvent 做流式广播（不变量 #6）
     let finalContent = '';
@@ -5593,135 +5467,185 @@ export class Gateway {
     }
   }
 
-  /**
-   * 挂载执行体进 RunBackend（触发面归 gateway、执行面归 backend，§5.4）。
-   * 仅内联 persona 写入 defaults；文件式 persona 由 runner 的 resolver 每轮解析。
-   *
-   * @param agent - agent 定义
-   * @param built - 构建产物（buildAgent 返回）
-   * @returns gateway 侧句柄
-   */
-  private mountBuilt(
-    agent: AgentDefinition,
-    built: {
-      agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
-      runner: SessionAwareRunner;
-      contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
-      contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
-      registerTools: (tools: import('@octopi-agent/engine').RegisteredTool[]) => void;
-    },
-  ): InProcessAgentHandle {
-    const runSystemPrompt =
-      typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
-    let contextWindow = agent.model.contextWindow;
-    if (!contextWindow) {
-      const provider = this.providers.get(agent.model.provider);
-      contextWindow = provider?.getModelInfo(agent.model.model)?.contextWindow;
-    }
-    return this.runBackend.mount({
-      agentId: agent.id,
-      agent: built.agent,
-      runner: built.runner,
-      ...(built.contextEngine === undefined ? {} : { contextEngine: built.contextEngine }),
-      ...(built.contextHealth === undefined ? {} : { contextHealth: built.contextHealth }),
-      registerTools: built.registerTools,
-      // 不要把 agent 默认 model 写入 defaults：
-      // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
-      runConfigDefaults: {
-        agentId: agent.id,
-        contextWindow,
-        systemPrompt: runSystemPrompt,
-      },
-    });
-  }
+  // mountBuilt 已迁 RunAssembly.buildMountSpec（P0b：spec 组装随装配内核，挂载动作归宿主）
 
   /**
-   * 把句柄注册进激活宿主（RuntimeAgent 的执行腿 = handle.dispatcher，已含准入/in-flight 包装）。
-   * 重注册复用 handle.dispatcher（原实现每次新建 dispatcher/丢弃旧 inbox 排队项；有意收敛——
-   * 同执行体保持同一执行腿与 inbox 连续性，见 CHANGELOG）。
+   * 把远程执行腿注册进激活宿主（dispatcher = RemoteRunBackend.startRun 包装；
+   * 按 agentId 现查路由，构建/挂载在 run 实例内懒建）。稳定执行腿：热重建无需重注册。
    *
    * @param agent - agent 定义
-   * @param handle - RunBackend 句柄
    */
-  private async registerRuntimeAgent(
-    agent: AgentDefinition,
-    handle: InProcessAgentHandle,
-  ): Promise<void> {
+  private registerRuntimeAgent(agent: AgentDefinition): void {
+    if (this.runtime.listAgents().some((a) => a.agentId === agent.id)) return;
     this.runtime.registerAgent({
       agentId: agent.id,
-      dispatcher: handle.dispatcher,
+      dispatcher: {
+        execute: (req, signal) => this.remoteExecute(req, signal),
+      },
       resolveSession: (trigger) => trigger.sessionId ?? `${agent.id}:main`,
     });
   }
 
-  /**
-   * 消息路径 get-or-mount：未挂载则构建 + 挂载；并确保 Runtime 已注册 dispatcher
-   * （缓存命中但未注册的窗口，冻结原语义）。
-   *
-   * @param agent - agent 定义
-   * @returns 已挂载且已注册的句柄
-   */
-  private async ensureAgentHandle(agent: AgentDefinition): Promise<InProcessAgentHandle> {
-    const handle = await this.getOrMountHandle(agent);
-    if (!this.runtime.listAgents().some((a) => a.agentId === agent.id)) {
-      await this.registerRuntimeAgent(agent, handle);
-    }
-    return handle;
+  /** 消息路径注册（幂等）；构建/挂载由 run 实例懒建（get-or-mount 单飞在 RunHost） */
+  private ensureRuntimeAgent(agent: AgentDefinition): void {
+    this.registerRuntimeAgent(agent);
   }
 
   /**
-   * 单飞 get-or-mount：同 agent 并发首建合流为一次构建。
+   * 远程执行腿：startRun（NDJSON 事件流）；调用方 signal 中止映射 control 'abort'。
+   * 无 inbox：排队语义是 RunDispatcher 的文档化缺省（合并接续为加速优化，声明收敛）。
    *
-   * 语义基线：旧实现并发首建时缓存后写覆盖、两条消息都能跑完（代价是败者 runner
-   * 的后台 timer 泄漏）。本实现保持"并发请求全部成功"的业务语义，并消除泄漏：
-   * 竞态败者回收自己的构建产物、复用胜者句柄；其余 mount 错误如实上抛（fail-loud）。
-   *
-   * @param agent - agent 定义
-   * @returns 句柄（保证已挂载）
+   * @param req - run 请求（纯数据）
+   * @param signal - 调用方中止信号
+   * @returns 协议事件流
    */
-  private getOrMountHandle(agent: AgentDefinition): Promise<InProcessAgentHandle> {
-    const existing = this.runBackend.get(agent.id);
-    if (existing) return Promise.resolve(existing);
-    const inFlight = this.buildInFlight.get(agent.id);
-    if (inFlight) return inFlight;
-    const task = (async () => {
-      const built = await this.buildAgent(agent);
+  private remoteExecute(
+    req: import('@octopi-agent/engine/harness/activation/index.js').RunRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentEvent> {
+    const backend = this.getRunBackend();
+    const iter = backend.startRun(req);
+    if (!signal) return iter;
+    const onAbort = (): void => {
+      void backend
+        .control({ type: 'abort', sessionId: req.sessionId, reason: 'caller_aborted' })
+        .catch(() => undefined);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    return (async function* () {
       try {
-        return this.mountBuilt(agent, built);
-      } catch (err) {
-        // mount 失败回收构建产物（防后台 timer 泄漏）；竞态败者复用胜者，其余错误照抛
-        try {
-          built.runner.dispose();
-        } catch {
-          // 回收失败不掩盖原始错误
-        }
-        const winner = this.runBackend.get(agent.id);
-        if (winner) return winner;
-        throw err;
+        yield* iter;
+      } finally {
+        signal.removeEventListener('abort', onAbort);
       }
     })();
-    this.buildInFlight.set(agent.id, task);
-    const clear = (): void => {
-      if (this.buildInFlight.get(agent.id) === task) this.buildInFlight.delete(agent.id);
-    };
-    void task.then(clear, clear);
-    return task;
+  }
+
+  /** run 实例后端（未起则 fail-loud：执行腿在 gateway.start() 前不可用） */
+  private getRunBackend(): RemoteRunBackend {
+    if (!this.runBackend) {
+      throw new Error('run backend not started (gateway.start() must run first)');
+    }
+    return this.runBackend;
   }
 
   /**
-   * 控制面 get-or-mount（compact 等）：只挂载、不注册 Runtime（冻结原语义）。
+   * run 实例宿主通知出口（fork IPC）：审批桥 / 客户端工具执行腿 / 会话事件 /
+   * inbox 重投 / 命令注册 / 日志。
    *
-   * @param agentId - agent id
-   * @returns 句柄
+   * @param n - 宿主通知（纯数据）
    */
-  private async ensureBuiltForControl(agentId: string): Promise<InProcessAgentHandle> {
-    const existing = this.runBackend.get(agentId);
-    if (existing) return existing;
-    const def = this.agents.get(agentId);
-    if (!def) {
-      throw new Error(`Agent "${agentId}" not found`);
+  private async handleRunHostNotify(n: RunHostNotify): Promise<void> {
+    switch (n.type) {
+      case 'log':
+        console[n.level](n.message);
+        return;
+      case 'redispatch':
+        try {
+          await this.runtime.dispatch(n.trigger);
+        } catch (err) {
+          console.error('[Gateway] run host redispatch failed:', err);
+        }
+        return;
+      case 'session_event': {
+        const ev = n.event;
+        this.emitEvent(ev);
+        for (const adapter of this.streamingAdapters) {
+          adapter.broadcastEvent(n.sessionId, ev, (ev as { agentId?: string }).agentId);
+        }
+        return;
+      }
+      case 'approval_request': {
+        // 审批桥：gateway UI 面裁决 → control 'approvalReply' 解配对（映射单源在 run-assembly）
+        try {
+          const outcome = await this.requestApproval(n.input);
+          await this.getRunBackend().control({
+            type: 'approvalReply',
+            approvalId: n.approvalId,
+            result: approvalOutcomeToHitlAskResult(outcome),
+          });
+        } catch (err) {
+          console.error('[Gateway] approval bridge failed:', err);
+          await this.getRunBackend()
+            .control({
+              type: 'approvalReply',
+              approvalId: n.approvalId,
+              result: {
+                decision: 'deny',
+                denyDetail: err instanceof Error ? err.message : String(err),
+              },
+            })
+            .catch(() => undefined);
+        }
+        return;
+      }
+      case 'client_tool_call': {
+        // 客户端工具执行腿：原 handler（ClientToolHost 构造、闭包经 streamTransport 回客户端）
+        const tool = this.tools.find((t) => t.definition.name === n.toolName);
+        const fail = (message: string): Promise<unknown> =>
+          this.getRunBackend()
+            .control({
+              type: 'clientToolResult',
+              callId: n.callId,
+              outcome: { ok: false, error: { message } },
+            })
+            .catch(() => undefined);
+        if (!tool) {
+          await fail(`client tool "${n.toolName}" not found`);
+          return;
+        }
+        try {
+          const result = await tool.handler(n.args, {
+            sessionId: n.sessionId,
+            agentId: n.agentId,
+            messages: [],
+            abortSignal: undefined,
+          } as never);
+          await this.getRunBackend().control({
+            type: 'clientToolResult',
+            callId: n.callId,
+            outcome: { ok: true, result },
+          });
+        } catch (err) {
+          await fail(err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
+      case 'ask_user_request': {
+        // ask_user 跨通道配对：挂 pending question 等 UI 作答；回执经 control 解配对。
+        // 失败如实回 ok:false（子进程侧工具 fail-loud，不吞）。
+        void this.askUser({
+          sessionId: n.sessionId,
+          agentId: n.agentId,
+          question: n.question,
+          ...(n.options === undefined ? {} : { options: n.options }),
+        })
+          .then((answer) =>
+            this.runBackend?.control({
+              type: 'askUserReply',
+              askId: n.askId,
+              outcome: { ok: true, answer },
+            }),
+          )
+          .catch((err) =>
+            this.runBackend?.control({
+              type: 'askUserReply',
+              askId: n.askId,
+              outcome: {
+                ok: false,
+                error: { message: err instanceof Error ? err.message : String(err) },
+              },
+            }),
+          );
+        return;
+      }
+      case 'commands_registered': {
+        for (const c of n.commands) {
+          this.commandRouter.register(c.definition, c.ref);
+        }
+        return;
+      }
     }
-    return this.getOrMountHandle(def);
   }
 
   /**
@@ -5821,433 +5745,10 @@ export class Gateway {
     return this.delegationRuntime;
   }
 
-  /**
-   * 为 Agent 构建 Agent + SessionAwareRunner（新架构）
-   */
-  private async buildAgent(agent: AgentDefinition): Promise<{
-    agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
-    runner: SessionAwareRunner;
-    contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
-    contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
-    registerTools: (tools: import('@octopi-agent/engine').RegisteredTool[]) => void;
-  }> {
-    // 获取主 provider，并解析 agent 默认模型快照（含熔断包装）
-    const rawProvider = this.providers.get(agent.model.provider);
-    if (!rawProvider) {
-      throw new Error(`LLM provider "${agent.model.provider}" not found.`);
-    }
-    const defaultSnapshot = resolveModel({
-      providerName: agent.model.provider,
-      modelName: agent.model.model,
-      providers: this.providers,
-      explicit: {
-        contextWindow: agent.model.contextWindow,
-        maxOutputTokens: agent.model.maxTokens,
-      },
-      isOverride: false,
-      wrapProvider: (p, name) => wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(name)),
-    });
-    if (!defaultSnapshot) {
-      throw new Error(`LLM provider "${agent.model.provider}" not found.`);
-    }
-    const wrappedProvider: ModelProvider = defaultSnapshot.provider;
-
-    // 命名 provider 同样包 circuit breaker：wire 的 providers 映射喂 ProviderPool 与
-    // 子系统 provider/model 解析，必须与主 provider 同等待遇，不得绕过熔断
-    const wrappedProviders = new Map<string, import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider>();
-    for (const [name, p] of this.providers) {
-      wrappedProviders.set(name, wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(name)));
-    }
-
-    // 如果配置了 fallbackModels，构建 FallbackProvider（回退 provider 也包装 circuit breaker）
-    let finalProvider: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider = wrappedProvider;
-    if (agent.model.fallbackModels && agent.model.fallbackModels.length > 0) {
-      const { FallbackProvider } = await import('@octopi-agent/engine/harness/run/reliability/fallback-provider.js');
-      finalProvider = new FallbackProvider(
-        wrappedProvider,
-        agent.model.model,
-        agent.model.fallbackModels,
-        wrappedProviders,
-        {
-          attemptTtftTimeoutMs: this.config.modelCallFallbackAttemptTtftMs,
-          attemptChatTimeoutMs: this.config.modelCallFallbackChatAttemptMs,
-          degradeTtlMs: this.config.modelCallFallbackDegradeTtlMs,
-        },
-      );
-      console.log(`[Gateway] Agent "${agent.id}" fallback chain: ${[agent.model.model, ...agent.model.fallbackModels.map(f => f.model)].join(' ?')}`);
-    }
-
-    // ── 标准组装（与 config-bridge 同源）+ 宿主适配 ──
-    const { AgentBuilder } = await import('@octopi-agent/engine/harness/agent/builder.js');
-    const {
-      wireAgentBuilder,
-      resolveSecurityConfig,
-    } = await import('@octopi-agent/engine/harness/agent/wire-agent-builder.js');
-
-    const builder = new AgentBuilder()
-      .store(this.store)
-      .events(this.gatewayBus)
-      .pluginTools(this.pluginManager.getTools());
-
-    // F3/D5：observability 配置 → 观测装配（trace 落盘 + 采集意图）
-    const { wireObservability } = await import('@octopi-agent/engine/config.js');
-    await wireObservability(builder, this.config.observability, { filePrefix: agent.id });
-
-    const { existsSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
-    const pathJoinForAttachments = join;
-
-    const wired = await wireAgentBuilder(builder, {
-      model: finalProvider,
-      agentId: agent.id,
-      workspace: agent.workspace,
-      home: agent.home,
-      persona:
-        typeof agent.persona === 'object' && agent.persona?.systemPrompt
-          ? { systemPrompt: agent.persona.systemPrompt }
-          : typeof agent.persona === 'string'
-            ? agent.persona
-            : undefined,
-      skillDirectory: agent.skillDirectory,
-      skills: agent.skills,
-      tools: agent.tools,
-      maxSessionRights: agent.maxSessionRights,
-      effectPolicy:
-        (agent as { effectPolicy?: import('@octopi-agent/engine').EffectPolicyConfig }).effectPolicy ??
-        this.config.effectPolicy,
-      toolIsolation: this.config.toolIsolation,
-      sessionIdleExpiryMs: this.config.session?.idleExpiryMs,
-      modelCallTimeouts:
-        this.config.modelCallIdleTimeoutMs !== undefined ||
-        this.config.modelCallAbsoluteTimeoutMs !== undefined
-          ? {
-              idleTimeoutMs: this.config.modelCallIdleTimeoutMs,
-              absoluteTimeoutMs: this.config.modelCallAbsoluteTimeoutMs,
-            }
-          : undefined,
-      providers: wrappedProviders,
-      levelMap: this.config.levels,
-      modelsConfig: {
-        providers: this.config.modelProviders,
-        embedding: this.config.embedding,
-      },
-      contextEngineConfig: this.config.contextEngine,
-      contextAssemblerConfig:
-        this.config.context?.contextAssembler,
-      constitutionConfig:
-        this.config.context?.constitution,
-      memoryConfig: this.config.memory,
-      cognitionConfig: this.config.cognition,
-      wisdomConfig: this.config.wisdom,
-      securityConfig: resolveSecurityConfig({ security: this.config.security }),
-      budgetConfig: this.config.budgetPolicy,
-      runGuardConfig: this.config.runGuard,
-      subsystemAuditDir: this.config.subsystems?.auditDir,
-      subsystemAllowlist: this.config.subsystems?.allowlist,
-      subsystemDenylist: this.config.subsystems?.denylist,
-      concurrencyConfig: this.config.concurrency,
-      extraRunnerConfig: {
-        // ops P2：安全配置漂移守卫（daemon 锚定；漂移拒新 run）
-        securityIntegrity: this.config.securityIntegrity,
-        sessionLease: this.runBackend.sessionLock,
-        sessionAcl: this.sessionAcl,
-        sessionScheduleService: this.sessionSchedules,
-        requireCredentialBindings: this.config.credentials?.requireBindings === true,
-        observerHub: this.observerHub.isEnabled() ? this.observerHub : undefined,
-        sessionsDir: pathJoinForAttachments(getOctopiHome(), 'sessions'),
-        extensionHooks: this.pluginManager.getHookPort(),
-        sessionAttachmentInject: {
-          fullTextMaxChars: this.config.knowledge?.attachments?.inject?.fullTextMaxChars,
-          recallTopK: this.config.knowledge?.attachments?.inject?.recallTopK,
-          intent: this.config.knowledge?.attachments?.inject?.intent,
-          intentTimeoutMs: this.config.knowledge?.attachments?.inject?.intentTimeoutMs,
-          emptyMessagePrompt: this.config.knowledge?.attachments?.inject?.emptyMessagePrompt,
-        },
-      },
-      errorStrategy: {
-        onModelError: (error: { reason: string; message: string }, attempt: number) => {
-          const retryable = ['rate_limit', 'timeout', 'network', 'server'];
-          if (retryable.includes(error.reason) && attempt < 3) {
-            const delayMs = (attempt + 1) * (error.reason === 'rate_limit' ? 1000 : 2000);
-            return { action: 'retry' as const, delayMs };
-          }
-          return { action: 'abort' as const, reason: error.message };
-        },
-        onToolError: () => ({ action: 'skip' as const, reason: 'Tool failed' }),
-        onContextOverflow: () => ({ action: 'compact' as const }),
-        onSecurityViolation: (v: { description: string }) => ({
-          action: 'block' as const,
-          reason: v.description,
-        }),
-      },
-    });
-
-    // ── 宿主适配：user commands / knowledge / tools / approval ──
-    // skill 发现已由 wireAgentBuilder 完成（唯一 discover 出口）
-    if (wired.skillManager) {
-      this.registerSkillCommands(
-        wired.skillManager as import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/types.js').SkillManager,
-      );
-    }
-    if (agent.home) {
-      try {
-        this.registerUserCommands(agent.id, join(agent.home, 'commands'));
-      } catch (err) {
-        console.warn(`[Gateway] user command load failed for agent "${agent.id}": ${err instanceof Error ? err.message : String(err)}`);
-      }
-      try {
-        const { resolveEmbeddingRuntime } = await import('@octopi-agent/engine/harness/memory/sqlite/embedding-from-models.js');
-        const embRuntime = resolveEmbeddingRuntime({
-          providers: this.config.modelProviders ?? {},
-          embedding: this.config.embedding,
-        });
-        if (wired.memoryStore) {
-          const { createMemoryRestorer } = await import('@octopi-agent/engine');
-          this.memoryRestorers.set(
-            agent.id,
-            createMemoryRestorer(wired.memoryStore as never),
-          );
-        }
-        try {
-          const agentIdForCatalog = agent.id;
-          const kn = this.config.knowledge;
-          builder.knowledgeCatalog(
-            async () => {
-              try {
-                const client = await this.getKnowledgeClient();
-                const items = await client.catalog(agentIdForCatalog);
-                return items as import('@octopi-agent/engine/harness/knowledge/catalog-types.js').KnowledgeCatalogItem[];
-              } catch {
-                return [];
-              }
-            },
-            {
-              maxEntries: kn?.catalog?.maxEntries,
-              groupByScope: kn?.catalog?.groupByScope,
-              showProgress: kn?.catalog?.showProgress,
-            },
-          );
-        } catch (kErr) {
-          console.warn(
-            `[Gateway] knowledge catalog unavailable: ${kErr instanceof Error ? kErr.message : String(kErr)}`,
-          );
-        }
-        if (embRuntime?.provider) {
-          console.log(
-            `[Gateway] memory embedding enabled: model=${embRuntime.model} vectorEngine=${embRuntime.vectorEngine}`,
-          );
-        } else {
-          console.log('[Gateway] memory embedding not configured → keyword retrieval');
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[Gateway] context stores unavailable for agent "${agent.id}": ${msg}`);
-      }
-    }
-
-    console.log(`[Gateway] Building agent "${agent.id}" with ${this.tools.length} global tools: ${this.tools.map(t => t.definition.name).join(', ')}`);
-    for (const tool of this.tools) {
-      const name = tool.definition.name;
-      if (name === 'memory_store' || name === 'memory_search') continue;
-      try {
-        builder.tool(tool);
-      } catch (err) {
-        console.warn(
-          `[Gateway] tool register failed (${name}): ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-
-    try {
-      const rt = await this.getKnowledgeRuntime();
-      if (rt.state === 'disabled') {
-        console.log('[Gateway] knowledge tools skipped: knowledge.service disabled');
-      } else {
-        const kclient = await this.getKnowledgeClient();
-        const { createKnowledgeClientTools } = await import(
-          '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/knowledge.js'
-        );
-        for (const tool of createKnowledgeClientTools({ client: kclient })) {
-          builder.tool(tool);
-        }
-        console.log('[Gateway] knowledge tools via service: knowledge_search, knowledge_read');
-
-        const recall =
-          (agent as { knowledge?: { recall?: string } }).knowledge?.recall ??
-          this.config.knowledge?.recall ??
-          'hybrid';
-        if (recall !== 'off') {
-          const { ClientKnowledgeGrounding } = await import(
-            '@octopi-agent/engine/harness/knowledge/client.js'
-          );
-          const g = this.config.knowledge?.autoInject;
-          const q = this.config.knowledge?.query;
-          builder.knowledgeGrounding(
-            new ClientKnowledgeGrounding(
-              kclient,
-              recall as 'hint' | 'hybrid' | 'inject',
-            ),
-            {
-              ...(g?.budgetTokens != null ? { budgetTokens: g.budgetTokens } : {}),
-              ...(g?.budgetRatio != null ? { budgetRatio: g.budgetRatio } : {}),
-              ...(g?.maxBudgetTokens != null ? { maxBudgetTokens: g.maxBudgetTokens } : {}),
-              ...(g?.maxChunks != null ? { maxChunks: g.maxChunks } : {}),
-              ...(q?.skipIfUserTokensBelow != null
-                ? { skipIfUserTokensBelow: q.skipIfUserTokensBelow }
-                : {}),
-              ...(q?.includePriorUserTurns != null
-                ? { includePriorUserTurns: q.includePriorUserTurns }
-                : {}),
-            },
-          );
-          console.log(`[Gateway] knowledge grounding via service (recall=${recall})`);
-        }
-      }
-    } catch (kToolErr) {
-      console.warn(
-        `[Gateway] knowledge tools skipped: ${kToolErr instanceof Error ? kToolErr.message : String(kToolErr)}`,
-      );
-    }
-
-    builder.confirmEffect(async (intent) => {
-      const { getRunScope } = await import('@octopi-agent/engine/harness');
-      const scope = getRunScope();
-      // 无 run scope ≠ 人工拒绝：带来源标注回给引擎（错误面不得冒充人工拒绝）
-      if (!scope?.sessionId) return { decision: 'deny', reason: 'no_session_scope' };
-      const sessionId = scope.sessionId;
-      const agentId = scope.agentId ?? 'default';
-      const desc =
-        intent.kind === 'shell'
-          ? `shell: ${String(intent.command ?? '').slice(0, 120)}`
-          : intent.kind === 'file.write'
-            ? `write ${intent.path} (${intent.mode ?? 'overwrite'})`
-            : (intent.description ?? intent.kind);
-      return this.requestApproval({
-        sessionId,
-        agentId,
-        request: {
-          kind: 'effect',
-          toolName: intent.kind,
-          arguments: {
-            path: intent.path,
-            command: intent.command,
-            mode: intent.mode,
-            cwd: intent.cwd,
-            domain: intent.domain,
-            description: intent.description,
-          },
-          riskLevel: intent.kind === 'shell' ? 'high' : 'medium',
-          riskDescription: desc,
-          actionDescription: desc,
-        },
-        // 引擎确认窗原样作为卡片决策截止（deadlineAt）与 settle 时刻——引擎 askWithTimeout
-        // 先注册必先定案，超时标签如实是 confirm_timeout；窗口后的点击只得 rejected/late
-        ...(intent.timeoutMs !== undefined ? { timeoutMs: intent.timeoutMs } : {}),
-      });
-    });
-
-    builder.confirmHighRisk(async (req) => {
-      if (!req.sessionId) return 'deny';
-      const sessionId = req.sessionId;
-      const agentId = req.agentId ?? 'default';
-      const toolName = req.toolCall?.name ?? 'tool';
-      const args = (req.toolCall?.arguments ?? {}) as Record<string, unknown>;
-      const purpose = typeof args.purpose === 'string' ? args.purpose.trim() : '';
-      const outcome = await this.requestApproval({
-        sessionId,
-        agentId,
-        request: {
-          kind: 'high_risk',
-          toolName,
-          arguments: args,
-          riskLevel: normalizeRiskLevel(req.severity),
-          riskDescription: req.reason,
-          actionDescription: purpose ? `${toolName}: ${purpose}` : toolName,
-        },
-      });
-      // high_risk 契约只认决策；确认人归因随审批记录走（PendingApprovalView）
-      return typeof outcome === 'string' ? outcome : outcome.decision;
-    });
-
-    builder.observerHub(this.observerHub.isEnabled() ? this.observerHub : undefined);
-    const built = await builder.build();
-    built.runner.setObserverHub(this.observerHub.isEnabled() ? this.observerHub : undefined);
-    const agentToolNames = built.agent.context.tools
-      ?.map((t: any) => t?.definition?.name ?? t?.name)
-      .filter(Boolean) ?? [];
-    const hasMemoryTools = agentToolNames.includes('memory_store') && agentToolNames.includes('memory_search');
-    console.log(
-      `[Gateway] Agent "${agent.id}" tools: ${agentToolNames.join(', ') || '(none)'}` +
-        (hasMemoryTools ? ' [memory_store/search OK]' : ' [memory_store/search MISSING]'),
-    );
-
-    // ── Run 级模型快照解析（方案 B 唯一入口）──
-    // 每 run 调一次；provider 缺失返回 null，Runner 回退 Agent 实例默认
-    const wrap = (p: ModelProvider, providerName: string) =>
-      wrapProviderWithCircuitBreaker(p, this.getCircuitBreaker(providerName));
-
-    built.runner.setModelResolver(({ modelRef, defaultProvider }) => {
-      const agentDef = this.agents.get(agent.id) ?? agent;
-      if (!modelRef) {
-        return resolveModel({
-          providerName: agentDef.model.provider,
-          modelName: agentDef.model.model,
-          providers: this.providers,
-          explicit: {
-            contextWindow: agentDef.model.contextWindow,
-            maxOutputTokens: agentDef.model.maxTokens,
-          },
-          isOverride: false,
-          wrapProvider: wrap,
-        });
-      }
-      return resolveModelRef(modelRef, {
-        providers: this.providers,
-        defaultProvider: defaultProvider ?? agentDef.model.provider,
-        isOverride: true,
-        wrapProvider: wrap,
-      });
-    });
-
-    // 会话任务事件 → WebSocket（UI 只读实时面板）
-    const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown; agentId?: string }) => {
-      if (!event.sessionId) return;
-      for (const adapter of this.streamingAdapters) {
-        adapter.broadcastEvent(event.sessionId, event as any, event.agentId);
-      }
-    };
-    for (const type of ['session.task.created', 'session.task.updated', 'session.task.snapshot']) {
-      built.events.on(type, forwardTaskEvent);
-    }
-
-    // Client Tool 会话可见性：无 live client 的 tool 不进该 session 的 LLM tool 面
-    built.agent.setToolVisibilityFilter(this.clientTools.createVisibilityFilter());
-
-    // 委派编排（arch/delegation.md §7/§14）：惰性构建，attach 后该 agent 可被委派/可发委派。
-    // notify 通道：接收端 AgentSignalSource 默认随委派接线补挂（ensureDelegationRuntime），
-    // 与 notifier 同源同生命周期；显式 agentSignal:false 时退化为 poll + 状态提示。
-    // TODO(P0b): 子 run 绕过 RunBackend 契约（RunnerChildRunPort 持裸 runner，child-run 直调
-    // runner.handle）——退役判据（in-flight）看不见子 run，且契约缝在此漏出。P0b 删脚手架前
-    // 必须把子 run 收口到契约（arch/service-topology.md §9 已注记债务）。
-    (await this.ensureDelegationRuntime())?.attach({
-      agentId: agent.id,
-      agent: built.agent,
-      runner: built.runner,
-      store: this.store,
-      traits: agent.traits,
-      delegation: agent.delegation,
-      persona: typeof agent.persona === 'string' ? agent.persona : undefined,
-      registerTools: built.registerTools,
-    });
-
-    return {
-      agent: built.agent,
-      runner: built.runner,
-      contextEngine: built.contextEngine,
-      contextHealth: built.contextHealth,
-      registerTools: built.registerTools,
-    };
+  // buildAgent 内核已迁 RunAssembly（P0b：装配内核单一来源；面接线经 assembly hooks）。
+  // 本委托方法保留为测试缝（gateway-plugin-tool / gateway-run-backend 直调或 spyOn）。
+  private async buildAgent(agent: AgentDefinition): Promise<import('./run-assembly.js').RunAssemblyResult> {
+    return this.assembly.buildAgent(agent);
   }
 
   private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {

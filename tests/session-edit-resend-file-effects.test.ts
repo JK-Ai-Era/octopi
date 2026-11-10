@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, readFile, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { RunHost } from '@octopi-agent/engine/harness/run/run-host.js';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
@@ -63,6 +64,30 @@ describe('edit-resend file effects (L3)', () => {
       } as unknown as GatewayConfig,
       store,
     );
+    // P0b：截断语义在 RunHost（会话写者单点）。测试经传输缝注入 control 直达本地内核
+    // （HTTP hop 由协议 e2e 覆盖）；行为实现唯一——RunHost，无双实现矩阵。
+    const host = new RunHost({
+      redispatch: () => undefined,
+      sessionWriter: {
+        load: async (sid) => (await store.load(sid)) ?? undefined,
+        save: async (sid, s) => store.save(sid, s),
+        patchMetadata: async (sid, updater) => {
+          await store.updateMetadata(sid, updater as never);
+        },
+        discardFileUndo: async (sid, agentId) => {
+          const { discardSessionFileUndo } = await import('@octopi-agent/engine');
+          const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+          return discardSessionFileUndo(
+            join(getOctopiHome(), 'sessions'),
+            sid,
+            (gateway as never as { memoryRestorers: Map<string, unknown> }).memoryRestorers.get(agentId) as never,
+          );
+        },
+      },
+    });
+    (gateway as never as { runBackend: unknown }).runBackend = {
+      control: (op: never) => host.handleControl(op),
+    };
   });
 
   afterEach(async () => {

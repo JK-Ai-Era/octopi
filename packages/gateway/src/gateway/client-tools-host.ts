@@ -99,6 +99,9 @@ export class ClientToolHost {
   private recentTerminal: ClientToolCall[] = [];
   private static readonly RECENT_TERMINAL_MAX = 100;
 
+  /** 可见性周期刷新 timer（M2-5；unref，不赖进程退出） */
+  private refreshTimer?: ReturnType<typeof setInterval>;
+
   constructor(deps: ClientToolHostDeps) {
     this.deps = deps;
   }
@@ -114,6 +117,58 @@ export class ClientToolHost {
       if (!this.installed.has(toolName)) return true;
       return this.deps.registry.hasLiveProvider(sessionId, toolName);
     };
+  }
+
+  /**
+   * 可见性快照（createVisibilityFilter 谓词的数据化）：随 setClientTools 同步给
+   * run 实例，run 侧本地求值（stale 窗口 = 推送间隔，已声明收敛）。
+   *
+   * @returns 快照（安装名 + live 对）
+   */
+  visibilitySnapshot(): {
+    installed: string[];
+    live: Array<{ sessionId: string; toolName: string }>;
+    expiresAt: number;
+  } {
+    const installed = [...this.installed.keys()];
+    return {
+      installed,
+      live: this.deps.registry.livePairs(installed),
+      // 有效期 = provider live TTL（刷新间隔的 ~3 倍：容忍两次刷丢才失效）
+      expiresAt: Date.now() + (this.deps.providerLiveTtlMs ?? 90_000),
+    };
+  }
+
+  /**
+   * 可见性周期刷新（M2-5）：TTL 过期是「心跳缺失」的缺因态——没有事件可挂，
+   * 生产者只能是时间刷。diff 后推送（无变化不打扰 wire）；空 ops = 纯可见性刷。
+   */
+  startVisibilityRefresh(): void {
+    if (this.refreshTimer) return;
+    const ttl = this.deps.providerLiveTtlMs ?? 90_000;
+    const interval = Math.max(5_000, Math.floor(ttl / 3));
+    let last = '';
+    this.refreshTimer = setInterval(() => {
+      try {
+        const snap = this.visibilitySnapshot();
+        const key = JSON.stringify({ i: snap.installed, l: snap.live });
+        if (key === last) return;
+        last = key;
+        this.deps.syncAgentTools([]);
+      } catch {
+        // 刷失败不打断主路径（下一拍再试）
+      }
+    }, interval);
+    // 不赖进程退出（vitest 收尾卫生；生产由 stop 兜底）
+    this.refreshTimer.unref?.();
+  }
+
+  /** 停止周期刷新（gateway 停机时调用） */
+  stopVisibilityRefresh(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
   }
 
   /** 心跳续期；可顺带踢掉过期 provider */

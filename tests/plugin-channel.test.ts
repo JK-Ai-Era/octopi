@@ -699,12 +699,14 @@ describe('Gateway channel lifecycle — startup buffer + reverse stop (P5b revie
         name: 'chan-a',
         // 通道先于 gateway readiness 收到消息（真实场景：后启动通道仍在握手）
         start: async (handler) => { await handler(inbound); },
-        send: async () => {},
+        // 失败触发点随远程执行腿迁移：run 失败落 dispatchResult.status='failed'
+        //（[Gateway Error] 覆盖正文、不抛出），回放循环的 catch 面由发送段失败命中——
+        // 语义锚不变：缓冲→按序回放→单条失败逐条记录且不阻断其余。
+        send: async () => { throw new Error('im downstream unavailable'); },
         stop: async () => {},
       });
       await gateway.start();
-      // 缓冲已回放（不再排队）；消息到达全链（本用例无真实模型 →
-      // 回放在业务段失败并被逐条记录，这正是“已回放”的直接证据）
+      // 缓冲已回放（不再排队）；消息到达全链（发送段失败 → 逐条记录，即"已回放"的直接证据）
       expect((gateway as unknown as { pendingInbound: ChannelMessage[] }).pendingInbound).toHaveLength(0);
       expect(
         error.mock.calls.some((c) => String(c[0]).includes('Queued inbound message') && String(c[0]).includes('failed after startup')),

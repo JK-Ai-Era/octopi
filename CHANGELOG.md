@@ -115,6 +115,118 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.107.0 (2026-11-10)
+
+### feat(gateway): P0b run-instance process split — RemoteRunBackend as the sole run backend
+
+The execution plane moves out of the gateway process. A `run-serve-child` instance
+(fork + pure-data boot file + loopback HTTP NDJSON contract channel + fork-IPC host
+notifications) now hosts the full execution assembly (providers, plugin host,
+session-store writer, `RunAssembly`, `RunHost`, delegation). `RemoteRunBackend` is the
+sole `RunBackend` implementation and `InProcessRunBackend` is deleted; the contract
+surface is `startRun` / `control` / `health` (`stop` is lifecycle). The run instance
+keeps zero resident trigger surfaces (no `AgentRuntime`/`TriggerSource`; schedules open
+store-only) — trigger/execution face separation per arch/service-topology.md §4/§5.4.
+
+- **S1 closed**: delegated child runs execute through the same execution leg
+  (`activation/delegated-run.ts` → `host.startRun`, admission gate + in-flight counting +
+  abort), so retire judgment sees child runs; `attach`/`child-run` no longer hold a bare
+  runner. `RunRequest` gains per-run `systemPrompt`/`rightsCeiling` (D3 stays
+  tighten-only: the Runner intersects with the template ceiling) and `startRun` accepts
+  an external abort signal (D4 projection).
+- **S2 closed**: `buildAgent` assembly kernel extracted into `RunAssembly`; face wiring
+  (approval / commands / memory / delegation) goes through hooks.
+- **Tool face follows the execution node** (§10): global tools assemble at the run
+  instance via `integration/tools/assemble.ts` — the single source shared with the CLI
+  daemon (its inline assembly is removed; `resolveSummaryToolBindings` moved into engine).
+  `GatewayConfig`/`toGatewayConfig` carry `summary`/`webSearch` for run-node assembly.
+  `ask_user` crosses the boundary as a notify/control pair (`ask_user_request` /
+  `askUserReply`, two-state outcome; failure rejects so the tool fails loud).
+- Session retrieval projection (`sessions.index.db`) attaches to the run node's store
+  (the writer side); index loss degrades to scan-only search with an explicit warning.
+
+### fix(gateway): process-split correctness (independent-review blockers/majors)
+
+- Global tools were silently absent in remote mode (production agents saw only builder
+  tools) — assembly now runs at the run node via the shared factory (above).
+- `SessionScheduleService.open()` unconditionally re-armed schedules and started the
+  tick, and `set`/`update`/`resume` re-armed through `arm()`: a run node consumed due
+  jobs through an empty wakeup with bookkeeping already advanced. `arm` is now a
+  first-class service state (`open({arm:false})` gates arming everywhere); the trigger
+  face stays solely at the gateway (its 60s fallback tick picks up run-created jobs
+  from the shared store). Regression anchor covers the silent-consumption shape.
+- Client tools registered before the first mount were dropped (ops applied to mounted
+  agents only). `RunHost` keeps a live registry and replays it at mount.
+- Visibility freshness contract: `ClientToolVisibilitySnapshot` carries `expiresAt`;
+  the gateway refreshes with periodic diff-pushes (TTL lapse is heartbeat-absence —
+  a time-based state has no event to hook, so the producer is a timer) and the run
+  side fails safe to hidden once a snapshot expires (unknown liveness → not visible).
+- Knowledge admission-state mirror is a three-segment contract (source-point
+  subscribe before runtime start → attach snapshot → post-attach sync): runtime
+  transitions (degrade / self-heal) now reach the run-side gate instead of freezing
+  on the boot snapshot.
+- `syncKnowledgeState` had no producer at all before: `knowledge.required` could
+  refuse every run while the panel showed ready (or stay pinned after self-heal).
+- Runtime-added/rebuilt agents never registered skill/user commands at the command
+  router (empty hooks) — discovery results flow via `commands_registered` now (hook
+  signature carries `agentId`).
+- Session-index projection has a single writer now (the run node's store — the §3
+  session writer); the gateway-side store no longer projects. Gateway's residual
+  write paths skip projection until §9.6 lands (registered debt).
+- The knowledge admission gate closure is a single-source factory
+  (`makeKnowledgeAdmissionGate`) shared by run-serve-child and tests; daemon's dead
+  inline assembly blocks (and their fake-success log) are removed.
+- `startRun` synchronous throws leaked the abort controller/listener into `activeRuns`.
+- Manual-compact events lost Observer Hub ingestion (F22) and drifted the event
+  `data` envelope; the Hub seam now records honestly (see Known debt for the
+  cross-process observer gap).
+
+### Intentional convergences (declared, not deferred)
+
+1. No-inbox execution leg is the documented default: `RunDispatcher` keeps the original
+   trigger queueing semantics remotely; inbox merge is an in-process optimization only.
+2. Client-tool visibility snapshots may lag by one push interval; the wire carries
+   `expiresAt` and an expired snapshot fails safe to hidden (unknown liveness → tool
+   not visible).
+3. Runner-side hook observations cross the process boundary as shared-file writes
+   (`globalThis` cannot); tests observe via the shared store.
+4. Test transport seam: `control` reaches the local kernel directly; the HTTP hop is
+   covered by the protocol e2e (run-remote-backend).
+5. Circuit breakers are per-process (no cross-process breaker state in this phase).
+6. Schedules dual-instance transition: ticking/rearm live only at the gateway.
+
+### Known debt (registered, not fixed here)
+
+- Agent-subsystem timers (backfill, memory health probe) are per-run-node; multi-instance
+  de-duplication rides the P0c lease work.
+- Gateway retains whole-package session writes at five call sites plus
+  `patchSessionMetadata`; the §3 single-writer invariant is not fully established across
+  processes — routed with the session service (arch/service-topology.md §9.6). Gateway
+  residual writes therefore skip the session-index projection (run node owns it);
+  zero-message sessions arrive in search at the next boot reconciliation.
+- Cross-process Observer gap: run-node observations land in the run node's ObserverHub
+  (exporter sink) — the gateway's in-memory timeline does not cover run events; the UI
+  live view rides WS. Face ownership rides the P1 observer/service split.
+- `RunBackend` type still carries P0a scaffold surface (mount/handle face); the
+  client-contract type split rides P1.
+- Minor review items (stream terminal-state validation, client-tool bridge payload
+  narrowing, boot-file permission hardening, `/runs` backpressure/disconnect handling,
+  shutdown awaiting) are tracked in arch/open-problems.md.
+- vitest run exit shows a `close timed out` warning (phantom FILEHANDLEs on some
+  multi-test files); lsof confirms zero OS-level FD leak — test-exit hygiene only.
+
+**Verification**: three-package tsc green; full suite 434 files / 4526 tests green
+(incl. new anchors for delegated-leg mapping, per-run overrides, external abort signal,
+client-tool replay); lint green (typecheck-tests 0 new). Two independent review rounds
+(P0b body, then the fix face); every accepted finding is fixed or declared above.
+
+**Breaking notes**: `InProcessRunBackend` is removed (internal scaffold, no external
+consumers); `resolveSummaryToolBindings` now lives in engine (daemon re-export kept);
+`RunRequest` gained optional `systemPrompt`/`rightsCeiling` fields and `RunControlOp`/
+`RunHostNotify` gained the `askUserReply`/`ask_user_request` pair (additive).
+
+---
+
 ## v0.106.1 (2026-11-10)
 
 ### refactor(gateway): extract RunBackend contract seam (P0a, behavior-frozen)

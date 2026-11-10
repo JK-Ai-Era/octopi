@@ -104,6 +104,10 @@ export interface GatewayConfig {
   knowledge?: import('@octopi-agent/engine/config.js').HarnessConfig['knowledge'];
   /** 公用能力 documents（DocumentPort 读抽取） */
   documents?: import('@octopi-agent/engine/config.js').HarnessConfig['documents'];
+  /** 公用能力 summary（L1/L2 压缩；全局工具面装配用，§10 tool 面随执行节点） */
+  summary?: import('@octopi-agent/engine/config.js').HarnessConfig['summary'];
+  /** web search（web_search 工具面装配用） */
+  webSearch?: import('@octopi-agent/engine/config.js').HarnessConfig['webSearch'];
   /** models.embedding — 向量检索配置（memory 等共用） */
   embedding?: import('@octopi-agent/engine/config.js').EmbeddingModelConfig;
   /** models.providers — 供 embedding 继承 baseUrl/apiKey */

@@ -210,7 +210,7 @@ describe('file_search L1 output cap', () => {
     for (let i = 0; i < 60; i++) text += `hitme row ${String(i).padStart(2, '0')} ${'y'.repeat(140)}\n`;
     await writeFile(join(tmpDir, 'many.txt'), text);
 
-    // 与 daemon 接线同路径：config.summary.tools → resolveSummaryToolBindings → support.toolBindings
+    // 与 assemble-global-tools 装配工厂同路径（daemon 与 run 节点共用单源）：
     const toolBindings = resolveSummaryToolBindings({
       maxReturnChars: 5000,
       file_search: { maxReturnChars: 1200 },

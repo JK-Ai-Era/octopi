@@ -509,3 +509,33 @@ describe('schedule_* / timer_* tools', () => {
     expect(fired).toHaveLength(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// BLK-1 回归锚（P0b 修复面评审）：store-only（arm:false，执行面）不得点火/自消费。
+// set/update/resume 经 arm() 一等状态短路；到期作业留给 gateway 的兜底 tick
+//（触发面唯一在 gateway）。本锚穿过一次真实事故：arm 只堵 open() 时，schedule_set
+// 创建的作业被 run 节点经空 wakeup 静默消费（记账推进、无人接）。
+// ─────────────────────────────────────────────────────────────
+
+describe('SessionScheduleService — store-only（执行面 arm:false）', () => {
+  it('到期作业不被本地消费：wakeup 不触发且作业保持 active', async () => {
+    const firedStoreOnly: string[] = [];
+    const svc = new SessionScheduleService({
+      dbPath: ':memory:',
+      wakeup: () => {
+        firedStoreOnly.push('wakeup');
+      },
+    });
+    await svc.open({ arm: false });
+    const s = await svc.set({
+      sessionId: 's1',
+      agentId: 'a1',
+      delay: '0.05s',
+      payload: { delivery: 'wakeup', text: 'do it' },
+    } as never);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(firedStoreOnly).toEqual([]);
+    expect(svc.get(s.id)?.status).toBe('active');
+    svc.dispose();
+  });
+});

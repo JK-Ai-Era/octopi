@@ -13,9 +13,9 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   Gateway,
   knowledgeRequiredAdmissionError,
+  makeKnowledgeAdmissionGate,
 } from '@octopi-agent/gateway/gateway/gateway.js';
-import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
-import type { InProcessRunBackend } from '@octopi-agent/gateway/gateway/run-backend.js';
+import { RunHost } from '@octopi-agent/engine/harness/run/run-host.js';
 
 describe('knowledgeRequiredAdmissionError', () => {
   it('required=true + ready → admits (undefined)', () => {
@@ -36,22 +36,14 @@ describe('knowledgeRequiredAdmissionError', () => {
   });
 });
 
-describe('dispatcher 咽喉接线（InProcessRunBackend 执行腿）', () => {
-  function gatewayWithKnowledge(state: 'ready' | 'degraded'): {
-    backend: InProcessRunBackend;
+describe('dispatcher 咽喉接线（RunHost 执行腿）', () => {
+  function hostWithKnowledge(state: 'ready' | 'degraded'): {
+    backend: RunHost;
     runner: {
       handle: ReturnType<typeof vi.fn>;
       recordAdmissionRefusal: ReturnType<typeof vi.fn>;
     };
   } {
-    const gw = new Gateway(
-      { agents: [], knowledge: { required: true } } as unknown as GatewayConfig,
-      // 显式假 store：不走 createDefaultStore——那会触碰真实 OCTOPI_HOME/sessions，
-      // 且其动态 import 尾巴会拖过测试环境拆除（unhandled rejection）
-      { load: async () => undefined, save: async () => undefined } as never,
-    );
-    // getKnowledgeState() 的真实来源：runtime ref 优先，其次 bootState
-    (gw as never as { knowledgeRuntimeRef?: unknown }).knowledgeRuntimeRef = { state };
     const runner = {
       handle: vi.fn(() =>
         (async function* () {
@@ -60,8 +52,12 @@ describe('dispatcher 咽喉接线（InProcessRunBackend 执行腿）', () => {
       ),
       recordAdmissionRefusal: vi.fn(),
     };
-    // gateway 私有 runBackend（P0a 契约缝实例）：闸门闭包是生产 wiring，不另造
-    const backend = (gw as never as { runBackend: InProcessRunBackend }).runBackend;
+    // 准入闸门闭包 = 生产单源工厂（makeKnowledgeAdmissionGate；包装形状不再手抄，
+    // 与 run-serve-child 同一实现——政策函数已被上组锚定）
+    const backend = new RunHost({
+      redispatch: () => undefined,
+      admissionGate: makeKnowledgeAdmissionGate(true, () => state),
+    });
     backend.mount({
       agentId: 'a1',
       agent: {} as never,
@@ -83,7 +79,7 @@ describe('dispatcher 咽喉接线（InProcessRunBackend 执行腿）', () => {
   } as never;
 
   it('知识未 ready：run 在咽喉被拒（错误带前缀，Runner 不被触达）+ 三件套记账', async () => {
-    const { backend, runner } = gatewayWithKnowledge('degraded');
+    const { backend, runner } = hostWithKnowledge('degraded');
     const iter = backend.execute(runReq);
     await expect(
       (async () => {
@@ -106,7 +102,7 @@ describe('dispatcher 咽喉接线（InProcessRunBackend 执行腿）', () => {
   });
 
   it('知识 ready：run 正常透达 Runner（不记账）', async () => {
-    const { backend, runner } = gatewayWithKnowledge('ready');
+    const { backend, runner } = hostWithKnowledge('ready');
     const events: unknown[] = [];
     for await (const ev of backend.execute(runReq)) events.push(ev);
     expect(events).toEqual(['run-event']);

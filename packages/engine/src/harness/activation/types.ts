@@ -6,6 +6,7 @@
 
 import type { Message } from '@octopi-agent/core/types.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
+import type { SessionRights } from '../governance/session-acl/types.js';
 
 // ── Trigger ──
 
@@ -85,6 +86,13 @@ export interface RunRequest {
   modelOverride?: string;
   /** modelOverride 为裸名时的 provider */
   modelProvider?: string;
+  /**
+   * per-run systemPrompt 覆盖（委派子 run：模板 persona + 编排指令，delegation §9.4）。
+   * 显式值覆盖挂载默认；缺省沿用挂载体 defaults。
+   */
+  systemPrompt?: string;
+  /** per-run 权利天花板（D3：只能收紧不能放宽；Runner 与模板天花板取交集） */
+  rightsCeiling?: SessionRights;
   /** Principal / Intent 字段位（宪法 I6）；宿主填充，引擎不做权限 NLU */
   actorId?: string;
   actorType?: 'host' | 'user' | 'agent' | 'service' | 'timer' | 'subsystem';

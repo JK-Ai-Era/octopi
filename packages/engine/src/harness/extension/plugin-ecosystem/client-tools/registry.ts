@@ -184,6 +184,33 @@ export class ClientToolRegistry {
     return false;
   }
 
+  /**
+   * 快照枚举：live provider 覆盖的 (session, tool) 对。
+   * 可见性谓词数据化（ClientToolVisibilitySnapshot）的数据源；run 侧本地求值。
+   *
+   * @param toolNames - 关心的工具名（通常是已安装客户端工具全集）
+   * @param now - 可选时间点（测试用）
+   * @returns live 对列表
+   */
+  livePairs(
+    toolNames: ClientToolName[],
+    now?: number,
+  ): Array<{ sessionId: string; toolName: ClientToolName }> {
+    const ts = this.at(now);
+    this.expireStaleProviders(ts);
+    const wanted = new Set(toolNames);
+    const pairs: Array<{ sessionId: string; toolName: ClientToolName }> = [];
+    for (const [sessionId, providers] of this.bySession) {
+      for (const p of providers.values()) {
+        if (!this.isLive(p, ts)) continue;
+        for (const d of p.descriptors) {
+          if (wanted.has(d.name)) pairs.push({ sessionId, toolName: d.name });
+        }
+      }
+    }
+    return pairs;
+  }
+
   /** 全局是否仍有任一 live provider（决定能否 uninstall） */
   hasAnyProvider(name: ClientToolName, now?: number): boolean {
     const ts = this.at(now);

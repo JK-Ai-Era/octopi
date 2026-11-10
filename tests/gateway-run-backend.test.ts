@@ -2,15 +2,13 @@
  * RunBackend 脚手架（P0a）行为锚：挂载语义 / 退役回收判据 / in-flight 计数 /
  * 并发首建单飞（B1）。
  *
- * 这些行为自 gateway.ts 迁入 InProcessRunBackend（P0a 契约缝抽取）。独立评审
+ * 这些行为自 gateway.ts 迁入 RunHost（P0a 契约缝抽取）。独立评审
  * （2026-11-10）确认原搬迁无任何测试锚点（T1/T2/T3），本文件补齐：
  * 退役判据是"行为冻结"里唯一带时间常量的段（5s 重查 / 30min 强制兜底），
  * 必须锚死；并发首建是 blocker B1 的回归锚。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { InProcessRunBackend } from '@octopi-agent/gateway/gateway/run-backend.js';
-import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
-import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
+import { RunHost } from '@octopi-agent/engine/harness/run/run-host.js';
 
 interface FakeRunner {
   handle: ReturnType<typeof vi.fn>;
@@ -42,8 +40,8 @@ function runReq(): never {
   } as never;
 }
 
-function backendWith(runner: FakeRunner): InProcessRunBackend {
-  const backend = new InProcessRunBackend({ redispatch: () => undefined });
+function backendWith(runner: FakeRunner): RunHost {
+  const backend = new RunHost({ redispatch: () => undefined });
   backend.mount({
     agentId: 'a1',
     agent: {} as never,
@@ -61,7 +59,7 @@ afterEach(() => {
 
 describe('挂载语义（fail-loud）', () => {
   it('同 agentId 重复 mount 抛 already mounted（防旧 Runner 泄漏）', () => {
-    const backend = new InProcessRunBackend({ redispatch: () => undefined });
+    const backend = new RunHost({ redispatch: () => undefined });
     const spec = {
       agentId: 'a1',
       agent: {} as never,
@@ -74,9 +72,9 @@ describe('挂载语义（fail-loud）', () => {
   });
 
   it('未挂载 execute/compactSession 同步抛错（fail-loud，不静默空转）', () => {
-    const backend = new InProcessRunBackend({ redispatch: () => undefined });
+    const backend = new RunHost({ redispatch: () => undefined });
     expect(() => backend.execute(runReq())).toThrow(/not mounted/);
-    expect(() => backend.compactSession('s1', 'a1', {} as never)).toThrow(/not mounted/);
+    expect(() => backend.compactSession('s1', 'a1')).toThrow(/not mounted/);
   });
 });
 
@@ -174,39 +172,91 @@ describe('in-flight 计数（退役判据的账）', () => {
 });
 
 describe('并发首建单飞（B1 回归锚）', () => {
-  it('两条并发 ensureAgentHandle 只构建一次、共享句柄、无抛错', async () => {
-    const gw = new Gateway(
-      { agents: [], knowledge: {} } as unknown as GatewayConfig,
-      { load: async () => undefined, save: async () => undefined } as never,
-    );
+  it('两条并发 ensureMounted 只构建一次、共享句柄、无抛错', async () => {
     const runner = fakeRunner();
-    const built = {
-      agent: { context: {} },
-      runner,
-      contextEngine: undefined,
-      contextHealth: undefined,
+    const spec = {
+      agentId: 'a1',
+      agent: { context: {} } as never,
+      runner: runner as never,
       registerTools: () => undefined,
+      runConfigDefaults: {},
     };
-    const gwr = gw as unknown as {
-      buildAgent: (a: unknown) => Promise<unknown>;
-      ensureAgentHandle: (a: unknown) => Promise<{ agentId: string }>;
-      runtime: { listAgents(): Array<{ agentId: string }> };
-    };
-    const buildSpy = vi
-      .spyOn(gwr, 'buildAgent')
-      .mockImplementation(async () => built);
-    const def = {
-      id: 'a1',
-      persona: 'inline',
-      model: { provider: 'p', model: 'm', contextWindow: 1000 },
-    } as never;
+    const buildSpec = vi.fn(async () => spec);
+    const host = new RunHost({
+      redispatch: () => undefined,
+      buildMountSpec: buildSpec,
+    });
+    const def = { id: 'a1' } as never;
     const [h1, h2] = await Promise.all([
-      gwr.ensureAgentHandle(def),
-      gwr.ensureAgentHandle(def),
+      host.ensureMounted('a1', def),
+      host.ensureMounted('a1', def),
     ]);
     // 旧实现此处为缓存后写覆盖（两条都成功但败者 timer 泄漏）；新实现合流为一次构建
-    expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(buildSpec).toHaveBeenCalledTimes(1);
     expect(h1).toBe(h2);
-    expect(gwr.runtime.listAgents().map((a) => a.agentId)).toContain('a1');
+    expect(host.mountedAgentIds()).toContain('a1');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// S1 收口锚（arch/service-topology.md §9.5）：RunRequest per-run 覆盖
+//（委派 systemPrompt / D3 rightsCeiling）与 startRun 外部中止信号（D4 投影）。
+// ─────────────────────────────────────────────────────────────
+
+describe('startRun per-run 覆盖（委派 systemPrompt / D3 rightsCeiling）', () => {
+  it('显式覆盖进 runConfig；缺省沿用挂载默认', async () => {
+    const captured: Array<Record<string, unknown>> = [];
+    const runner = fakeRunner(((_s: string, _i: unknown, config: Record<string, unknown>) => {
+      captured.push(config);
+      return (async function* () {
+        yield 'run-event';
+      })();
+    }) as never);
+    const backend = new RunHost({ redispatch: () => undefined });
+    backend.mount({
+      agentId: 'a1',
+      agent: {} as never,
+      runner: runner as never,
+      registerTools: () => undefined,
+      runConfigDefaults: { systemPrompt: 'mount-prompt' },
+    } as never);
+    const overrideReq = {
+      ...(runReq() as Record<string, unknown>),
+      systemPrompt: 'child-prompt',
+      rightsCeiling: { tools: ['read'] },
+    } as never;
+    for await (const _ of backend.startRun(overrideReq)) {
+      // 消费完
+    }
+    for await (const _ of backend.startRun(runReq())) {
+      // 消费完
+    }
+    expect(captured[0]?.systemPrompt).toBe('child-prompt');
+    expect(captured[0]?.rightsCeiling).toEqual({ tools: ['read'] });
+    expect(captured[1]?.systemPrompt).toBe('mount-prompt');
+  });
+});
+
+describe('startRun 外部中止信号（委派 D4 本地投影）', () => {
+  it('外部 signal 合流到 run 的 controller（run 内可见 abort）', async () => {
+    const observed: string[] = [];
+    const runner = fakeRunner(((_s: string, _i: unknown, _c: unknown, signal?: AbortSignal) => {
+      return (async function* () {
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) resolve();
+          else signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        observed.push('aborted');
+        yield 'after-abort';
+      })();
+    }) as never);
+    const backend = backendWith(runner);
+    const ctrl = new AbortController();
+    const stream = backend.startRun(runReq(), ctrl.signal);
+    const iter = stream[Symbol.asyncIterator]();
+    const first = iter.next();
+    ctrl.abort('stop');
+    expect((await first).value).toBe('after-abort');
+    expect(observed).toEqual(['aborted']);
   });
 });

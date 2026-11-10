@@ -9,9 +9,9 @@
  * - P0a：InProcessRunBackend（gateway 包内，进程内脚手架，P0b 后删除）；
  * - P0b 起：RemoteRunBackend（进程间唯一实现）。
  *
- * P0b 迁移注记（已知债务，勿在本契约上继续加函数型参数）：
- * compactSession 的 options 含回调（compactStructural / summarize），远程化时
- * 这些回调须改为 run 实例侧解析的纯数据参数；控制面只传数据不传函数。
+ * P0b 迁移注记：compactSession 的函数型参数（compactStructural / summarize）已数据化
+ * 清偿（2026-11-10，解析入 engine RunHost）——控制面只传键，实现在 run 侧解析。
+ * 本契约禁止再引入函数型参数。
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
@@ -131,17 +131,13 @@ export interface RunBackend extends RunDispatcher {
 
   /**
    * 会话压缩（控制面 op；与 run 共用 sessionLock 排队）。
+   * 纯数据签名：systemPrompt/tools/摘要绑定由实现侧（RunHost）从 run 状态解析。
    *
    * @param sessionId - 会话 id
    * @param agentId - compact 视图归属 agent
-   * @param options - structural compact 回调 + 摘要参数（P0b 迁移注记：函数型参数待数据化）
    * @returns 压缩结果
    */
-  compactSession(
-    sessionId: string,
-    agentId: string,
-    options: Parameters<SessionAwareRunner['compactSession']>[2],
-  ): Promise<CompactTransportOutcome>;
+  compactSession(sessionId: string, agentId: string): Promise<CompactTransportOutcome>;
 
   /**
    * 运行面健康（supervise 健康门的进程内形态）。

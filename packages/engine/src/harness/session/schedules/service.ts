@@ -128,12 +128,17 @@ export class SessionScheduleService {
   }
 
   /**
-   * 打开/建库并重臂 active 作业。幂等。
+   * 打开/建库。幂等（先开者语义为准）。
+   *
+   * @param options - `arm: false` = 只开 store 不重臂/不起 tick（执行面用：§5.4
+   *   触发面唯一在 gateway，run 节点若重臂会把到期作业经空 wakeup 静默消费）
    */
-  async open(): Promise<void> {
+  async open(options?: { arm?: boolean }): Promise<void> {
     if (this.opened) return;
     this.store = await SessionScheduleStore.create(this.options);
     this.opened = true;
+    this.armEnabled = options?.arm !== false;
+    if (!this.armEnabled) return;
     this.rearmAll();
     this.startTick();
   }
@@ -577,7 +582,12 @@ export class SessionScheduleService {
     this.firing.delete(id);
   }
 
+  /** store-only 模式（执行面，open({arm:false})）：不点火/不起 tick/不自消费——
+   * set/update/resume 经本口也不得 arm（否则到期作业被空 wakeup 静默消费）。 */
+  private armEnabled = true;
+
   private arm(schedule: SessionSchedule): void {
+    if (!this.armEnabled) return;
     if (schedule.status !== 'active') return;
     this.disarm(schedule.id);
     const fireAt = schedule.nextFireAt;
