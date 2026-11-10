@@ -1,0 +1,259 @@
+/**
+ * RemoteRunBackend — RunBackend 的进程间唯一实现（arch/service-topology.md §4 P0b）。
+ *
+ * 生命周期：fork run-serve-child（resolveWorkerUrl 映射 dist；NODE_CHANNEL_* 剥离）→
+ * boot 文件纯数据交接 → ready 握手拿端口 → loopback HTTP 契约通道。
+ * 传输可换（loopback → 跨机），协议不变（run-protocol 纯数据）。
+ *
+ * 错误表面（run-protocol 注记的传输形态）：HTTP 4xx（未装载等同步错）在消费端
+ * 首个 next 即抛；闸门拒为流内 error entry。两者以错误消息/状态可辨，不静默吞。
+ */
+
+import { fork, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
+import { resolveWorkerUrl } from '@octopi-agent/engine/worker-path.js';
+import type {
+  RunBackendHealth,
+} from '@octopi-agent/engine/harness/activation/run-backend.js';
+import type {
+  RunControlOp,
+  RunControlResponse,
+  RunHostNotify,
+  RunStreamEntry,
+} from '@octopi-agent/engine/harness/activation/run-protocol.js';
+import type { RunRequest } from '@octopi-agent/engine/harness/activation/index.js';
+import type { RunServeBoot } from './run-serve-child.js';
+
+export interface RemoteRunBackendOptions {
+  /** 宿主通知（审批/客户端工具/事件/重投）出口；缺省 fail-loud 留痕 */
+  onNotify?: (notify: RunHostNotify) => void;
+  /** ready 握手超时（缺省 30s：首启含插件发现） */
+  readyTimeoutMs?: number;
+}
+
+export class RemoteRunBackend {
+  private constructor(
+    private readonly child: ChildProcess,
+    private readonly port: number,
+    private readonly token: string | undefined,
+    private readonly bootPath: string,
+    private readonly options: RemoteRunBackendOptions,
+  ) {}
+
+  /**
+   * fork run 实例子进程并完成 boot 握手。
+   *
+   * @param boot - boot 文件内容（纯数据交接面）
+   * @param options - 通知出口/握手超时
+   * @returns 就绪的远程后端
+   */
+  static async start(
+    boot: Omit<RunServeBoot, 'token'>,
+    options: RemoteRunBackendOptions = {},
+  ): Promise<RemoteRunBackend> {
+    const token = randomUUID();
+    const bootPath = join(tmpdir(), `run-serve-boot-${randomUUID()}.json`);
+    writeFileSync(bootPath, JSON.stringify({ ...boot, token }), 'utf8');
+
+    const entry = resolveWorkerUrl('./run-serve-child.js', import.meta.url);
+    const env = { ...process.env };
+    // 子进程自有 IPC 通道；剥掉继承的通道标识（knowledge fork 同规）
+    delete env.NODE_CHANNEL_FD;
+    delete env.NODE_CHANNEL_ID;
+    const child = fork(entry, [bootPath], {
+      execArgv: [],
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      env,
+    });
+
+    const ready = await new Promise<{ port: number }>((resolve, reject) => {
+      let settled = false;
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        child.off('message', onMessage);
+        fn();
+      };
+      const fail = (err: Error): void =>
+        settle(() => {
+          child.kill('SIGKILL');
+          rmSync(bootPath, { force: true });
+          reject(err);
+        });
+      const timeout = setTimeout(() => {
+        fail(new Error('run_remote: ready handshake timeout'));
+      }, options.readyTimeoutMs ?? 30_000);
+      timeout.unref();
+      const onMessage = (msg: unknown): void => {
+        const m = msg as { type?: string; kind?: string; port?: number; error?: string };
+        // 宿主通知（provider 注册日志等）先于 ready 到达；不参与握手判定
+        if (m?.kind === 'notify') return;
+        if (m?.type === 'ready' && typeof m.port === 'number') {
+          const port = m.port;
+          settle(() => resolve({ port }));
+        } else {
+          fail(new Error(`run_remote: child boot failed: ${m?.error ?? `unexpected handshake ${JSON.stringify(m)}`}`));
+        }
+      };
+      child.on('message', onMessage);
+      child.once('error', (err) => fail(err));
+      child.once('exit', (code) => {
+        fail(new Error(`run_remote: child exited before ready (code ${String(code)})`));
+      });
+    });
+
+    const backend = new RemoteRunBackend(child, ready.port, token, bootPath, options);
+    child.removeAllListeners('exit');
+    child.on('exit', (code) => {
+      console.warn(`[RunRemote] run instance exited (code ${String(code)})`);
+    });
+    child.on('message', (msg: unknown) => {
+      const m = msg as { kind?: string; notify?: RunHostNotify };
+      if (m?.kind === 'notify' && m.notify) {
+        if (options.onNotify) {
+          options.onNotify(m.notify);
+        } else if (m.notify.type === 'log') {
+          console[m.notify.level](m.notify.message);
+        } else {
+          console.error(`[RunRemote] unhandled run-host notify "${m.notify.type}" (no onNotify wired)`);
+        }
+      }
+    });
+    return backend;
+  }
+
+  /**
+   * 执行 run（契约 startRun）。NDJSON 流逐条还原为 AgentEvent。
+   *
+   * @param req - run 请求（纯数据）
+   * @returns 协议事件流
+   */
+  startRun(req: RunRequest): AsyncIterable<AgentEvent> {
+    const self = this;
+    return (async function* () {
+      const res = await self.fetchJson('POST', '/runs', req);
+      if (!res.ok || !res.body) {
+        throw new Error(`run_remote: startRun failed (HTTP ${res.status}): ${await self.errorText(res)}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let nl = buffer.indexOf('\n');
+          while (nl >= 0) {
+            const line = buffer.slice(0, nl).trim();
+            buffer = buffer.slice(nl + 1);
+            nl = buffer.indexOf('\n');
+            if (!line) continue;
+            const entry = JSON.parse(line) as RunStreamEntry;
+            if (entry.type === 'event') {
+              yield entry.event;
+            } else if (entry.type === 'error') {
+              throw new Error(entry.error.message);
+            } else {
+              return;
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    })();
+  }
+
+  /**
+   * 会话级控制 op（契约 control）。
+   *
+   * @param op - 纯数据控制 op
+   * @returns 执行结果（ok:false 不抛——调用方裁决）
+   */
+  async control(op: RunControlOp): Promise<RunControlResponse> {
+    const res = await this.fetchJson('POST', '/control', op);
+    return (await res.json()) as RunControlResponse;
+  }
+
+  /**
+   * 运行面健康（契约 health）。
+   *
+   * @returns 健康报告
+   */
+  async health(): Promise<RunBackendHealth> {
+    const res = await this.fetchJson('GET', '/health');
+    if (!res.ok) {
+      throw new Error(`run_remote: health failed (HTTP ${res.status}): ${await this.errorText(res)}`);
+    }
+    const body = (await res.json()) as RunBackendHealth & { ok?: boolean };
+    return {
+      mountedAgents: body.mountedAgents,
+      inFlightRuns: body.inFlightRuns,
+      retiredRunners: body.retiredRunners,
+    };
+  }
+
+  /**
+   * 停止 run 实例（优雅关闭 → 超时 SIGTERM → SIGKILL），并清理 boot 文件。
+   *
+   * @returns 关闭完成
+   */
+  async stop(): Promise<void> {
+    const child = this.child;
+    if (child.exitCode !== null || child.signalCode !== null) {
+      rmSync(this.bootPath, { force: true });
+      return;
+    }
+    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+    child.send({ type: 'close' });
+    const graceful = await Promise.race([
+      exited.then(() => true),
+      new Promise<boolean>((resolve) => {
+        const t = setTimeout(() => resolve(false), 5_000);
+        t.unref();
+      }),
+    ]);
+    if (!graceful) {
+      child.kill('SIGTERM');
+      const hard = await Promise.race([
+        exited.then(() => true),
+        new Promise<boolean>((resolve) => {
+          const t = setTimeout(() => resolve(false), 3_000);
+          t.unref();
+        }),
+      ]);
+      if (!hard) {
+        child.kill('SIGKILL');
+        await exited;
+      }
+    }
+    rmSync(this.bootPath, { force: true });
+  }
+
+  private async fetchJson(method: string, path: string, body?: unknown): Promise<Response> {
+    return fetch(`http://127.0.0.1:${this.port}${path}`, {
+      method,
+      headers: {
+        ...(this.token === undefined ? {} : { 'x-run-serve-token': this.token }),
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+
+  private async errorText(res: Response): Promise<string> {
+    const text = await res.text();
+    try {
+      const parsed = JSON.parse(text) as { error?: { message?: string } };
+      return parsed.error?.message ?? text;
+    } catch {
+      return text;
+    }
+  }
+}

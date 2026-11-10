@@ -15,6 +15,7 @@ import {
 import type { Message } from '@octopi-agent/core/types.js';
 import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import { RunHost } from '@octopi-agent/engine/harness/run/run-host.js';
 
 let turnSeq = 0;
 /** 真实不变量：用户消息进会话即定形为 turn_start 信封（runner.bakeTurnStart） */
@@ -47,6 +48,31 @@ describe('edit-resend (truncate aborted turn)', () => {
       } as unknown as GatewayConfig,
       store,
     );
+    // P0b：截断语义在 RunHost（会话写者单点）。测试经传输缝注入 control 直达本地内核
+    // （HTTP hop 由协议 e2e 覆盖）；行为实现唯一——RunHost，无双实现矩阵。
+    const host = new RunHost({
+      redispatch: () => undefined,
+      sessionWriter: {
+        load: async (sid) => (await store.load(sid)) ?? undefined,
+        save: async (sid, s) => store.save(sid, s),
+        patchMetadata: async (sid, updater) => {
+          await store.updateMetadata(sid, updater as never);
+        },
+        discardFileUndo: async (sid, agentId) => {
+          const { discardSessionFileUndo } = await import('@octopi-agent/engine');
+          const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+          const { join } = await import('node:path');
+          return discardSessionFileUndo(
+            join(getOctopiHome(), 'sessions'),
+            sid,
+            (gateway as never as { memoryRestorers: Map<string, unknown> }).memoryRestorers.get(agentId) as never,
+          );
+        },
+      },
+    });
+    (gateway as never as { runBackend: unknown }).runBackend = {
+      control: (op: never) => host.handleControl(op),
+    };
   });
 
   it('truncate 从用户下标起丢掉中止残片；清除 abortedTurn 标记', async () => {

@@ -280,6 +280,8 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     cognition: config.cognition,
     wisdom: config.wisdom,
     documents: config.documents,
+    summary: config.summary,
+    webSearch: config.webSearch,
     schedules: config.schedules,
     concurrency: config.concurrency,
     plugins: config.plugins,

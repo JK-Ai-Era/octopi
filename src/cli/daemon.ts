@@ -18,7 +18,7 @@ import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { loadConfig, toGatewayConfig, resolveConfigFilePath } from '../config.js';
 import { resolveListenConfig } from './listen-config.js';
-import { createToolSet } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/tool-set.js';
+import { assembleGlobalTools } from '@octopi-agent/engine/integration/tools/assemble.js';
 import { createProviderFromConfig, createWireDumpSinkFromConfig } from '@octopi-agent/engine/config.js';
 import type {
   WireDumpConfig,
@@ -506,24 +506,8 @@ async function createWireDumpFromConfig(config: {
  * @param toolsCfg - `config.summary.tools`（形状经 config-schema 校验）
  * @returns tool 名 → binding 覆盖表
  */
-export function resolveSummaryToolBindings(
-  toolsCfg: Record<string, unknown> | undefined,
-): Record<
-  string,
-  Partial<import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').ToolSummaryBinding>
-> {
-  type Binding = Partial<
-    import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').ToolSummaryBinding
-  >;
-  const out: Record<string, Binding> = {};
-  for (const [tool, value] of Object.entries(toolsCfg ?? {})) {
-    if (tool === 'maxReturnChars') continue;
-    if (value !== null && typeof value === 'object') {
-      out[tool] = value as Binding;
-    }
-  }
-  return out;
-}
+import { resolveSummaryToolBindings } from '@octopi-agent/engine/harness/context/capabilities/summary/tool-bindings.js';
+export { resolveSummaryToolBindings };
 
 export async function ensureDaemonConfig(args: CliArgs): Promise<string | undefined> {
   if (args.config) return args.config;
@@ -1028,7 +1012,9 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   }
   const gatewayStoreForHistory = new JsonlSessionStore({
     sessionsDir: joinPath(home, 'sessions'),
-    index: sessionIndex,
+    // 索引投影唯一写者 = run 节点 store（§3 会话写者单点）；本侧 store 只读（gateway
+    // 残留写路径不投影——M4 过渡面，随 §9.6 收口；boot 前 ensureSessionIndexFresh 对齐存量）。
+    // index 仍传给 history port 供检索查询（读侧不受影响）。
   });
 
   const gateway = new Gateway(gatewayConfig, gatewayStoreForHistory);
@@ -1055,93 +1041,14 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   //（SqliteMemoryStore(agent.db)）创建 memory_store/search，与七层 MemoryLayer / memory.steward.* 同实例。
   // SessionTaskService 随 AgentBuilder/Gateway 的 SessionStore 自动接线；不再单独建 TaskTracker。
 
-  let webSearchToolCfg: { provider: import('@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/web-search-types.js').WebSearchProvider; defaultLimit?: number; timeoutMs?: number } | undefined;
-  if (config.webSearch?.providers && Object.keys(config.webSearch.providers).length > 0) {
-    const { resolveWebSearchProviders, createWebSearchWithFallback } = await import('@octopi-agent/engine/integration/web-search/factory.js');
-    const resolved = resolveWebSearchProviders(config.webSearch);
-    if (resolved.primary) {
-      webSearchToolCfg = {
-        provider: createWebSearchWithFallback(resolved.primary, resolved.fallbacks),
-        defaultLimit: resolved.defaultLimit,
-        timeoutMs: resolved.timeoutMs,
-      };
-      console.log(
-        `[CLI] Web search enabled: primary=${resolved.primary.id} (api=${resolved.primaryApi}), ` +
-        `fallbacks=[${resolved.fallbacks.map((f) => f.id).join(', ')}]`,
-      );
-    }
-  }
-
-  // 公用能力 SummaryPort（http_request / file_read L2）；无可用 provider 时仅 L1
-  let summarySupport: import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').ToolSummarySupport | undefined;
-  try {
-    const { createSummaryPort, createToolSummarySupport, createMemorySummaryCache } = await import(
-      '@octopi-agent/engine/harness/context/capabilities/summary/index.js'
-    );
-    // 复用已注册实例（与首循环同一批）：禁止二次构造插件工厂/transport
-    const providerMap = registeredProviders;
-    const fallback = [...providerMap.values()][0];
-    if (fallback) {
-      const summaryCfg = config.summary;
-      const toolsCfg = summaryCfg?.tools as
-        | {
-            maxReturnChars?: number;
-            http_request?: Record<string, unknown>;
-            file_read?: Record<string, unknown>;
-          }
-        | undefined;
-
-      let cache:
-        | import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').SummaryCachePort
-        | undefined;
-      let cacheEnabled = false;
-      if (summaryCfg?.cache?.enabled) {
-        cache = createMemorySummaryCache({
-          maxEntries: summaryCfg.cache.maxEntries,
-          defaultTtlMs: summaryCfg.cache.ttlMs,
-        });
-        cacheEnabled = true;
-      }
-
-      const policyOverrides = summaryCfg?.policies as
-        | Record<string, import('@octopi-agent/engine/harness/context/capabilities/summary/index.js').SummaryPolicy>
-        | undefined;
-
-      const portOptions = {
-        providers: providerMap,
-        levelMap: config.models?.level,
-        fallbackProvider: fallback,
-        model: summaryCfg?.model,
-        modelLevel: summaryCfg?.modelLevel,
-        gate: summaryCfg?.gate,
-        defaultInputBudgetTokens: summaryCfg?.defaultInputBudgetTokens,
-        safetyMarginTokens: summaryCfg?.safetyMarginTokens,
-        oversizedStrategy: summaryCfg?.oversizedStrategy,
-        policyOverrides,
-        cache,
-        cacheEnabled,
-        cacheTtlMs: summaryCfg?.cache?.ttlMs,
-        maxReturnCharsDefault: toolsCfg?.maxReturnChars,
-        toolBindings: resolveSummaryToolBindings(toolsCfg as Record<string, unknown> | undefined),
-      };
-      const port = createSummaryPort(portOptions);
-      // 根因修复：配置与 tools 共用同一 binding 解析表（toolBindings），不再 binding:undefined
-      summarySupport = createToolSummarySupport(port, portOptions);
-      console.log('[CLI] Summary capability: SummaryPort wired into builtin tools');
-    }
-  } catch (err) {
-    console.warn(`[CLI] Summary capability wiring failed (L1-only tools): ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  // 全局工具：CLI 级 builtin（shell/file/http/web_search 等）。
-  // memory_store/memory_search **不在**全局注册：由 AgentBuilder 在 agent build 时
-  // 按各 agent 的 MemoryStore（SqliteMemoryStore(agent.db)）注入，与 MemoryLayer 同实例。
-  // session_search / session_read：Information 历史检索，绑 Gateway 同一 SessionStore。
-  let sessionHistoryPort: import('@octopi-agent/engine/harness/session/history/index.js').SessionHistoryPort | undefined;
-  try {
-    const { createSessionHistoryPort } = await import('@octopi-agent/engine/harness/session/history/index.js');
-    const { SessionAclService } = await import('@octopi-agent/engine/harness/governance/session-acl/service.js');
-    sessionHistoryPort = createSessionHistoryPort({
+  // 全局工具面装配（单源 = engine assemble-global-tools；daemon 与 run 节点同一工厂）。
+  // 工具面随执行节点（§10）；此处 CLI 侧也装配一份供 gateway 侧消费（测试缝/工具目录）。
+  const { SessionAclService } = await import(
+    '@octopi-agent/engine/harness/governance/session-acl/service.js'
+  );
+  const globalToolList = await assembleGlobalTools({
+    providers: registeredProviders,
+    sessionHistory: {
       store: gatewayStoreForHistory,
       sessionAcl: new SessionAclService(gatewayConfig.sessionAcl),
       archiveDir: joinPath(home, 'archives'),
@@ -1149,36 +1056,14 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       index: sessionIndex,
       // E6 agent.max：与 Runner agentMaxSessionRights 同源（宿主可按 agent 收紧）
       resolveAgentMax: () => undefined,
-    });
-    console.log('[CLI] session_search/session_read: SessionHistoryPort @ OCTOPI_HOME/sessions');
-  } catch (err) {
-    console.warn(`[CLI] session history tools unavailable: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  const documentPort = await gateway.getDocumentPort().catch(() => null);
-  // SEC-3c: named credentials for http_request.credential; requireBindings from config
-  const requireCredentialBindings = Boolean(config.credentials?.requireBindings);
-  const allowPrivateNetwork = Boolean(config.security?.network?.allowPrivateNetwork);
-  let credentialStore: import('@octopi-agent/engine/harness/governance/credentials/store.js').CredentialStore | null =
-    null;
-  try {
-    const { CredentialStore } = await import(
-      '@octopi-agent/engine/harness/governance/credentials/store.js'
-    );
-    credentialStore = await CredentialStore.openDefault(getOctopiHome(), {
-      requireBindings: requireCredentialBindings,
-    });
-  } catch (err) {
-    console.warn(`[CLI] CredentialStore unavailable: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  const { all } = createToolSet({
-    webSearch: webSearchToolCfg,
-    summary: summarySupport,
-    sessionHistory: sessionHistoryPort,
-    documentPort,
-    credentials: credentialStore,
-    network: { allowPrivateNetwork },
-    requireCredentialBindings,
+    },
+    documentPort: await gateway.getDocumentPort().catch(() => null),
+    octopiHome: getOctopiHome(),
+    summary: config.summary,
+    levelMap: config.models?.level,
+    webSearch: config.webSearch,
+    requireCredentialBindings: Boolean(config.credentials?.requireBindings),
+    allowPrivateNetwork: Boolean(config.security?.network?.allowPrivateNetwork),
     askUser: (question, options, context) =>
       gateway.askUser({
         sessionId: context.sessionId,
@@ -1187,8 +1072,10 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         options,
       }),
   });
-  for (const tool of all) gateway.registerTool(tool);
-  console.log(`[CLI] Registered ${all.length} global tools: ${all.map(t => t.definition.name).join(', ')}`);
+  for (const tool of globalToolList) gateway.registerTool(tool);
+  console.log(
+    `[CLI] Registered ${globalToolList.length} global tools: ${globalToolList.map((t) => t.definition.name).join(', ')}`,
+  );
   console.log('[CLI] memory_store/memory_search: agent-scoped (AgentBuilder + memoryStore), not global');
 
   // ── 子系统发现（启动可见；Agent 首次 build 时按 allow/deny 实际注册） ──

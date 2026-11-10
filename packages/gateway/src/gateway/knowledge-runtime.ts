@@ -114,6 +114,33 @@ export class GatewayKnowledgeRuntime {
    * @param opts.restartBackoff - 自愈退避参数覆盖（测试用；缺省 1s→60s）
    * @param opts.connectTimeoutMs 经 cfg 传入：manageLocal 启动握手等待（fork→ready）
    */
+  /** 状态迁移观察者（gateway 经此补推 syncKnowledgeState；M2 单一生产点） */
+  private stateChange?: (state: KnowledgeRuntimeState) => void;
+
+  /**
+   * 注入状态迁移观察者（每次 _state 迁移后回调；回调异常不阻断迁移）。
+   *
+   * @param fn - 迁移回调
+   */
+  onStateChange(fn: (state: KnowledgeRuntimeState) => void): void {
+    this.stateChange = fn;
+  }
+
+  /**
+   * 状态迁移单点：赋值 + 上抛（供 run 侧准入态同步）。
+   *
+   * @param state - 目标状态
+   */
+  private setState(state: KnowledgeRuntimeState): void {
+    if (this._state === state) return;
+    this._state = state;
+    try {
+      this.stateChange?.(state);
+    } catch {
+      // 观察者失败不阻断迁移（上抛面 fail-open）
+    }
+  }
+
   async start(
     cfg: KnowledgeServiceConfig | undefined,
     opts: KnowledgeStartOpts,
@@ -132,7 +159,7 @@ export class GatewayKnowledgeRuntime {
       `local:${this.gatewayId}:${(await import('node:crypto')).randomBytes(16).toString('hex')}`;
 
     if (!baseUrl && !manageLocal) {
-      this._state = 'disabled';
+      this.setState('disabled');
       this.client = null;
       return;
     }
@@ -153,16 +180,16 @@ export class GatewayKnowledgeRuntime {
         });
         console.log(`[Knowledge] remote client → ${baseUrl} (gatewayId=${this.gatewayId})`);
         await this.client.health();
-        this._state = 'ready';
+        this.setState('ready');
         console.log(`[Knowledge] state=ready`);
       } else {
-        this._state = 'disabled';
+        this.setState('disabled');
         this.client = null;
         console.log('[Knowledge] disabled (manageLocal=false and no baseUrl)');
       }
     } catch (err) {
       if (this.stopped) return; // stop() 在途：保持 disabled，不进入自愈
-      this._state = 'degraded';
+      this.setState('degraded');
       console.warn(
         `[Knowledge] start failed/degraded: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -207,7 +234,7 @@ export class GatewayKnowledgeRuntime {
       // 子进程崩溃 → degraded + 自愈重启（不得拖死 Gateway）
       handle.child.once('exit', (code: number | null, signal: string | null) => {
         if (gen !== this.generation || this.stopped || this._state === 'disabled') return;
-        this._state = 'degraded';
+        this.setState('degraded');
         this.local = null;
         console.warn('[Knowledge] service process exited; state=degraded (self-heal armed)');
         this.emitLifecycle('knowledge.service.exited', {
@@ -230,7 +257,7 @@ export class GatewayKnowledgeRuntime {
       if (this.stopped || gen !== this.generation) {
         throw new Error('launch aborted: runtime stopped during launch');
       }
-      this._state = 'ready';
+      this.setState('ready');
       console.log(
         `[Knowledge] manageLocal child started (port=${handle.port}, pid=${handle.child.pid}, db=${dbPath}, gatewayId=${this.gatewayId})`,
       );
@@ -288,7 +315,7 @@ export class GatewayKnowledgeRuntime {
       this.emitLifecycle('knowledge.service.recovered', {});
     } catch (err) {
       if (this.stopped) return; // launchLocal 已清理；停机中不再调度/发事件
-      this._state = 'degraded';
+      this.setState('degraded');
       this.emitLifecycle('knowledge.service.restart_failed', {
         attempt: this.restartAttempt,
         error: err instanceof Error ? err.message : String(err),
@@ -319,7 +346,7 @@ export class GatewayKnowledgeRuntime {
       this.local = null;
     }
     this.client = null;
-    this._state = 'disabled';
+    this.setState('disabled');
   }
 
   /**
