@@ -103,7 +103,7 @@ import { InProcessSessionLock } from '@octopi-agent/engine/harness/run/concurren
 import { RunAssembly, toolApprovalToRequestInput, approvalOutcomeToHitlAskResult } from './run-assembly.js';
 import { dispatchChannelMessage } from '@octopi-agent/engine/integration/agent-runtime/channel-message-source.js';
 import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
-import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
+import type { HitlDecision, MemoryEffectJournal, ToolFileEffects } from '@octopi-agent/core/types/tools.js';
 import { defaultHitlCache } from '@octopi-agent/engine/harness/governance/human-in-the-loop/decision-cache.js';
 import { ObserverHub } from '@octopi-agent/engine/harness/observability/observer/hub.js';
 import type {
@@ -231,6 +231,35 @@ export interface ModelCatalogItem {
   known: boolean;
   source: string;
 }
+
+/**
+ * 客户端工具桥效应账本 fail-loud 桩（m2）：gateway 侧执行腿拿不到 run 节点的
+ * ToolFileEffects/MemoryEffectJournal（undo 记账在 run 进程），按 AGENTS.md
+ * 「未实现即 throw，禁假数据桩」——调用方（客户端工具 handler）显式失败而非静默空转。
+ * 同步 throw（F6）：异步 reject 在 fire-and-forget 调用点会变 unhandled rejection，
+ * 同步抛留在调用方帧内可被其 try/catch 捕获（与 run-host 的 not_implemented 同形态）。
+ */
+function notImplementedEffect(surface: string): () => Promise<never> {
+  return () => {
+    throw new Error(`not_implemented: client tool bridge has no ${surface} journal (run-node side only)`);
+  };
+}
+
+const bridgeFileEffects: ToolFileEffects = {
+  writeFile: notImplementedEffect('file write'),
+  appendFile: notImplementedEffect('file append'),
+  recordDelete: notImplementedEffect('file delete'),
+  recordCreate: notImplementedEffect('file create'),
+  recordRename: notImplementedEffect('file rename'),
+  recordOverwrite: notImplementedEffect('file overwrite'),
+  noteNotReversed: notImplementedEffect('not-reversed'),
+};
+
+const bridgeMemoryEffects: MemoryEffectJournal = {
+  recordInsert: notImplementedEffect('memory insert'),
+  recordUpdate: notImplementedEffect('memory update'),
+  recordDelete: notImplementedEffect('memory delete'),
+};
 
 /** `resolveCatalogEntry` 结果 → WebUI 目录条目（唯一转换点，防两处字面量漂移） */
 function toCatalogItem(e: {
@@ -397,6 +426,8 @@ export class Gateway {
   private retiredProviders: ModelProvider[] = [];
   /** 工具 */
   private tools: RegisteredTool[] = [];
+  /** 客户端工具桥在途执行腿（callId → 中止句柄；client_tool_cancel 撤销） */
+  private readonly clientToolAborts = new Map<string, AbortController>();
   /** 每 agent 记忆逆放器（L3 P2） */
   private memoryRestorers = new Map<string, import('@octopi-agent/engine').MemoryEffectRestorer>();
   /** 委派编排运行时（arch/delegation.md）惰性创建 */
@@ -1727,8 +1758,20 @@ export class Gateway {
       }
     }
 
-    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）+ 退役回收
-    void this.runBackend?.stop().catch(() => undefined);
+    // F7：停机先撤销在途客户端工具腿并清表——否则 WS 已断的 pending promise 挂到 TTL、
+    // 表项永不清算（本 diff 新增的在途状态，生命周期须随停机闭环）。先撤腿再停 backend，
+    // 结算回执（clientToolResult）赶在通道关闭前发出。
+    for (const abort of this.clientToolAborts.values()) {
+      abort.abort(new Error('gateway stopping'));
+    }
+    this.clientToolAborts.clear();
+    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）+ 退役回收。
+    // await 到位（m8）：否则 gateway 先退、boot/子进程清理与进程退出竞态
+    try {
+      await this.runBackend?.stop();
+    } catch {
+      // stop 路径 fail-open，不阻断关闭
+    }
 
     // 释放 provider transport（keep-alive dispatcher 的连接池）；
     // 经 Promise 桥接，dispose 的同步/异步异常都落进 catch，不阻断关闭
@@ -5580,7 +5623,10 @@ export class Gateway {
         return;
       }
       case 'client_tool_call': {
-        // 客户端工具执行腿：原 handler（ClientToolHost 构造、闭包经 streamTransport 回客户端）
+        // 客户端工具执行腿：原 handler（ClientToolHost 构造、闭包经 streamTransport 回客户端）。
+        // 载荷还原（m2）：messages 随 notify 真实携带（不再 [] 占位）；abortSignal 用 per-call
+        // AbortController（run 侧中止经 client_tool_cancel 撤销，不等 TTL）；效应账本跨进程
+        // 不可得 → fail-loud 桩（禁 as never）。
         const tool = this.tools.find((t) => t.definition.name === n.toolName);
         const fail = (message: string): Promise<unknown> =>
           this.getRunBackend()
@@ -5594,13 +5640,22 @@ export class Gateway {
           await fail(`client tool "${n.toolName}" not found`);
           return;
         }
+        const abort = new AbortController();
+        this.clientToolAborts.set(n.callId, abort);
         try {
+          if (!Array.isArray(n.messages)) {
+            // F8：messages 是契约必填载荷；版本错位/坏 notify 时 fail-loud，
+            // 不把 undefined 静默塞进 ToolExecutionContext
+            throw new Error(`client_tool_call ${n.callId}: missing messages payload (protocol mismatch?)`);
+          }
           const result = await tool.handler(n.args, {
             sessionId: n.sessionId,
             agentId: n.agentId,
-            messages: [],
-            abortSignal: undefined,
-          } as never);
+            messages: n.messages,
+            abortSignal: abort.signal,
+            fileEffects: bridgeFileEffects,
+            memoryEffects: bridgeMemoryEffects,
+          });
           await this.getRunBackend().control({
             type: 'clientToolResult',
             callId: n.callId,
@@ -5608,7 +5663,14 @@ export class Gateway {
           });
         } catch (err) {
           await fail(err instanceof Error ? err.message : String(err));
+        } finally {
+          this.clientToolAborts.delete(n.callId);
         }
+        return;
+      }
+      case 'client_tool_cancel': {
+        // run 侧中止联动（m2）：撤销在途执行腿，createClientTool 按 abort 收尾其 pending
+        this.clientToolAborts.get(n.callId)?.abort(new Error(n.reason ?? 'run aborted'));
         return;
       }
       case 'ask_user_request': {

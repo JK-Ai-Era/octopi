@@ -260,3 +260,46 @@ describe('startRun 外部中止信号（委派 D4 本地投影）', () => {
     expect(observed).toEqual(['aborted']);
   });
 });
+
+describe('停机中止在途 run（F2 回归锚）', () => {
+  it('disposeAll 中止在途 run：流有界收束，不悬挂到兜底硬杀', async () => {
+    let abortSeen = false;
+    const runner = {
+      handle: async function* (
+        _sessionId: string,
+        _message: unknown,
+        _config: unknown,
+        signal?: AbortSignal,
+      ) {
+        yield 'run-event';
+        // 挂起直到中止：无 F2 修复时 disposeAll 不 abort → 流悬挂 → 本测试超时失败
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) {
+            abortSeen = true;
+            resolve();
+            return;
+          }
+          signal?.addEventListener(
+            'abort',
+            () => {
+              abortSeen = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      },
+      recordAdmissionRefusal: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const backend = backendWith(runner as never);
+    const seen: string[] = [];
+    const consumption = (async () => {
+      for await (const e of backend.startRun(runReq())) seen.push(String(e));
+    })();
+    await vi.waitFor(() => expect(seen).toContain('run-event'));
+    backend.disposeAll();
+    await consumption; // 有界收束（回归时悬挂 → 超时失败）
+    expect(abortSeen).toBe(true);
+  }, 3_000);
+});

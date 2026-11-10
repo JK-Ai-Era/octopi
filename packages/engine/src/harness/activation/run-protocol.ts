@@ -157,7 +157,18 @@ export type RunHostNotify =
       agentId: string;
       toolName: string;
       args: Record<string, unknown>;
+      /**
+       * 调用时刻的 episode 消息列表（ToolExecutionContext.messages 的跨进程还原）。
+       * 随桥携带是有意的载荷成本：handler 契约承诺真实 messages，禁以空数组冒充。
+       */
+      messages: Message[];
     }
+  /**
+   * 客户端工具调用取消（run 侧中止信号触发）。gateway 据此中止该 callId 的
+   * 执行腿（per-call AbortSignal），否则 pending 会挂到 TTL 过期——覆盖不经
+   * `abortSession()` 的中止路径（runGuard/budget/引擎内中止等）。
+   */
+  | { type: 'client_tool_cancel'; callId: string; reason?: string }
   /** out-of-run 会话事件（compact 进度、ClientToolHost 会话事件等；gateway 转 WS/store） */
   | { type: 'session_event'; sessionId: string; event: AgentEvent }
   /** inbox 未消费项的原 Trigger 重投（原 registerRuntimeAgent.redispatch 的远程形态） */

@@ -7,10 +7,15 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RemoteRunBackend } from '@octopi-agent/gateway/gateway/remote-run-backend.js';
+import { randomUUID } from 'node:crypto';
+import type { ChildProcess } from 'node:child_process';
+import {
+  RemoteRunBackend,
+  writeRunServeBoot,
+} from '@octopi-agent/gateway/gateway/remote-run-backend.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 
 const FAKE_REPLY = 'pong from fake llm';
@@ -29,6 +34,10 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
         body += c.toString('utf8');
       });
       req.on('end', () => {
+        // m7 锚：SLOW_MARKER 请求挂 5s 不回——客户端断开须触发 run 中止，
+        // 而非空转到自然结束（判别窗口 3s < 5s）
+        setTimeout(
+          () => {
         const wantsStream = body.includes('"stream":true') || body.includes('"stream": true');
         if (wantsStream) {
           res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -70,6 +79,9 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
             ],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           }),
+        );
+          },
+          body.includes('SLOW_MARKER') ? 5_000 : 0,
         );
       });
     });
@@ -179,4 +191,90 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
     expect(late.ok).toBe(false);
     if (!late.ok) expect(late.error.message).toMatch(/unknown approvalId/);
   });
+
+  it('m6：boot 文件 0600 创建（同机多用户不可读）', () => {
+    const p = join(tmpdir(), `boot-mode-${randomUUID()}.json`);
+    writeRunServeBoot(p, '{"secret":true}');
+    try {
+      expect(statSync(p).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(p, { force: true });
+    }
+  });
+
+  it('m7：客户端断开 → run 被中止（不空转到 LLM 自然结束）', async () => {
+    // 假 LLM 遇 SLOW_MARKER 挂 5s；断连后 run 须在 3s 内中止（in-flight 归零）。
+    // 若 m7 缺失（close 不 abort），run 会继续迭代到 5s 自然结束 → 超时失败。
+    const iter = backend.startRun({
+      requestId: 'r-e2e-m7',
+      sessionId: 's-e2e-m7',
+      agentId: 'test-agent',
+      triggers: [
+        {
+          id: 't-e2e-m7',
+          type: 'message',
+          agentId: 'test-agent',
+          sessionId: 's-e2e-m7',
+          payload: { kind: 'user_message', content: 'SLOW_MARKER ping' },
+        },
+      ],
+      messages: [{ role: 'user', content: 'SLOW_MARKER ping', timestamp: Date.now() }],
+    });
+    for await (const event of iter) {
+      void event;
+      break; // 首事件即消费端断开（连接关闭 → 服务端 abort run）
+    }
+    const deadline = Date.now() + 3000;
+    for (;;) {
+      const health = await backend.health();
+      if (health.inFlightRuns === 0) break;
+      if (Date.now() > deadline) {
+        throw new Error(`run not aborted after client disconnect (inFlight=${health.inFlightRuns})`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }, 15_000);
+
+  it('m6/m8：boot 读毕即删 + IPC 断连子进程自收摊（孤儿防护）', async () => {
+    const before = new Set(
+      readdirSync(tmpdir()).filter((f) => f.startsWith('run-serve-boot-')),
+    );
+    const soloHome = mkdtempSync(join(tmpdir(), 'run-serve-solo-'));
+    mkdirSync(join(soloHome, 'sessions'), { recursive: true });
+    mkdirSync(join(soloHome, 'workspace'), { recursive: true });
+    mkdirSync(join(soloHome, 'agent-home'), { recursive: true });
+    const solo = await RemoteRunBackend.start({
+      octopiHome: soloHome,
+      config: {
+        agents: [],
+        modelProviders: {
+          fake: {
+            api: 'openai-completions',
+            baseUrl: llmUrl,
+            apiKey: 'test-key',
+            models: [{ id: 'test-model', name: 'test-model', contextWindow: 8192, maxTokens: 1024 }],
+          },
+        },
+      },
+      agentDefinitions: [],
+    });
+    // m6：boot 在 ready 握手前已删（暴露窗口=启动一瞬）——本次 spawn 无残留。
+    // 并行测试文件也在 tmpdir 留 boot：按内容锚定本次 spawn 的 octopiHome，只查自己的文件
+    const leaked = readdirSync(tmpdir())
+      .filter((f) => f.startsWith('run-serve-boot-') && !before.has(f))
+      .filter((f) => readFileSync(join(tmpdir(), f), 'utf8').includes(soloHome));
+    expect(leaked).toEqual([]);
+
+    // m8：gateway 侧消失（IPC 断连）→ 子进程自收摊退出，不孤儿、不硬等 stop 兜底
+    const child = (solo as unknown as { child: ChildProcess }).child;
+    const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
+    child.disconnect();
+    const code = await Promise.race([
+      exited,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 5000)),
+    ]);
+    expect(code).not.toBe('timeout');
+    expect(code).toBe(0); // 优雅收摊（disposeAll + dispose schedules + server.close）
+    rmSync(soloHome, { recursive: true, force: true });
+  }, 30_000);
 });

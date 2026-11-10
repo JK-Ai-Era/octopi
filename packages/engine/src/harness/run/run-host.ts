@@ -659,6 +659,18 @@ export class RunHost implements RunBackend {
   }
 
   disposeAll(): void {
+    // F2：先中止在途 run 再收摊——否则 /runs 流拖到兜底硬杀，消费端经 m1 把
+    // 正常停机误报成截断失败。abort 让执行流走正常终态收束（aborted）。
+    for (const controllers of this.activeRuns.values()) {
+      for (const controller of controllers) {
+        try {
+          controller.abort(new Error('run_backend: host disposing'));
+        } catch {
+          // stop 路径 fail-open，不阻断关闭
+        }
+      }
+    }
+    this.activeRuns.clear();
     // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）
     for (const { runner } of this.mounted.values()) {
       try {
@@ -676,7 +688,6 @@ export class RunHost implements RunBackend {
         // stop 路径 fail-open，不阻断关闭
       }
     }
-    this.activeRuns.clear();
   }
 
   /**
@@ -884,7 +895,31 @@ export class RunHost implements RunBackend {
       handler: (args: Record<string, unknown>, context: ToolExecutionContext) => {
         const callId = `ct-${++this.callSeq}`;
         return new Promise<unknown>((resolve, reject) => {
+          const abortSignal = context.abortSignal;
+          let settled = false;
+          const onAbort = (): void => {
+            if (settled) return;
+            settled = true;
+            this.pendingClientCalls.delete(callId);
+            // run 侧中止即通知 gateway 收掉执行腿（否则其 pending 挂到 TTL 过期）；
+            // 通知失败不改写本地结局——中止已发生，gateway 侧由 TTL 兜底
+            try {
+              this.notify({ type: 'client_tool_cancel', callId, reason: 'run aborted' });
+            } catch {
+              // swallow：中止路径没有更上层消费者可回告，结局由下方 resolve 表达
+            }
+            // 与 createClientTool 中止语义一致：LLM 可见 error 形结局，不静默悬挂
+            resolve({ error: 'cancelled', hint: 'run aborted while waiting for client tool' });
+          };
+          if (abortSignal?.aborted) {
+            onAbort();
+            return;
+          }
+          abortSignal?.addEventListener('abort', onAbort, { once: true });
           this.pendingClientCalls.set(callId, (outcome) => {
+            if (settled) return;
+            settled = true;
+            abortSignal?.removeEventListener('abort', onAbort);
             if (outcome.ok) resolve(outcome.result);
             else reject(new Error(outcome.error.message));
           });
@@ -896,9 +931,13 @@ export class RunHost implements RunBackend {
               agentId: context.agentId,
               toolName: spec.definition.name,
               args,
+              messages: context.messages,
             });
           } catch (err) {
+            if (settled) return;
+            settled = true;
             this.pendingClientCalls.delete(callId);
+            abortSignal?.removeEventListener('abort', onAbort);
             reject(err instanceof Error ? err : new Error(String(err)));
           }
         });

@@ -28,6 +28,70 @@ import type {
 import type { RunRequest } from '@octopi-agent/engine/harness/activation/index.js';
 import type { RunServeBoot } from './run-serve-child.js';
 
+/**
+ * boot 文件写入（0600：内容含 provider apiKey + loopback token，同机多用户不可读）。
+ *
+ * @param bootPath - 目标路径（随机名，创建态写入）
+ * @param payload - boot JSON 文本
+ * @returns void
+ */
+export function writeRunServeBoot(bootPath: string, payload: string): void {
+  writeFileSync(bootPath, payload, { encoding: 'utf8', mode: 0o600 });
+}
+
+/**
+ * NDJSON 流 → AgentEvent 流解码（run-protocol `/runs` 消费端，纯函数可单测）。
+ *
+ * 终态契约（`RunStreamEntry`）：事件若干后恰好一个 `done`/`error`（逐行、`\n` 结尾）。
+ * 流干净结束而无终态 entry 是**截断**——按成功返回会静默吞掉半个 run，故 throw
+ * （m1：截断≠成功）；未知 entry type 与坏行同样 fail-loud。错误文案带调用方上下文；
+ * `error` entry 的 `name`（分类字段，如 AbortError）保留传递。
+ *
+ * @param chunks - NDJSON 字节块流（`Response.body` 同形）
+ * @param ctxLabel - 错误文案上下文（如 `session x, run y`）
+ * @returns 协议事件流
+ */
+export async function* decodeRunStream(
+  chunks: AsyncIterable<Uint8Array>,
+  ctxLabel: string,
+): AsyncGenerator<AgentEvent> {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for await (const chunk of chunks) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let nl = buffer.indexOf('\n');
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      nl = buffer.indexOf('\n');
+      if (!line) continue;
+      let entry: { type?: unknown; event?: unknown; error?: { message?: string; name?: string } };
+      try {
+        entry = JSON.parse(line);
+      } catch (parseErr) {
+        // 坏行也带上下文（F4）：截断/损坏 ≠ 成功
+        throw new Error(
+          `run_remote: malformed stream entry (${ctxLabel}): ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+        );
+      }
+      if (entry.type === 'event') {
+        yield entry.event as AgentEvent;
+      } else if (entry.type === 'error') {
+        // F3：wire 的 name 是分类字段（如 AbortError），保留给调用方区分中止与失败
+        const e = new Error(`${entry.error?.message ?? 'run stream error'} (${ctxLabel})`);
+        if (entry.error?.name) e.name = entry.error.name;
+        throw e;
+      } else if (entry.type === 'done') {
+        return;
+      } else {
+        throw new Error(`run_remote: unknown stream entry type "${String(entry.type)}" (${ctxLabel})`);
+      }
+    }
+  }
+  // done/error 均在上方终结；落到这里 = 流干净结束而无终态 entry（m1 核心不变量）
+  throw new Error(`run_remote: stream ended without terminal entry (truncated, ${ctxLabel})`);
+}
+
 export interface RemoteRunBackendOptions {
   /** 宿主通知（审批/客户端工具/事件/重投）出口；缺省 fail-loud 留痕 */
   onNotify?: (notify: RunHostNotify) => void;
@@ -57,18 +121,25 @@ export class RemoteRunBackend {
   ): Promise<RemoteRunBackend> {
     const token = randomUUID();
     const bootPath = join(tmpdir(), `run-serve-boot-${randomUUID()}.json`);
-    writeFileSync(bootPath, JSON.stringify({ ...boot, token }), 'utf8');
+    writeRunServeBoot(bootPath, JSON.stringify({ ...boot, token }));
 
     const entry = resolveWorkerUrl('./run-serve-child.js', import.meta.url);
     const env = { ...process.env };
     // 子进程自有 IPC 通道；剥掉继承的通道标识（knowledge fork 同规）
     delete env.NODE_CHANNEL_FD;
     delete env.NODE_CHANNEL_ID;
-    const child = fork(entry, [bootPath], {
-      execArgv: [],
-      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-      env,
-    });
+    let child: ChildProcess;
+    try {
+      child = fork(entry, [bootPath], {
+        execArgv: [],
+        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+        env,
+      });
+    } catch (err) {
+      // fork 同步抛（F9）：boot 已写而子进程没机会读删——父进程兜底清 secret
+      rmSync(bootPath, { force: true });
+      throw err;
+    }
 
     const ready = await new Promise<{ port: number }>((resolve, reject) => {
       let settled = false;
@@ -140,33 +211,7 @@ export class RemoteRunBackend {
       if (!res.ok || !res.body) {
         throw new Error(`run_remote: startRun failed (HTTP ${res.status}): ${await self.errorText(res)}`);
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let nl = buffer.indexOf('\n');
-          while (nl >= 0) {
-            const line = buffer.slice(0, nl).trim();
-            buffer = buffer.slice(nl + 1);
-            nl = buffer.indexOf('\n');
-            if (!line) continue;
-            const entry = JSON.parse(line) as RunStreamEntry;
-            if (entry.type === 'event') {
-              yield entry.event;
-            } else if (entry.type === 'error') {
-              throw new Error(entry.error.message);
-            } else {
-              return;
-            }
-          }
-        }
-      } finally {
-        reader.releaseLock();
-      }
+      yield* decodeRunStream(res.body, `session ${req.sessionId}, run ${req.requestId}`);
     })();
   }
 

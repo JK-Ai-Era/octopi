@@ -115,6 +115,84 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.107.1 (2026-11-11)
+
+### fix(gateway): P0b review minors — stream terminal validation, client-tool bridge payload, boot perms, /runs robustness, shutdown await
+
+Clears the five residual minors from the P0b review rounds (OP-P0B-1 ⑥);
+an independent review pass (10 findings: 2 major, 8 minor) was run afterwards
+and **all findings are fixed in this batch** (see below).
+
+- **m1 stream terminal validation**: `/runs` NDJSON decoding extracted into a
+  pure `decodeRunStream`. A cleanly-ended stream without a `done`/`error`
+  terminal entry is now a **throw** (truncation ≠ success — previously silent
+  success swallowed half a run); unknown entry types also fail loud; error text
+  carries session/run context.
+- **m2 client-tool bridge payload**: the bridge no longer fakes the tool
+  execution context. `client_tool_call` now carries the real `messages`
+  (payload cost accepted — handler contract promises real messages), and the
+  run-side abort signal maps to a new `client_tool_cancel` notify so the
+  gateway aborts the in-flight leg immediately (was: hung to TTL when the
+  abort didn't route through `abortSession()`, e.g. runGuard/budget aborts).
+  Gateway side uses a per-call AbortController and typed fail-loud
+  `not_implemented` effect-journal stubs — the `as never` cast is gone.
+  Contract note: `RunHostNotify.client_tool_call` gains a required `messages`
+  field and `client_tool_cancel` is a new variant; gateway and run instance are
+  version-locked (child forked from same dist), so no mixed-version window.
+- **m6 boot file exposure**: boot file (provider apiKey + loopback token) is
+  written `0600` and deleted by the child immediately after read — exposure
+  window shrinks from "whole run lifetime" to "startup instant".
+- **m7 /runs robustness**: NDJSON writes honor backpressure (await drain on
+  `write === false`); client disconnect (`res` close) aborts the run through
+  the `startRun` signal seam instead of spinning to natural completion; mount
+  failures return 4xx (sync error surface) instead of 500 — symmetrically on
+  `/control` compact; outer catch refuses a second `writeHead` after
+  `headersSent` and the request handler gets a terminal `.catch` — the
+  unhandled-rejection path is gone.
+- **m8 shutdown**: gateway `stop()` awaits `runBackend.stop()` (was `void` —
+  raced process exit against child/boot cleanup); the run child disposes
+  `sessionSchedules` on close and exits on IPC `disconnect` (orphan guard for
+  gateway crash).
+
+Independent-review findings fixed in the same batch:
+
+- **F1 (major)**: after IPC `disconnect`, `process.send` no-ops into an
+  unhandled `'error'` event (`ERR_IPC_CHANNEL_CLOSED`) and crashes the
+  shutdown — all send sites now check `process.connected` and absorb send
+  errors via callback (graceful close stays graceful).
+- **F2 (major)**: `RunHost.disposeAll()` cleared `activeRuns` without aborting
+  — shutdown with an in-flight run hung until the 5s force-exit, and m1 then
+  reported the forced kill as a truncation failure. `disposeAll` now aborts
+  in-flight runs first (streams close with their real terminal state).
+- **F3–F9 (minor)**: `error` entries preserve `name` (abort vs failure stays
+  distinguishable); malformed stream lines throw with context (not a bare
+  `SyntaxError`); the dead `sawTerminal` flag removed (truncation is the only
+  fall-through); effect-journal stubs throw **synchronously** (a rejected
+  promise in a fire-and-forget call site is an unhandled rejection);
+  `clientToolAborts` is aborted + drained at `Gateway.stop()`; `messages` is
+  runtime-validated at the bridge (fail-loud on protocol mismatch); boot file
+  is deleted **before** parsing and cleaned up when `fork()` throws.
+- **F10**: test anchors for m6/m7/m8 (boot 0600 + read-and-delete, client
+  disconnect aborts the run, IPC disconnect self-terminates the child) and a
+  disposeAll-abort anchor for F2.
+
+Verified: build green; 4543 tests green (anchors: `run-stream-decode`
+terminal-state table incl. name-preservation/malformed-line, `client-tool-bridge`
+pairing/payload, `gateway-run-backend` disposeAll-abort, `run-remote-backend`
+m6/m7/m8 e2e); lint 0 new; arch check-sync green.
+
+Also resolves the v0.107.0 known-debt `close timed out` exit symptom with
+~745 phantom FILEHANDLEs (OP-P0B-1 ⑤). Decisive A/B with the original probe
+(`--reporter=hanging-process` on `tests/plugin-channel.test.ts`, whole file):
+parent commit `19cd568c` = 745 ghost handles + 10s close timeout, this commit
+= 0 (two runs), with the test files byte-identical between the two — so the
+cure lies in this batch's shutdown/disposal fixes (F2/m8 family; individual
+member not isolated). Attribution correction: **not** test-exit hygiene — the
+ghosts were Node-bookkeeping shadows of undisposed shutdown work (the
+lsof zero-OS-leak finding still holds). No vitest upstream defect to track.
+
+---
+
 ## v0.107.0 (2026-11-10)
 
 ### feat(gateway): P0b run-instance process split — RemoteRunBackend as the sole run backend

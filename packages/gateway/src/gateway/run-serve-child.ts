@@ -86,13 +86,19 @@ async function main(): Promise<void> {
   if (!bootPath) {
     throw new Error('run-serve-child: missing boot file argument');
   }
-  const boot = JSON.parse(readFileSync(bootPath, 'utf8')) as RunServeBoot;
+  const bootRaw = readFileSync(bootPath, 'utf8');
+  // 读毕即删，先删后解析（m6/F9）：解析失败也不把 provider apiKey + loopback token留在 tmpdir
+  rmSync(bootPath, { force: true });
+  const boot = JSON.parse(bootRaw) as RunServeBoot;
   const config = boot.config;
 
   // ── 宿主通知出口（fork IPC） ──
   const notify = (n: RunHostNotify): void => {
-    if (process.send) {
-      process.send({ kind: 'notify', notify: n });
+    // F1：disconnect 后 process.send 仍在但通道已关——直接调用会发未处理
+    // 'error' 事件（ERR_IPC_CHANNEL_CLOSED）把优雅关闭打成崩溃。判 connected
+    // 并把发送错误吸进回调（关闭路径无上层消费者可回告，进程即将退出）。
+    if (process.connected && process.send) {
+      process.send({ kind: 'notify', notify: n }, () => undefined);
     } else if (n.type === 'log') {
       console[n.level](n.message);
     }
@@ -453,7 +459,16 @@ async function main(): Promise<void> {
               });
               return;
             }
-            await host.ensureMounted(op.agentId, def as unknown as Record<string, unknown>);
+            try {
+              await host.ensureMounted(op.agentId, def as unknown as Record<string, unknown>);
+            } catch (err) {
+              // 与 /runs get-or-mount 对称（m7）：挂载失败 = 同步错误面 → 4xx，不落 500
+              sendJson(res, 409, {
+                ok: false,
+                error: { message: err instanceof Error ? err.message : String(err) },
+              });
+              return;
+            }
           }
           const result = await host.handleControl(op);
           sendJson(res, result.ok ? 200 : 409, result);
@@ -473,14 +488,30 @@ async function main(): Promise<void> {
               });
               return;
             }
-            await host.ensureMounted(runReq.agentId, def as unknown as Record<string, unknown>);
+            try {
+              await host.ensureMounted(runReq.agentId, def as unknown as Record<string, unknown>);
+            } catch (err) {
+              // 挂载失败 = 同步错误面（§4）：4xx，不进流也不落 500（m7）
+              sendJson(res, 409, {
+                ok: false,
+                error: { message: err instanceof Error ? err.message : String(err) },
+              });
+              return;
+            }
           }
           // 错误表面两形态（run-protocol）：同步错（未装载等）→ HTTP 4xx body；
           // 闸门拒/执行错 → 流内 error entry。
+          // 客户端断开 → 中止 run（m7）：res close 经 signal 缝取消，不空转到自然结束。
+          const clientGone = new AbortController();
+          const onClose = (): void => {
+            if (!res.writableEnded) clientGone.abort(new Error('run-serve-child: client disconnected'));
+          };
+          res.on('close', onClose);
           let stream: AsyncIterable<AgentEvent>;
           try {
-            stream = host.startRun(runReq);
+            stream = host.startRun(runReq, clientGone.signal);
           } catch (err) {
+            res.off('close', onClose);
             sendJson(res, 409, {
               ok: false,
               error: { message: err instanceof Error ? err.message : String(err) },
@@ -488,35 +519,58 @@ async function main(): Promise<void> {
             return;
           }
           res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+          // NDJSON 写线程尊重背压（m7）：write false → 等 drain/close；断连后跳过写
+          const writeEntry = async (entry: RunStreamEntry): Promise<void> => {
+            if (res.destroyed || res.writableEnded) return;
+            const line = `${JSON.stringify(entry)}\n`;
+            if (res.write(line)) return;
+            await new Promise<void>((resolve) => {
+              const settle = (): void => {
+                res.off('drain', settle);
+                res.off('close', settle);
+                resolve();
+              };
+              res.once('drain', settle);
+              res.once('close', settle);
+            });
+          };
           try {
             for await (const event of stream) {
-              const entry: RunStreamEntry = { type: 'event', event };
-              res.write(`${JSON.stringify(entry)}\n`);
+              await writeEntry({ type: 'event', event });
             }
-            const done: RunStreamEntry = { type: 'done' };
-            res.write(`${JSON.stringify(done)}\n`);
+            await writeEntry({ type: 'done' });
           } catch (err) {
-            const entry: RunStreamEntry = {
+            await writeEntry({
               type: 'error',
               error: {
                 message: err instanceof Error ? err.message : String(err),
                 ...(err instanceof Error && err.name ? { name: err.name } : {}),
               },
-            };
-            res.write(`${JSON.stringify(entry)}\n`);
+            });
+          } finally {
+            res.off('close', onClose);
+            res.end();
           }
-          res.end();
           return;
         }
 
         sendJson(res, 404, { ok: false, error: { message: `run-serve-child: no route ${req.method} ${url.pathname}` } });
       } catch (err) {
+        // 外层兜底（m7）：流已开始（headersSent）时禁再 writeHead（会抛 → unhandled
+        // rejection），只收尾；未发头才回 JSON 错误面
+        if (res.headersSent || res.destroyed) {
+          res.end();
+          return;
+        }
         sendJson(res, 500, {
           ok: false,
           error: { message: err instanceof Error ? err.message : String(err) },
         });
       }
-    })();
+    })().catch((err) => {
+      // m7：以上全部防线失效时也不许 unhandled rejection（进程级崩面）
+      console.error('[RunServe] request handler failed:', err);
+    });
   });
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -525,41 +579,53 @@ async function main(): Promise<void> {
     throw new Error('run-serve-child: failed to bind loopback port');
   }
 
-  // 优雅关闭：close 消息 → dispose 执行体（放后台 timer）→ 退出
-  process.on('message', (msg: unknown) => {
-    if ((msg as { type?: string })?.type === 'close') {
-      try {
-        host.disposeAll();
-      } catch {
-        // stop 路径 fail-open
-      }
-      // 委派运行时持有送达回执订阅（events 总线）：停机回收，防订阅闭包残留
-      try {
-        delegationRuntime?.dispose();
-      } catch {
-        // stop 路径 fail-open
-      }
-      delegationRuntime = undefined;
-      server.close(() => process.exit(0));
-      // 兜底：连接悬挂时强退（stop 路径不无限等）
-      const t = setTimeout(() => process.exit(0), 5_000);
-      t.unref();
+  // 优雅关闭：close 消息或 IPC 断连（gateway 崩溃/退出）→ dispose 执行体 → 退出。
+  // 断连也走同一出口（m8）：否则 gateway 崩溃后子进程成孤儿常驻。
+  let closing = false;
+  const shutdown = (): void => {
+    if (closing) return;
+    closing = true;
+    try {
+      host.disposeAll();
+    } catch {
+      // stop 路径 fail-open
     }
+    // 委派运行时持有送达回执订阅（events 总线）：停机回收，防订阅闭包残留
+    try {
+      delegationRuntime?.dispose();
+    } catch {
+      // stop 路径 fail-open
+    }
+    delegationRuntime = undefined;
+    // schedule 面持 DB 句柄/定时器：显式 dispose（m8），不靠 process.exit 兜底
+    try {
+      sessionSchedules.dispose();
+    } catch {
+      // stop 路径 fail-open
+    }
+    server.close(() => process.exit(0));
+    // 兜底：连接悬挂时强退（stop 路径不无限等）
+    const t = setTimeout(() => process.exit(0), 5_000);
+    t.unref();
+  };
+  process.on('message', (msg: unknown) => {
+    if ((msg as { type?: string })?.type === 'close') shutdown();
   });
+  process.on('disconnect', shutdown);
 
-  if (process.send) {
-    process.send({ type: 'ready', port: address.port });
+  if (process.connected && process.send) {
+    process.send({ type: 'ready', port: address.port }, () => undefined);
   } else {
-    // 独立调试模式：无 IPC 时自报端口，boot 文件即用即删
+    // 独立调试模式：无 IPC 时自报端口（boot 文件已在读取后即删）
     console.log(`[RunServe] listening on 127.0.0.1:${address.port}`);
-    rmSync(bootPath, { force: true });
   }
 }
 
 main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
-  if (process.send) {
-    process.send({ type: 'error', error: message });
+  // F1 对称面：通道已关时不再 send（避免 unhandled 'error' 事件把启动失败二次炸掉）
+  if (process.connected && process.send) {
+    process.send({ type: 'error', error: message }, () => undefined);
   }
   console.error('[RunServe] boot failed:', message);
   process.exit(1);
