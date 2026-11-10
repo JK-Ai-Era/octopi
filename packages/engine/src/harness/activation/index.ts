@@ -49,3 +49,9 @@ export type {
   RuntimeEventType,
   RuntimeEventListener,
 } from './types.js';
+export type {
+  RunBackend,
+  InProcessAgentHandle,
+  RunBackendHealth,
+  RunBackendMountSpec,
+} from './run-backend.js';

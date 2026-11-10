@@ -5,7 +5,9 @@
  * 防回归背景：`knowledge.required` 自声明以来无消费方（docs 曾承诺 fail-closed
  * 但从未实现）；v0.98.12 落地为 admission 语义。本文件锁两层：
  * 1. 判定纯函数（knowledgeRequiredAdmissionError）；
- * 2. 接线（wrapInflightTracking.execute 咽喉真的调用判定、被拒 run 不到 inner）。
+ * 2. 接线（InProcessRunBackend 执行腿咽喉真的调用判定、被拒 run 不到 Runner）。
+ *    P0a：咽喉随 wrapInflightTracking 搬入 RunBackend 脚手架，本测试随迁——
+ *    并改经 gateway 自己的 runBackend 驱动（覆盖生产端闸门闭包，胜于抓私有方法）。
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
@@ -13,6 +15,7 @@ import {
   knowledgeRequiredAdmissionError,
 } from '@octopi-agent/gateway/gateway/gateway.js';
 import type { GatewayConfig } from '@octopi-agent/gateway/types/gateway-config.js';
+import type { InProcessRunBackend } from '@octopi-agent/gateway/gateway/run-backend.js';
 
 describe('knowledgeRequiredAdmissionError', () => {
   it('required=true + ready → admits (undefined)', () => {
@@ -33,43 +36,64 @@ describe('knowledgeRequiredAdmissionError', () => {
   });
 });
 
-describe('dispatcher 咽喉接线（wrapInflightTracking.execute）', () => {
-  function gatewayWithKnowledge(state: 'ready' | 'degraded'): Gateway {
-    const gw = new Gateway({ agents: [], knowledge: { required: true } } as unknown as GatewayConfig);
+describe('dispatcher 咽喉接线（InProcessRunBackend 执行腿）', () => {
+  function gatewayWithKnowledge(state: 'ready' | 'degraded'): {
+    backend: InProcessRunBackend;
+    runner: {
+      handle: ReturnType<typeof vi.fn>;
+      recordAdmissionRefusal: ReturnType<typeof vi.fn>;
+    };
+  } {
+    const gw = new Gateway(
+      { agents: [], knowledge: { required: true } } as unknown as GatewayConfig,
+      // 显式假 store：不走 createDefaultStore——那会触碰真实 OCTOPI_HOME/sessions，
+      // 且其动态 import 尾巴会拖过测试环境拆除（unhandled rejection）
+      { load: async () => undefined, save: async () => undefined } as never,
+    );
     // getKnowledgeState() 的真实来源：runtime ref 优先，其次 bootState
     (gw as never as { knowledgeRuntimeRef?: unknown }).knowledgeRuntimeRef = { state };
-    return gw;
+    const runner = {
+      handle: vi.fn(() =>
+        (async function* () {
+          yield 'run-event';
+        })(),
+      ),
+      recordAdmissionRefusal: vi.fn(),
+    };
+    // gateway 私有 runBackend（P0a 契约缝实例）：闸门闭包是生产 wiring，不另造
+    const backend = (gw as never as { runBackend: InProcessRunBackend }).runBackend;
+    backend.mount({
+      agentId: 'a1',
+      agent: {} as never,
+      runner: runner as never,
+      registerTools: () => undefined,
+      runConfigDefaults: {},
+    });
+    return { backend, runner };
   }
 
-  function fakeInner() {
-    const execute = vi.fn(() =>
-      (async function* () {
-        yield 'run-event';
-      })(),
-    );
-    return { inbox: undefined, execute } as never;
-  }
+  const runReq = {
+    requestId: 'r1',
+    agentId: 'a1',
+    sessionId: 's1',
+    triggers: [
+      { id: 't1', type: 'message', payload: { kind: 'user_message', content: 'hi' }, timestamp: 1 },
+    ],
+    messages: [{ role: 'user', content: 'hi' }],
+  } as never;
 
-  it('知识未 ready：run 在咽喉被拒（错误带前缀，inner 不被触达）+ 三件套记账', async () => {
-    const gw = gatewayWithKnowledge('degraded');
-    const inner = fakeInner();
-    const recordAdmissionRefusal = vi.fn();
-    const wrapped = (
-      gw as never as {
-        wrapInflightTracking(r: unknown, i: unknown): { execute(req: unknown): AsyncIterable<unknown> };
-      }
-    ).wrapInflightTracking({ recordAdmissionRefusal } as never, inner);
-
-    const iter = wrapped.execute({ agentId: 'a1', sessionId: 's1' } as never);
+  it('知识未 ready：run 在咽喉被拒（错误带前缀，Runner 不被触达）+ 三件套记账', async () => {
+    const { backend, runner } = gatewayWithKnowledge('degraded');
+    const iter = backend.execute(runReq);
     await expect(
       (async () => {
         for await (const _ of iter) void _;
       })(),
     ).rejects.toThrow(/^knowledge_required:/);
-    expect((inner as never as { execute: ReturnType<typeof vi.fn> }).execute).not.toHaveBeenCalled();
+    expect(runner.handle).not.toHaveBeenCalled();
     // 三件套对齐（ops P2）：与 security_config_drift / kill_switch_active 同待遇
-    expect(recordAdmissionRefusal).toHaveBeenCalledTimes(1);
-    expect(recordAdmissionRefusal).toHaveBeenCalledWith(
+    expect(runner.recordAdmissionRefusal).toHaveBeenCalledTimes(1);
+    expect(runner.recordAdmissionRefusal).toHaveBeenCalledWith(
       'ops.knowledge.run_refused',
       expect.objectContaining({
         state: 'degraded',
@@ -81,20 +105,12 @@ describe('dispatcher 咽喉接线（wrapInflightTracking.execute）', () => {
     );
   });
 
-  it('知识 ready：run 正常透达 inner（不记账）', async () => {
-    const gw = gatewayWithKnowledge('ready');
-    const inner = fakeInner();
-    const recordAdmissionRefusal = vi.fn();
-    const wrapped = (
-      gw as never as {
-        wrapInflightTracking(r: unknown, i: unknown): { execute(req: unknown): AsyncIterable<unknown> };
-      }
-    ).wrapInflightTracking({ recordAdmissionRefusal } as never, inner);
-
+  it('知识 ready：run 正常透达 Runner（不记账）', async () => {
+    const { backend, runner } = gatewayWithKnowledge('ready');
     const events: unknown[] = [];
-    for await (const ev of wrapped.execute({} as never)) events.push(ev);
+    for await (const ev of backend.execute(runReq)) events.push(ev);
     expect(events).toEqual(['run-event']);
-    expect((inner as never as { execute: ReturnType<typeof vi.fn> }).execute).toHaveBeenCalledTimes(1);
-    expect(recordAdmissionRefusal).not.toHaveBeenCalled();
+    expect(runner.handle).toHaveBeenCalledTimes(1);
+    expect(runner.recordAdmissionRefusal).not.toHaveBeenCalled();
   });
 });

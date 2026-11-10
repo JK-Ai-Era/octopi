@@ -115,6 +115,35 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.106.1 (2026-11-10)
+
+### refactor(gateway): extract RunBackend contract seam (P0a, behavior-frozen)
+
+- New `RunBackend` contract (`packages/engine/src/harness/activation/run-backend.ts`) and
+  `InProcessRunBackend` scaffold (`packages/gateway/src/gateway/run-backend.ts`); gateway's
+  runner touchpoints converge onto 12 `runBackend.*` call sites. The scaffold surface
+  (mount/get/handles/retire/compactSession/sessionLock/disposeAll/execute) disappears at P0b
+  (run-instance process isolation), where the contract narrows to `startRun` / pure-data
+  `control` / `health`. `InProcessAgentHandle` is named for its process-locality: live
+  references cannot cross the process boundary and the remote surface is pure-data messages,
+  not a handle stub — do not extend the handle as an API surface.
+- Three intentional behavior convergences, declared here:
+  - Concurrent first-mount is now single-flight (fixes the old loser-build product and timer
+    leak; business semantics stay "both requests succeed").
+  - Admission gate takes one snapshot per admission cycle (old and new agents share it within
+    a cycle; rebuilt across cycles).
+  - `SessionRunnerDispatcher` is reused across mounts and resolves the handle per agentId at
+    call time (matches the previous Map semantics).
+- Registered bypasses to close before P0b drops the scaffold: delegation sub-runs call
+  `runner.handle` directly (`TODO(P0b)` anchor in gateway.ts); build-time wiring
+  (`setObserverHub`/`setModelResolver`) moves to the run side together with `buildAgent`.
+- Verification: full vitest green (new `tests/gateway-run-backend.test.ts` — 8 behavior
+  anchors: mount fail-loud, retirement criteria under fake timers, in-flight accounting,
+  concurrent first-mount regression); tsc green for core/engine/gateway; lint green.
+- No breaking changes (behavior-frozen refactor apart from the leak fix).
+
+---
+
 ## v0.106.0 (2026-11-10)
 
 ### feat(plugin): distribution & deployment pipeline — dependency closure + octopi plugin install (P6-6)

@@ -91,12 +91,13 @@ import {
   prepareHandlerArgs,
   resolveToolCallPurpose,
 } from '@octopi-agent/engine/harness/agent/tool-purpose.js';
-import { AgentRuntime, SessionRunnerDispatcher, ExplicitRouter } from '@octopi-agent/engine/harness/activation/index.js';
+import { AgentRuntime, ExplicitRouter } from '@octopi-agent/engine/harness/activation/index.js';
+import type { InProcessAgentHandle } from '@octopi-agent/engine/harness/activation/run-backend.js';
+import { InProcessRunBackend } from './run-backend.js';
 import { dispatchChannelMessage } from '@octopi-agent/engine/integration/agent-runtime/channel-message-source.js';
 import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
 import type { HitlDecision } from '@octopi-agent/core/types/tools.js';
 import { defaultHitlCache } from '@octopi-agent/engine/harness/governance/human-in-the-loop/decision-cache.js';
-import { InProcessSessionLock } from '@octopi-agent/engine/harness/run/concurrency/session-lease.js';
 import { ObserverHub } from '@octopi-agent/engine/harness/observability/observer/hub.js';
 import type {
   RunMessagesSnapshot,
@@ -469,20 +470,15 @@ export class Gateway {
   >;
   /** 委派未启用诊断日志只打一次 */
   private delegationSkippedLogged = false;
-  /** Agent 缓存（避免每条消息重建） */
-  private agentCache = new Map<string, {
-    agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
-    runner: SessionAwareRunner;
-    contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
-    contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
-  }>();
   /**
-   * 热失效退役的 runner（arch/config-hot-reload.md §3：新 run 生效，在跑 run 跑完）。
-   * dispose 判据 = in-flight run 计数归零（dispatcher 包装跟踪）；长尾 30min 强制兜底（warn）。
+   * run 托管契约缝（arch/service-topology.md §4）：挂载槽 / in-flight 计数 /
+   * 退役回收 / 会话锁经 InProcessRunBackend（P0a 脚手架）。
+   * 已注记旁路（P0b 收口，见 §9）：构建期 Runner 装配（buildAgent 内
+   * setObserverHub/setModelResolver）与 delegation 子 run（attach 持裸 runner）。
    */
-  private retiredRunners: SessionAwareRunner[] = [];
-  /** runner → in-flight run 计数（dispatcher 包装维护；退役 dispose 判据） */
-  private runnerInflight = new WeakMap<SessionAwareRunner, number>();
+  private runBackend: InProcessRunBackend;
+  /** 单飞构建：同 agent 并发首建合流为一次（防 mount 冲突 + 构建产物泄漏） */
+  private buildInFlight = new Map<string, Promise<InProcessAgentHandle>>();
   /** 流式 adapter 引用（用于广播事件） */
   private streamingAdapters: StreamingChannelAdapter[] = [];
   /** RUN_EVENT 已广播的 Loop 事件对象（总线原始副本去重，防双投） */
@@ -524,8 +520,6 @@ export class Gateway {
   private agentSignalPushDisabled = false;
   /** Session ACL（E6）；缺省内置五角色 */
   private sessionAcl: SessionAclService;
-  /** 进程内共享 Session Lease（E1/E2）：所有 Runner 注入同一实例 */
-  private sessionLease: import('@octopi-agent/engine/harness/run/concurrency/session-lease.js').InProcessSessionLock;
   /** 会话日程（arch/session-schedules.md）；进程级单例 + schedules.db */
   private sessionSchedules?: import('@octopi-agent/engine/harness/session/schedules/service.js').SessionScheduleService;
   /** 会话标题更新去重（同 session 并发只跑一次） */
@@ -595,7 +589,19 @@ export class Gateway {
       this.reportPluginServiceFailure(service, error);
     }, this.pluginManager.getHookAudit());
     this.sessionAcl = new SessionAclService(config.sessionAcl);
-    this.sessionLease = new InProcessSessionLock();
+    this.runBackend = new InProcessRunBackend({
+      redispatch: (trigger, options) => this.runtime.dispatch(trigger, options),
+      // run 起点准入闸门政策（knowledge.required）在 gateway；执行在 backend 包装层。
+      // state 单次快照同时用于判定与账本（原实现两次调用取态；有意收敛——账本与
+      // 判定状态必然一致，见 CHANGELOG）
+      admissionGate: (req) => {
+        const state = this.getKnowledgeState();
+        const error = knowledgeRequiredAdmissionError(this.config.knowledge?.required, state);
+        return error
+          ? { event: 'ops.knowledge.run_refused', error, state }
+          : undefined;
+      },
+    });
     this.issueRegistry = new IssueRegistry();
     this.commandRouter = this.createCommandRouter();
     this.clientStreamTransport = new ClientStreamTransport({
@@ -1017,7 +1023,7 @@ export class Gateway {
         // 语义：通知不打断当前 Run，延迟到 Run 结束才落库（大哥 2026-11-04 确认）。
         // setNotify 调用方是 `void Promise.resolve(...)`，不会堵 tick；多个待写
         // 通知按 FIFO 排队，各自独立完成。
-        const release = await this.sessionLease.acquire(schedule.sessionId);
+        const release = await this.runBackend.sessionLock.acquire(schedule.sessionId);
         try {
           const session = await this.store.load(schedule.sessionId);
           if (!session) return;
@@ -1719,23 +1725,8 @@ export class Gateway {
       }
     }
 
-    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）
-    for (const cached of this.agentCache.values()) {
-      try {
-        cached.runner.dispose();
-      } catch {
-        // stop 路径 fail-open，不阻断关闭
-      }
-    }
-    this.agentCache.clear();
-    // 热失效退役 runner 兜底回收
-    for (const runner of this.retiredRunners.splice(0)) {
-      try {
-        runner.dispose();
-      } catch {
-        // stop 路径 fail-open，不阻断关闭
-      }
-    }
+    // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）+ 退役回收
+    this.runBackend.disposeAll();
 
     // 释放 provider transport（keep-alive dispatcher 的连接池）；
     // 经 Promise 桥接，dispose 的同步/异步异常都落进 catch，不阻断关闭
@@ -1782,11 +1773,7 @@ export class Gateway {
   removeAgent(agentId: string): void {
     this.agents.delete(agentId);
     this.runtime.unregisterAgent(agentId);
-    const cached = this.agentCache.get(agentId);
-    if (cached) {
-      this.agentCache.delete(agentId);
-      this.retireRunner(cached.runner);
-    }
+    this.runBackend.retire(agentId);
   }
 
   /**
@@ -1849,18 +1836,17 @@ export class Gateway {
    * @param agentId - 失效的 agent id
    */
   async invalidateAgentBuild(agentId: string): Promise<void> {
-    const cached = this.agentCache.get(agentId);
-    if (cached) {
-      this.agentCache.delete(agentId);
-      this.retireRunner(cached.runner);
-    }
+    this.runBackend.retire(agentId);
     // 立即重建（新 provider/level/定义）+ 覆盖注册
     const def = this.agents.get(agentId);
     if (!def) return;
     try {
-      const fresh = await this.buildAgent(def);
-      this.agentCache.set(agentId, fresh);
-      await this.registerRuntimeAgent(def, fresh.runner);
+      // 等在飞构建收敛后强制重建（新配置必须生效）：等待期间若有并发挂载（旧配置
+      // 产物）则再退役一次丢弃，随后单飞 get-or-mount 保证新构建
+      await this.buildInFlight.get(agentId)?.catch(() => undefined);
+      this.runBackend.retire(agentId);
+      const handle = await this.getOrMountHandle(def);
+      await this.registerRuntimeAgent(def, handle);
       console.log(`[Gateway] Rebuilt agent after config change: ${agentId}`);
     } catch (err) {
       // 构建失败降级（#6 fail-honest）：注册表仍保留新 def，缓存留空由下一条消息
@@ -1871,7 +1857,7 @@ export class Gateway {
 
   /** 热失效全部 agent 构建（level 路由变更等影响面难精确枚举时） */
   async invalidateAllAgentBuilds(): Promise<void> {
-    for (const agentId of [...this.agentCache.keys()]) {
+    for (const agentId of this.runBackend.mountedAgentIds()) {
       await this.invalidateAgentBuild(agentId);
     }
   }
@@ -1945,41 +1931,6 @@ export class Gateway {
     console.log(`[Gateway] Hot-removed provider: ${name}`);
   }
 
-  /** 退役 runner：in-flight 计数归零即 dispose；30min 长尾强制兜底（warn 后仍回收） */
-  private retireRunner(runner: SessionAwareRunner): void {
-    this.retiredRunners.push(runner);
-    const tryDispose = (): void => {
-      const inflight = this.runnerInflight.get(runner) ?? 0;
-      if (inflight > 0) {
-        // 仍有 run 在旧构建上跑完（拍板语义：不抢锁、不断流）——稍后重查
-        const t = setTimeout(tryDispose, 5_000);
-        t.unref?.();
-        return;
-      }
-      this.disposeRetiredRunner(runner);
-    };
-    tryDispose();
-    const force = setTimeout(() => {
-      if (this.retiredRunners.includes(runner)) {
-        console.warn('[Gateway] retired runner force-disposed with runs possibly in-flight (>30min)');
-        this.disposeRetiredRunner(runner);
-      }
-    }, 30 * 60_000);
-    force.unref?.();
-  }
-
-  /** 退役 runner 回收（幂等；stop 兜底也走这里） */
-  private disposeRetiredRunner(runner: SessionAwareRunner): void {
-    const idx = this.retiredRunners.indexOf(runner);
-    if (idx < 0) return;
-    this.retiredRunners.splice(idx, 1);
-    this.runnerInflight.delete(runner);
-    try {
-      runner.dispose();
-    } catch {
-      // 退役回收 fail-open：dispose 只清后台 timer，失败不阻断
-    }
-  }
 
   registerChannel(adapter: ChannelAdapter): void {
     if (this.channels.has(adapter.name)) {
@@ -2869,15 +2820,7 @@ export class Gateway {
 
     // E4：compact 键使用调用方 agentId（缺省 primary）；不静默改键
     const effectiveAgentId = agentId ?? session.primaryAgentId ?? session.agentId;
-    let cached = this.agentCache.get(effectiveAgentId);
-    if (!cached) {
-      const def = this.agents.get(effectiveAgentId);
-      if (!def) {
-        throw new Error(`Agent "${effectiveAgentId}" not found`);
-      }
-      cached = await this.buildAgent(def);
-      this.agentCache.set(effectiveAgentId, cached);
-    }
+    const cached = await this.ensureBuiltForControl(effectiveAgentId);
 
     const engine = cached.contextEngine;
     type StructuralEngine = {
@@ -2966,7 +2909,7 @@ export class Gateway {
       }));
 
     // D1：与 handle 共用 Runner session 锁；持久化走 Runner（E4 键）
-    return cached.runner.compactSession(sessionId, effectiveAgentId, {
+    return this.runBackend.compactSession(sessionId, effectiveAgentId, {
       systemPrompt: cached.agent.context.systemPrompt,
       tools: manualTools,
       compactStructural: (input) =>
@@ -3402,7 +3345,7 @@ export class Gateway {
     messageCount: number;
     fileEffects: import('@octopi-agent/engine').DiscardFileEffectsResult;
   }> {
-    const release = await this.sessionLease.acquire(sessionId);
+    const release = await this.runBackend.sessionLock.acquire(sessionId);
     try {
       const session = await this.store.load(sessionId);
       if (!session) {
@@ -4773,7 +4716,7 @@ export class Gateway {
    * @returns 健康快照
    */
   async getAgentContextHealth(agentId: string): Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth> {
-    const cached = this.agentCache.get(agentId);
+    const cached = this.runBackend.get(agentId);
     if (cached?.contextHealth) {
       return cached.contextHealth(agentId);
     }
@@ -5378,7 +5321,7 @@ export class Gateway {
     ops: Array<{ op: 'add'; tool: RegisteredTool } | { op: 'remove'; name: string }>,
   ): void {
     const visibility = this.clientTools.createVisibilityFilter();
-    for (const { agent } of this.agentCache.values()) {
+    for (const { agent } of this.runBackend.handles()) {
       agent.setToolVisibilityFilter(visibility);
       if (ops.length === 0) continue;
       const current = agent.tools;
@@ -5539,18 +5482,8 @@ export class Gateway {
       }
     }
 
-    // 3. 获取或构建 Agent + SessionAwareRunner，并注册进 Runtime
-    let cached = this.agentCache.get(agent.id);
-    if (!cached) {
-      cached = await this.buildAgent(agent);
-      this.agentCache.set(agent.id, cached);
-    }
-    const { runner } = cached;
-
-    // 确保 Runtime 已注册该 agent 的 dispatcher
-    if (!this.runtime.listAgents().some((a) => a.agentId === agent.id)) {
-      await this.registerRuntimeAgent(agent, runner);
-    }
+    // 3. 获取或构建执行体（经 RunBackend 挂载）并确保 Runtime 已注册 dispatcher
+    await this.ensureAgentHandle(agent);
 
     // 4–5. 经激活宿主执行（模型 A）；onEvent 做流式广播（不变量 #6）
     let finalContent = '';
@@ -5660,11 +5593,24 @@ export class Gateway {
     }
   }
 
-  private async registerRuntimeAgent(
+  /**
+   * 挂载执行体进 RunBackend（触发面归 gateway、执行面归 backend，§5.4）。
+   * 仅内联 persona 写入 defaults；文件式 persona 由 runner 的 resolver 每轮解析。
+   *
+   * @param agent - agent 定义
+   * @param built - 构建产物（buildAgent 返回）
+   * @returns gateway 侧句柄
+   */
+  private mountBuilt(
     agent: AgentDefinition,
-    runner: SessionAwareRunner,
-  ): Promise<void> {
-    // 仅内联 persona 写入 defaults；文件式 persona 由 runner 的 resolver 每轮解析
+    built: {
+      agent: import('@octopi-agent/engine/harness/run/agent/index.js').Agent;
+      runner: SessionAwareRunner;
+      contextEngine?: import('@octopi-agent/engine/harness/context/types.js').ContextEngine;
+      contextHealth?: (agentId?: string) => Promise<import('@octopi-agent/engine/harness/context/layer-health.js').ContextLayerHealth>;
+      registerTools: (tools: import('@octopi-agent/engine').RegisteredTool[]) => void;
+    },
+  ): InProcessAgentHandle {
     const runSystemPrompt =
       typeof agent.persona === 'object' ? agent.persona?.systemPrompt ?? '' : '';
     let contextWindow = agent.model.contextWindow;
@@ -5672,82 +5618,110 @@ export class Gateway {
       const provider = this.providers.get(agent.model.provider);
       contextWindow = provider?.getModelInfo(agent.model.model)?.contextWindow;
     }
+    return this.runBackend.mount({
+      agentId: agent.id,
+      agent: built.agent,
+      runner: built.runner,
+      ...(built.contextEngine === undefined ? {} : { contextEngine: built.contextEngine }),
+      ...(built.contextHealth === undefined ? {} : { contextHealth: built.contextHealth }),
+      registerTools: built.registerTools,
+      // 不要把 agent 默认 model 写入 defaults：
+      // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
+      runConfigDefaults: {
+        agentId: agent.id,
+        contextWindow,
+        systemPrompt: runSystemPrompt,
+      },
+    });
+  }
 
+  /**
+   * 把句柄注册进激活宿主（RuntimeAgent 的执行腿 = handle.dispatcher，已含准入/in-flight 包装）。
+   * 重注册复用 handle.dispatcher（原实现每次新建 dispatcher/丢弃旧 inbox 排队项；有意收敛——
+   * 同执行体保持同一执行腿与 inbox 连续性，见 CHANGELOG）。
+   *
+   * @param agent - agent 定义
+   * @param handle - RunBackend 句柄
+   */
+  private async registerRuntimeAgent(
+    agent: AgentDefinition,
+    handle: InProcessAgentHandle,
+  ): Promise<void> {
     this.runtime.registerAgent({
       agentId: agent.id,
-      dispatcher: this.wrapInflightTracking(
-        runner,
-        new SessionRunnerDispatcher({
-          runner,
-          redispatch: (trigger, options) => this.runtime.dispatch(trigger, options),
-          // 不要把 agent 默认 model 写入 defaults：
-          // RunConfig.model 只表示**消息级**覆盖；会话覆盖在 session.metadata.model
-          runConfigDefaults: {
-            agentId: agent.id,
-            contextWindow,
-            systemPrompt: runSystemPrompt,
-          },
-        }),
-      ),
+      dispatcher: handle.dispatcher,
       resolveSession: (trigger) => trigger.sessionId ?? `${agent.id}:main`,
     });
   }
 
   /**
-   * 包装 dispatcher：execute 期间维护 runner 的 in-flight run 计数。
-   * 退役 runner 的 dispose 判据即此计数归零（拍板①：在跑 run 用旧构建跑完）。
+   * 消息路径 get-or-mount：未挂载则构建 + 挂载；并确保 Runtime 已注册 dispatcher
+   * （缓存命中但未注册的窗口，冻结原语义）。
    *
-   * @param runner - 计数归属的 runner
-   * @param inner - 原 dispatcher
-   * @returns 包装后的 dispatcher（结构兼容 RunDispatcher）
+   * @param agent - agent 定义
+   * @returns 已挂载且已注册的句柄
    */
-  private wrapInflightTracking(
-    runner: SessionAwareRunner,
-    inner: SessionRunnerDispatcher,
-  ): SessionRunnerDispatcher {
-    const tracker = this;
-    return {
-      inbox: inner.inbox,
-      execute(req: Parameters<SessionRunnerDispatcher['execute']>[0], signal?: AbortSignal) {
-        // knowledge.required 准入闸门（run 起点复核，与安全配置漂移守卫同位）：
-        // 知识面未达 ready 时拒绝新 run，错误经 run 通道回给用户。
-        // 状态取 getKnowledgeState()（/health 同源，boot 失败=degraded 而非 disabled）；
-        // 被拒 run 不计入 in-flight（retireRunner 判据不受影响）。
-        const gateError = knowledgeRequiredAdmissionError(
-          tracker.config.knowledge?.required,
-          tracker.getKnowledgeState(),
-        );
-        if (gateError) {
-          // 三件套对齐（ops P2）：与 security_config_drift / kill_switch_active 同待遇——
-          // 账本 + 观测 + run 通道报错。required 拒 run 是知识面故障下最响的事件，
-          // 不得只留用户侧报错（监控盲区/审计缺口）。
-          const origin = { agentId: req.agentId, sessionId: req.sessionId };
-          runner.recordAdmissionRefusal(
-            'ops.knowledge.run_refused',
-            {
-              state: tracker.getKnowledgeState(),
-              action: 'refuse_new_run',
-              reason: gateError,
-              origin,
-            },
-            origin,
-          );
-          return (async function* () {
-            throw new Error(gateError);
-          })();
+  private async ensureAgentHandle(agent: AgentDefinition): Promise<InProcessAgentHandle> {
+    const handle = await this.getOrMountHandle(agent);
+    if (!this.runtime.listAgents().some((a) => a.agentId === agent.id)) {
+      await this.registerRuntimeAgent(agent, handle);
+    }
+    return handle;
+  }
+
+  /**
+   * 单飞 get-or-mount：同 agent 并发首建合流为一次构建。
+   *
+   * 语义基线：旧实现并发首建时缓存后写覆盖、两条消息都能跑完（代价是败者 runner
+   * 的后台 timer 泄漏）。本实现保持"并发请求全部成功"的业务语义，并消除泄漏：
+   * 竞态败者回收自己的构建产物、复用胜者句柄；其余 mount 错误如实上抛（fail-loud）。
+   *
+   * @param agent - agent 定义
+   * @returns 句柄（保证已挂载）
+   */
+  private getOrMountHandle(agent: AgentDefinition): Promise<InProcessAgentHandle> {
+    const existing = this.runBackend.get(agent.id);
+    if (existing) return Promise.resolve(existing);
+    const inFlight = this.buildInFlight.get(agent.id);
+    if (inFlight) return inFlight;
+    const task = (async () => {
+      const built = await this.buildAgent(agent);
+      try {
+        return this.mountBuilt(agent, built);
+      } catch (err) {
+        // mount 失败回收构建产物（防后台 timer 泄漏）；竞态败者复用胜者，其余错误照抛
+        try {
+          built.runner.dispose();
+        } catch {
+          // 回收失败不掩盖原始错误
         }
-        tracker.runnerInflight.set(runner, (tracker.runnerInflight.get(runner) ?? 0) + 1);
-        const iter = inner.execute(req, signal);
-        return (async function* () {
-          try {
-            yield* iter;
-          } finally {
-            // 完成 / 抛错 / 消费端提前 return 均收敛计数
-            tracker.runnerInflight.set(runner, (tracker.runnerInflight.get(runner) ?? 1) - 1);
-          }
-        })();
-      },
-    } as unknown as SessionRunnerDispatcher;
+        const winner = this.runBackend.get(agent.id);
+        if (winner) return winner;
+        throw err;
+      }
+    })();
+    this.buildInFlight.set(agent.id, task);
+    const clear = (): void => {
+      if (this.buildInFlight.get(agent.id) === task) this.buildInFlight.delete(agent.id);
+    };
+    void task.then(clear, clear);
+    return task;
+  }
+
+  /**
+   * 控制面 get-or-mount（compact 等）：只挂载、不注册 Runtime（冻结原语义）。
+   *
+   * @param agentId - agent id
+   * @returns 句柄
+   */
+  private async ensureBuiltForControl(agentId: string): Promise<InProcessAgentHandle> {
+    const existing = this.runBackend.get(agentId);
+    if (existing) return existing;
+    const def = this.agents.get(agentId);
+    if (!def) {
+      throw new Error(`Agent "${agentId}" not found`);
+    }
+    return this.getOrMountHandle(def);
   }
 
   /**
@@ -5976,7 +5950,7 @@ export class Gateway {
       extraRunnerConfig: {
         // ops P2：安全配置漂移守卫（daemon 锚定；漂移拒新 run）
         securityIntegrity: this.config.securityIntegrity,
-        sessionLease: this.sessionLease,
+        sessionLease: this.runBackend.sessionLock,
         sessionAcl: this.sessionAcl,
         sessionScheduleService: this.sessionSchedules,
         requireCredentialBindings: this.config.credentials?.requireBindings === true,
@@ -6253,6 +6227,9 @@ export class Gateway {
     // 委派编排（arch/delegation.md §7/§14）：惰性构建，attach 后该 agent 可被委派/可发委派。
     // notify 通道：接收端 AgentSignalSource 默认随委派接线补挂（ensureDelegationRuntime），
     // 与 notifier 同源同生命周期；显式 agentSignal:false 时退化为 poll + 状态提示。
+    // TODO(P0b): 子 run 绕过 RunBackend 契约（RunnerChildRunPort 持裸 runner，child-run 直调
+    // runner.handle）——退役判据（in-flight）看不见子 run，且契约缝在此漏出。P0b 删脚手架前
+    // 必须把子 run 收口到契约（arch/service-topology.md §9 已注记债务）。
     (await this.ensureDelegationRuntime())?.attach({
       agentId: agent.id,
       agent: built.agent,
