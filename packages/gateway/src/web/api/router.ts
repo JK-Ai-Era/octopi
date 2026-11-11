@@ -121,10 +121,14 @@ export class WebApiRouter {
 
       if (relativePath === '/fleet/scale' && method === 'POST') {
         const body = await this.readBody(req);
-        if (!body?.version || typeof body.n !== 'number') {
-          return this.json(res, 400, { ok: false, error: 'version and n are required' });
+        // MAJ-3 修复：n 必须整数 0-64（防小数截断 drain 全版本 / 无界 spawn）；buildRef 显式
+        if (!body?.version || typeof body.buildRef !== 'string') {
+          return this.json(res, 400, { ok: false, error: 'version and buildRef are required' });
         }
-        const outcome = await this.gateway.fleetScale(body.version, body.buildRef ?? 'self', body.n);
+        if (!Number.isInteger(body.n) || body.n < 0 || body.n > 64) {
+          return this.json(res, 400, { ok: false, error: 'n must be an integer in [0,64]' });
+        }
+        const outcome = await this.gateway.fleetScale(body.version, body.buildRef, body.n);
         return this.json(res, 200, { ok: true, data: outcome });
       }
 

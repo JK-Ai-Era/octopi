@@ -55,29 +55,15 @@ describe('V6 OP-KNOW-LOCK 撞锁取证（模拟 gateway 硬死）', () => {
     const holder = JSON.parse(readFileSync(lockPath, 'utf8')) as { holderPid: number };
 
     // 第二进程拉起（= gateway 重启后 manageLocal 再 fork）
-    const result = await startKnowledgeServiceProcess({
-      dbPath: join(home, 'knowledge.db'),
-      tokens: [],
-      port: 0,
-      startTimeoutMs: 15_000,
-    })
-      .then((h) => {
-        handles.push(h);
-        return { outcome: 'started', handle: h };
-      })
-      .catch((err: unknown) => ({
-        outcome: 'rejected',
-        error: err instanceof Error ? err.message : String(err),
-      }));
-
-    console.log(`[V6 forensics] holderPid=${String(holder.holderPid)}, second start -> ${result.outcome}${result.outcome === 'rejected' ? `: ${result.error}` : ''}`);
-
-    if (result.outcome === 'rejected') {
-      // 取证结论：撞锁复现（OP-KNOW-LOCK 缺口成立）——接管设计另行拍板
-      expect(result.error).toMatch(/already locked|locked by/i);
-    } else {
-      // 取证结论：存在接管/回收语义（更新 OP-KNOW-LOCK 记录）
-      expect(result.outcome).toBe('started');
-    }
+    // MIN-12 修复：钉实测行为（撞锁拒绝）——行为若变（接管落地）测试即红，届时更新锚
+    await expect(
+      startKnowledgeServiceProcess({
+        dbPath: join(home, 'knowledge.db'),
+        tokens: [],
+        port: 0,
+        startTimeoutMs: 15_000,
+      }),
+    ).rejects.toThrow(/already locked/i);
+    console.log(`[V6 forensics] holderPid=${String(holder.holderPid)} — collision pinned`);
   }, 30_000);
 });

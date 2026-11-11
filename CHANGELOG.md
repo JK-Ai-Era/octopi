@@ -115,6 +115,25 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.2 (2026-11-12)
+
+### fix(gateway): P1 评审修复批 — 7 MAJ + 11 MIN（fresh-eyes 评审 del-fae8be78 核实后）
+
+- **MAJ-1（生产回归，最重）**：投影单写者只挂默认 store 工厂——生产组合根（daemon.ts 注入 store）`sessionIndex` 恒 undefined → 运行期零投影（相对 v0.109.3 回归）。修复：`projectStore` 门面与 store 来源**解耦**（写口写后投影单挂点），注入 store 与默认工厂同走门面；直接回归锚「注入 store 路径也投影」补入。
+- **MAJ-2**：`setWeights` 先全量校验后落状态（拒绝不留半改路由）。
+- **MAJ-3**：`/fleet/scale` 入参 fail-loud（n 整数 [0,64]、buildRef 显式——防小数截断 drain 全版本/无界 spawn）。
+- **MAJ-4**：事件归档数据源改 **execute 流自收**（与 Hub 的 webPanel/observer 门禁解耦——归档默认即工作；Hub 富化面随 observer 开启另行增强）。
+- **MAJ-5**：`load.queued` 无生产者——负载判据回退 inFlightRuns，queued 标注 reserved（随排队/流控语义落地再纳入；勿空转假数据）。
+- **MAJ-6**：`createSqliteSessionIndex` 增 `readOnly` 模式——run 侧 prefilter 真只读打开（不写 WAL/不做 DDL），sessions.index.db 单写者纪律名实相符。
+- **MAJ-7**：V1 判据修正（Message 无 sessionId 字段，旧交叉判据空转）——改会话专属内容标记查交叉 + state.json 存在断言。
+- **MIN 批**：lease 续租认持有者（防旁观实例误续）；run 侧 updateMetadata 补写后通知；projectionThrottle 上限+unref；events 旁路随会话删除；回放读口行数上限+半写行容错；drift 失败分账（replacementFailed/drainFailed，drain 失败声明替换件归属）；运行期黑洞退避（抽样只在有 ready 副本的版本里选+warn）；scale drain 目标稳定排序；run-backend 死 import 删净（activation→run 类型边真断）；V6 取证测试钉实测行为（单分支）。
+- **breaking note 补记（MIN-11）**：v0.110.1 的 `@octopi-agent/engine/harness/activation/*` 导出面移除 `InProcessAgentHandle`/`RunBackendMountSpec`（已迁 `harness/run/run-host.js`）——公共子路径面 breaking，本条补记。
+- **边界声明（MIN-7/8/14 同批）**：「拒黑洞」设置时刻校验+运行期退避，但退避期间权重分布暂偏（warn 标注）；fleet-wide control 的独立 target 快照（MIN-8）与归档截断语义（MIN-14：events 为采样打平面非全量回放）另行记账。
+- 评审「核实为真」10 项：lease 并发正确性（同 tick 原子/runId 判等/对称清理）、fanOut 单一事实源、canary 确定性与 sticky 不迁移、契约拆分行为冻结、I2 降级不阻断等。
+- 全量 4646 passed。
+
+---
+
 ## v0.112.1 (2026-11-12)
 
 ### test(gateway): P1-5 验收演练 — V1 并发零冲突 + V6 撞锁取证

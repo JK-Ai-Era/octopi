@@ -97,6 +97,7 @@ function recordOf(instanceId: string): InstanceRecord {
 async function consumeRun(
   fleet: FleetRunBackend,
   sessionId: string,
+  marker: string,
 ): Promise<{ done: boolean; error?: string }> {
   try {
     for await (const _ of fleet.startRun({
@@ -104,7 +105,7 @@ async function consumeRun(
       triggers: [{ kind: 'user' }],
       agentId: 'probe-agent',
       sessionId,
-      messages: [{ role: 'user', content: 'hello', timestamp: Date.now() }],
+      messages: [{ role: 'user', content: marker, timestamp: Date.now() }],
     } as never)) {
       void _;
     }
@@ -135,26 +136,27 @@ describe('V1 并发多实例跑不同会话零写冲突', () => {
 
       // 两会话并发（真进程、真写盘）
       const [r1, r2] = await Promise.all([
-        consumeRun(fleet, 's-v1-a'),
-        consumeRun(fleet, 's-v1-b'),
+        consumeRun(fleet, 's-v1-a', 'hello-from-a'),
+        consumeRun(fleet, 's-v1-b', 'hello-from-b'),
       ]);
       expect(r1).toEqual({ done: true });
       expect(r2).toEqual({ done: true });
 
-      // 零写冲突：两会话各自会话文件完整（可 parse、内容不交叉）
+      // 零写冲突：两会话各自会话文件完整 + 内容零交叉（MAJ-7 修复：Message 无
+      // sessionId 字段，旧判据空转——改按会话专属内容标记查交叉）
+      const rawBySid: Record<string, string> = {};
       for (const sid of ['s-v1-a', 's-v1-b']) {
         const jsonlPath = join(home, 'sessions', `${sid}.jsonl`);
         expect(existsSync(jsonlPath)).toBe(true);
-        const lines = readFileSync(jsonlPath, 'utf8')
-          .split('\n')
-          .filter((l) => l.trim().length > 0);
-        for (const line of lines) {
-          const entry = JSON.parse(line) as { sessionId?: string };
-          if (entry.sessionId !== undefined) {
-            expect(entry.sessionId).toBe(sid); // 无交叉污染
-          }
+        const raw = readFileSync(jsonlPath, 'utf8');
+        rawBySid[sid] = raw;
+        for (const line of raw.split('\n').filter((l) => l.trim().length > 0)) {
+          JSON.parse(line); // 可 parse = 完整
         }
+        expect(existsSync(join(home, 'sessions', `${sid}.state.json`))).toBe(true);
       }
+      expect(rawBySid['s-v1-a']).not.toContain('hello-from-b'); // A 不含 B 的内容
+      expect(rawBySid['s-v1-b']).not.toContain('hello-from-a'); // B 不含 A 的内容
 
       // lease 各自持有（不同会话不互斥）——终态已 release
       expect(fleet.isInFlight('s-v1-a')).toBe(false);

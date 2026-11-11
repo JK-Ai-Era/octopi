@@ -14,13 +14,8 @@
  * 本契约禁止再引入函数型参数。
  */
 
-import type { RegisteredTool } from '@octopi-agent/core/types.js';
 import type { RunDispatcher } from './types.js';
 import type { SessionLease } from '../run/concurrency/session-lease.js';
-import type { SessionAwareRunner, RunConfig } from '../run/runner.js';
-import type { Agent } from '../run/agent/index.js';
-import type { ContextEngine } from '../context/types.js';
-import type { ContextLayerHealth } from '../context/layer-health.js';
 import type { CompactTransportOutcome } from '../context/capabilities/compact/types.js';
 import type { OpsAuditEvent } from '../extension/execution-environment/ops-audit.js';
 

@@ -64,6 +64,27 @@ describe('P1-1 检索投影收口（单写者=gateway 门面）', () => {
     return reader;
   }
 
+  it('①-injected 注入 store 路径也投影（MAJ-1 回归锚：生产组合根形态）', async () => {
+    // daemon.ts:1022 的生产形态 = new Gateway(config, 注入 store)——投影门面必须
+    // 与 store 来源解耦（旧实现只挂默认工厂，生产零投影=回归）
+    const { InMemorySessionStore } = await import(
+      '../packages/engine/src/integration/storage/memory.js'
+    );
+    const gateway = new Gateway(
+      { agents: [makeAgent('assistant')], knowledge: { service: { manageLocal: false } } },
+      new InMemorySessionStore(),
+    );
+    await (gateway as unknown as { ensureStore(): Promise<void> }).ensureStore();
+    await gateway.createSession({ agentId: 'assistant', sessionId: 's-injected' });
+
+    const reader = await openReader();
+    try {
+      expect(await reader.countSessions()).toBe(1);
+    } finally {
+      reader.close();
+    }
+  });
+
   it('① 零消息会话创建即入投影（不等 boot 对齐）', async () => {
     const gateway = await makeGateway();
     await gateway.createSession({ agentId: 'assistant', sessionId: 's-zero' });

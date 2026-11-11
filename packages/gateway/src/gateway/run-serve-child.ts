@@ -137,10 +137,11 @@ async function main(): Promise<void> {
     const { createSqliteSessionIndex } = await import(
       '@octopi-agent/engine/integration/storage/session-index.js'
     );
+    // MAJ-6：只读打开（不写 WAL、不做 DDL）——sessions.index.db 单写者=gateway 门面
     sessionIndexReader = await createSqliteSessionIndex({
       dbPath: join(boot.octopiHome, 'sessions.index.db'),
+      readOnly: true,
     });
-    await sessionIndexReader.ensureSchema();
   } catch (err) {
     notify({
       type: 'log',
@@ -153,6 +154,14 @@ async function main(): Promise<void> {
     sessionsDir: join(boot.octopiHome, 'sessions'),
     index: sessionIndexSink,
   });
+  // MIN-2：updateMetadata 不走 store 的 index 钩子——写后补发通知（投影门面同权）
+  const origUpdateMetadata = store.updateMetadata?.bind(store);
+  if (origUpdateMetadata) {
+    store.updateMetadata = async (sessionId, mutate) => {
+      await origUpdateMetadata(sessionId, mutate);
+      notify({ type: 'session_saved', sessionId });
+    };
+  }
   const pluginManager = new PluginManager({
     loadPaths: config.plugins?.loadPaths ?? [],
     ...(config.plugins?.allowList === undefined ? {} : { allowList: config.plugins.allowList }),
@@ -563,16 +572,14 @@ async function main(): Promise<void> {
             if (!res.writableEnded) clientGone.abort(new Error('run-serve-child: client disconnected'));
           };
           res.on('close', onClose);
-          // run 终态事件归档（P1-3b，Q3=(a)）：Hub 导出槽 timeline 经 notify 上行，
-          // gateway 门面落 <sid>.events.jsonl（历史回放面）。观测失败 fail-open，不打断 run 流。
+          // run 事件归档（P1-3b，Q3=(a)）：execute 流自收打平事件（MAJ-4 修复——
+          // 归档与 Hub 的 webPanel/observer 门禁解耦，默认即工作；Hub 富化面随
+          // observer 开启另行增强），run 终态经 notify 上行落 <sid>.events.jsonl。
+          const collectedEvents: Array<Record<string, unknown>> = [];
           const archiveRunEvents = (sessionId: string): void => {
             try {
-              const snapshot = observerHub.getRunObservatory(sessionId);
-              const events = (snapshot?.timeline ?? []) as unknown as Array<
-                Record<string, unknown>
-              >;
-              if (events.length > 0) {
-                notify({ type: 'run_events_archived', sessionId, events });
+              if (collectedEvents.length > 0) {
+                notify({ type: 'run_events_archived', sessionId, events: collectedEvents });
               }
             } catch (err) {
               notify({
@@ -611,6 +618,14 @@ async function main(): Promise<void> {
           };
           try {
             for await (const event of stream) {
+              const { data: _data, ...flat } = event as unknown as Record<string, unknown> & {
+                data?: Record<string, unknown>;
+              };
+              collectedEvents.push({
+                type: flat.type,
+                timestamp: Date.now(),
+                ...(_data ?? {}),
+              });
               await writeEntry({ type: 'event', event });
             }
             await writeEntry({ type: 'done' });

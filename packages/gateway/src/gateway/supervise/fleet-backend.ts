@@ -192,9 +192,12 @@ export class FleetRunBackend {
    * @param sessionId - 会话 id
    * @returns void
    */
-  renewRunLease(sessionId: string): void {
+  renewRunLease(sessionId: string, fromInstance?: string): void {
     const held = this.runLeases.get(sessionId);
-    if (held) held.expiresAt = Date.now() + this.leaseTtlMs;
+    // MIN-1：只认持有实例的续租（防旁观实例的 notify 误延长他人 lease）
+    if (held && (fromInstance === undefined || held.instanceId === fromInstance)) {
+      held.expiresAt = Date.now() + this.leaseTtlMs;
+    }
   }
 
   /**
@@ -515,7 +518,21 @@ export class FleetRunBackend {
    * @returns 选中的版本
    */
   private pickVersionForSession(sessionId: string): string {
-    const weights = [...this.route.weights.entries()].filter(([, w]) => w > 0);
+    // MIN-7：运行期黑洞退避——抽样只在「有 ready 副本」的权重版本里选
+    //（drain/崩溃可让某版本暂空；命中即抛会黑洞化新会话，退到有副本版本 + warn）
+    const withReady = new Set(
+      this.list()
+        .filter((e) => e.record.state === 'ready')
+        .map((e) => e.record.version),
+    );
+    const weights = [...this.route.weights.entries()].filter(
+      ([v, w]) => w > 0 && withReady.has(v),
+    );
+    if (weights.length < [...this.route.weights.values()].filter((w) => w > 0).length) {
+      console.warn(
+        '[Supervise] weighted version with no ready replica — sampling falls back to versions with replicas',
+      );
+    }
     if (weights.length === 0) return this.route.versionPointer;
     if (weights.length === 1) return weights[0][0];
     let h = 0;
@@ -547,7 +564,9 @@ export class FleetRunBackend {
         `supervise: no ready run instance for version "${version ?? '*'}"`,
       );
     }
-    const loadOf = (e: FleetEntry): number => e.record.load.inFlightRuns + e.record.load.queued;
+    // MAJ-5 勘误：queued 暂无生产者（run 直拒无排队语义）——判据先用 inFlightRuns；
+    // queued 字段保留 reserved（随 lease 排队/流控语义落地再纳入，勿空转假数据）。
+    const loadOf = (e: FleetEntry): number => e.record.load.inFlightRuns;
     let best = candidates[0];
     for (const entry of candidates) {
       if (loadOf(entry) < loadOf(best)) best = entry;

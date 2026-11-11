@@ -47,7 +47,7 @@ import type { Message } from '@octopi-agent/core/types.js';
 import { createHmac, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
 import { isTurnStartContent } from '@octopi-agent/engine/harness/context/turn-envelope.js';
 import { isTurnAnchor } from '@octopi-agent/engine/harness/context/layer-types.js';
@@ -324,41 +324,84 @@ export interface SessionModelView {
 // ================================================================
 
 /**
- * 无显式 store 时，在 OCTOPI_HOME/sessions 创建持久化 JSONL store。
- * 禁止改回 SqliteSessionStore（已删除；见 arch/session-history-search.md）。
- *
- * P1-1 投影收口（§3 表：检索投影单写者=gateway 门面）：默认 store 挂
- * sessions.index.db 投影 sink（I2：可重建非权威，失败降级不阻断权威写）。
- * run 节点侧写入经 `session_saved` 通知回来补投影（见 handleRunHostNotify）。
+ * 投影门面（P1-1a / MAJ-1 修复）：包任意 SessionStore 的写口，写后补投影。
+ * 投影装配与 store 来源解耦——生产组合根注入 store（daemon.ts）与默认工厂同走
+ * 本包装（单一挂点=本门面；store 构造钩子不承担投影）。I2：投影失败仅 warn。
  */
-async function createDefaultStore(_agents: AgentDefinition[]): Promise<{
-  store: SessionStore<SessionData>;
-  index: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined;
-}> {
-  const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
-  const { join } = await import('node:path');
-  const { JsonlSessionStore } = await import('@octopi-agent/engine/integration/storage/jsonl.js');
-  let index: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined;
+function projectStore<T>(
+  inner: SessionStore<T>,
+  hooks: { project: (sessionId: string) => Promise<void>; remove: (sessionId: string) => Promise<void> },
+): SessionStore<T> {
+  const after = async (sessionId: string): Promise<void> => {
+    await hooks.project(sessionId);
+  };
+  return {
+    load: (sessionId) => inner.load(sessionId),
+    save: async (sessionId, data) => {
+      await inner.save(sessionId, data);
+      await after(sessionId);
+    },
+    ...(inner.updateMetadata
+      ? {
+          updateMetadata: async (
+            sessionId: string,
+            mutate: (meta: Record<string, unknown>) => void | Record<string, unknown>,
+          ): Promise<void> => {
+            await inner.updateMetadata!(sessionId, mutate);
+            await after(sessionId);
+          },
+        }
+      : {}),
+    ...(inner.syncMessages
+      ? {
+          syncMessages: async (sessionId: string, messages: readonly unknown[]): Promise<void> => {
+            await inner.syncMessages!(sessionId, messages);
+            await after(sessionId);
+          },
+        }
+      : {}),
+    list: (filter) => inner.list(filter),
+    delete: async (sessionId) => {
+      await inner.delete(sessionId);
+      await hooks.remove(sessionId);
+    },
+    exists: (sessionId) => inner.exists(sessionId),
+  };
+}
+
+/** 投影索引装配（MAJ-1：与 store 来源解耦的单点创建；失败仅 warn 降级 scan-only，I2） */
+async function createProjectionIndex(): Promise<
+  import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined
+> {
   try {
     const { createSqliteSessionIndex } = await import(
       '@octopi-agent/engine/integration/storage/session-index.js'
     );
-    index = await createSqliteSessionIndex({
+    const index = await createSqliteSessionIndex({
       dbPath: join(getOctopiHome(), 'sessions.index.db'),
     });
     await index.ensureSchema();
+    return index;
   } catch (err) {
-    // 投影可重建（I2）：索引不可用仅降级 scan-only 检索，不阻断会话权威写
     console.warn(
-      `[Gateway] session index unavailable (scan-only search): ${err instanceof Error ? err.message : String(err)}`,
+      `[Gateway] session index unavailable (search degrades to scan-only): ${err instanceof Error ? err.message : String(err)}`,
     );
-    index = undefined;
+    return undefined;
   }
-  const store = new JsonlSessionStore({
+}
+
+/**
+ * 无显式 store 时，在 OCTOPI_HOME/sessions 创建持久化 JSONL store。
+ * 禁止改回 SqliteSessionStore（已删除；见 arch/session-history-search.md）。
+ *
+ */
+async function createDefaultStore(_agents: AgentDefinition[]): Promise<SessionStore<SessionData>> {
+  // SessionStore 构造成本高（环形缓冲/目录扫描）：首次解析后缓存；显式 store 则不触发。
+  // 投影不在此挂（MAJ-1 修复）：装配统一走 projectStore 门面，与 store 来源解耦。
+  const { JsonlSessionStore } = await import('@octopi-agent/engine/integration/storage/jsonl.js');
+  return new JsonlSessionStore({
     sessionsDir: join(getOctopiHome(), 'sessions'),
-    ...(index === undefined ? {} : { index }),
   });
-  return { store, index };
 }
 
 /**
@@ -501,10 +544,7 @@ export class Gateway {
   /** 每个 provider 的熔断器 */
   private circuitBreakers = new Map<string, CircuitBreaker>();
   /** 默认 store 的异步初始化 Promise（未传入 store 时） */
-  private _defaultStorePromise?: Promise<{
-    store: SessionStore<SessionData>;
-    index: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined;
-  }>;
+  private _storeReady = false;
   /** Web Runtime pending approvals（confirmHighRisk / confirmEffect） */
   private pendingApprovals = new Map<string, PendingApprovalView>();
   private approvalResolvers = new Map<
@@ -797,7 +837,7 @@ export class Gateway {
       this.store = store;
     } else {
       // 延迟初始化：启动时解析默认持久化 store
-      this._defaultStorePromise = createDefaultStore(config.agents);
+      // store 解析与投影装配统一在 ensureStore（与来源解耦，MAJ-1）
     }
 
     // Issue → WS 广播
@@ -923,7 +963,9 @@ export class Gateway {
     await this.agentSignalSourcePromise;
   }
 
-  // ================================================================
+  
+
+// ================================================================
   // 生命周期
   // ================================================================
 
@@ -932,12 +974,16 @@ export class Gateway {
    * 确保 store 已就绪（解析默认 store 的异步初始化）
    */
   private async ensureStore(): Promise<void> {
-    if (this._defaultStorePromise) {
-      const { store, index } = await this._defaultStorePromise;
-      this.store = store;
-      this.sessionIndex = index;
-      this._defaultStorePromise = undefined;
-    }
+    if (this._storeReady) return;
+    const raw = this.store ?? (await createDefaultStore(this.config.agents));
+    // 投影单写者=gateway 门面（MAJ-1 修复）：装配与 store 来源解耦——注入 store
+    //（生产组合根 daemon.ts）与默认工厂同走投影门面，写口写后补投影。
+    this.sessionIndex = await createProjectionIndex();
+    this.store = projectStore(raw, {
+      project: (sessionId) => this.upsertProjection(sessionId),
+      remove: (sessionId) => this.removeProjection(sessionId),
+    });
+    this._storeReady = true;
   }
 
   async start(): Promise<void> {
@@ -5277,9 +5323,8 @@ export class Gateway {
     await this.ensureStore();
     const update = this.store.updateMetadata?.bind(this.store);
     if (update) {
+      // 投影由 projectStore 门面写后触发（MAJ-1 单挂点），此处无需补
       await update(sessionId, mutate);
-      // updateMetadata 不走 save 的投影钩子：显式补投影（I2 可重建非权威，失败仅 warn）
-      await this.upsertProjection(sessionId);
       return;
     }
     // 老 store 无 updateMetadata：退化为串行 load-modify-save（metadata 合并仍由 save 保证）
@@ -5367,12 +5412,20 @@ export class Gateway {
    */
   async readSessionEvents(sessionId: string): Promise<Array<Record<string, unknown>>> {
     const file = join(getOctopiHome(), 'sessions', `${sessionId}.events.jsonl`);
+    // MIN-5：行数上限（尾部优先软顶）+ 半写行容错（归档是截断/半写的，不整读失败）
+    const MAX_LINES = 5_000;
     try {
       const raw = await readFile(file, 'utf8');
-      return raw
-        .split('\n')
-        .filter((line) => line.trim().length > 0)
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const lines = raw.split('\n').filter((line) => line.trim().length > 0);
+      const out: Array<Record<string, unknown>> = [];
+      for (const line of lines.slice(-MAX_LINES)) {
+        try {
+          out.push(JSON.parse(line) as Record<string, unknown>);
+        } catch {
+          // 半写行（进程中断留尾）：跳过并继续——回放面容错
+        }
+      }
+      return out;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw err;
@@ -5398,6 +5451,12 @@ export class Gateway {
    */
   private scheduleProjectionUpsert(sessionId: string): void {
     const THROTTLE_MS = 3_000;
+    // MIN-3：表上限——即时分支不留条目（只留 pending timer 的），防长跑泄漏
+    if (this.projectionThrottle.size > 1024) {
+      for (const [sid, e] of this.projectionThrottle) {
+        if (e.timer === undefined) this.projectionThrottle.delete(sid);
+      }
+    }
     const entry = this.projectionThrottle.get(sessionId) ?? { last: 0 };
     const now = Date.now();
     if (entry.timer !== undefined) return; // 已有待跑的补差，合并即可
@@ -5410,6 +5469,7 @@ export class Gateway {
         entry.last = Date.now();
         void this.upsertProjection(sessionId);
       }, THROTTLE_MS - (now - entry.last));
+      entry.timer.unref?.();
     }
     this.projectionThrottle.set(sessionId, entry);
   }
@@ -5959,7 +6019,7 @@ export class Gateway {
     // run lease 续租（P1-2，Q1：活动事件驱动 + 进程存活判据 + 超长 TTL 兜底）：
     // 任何携带会话 id 的 notify 都是活动证明；run 终态/进程退出走 release/回收。
     if ('sessionId' in n && typeof n.sessionId === 'string') {
-      this.fleet.renewRunLease(n.sessionId);
+      this.fleet.renewRunLease(n.sessionId, instanceId);
     }
     // 回执路由登记：approvalReply / clientToolResult / askUserReply 按此回源实例
     if (n.type === 'approval_request') {
@@ -5980,6 +6040,18 @@ export class Gateway {
       case 'session_removed':
         this.projectionThrottle.delete(n.sessionId);
         void this.removeProjection(n.sessionId);
+        // MIN-4：events 归档旁路随会话删除（生命周期不留残件）
+        void (async () => {
+          try {
+            await rm(join(getOctopiHome(), 'sessions', `${n.sessionId}.events.jsonl`), {
+              force: true,
+            });
+          } catch (err) {
+            console.warn(
+              `[Gateway] events sidecar cleanup failed for ${n.sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
         return;
       case 'run_events_archived':
         // run 终态事件归档（P1-3b，Q3=(a)）：随会话 jsonl 旁路 <sid>.events.jsonl，

@@ -76,6 +76,11 @@ export async function createSqliteSessionIndex(options: {
   wal?: boolean;
   /** 默认自动探测 FTS5；false 则只用 LIKE */
   fts?: boolean;
+  /**
+   * 只读打开（P1-1a / MAJ-6）：不写 WAL、不做 DDL（schema 归写者门面首建）——
+   * run 侧 prefilter 消费用本模式，保证 sessions.index.db 单写者纪律。
+   */
+  readOnly?: boolean;
 }): Promise<SessionIndexBackend> {
   let DatabaseSyncCtor: typeof DatabaseSync;
   try {
@@ -89,10 +94,15 @@ export async function createSqliteSessionIndex(options: {
   const index = new SqliteSessionIndex(
     DatabaseSyncCtor,
     options.dbPath,
-    options.wal !== false,
+    options.readOnly === true ? false : options.wal !== false,
     options.fts !== false,
+    options.readOnly === true,
   );
-  await index.ensureSchema();
+  if (options.readOnly === true) {
+    await index.probeFtsReadOnly();
+  } else {
+    await index.ensureSchema();
+  }
   return index;
 }
 
@@ -110,10 +120,31 @@ class SqliteSessionIndex implements SessionIndexBackend {
   private wantFts: boolean;
   private fts = false;
 
-  constructor(Ctor: typeof DatabaseSync, dbPath: string, wal: boolean, wantFts: boolean) {
-    this.db = new Ctor(dbPath, { timeout: 5000, enableForeignKeyConstraints: false });
+  private readOnly: boolean;
+
+  constructor(
+    Ctor: typeof DatabaseSync,
+    dbPath: string,
+    wal: boolean,
+    wantFts: boolean,
+    readOnly = false,
+  ) {
+    this.db = new Ctor(dbPath, {
+      timeout: 5000,
+      enableForeignKeyConstraints: false,
+      ...(readOnly ? { readOnly: true } : {}),
+    });
     if (wal) this.db.exec('PRAGMA journal_mode = WAL');
     this.wantFts = wantFts;
+    this.readOnly = readOnly;
+  }
+
+  /** 只读模式的 FTS 探测（不建表；缺表 = 纯 LIKE） */
+  async probeFtsReadOnly(): Promise<void> {
+    const row = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'")
+      .get();
+    this.fts = this.wantFts && row !== undefined;
   }
 
   get ftsEnabled(): boolean {
@@ -121,6 +152,9 @@ class SqliteSessionIndex implements SessionIndexBackend {
   }
 
   async ensureSchema(): Promise<void> {
+    if (this.readOnly) {
+      throw new Error('SqliteSessionIndex: ensureSchema refused on readOnly handle (schema belongs to the writer facade)');
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS index_meta (
         key TEXT PRIMARY KEY,

@@ -154,15 +154,15 @@ describe('P1-4 canary 权重 + 扩容', () => {
     expect(drainSpy).toHaveBeenCalledTimes(1); // drain 1 个
   });
 
-  it('⑤ 负载判据纳入队列深度（inFlightRuns + queued）', async () => {
+  it('⑤ 负载判据=inFlightRuns（MAJ-5 勘误：queued reserved 无生产者，不空转假数据）', async () => {
     const { fleet, register } = setup();
     const a = register('i-a', 'self');
     const b = register('i-b', 'self');
-    a.load.queued = 5; // a 在跑 0 但排 5
-    b.load.inFlightRuns = 1; // b 在跑 1
+    a.load.queued = 5; // queued 变化不得影响选择（reserved，随排队语义落地再纳入）
+    b.load.inFlightRuns = 1;
 
-    // 新会话应落负载更小的 b（0+1 < 0+5）
+    // 判据只看 inFlightRuns：a=0 < b=1 → 选 a
     for await (const _ of fleet.startRun(req('s-pick'))) void _;
-    expect(fleet.routeOf('s-pick')).toBe('i-b');
+    expect(fleet.routeOf('s-pick')).toBe('i-a');
   });
 });

@@ -144,7 +144,11 @@ export class FleetOps {
       .list()
       .filter((r) => r.version === version && r.state !== 'failed');
     if (alive.length > n) {
-      for (const extra of alive.slice(n)) {
+      // MIN-9：稳定排序（startedAt 升序保留最旧 n 个）——drain 目标确定可重放
+      const ordered = [...alive].sort(
+        (a, b) => a.startedAt - b.startedAt || a.instanceId.localeCompare(b.instanceId),
+      );
+      for (const extra of ordered.slice(n)) {
         await this.drain(extra.instanceId);
       }
       return { ready: [], failed: [] };
@@ -177,7 +181,7 @@ export class FleetOps {
    * @returns void
    */
   setWeights(weights: Record<string, number>): void {
-    RouteConfig.setWeights(this.deps.route, weights);
+    // MAJ-2 修复：先全量校验再落状态——拒绝时不得留半改路由（fail-loud 且零半态）
     for (const [version, w] of Object.entries(weights)) {
       if (w <= 0) continue;
       const ready = this.deps.registry
@@ -189,6 +193,7 @@ export class FleetOps {
         );
       }
     }
+    RouteConfig.setWeights(this.deps.route, weights);
   }
 
   /**
@@ -292,10 +297,19 @@ export class FleetOps {
       try {
         const outcome = await this.spawn(version, buildRef, 1);
         if (outcome.failed.length > 0) {
-          failed.push(`${r.instanceId}: replacement failed health gate: ${outcome.failed[0].reason}`);
+          failed.push(`${r.instanceId}: replacementFailed (health gate): ${outcome.failed[0].reason}`);
           continue;
         }
-        await this.drain(r.instanceId);
+        // MIN-6：drain 失败与替换失败分账——替换件已过门在跑，旧实例未收摊（N+1），
+        // 归属如实声明：替换件留任接流量，旧实例保持 drift 态待人工/下次处置
+        try {
+          await this.drain(r.instanceId);
+        } catch (drainErr) {
+          failed.push(
+            `${r.instanceId}: drainFailed after replacement started (replacement kept serving; old instance stays in drift state): ${drainErr instanceof Error ? drainErr.message : String(drainErr)}`,
+          );
+          continue;
+        }
         replaced.push(r.instanceId);
       } catch (err) {
         failed.push(`${r.instanceId}: replacement errored: ${err instanceof Error ? err.message : String(err)}`);
