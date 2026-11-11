@@ -115,6 +115,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.107.3 (2026-11-11)
+
+### fix(gateway): run-instance security guard rebuild + child wire-dump provenance
+
+- **securityIntegrity 跨进程守卫（TypeError 事故修复）**：P0b 把 `securityIntegrity` 活对象 JSON 进 boot，方法被剥成 `{fingerprint}` 残壳，子进程 run 起点 `recheck()` 抛 `recheck is not a function`（run 全数 error 终止）。修复按「boot 纯数据纪律」：`RemoteRunBackend.start` 显式剥离活守卫（配 `configPath` 缺失即拒启动，不静默丢闸）；run-serve-child 按 `configPath` 重建守卫，与 gateway 各自持锚（service-topology §7.3）。console 受控写重锚定经新增 `reattestSecurity` control op 同步子进程；同步失败降级 warning（子进程保持漂移拒新 run，fail-closed）。
+- **wire dump 留痕（OP-TOOL-1 后续）**：P0b 子进程 `createProviderFromConfig` 漏传 `wireDump`，run 全走子进程后 LLM 请求/响应零留痕（事故复现时无响应体可查的直接原因）。修复：run-serve-child 按 `observability.llmRequestDump` 建 sink 并注入 provider 工厂。
+- **协议硬化**：run-host 未知 control op 返回明确错误（不再静默 fall-through），为多版本混跑的 op 演进兜底。
+- **验证**：`tests/run-remote-backend.test.ts` 新增 3 个回归锚（boot 剥守卫 + configPath 自建 e2e、无 configPath 拒启动、wire dump 留痕），全绿；网关重启后线上收发正常。
+- **P0c 注记**：跨版本缺口（旧版 run-serve-child 不按 configPath 建守卫 → 多版本拉起时漂移闸 fail-open）已登记 `arch/service-topology-p0c.md` §4.3/§4.6，健康门须核查 `securityGuard: armed|absent`。
+
+---
+
 ## v0.107.2 (2026-11-11)
 
 ### fix(core/engine): OP-TOOL-1 — elision vocabulary namespaced + degraded tool args rejected at dispatch

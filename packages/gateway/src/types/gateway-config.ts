@@ -33,6 +33,11 @@ export interface GatewayConfig {
   effectPolicy?: import('@octopi-agent/engine').EffectPolicyConfig;
   /** ops P2 §4.3/§8.4：安全配置漂移守卫（宿主锚定 + run 起点复核，漂移拒新 run） */
   securityIntegrity?: import('@octopi-agent/engine/harness/run/runner.js').SessionAwareRunnerConfig['securityIntegrity'];
+  /**
+   * 配置文件绝对路径。boot 纯数据交接无法携带 {@link securityIntegrity} 活对象
+   * （JSON 剥掉 recheck/reattest 方法），run 实例子进程按此路径自建守卫。
+   */
+  configPath?: string;
   /** 命名凭证库策略（SEC-3c）；requireBindings=true 时无绑定凭证不可 resolve */
   credentials?: {
     requireBindings?: boolean;

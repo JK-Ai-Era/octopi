@@ -1917,6 +1917,9 @@ export class Gateway {
    * 重新锚定安全指纹——console API 是带鉴权的宿主管理面，等价于人工重启的署名动作。
    * 边界：绕过 console API 直改配置文件仍判漂移（拒新 run 不变）。
    *
+   * P0b：run 实例子进程持独立守卫（boot 纯数据无法携带方法），本方法重锚后
+   * 经 `reattestSecurity` control op 同步子进程（service-topology §7.3）。
+   *
    * @returns 旧→新指纹与变化字段；宿主未接线守卫时 undefined
    */
   reattestSecurityConfig(options: {
@@ -1933,6 +1936,28 @@ export class Gateway {
     console.log(
       `[Gateway] Security config re-attested via console apply（changed: ${result.changed.join(', ') || '无'}，${result.previousFingerprint.slice(0, 8)} → ${result.fingerprint.slice(0, 8)}）`,
     );
+    // 同步 run 实例守卫：失败降级 warning（gateway 已锚；子进程维持漂移拒 run，
+    // 与 config-apply 署名失败同 fail-closed 语义，重启采纳盘上配置兜底）。
+    if (this.runBackend) {
+      void this.runBackend
+        .control({
+          type: 'reattestSecurity',
+          expectHash: options.expectHash,
+          allowedChanged: options.allowedChanged,
+        })
+        .then((res) => {
+          if (!res.ok) {
+            console.warn(
+              `[Gateway] run-instance security re-attest failed（子进程守卫保持漂移，新 run 仍拒直至重启）: ${res.error.message}`,
+            );
+          }
+        })
+        .catch((err: unknown) => {
+          console.warn(
+            `[Gateway] run-instance security re-attest failed（子进程守卫保持漂移，新 run 仍拒直至重启）: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    }
     return result;
   }
 

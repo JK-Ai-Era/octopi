@@ -7,7 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -201,6 +201,180 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
       rmSync(p, { force: true });
     }
   });
+
+  it('ops P2：boot 剥活守卫 + configPath 子进程自建，run 起点 recheck 不再 TypeError', async () => {
+    // 回归锚：P0b 把 securityIntegrity 活对象 JSON 进 boot → 方法被剥成
+    // {fingerprint} 残壳 → runner.recheck() 抛 "recheck is not a function"。
+    const { createSecurityIntegrityGuard } = await import(
+      '@octopi-agent/engine/harness/agent/config-integrity.js'
+    );
+    const guardHome = mkdtempSync(join(tmpdir(), 'run-serve-guard-'));
+    mkdirSync(join(guardHome, 'sessions'), { recursive: true });
+    mkdirSync(join(guardHome, 'workspace'), { recursive: true });
+    mkdirSync(join(guardHome, 'agent-home'), { recursive: true });
+    const configPath = join(guardHome, 'octopi.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({ agents: [], models: {}, effectPolicy: { mode: 'session' } }),
+    );
+    let guarded: Awaited<ReturnType<typeof RemoteRunBackend.start>> | undefined;
+    try {
+      guarded = await RemoteRunBackend.start({
+        octopiHome: guardHome,
+        config: {
+          agents: [],
+          configPath,
+          // 活守卫必须随 boot 交给子进程重建；直接序列化会静默丢方法
+          securityIntegrity: createSecurityIntegrityGuard({ configPath }),
+          modelProviders: {
+            fake: {
+              api: 'openai-completions',
+              baseUrl: llmUrl,
+              apiKey: 'test-key',
+              models: [{ id: 'test-model', name: 'test-model', contextWindow: 8192, maxTokens: 1024 }],
+            },
+          },
+        },
+        agentDefinitions: [
+          {
+            id: 'guard-agent',
+            model: { provider: 'fake', model: 'test-model' },
+            persona: 'You are a test agent. Answer briefly.',
+            workspace: join(guardHome, 'workspace'),
+            home: join(guardHome, 'agent-home'),
+          },
+        ],
+      });
+      const events: AgentEvent[] = [];
+      for await (const event of guarded.startRun({
+        requestId: 'r-e2e-guard',
+        sessionId: 's-e2e-guard',
+        agentId: 'guard-agent',
+        triggers: [
+          {
+            id: 't-e2e-guard',
+            type: 'message',
+            agentId: 'guard-agent',
+            sessionId: 's-e2e-guard',
+            payload: { kind: 'user_message', content: 'ping' },
+          },
+        ],
+        messages: [{ role: 'user', content: 'ping', timestamp: Date.now() }],
+      })) {
+        events.push(event);
+      }
+      expect(JSON.stringify(events)).toContain(FAKE_REPLY);
+      expect(JSON.stringify(events)).not.toContain('recheck is not a function');
+      expect(JSON.stringify(events)).not.toContain('security_config_drift');
+
+      // console 署名同步：子进程守卫经 reattestSecurity 重锚（expectHash 必须是写后真实 hash）
+      const { computeConfigHash } = await import('@octopi-agent/engine/config-admin/patch.js');
+      const control = await guarded.control({
+        type: 'reattestSecurity',
+        expectHash: computeConfigHash(readFileSync(configPath, 'utf8')),
+        allowedChanged: [],
+      });
+      if (!control.ok) throw new Error(`reattestSecurity failed: ${control.error.message}`);
+      expect(control.ok).toBe(true);
+    } finally {
+      await guarded?.stop();
+      rmSync(guardHome, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('ops P2：有 securityIntegrity 无 configPath → 拒启动（不静默丢闸）', async () => {
+    const { createSecurityIntegrityGuard } = await import(
+      '@octopi-agent/engine/harness/agent/config-integrity.js'
+    );
+    const p = join(tmpdir(), `no-path-${randomUUID()}.json`);
+    writeFileSync(p, '{}');
+    try {
+      await expect(
+        RemoteRunBackend.start({
+          octopiHome: mkdtempSync(join(tmpdir(), 'run-serve-nopath-')),
+          config: {
+            agents: [],
+            securityIntegrity: createSecurityIntegrityGuard({ configPath: p }),
+          },
+          agentDefinitions: [],
+        }),
+      ).rejects.toThrow(/configPath/);
+    } finally {
+      rmSync(p, { force: true });
+    }
+  });
+
+  it('OP-TOOL-1：child provider 注入 wire dump——run 的 LLM 调用必须留请求/响应痕（裁决物证）', async () => {
+    // 回归锚：P0b 子进程 createProviderFromConfig 漏传 wireDump → run 全走子进程后
+    // wire dump 静默零留痕（2026-11-11 复现时无响应体可查的直接原因）。
+    const dumpHome = mkdtempSync(join(tmpdir(), 'run-serve-dump-'));
+    mkdirSync(join(dumpHome, 'sessions'), { recursive: true });
+    mkdirSync(join(dumpHome, 'workspace'), { recursive: true });
+    mkdirSync(join(dumpHome, 'agent-home'), { recursive: true });
+    const dumpDir = join(dumpHome, 'dumps');
+    let backend: Awaited<ReturnType<typeof RemoteRunBackend.start>> | undefined;
+    try {
+      backend = await RemoteRunBackend.start({
+        octopiHome: dumpHome,
+        config: {
+          agents: [],
+          observability: {
+            llmRequestDump: { enabled: true, dir: dumpDir },
+          },
+          modelProviders: {
+            fake: {
+              api: 'openai-completions',
+              baseUrl: llmUrl,
+              apiKey: 'test-key',
+              models: [{ id: 'test-model', name: 'test-model', contextWindow: 8192, maxTokens: 1024 }],
+            },
+          },
+        },
+        agentDefinitions: [
+          {
+            id: 'dump-agent',
+            model: { provider: 'fake', model: 'test-model' },
+            persona: 'You are a test agent. Answer briefly.',
+            workspace: join(dumpHome, 'workspace'),
+            home: join(dumpHome, 'agent-home'),
+          },
+        ],
+      });
+      const events: AgentEvent[] = [];
+      for await (const event of backend.startRun({
+        requestId: 'r-e2e-dump',
+        sessionId: 's-e2e-dump',
+        agentId: 'dump-agent',
+        triggers: [
+          {
+            id: 't-e2e-dump',
+            type: 'message',
+            agentId: 'dump-agent',
+            sessionId: 's-e2e-dump',
+            payload: { kind: 'user_message', content: 'ping' },
+          },
+        ],
+        messages: [{ role: 'user', content: 'ping', timestamp: Date.now() }],
+      })) {
+        events.push(event);
+      }
+      expect(JSON.stringify(events)).toContain(FAKE_REPLY);
+
+      // 子进程内同步落盘（appendFileSync）：run 结束即可见
+      const files = readdirSync(dumpDir, { recursive: true }) as string[];
+      expect(files.some((f) => f.endsWith('index.jsonl'))).toBe(true);
+      const indexText = files
+        .filter((f) => f.endsWith('index.jsonl'))
+        .map((f) => readFileSync(join(dumpDir, f), 'utf8'))
+        .join('\n');
+      // 响应留痕在场（请求体 + result.response；文本回显真实回复）
+      expect(indexText).toContain('"type":"request"');
+      expect(indexText).toContain('"response"');
+    } finally {
+      await backend?.stop();
+      rmSync(dumpHome, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it('m7：客户端断开 → run 被中止（不空转到 LLM 自然结束）', async () => {
     // 假 LLM 遇 SLOW_MARKER 挂 5s；断连后 run 须在 3s 内中止（in-flight 归零）。

@@ -37,7 +37,7 @@ import type {
 import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
 import { SessionScheduleService } from '@octopi-agent/engine/harness/session/schedules/service.js';
 import { ObserverHub } from '@octopi-agent/engine/harness/observability/observer/hub.js';
-import { createProviderFromConfig } from '@octopi-agent/engine/config.js';
+import { createProviderFromConfig, createWireDumpSinkFromConfig } from '@octopi-agent/engine/config.js';
 import { KnowledgeClient } from '@octopi-agent/engine/harness/knowledge/client.js';
 import type {
   KnowledgeStateWire,
@@ -91,6 +91,16 @@ async function main(): Promise<void> {
   rmSync(bootPath, { force: true });
   const boot = JSON.parse(bootRaw) as RunServeBoot;
   const config = boot.config;
+  // ops P2：boot 无法携带活守卫（JSON 剥方法）；按 configPath 在本实例锚定，
+  // 与 gateway 各自持锚（service-topology §7.3）。console 写经 reattestSecurity 同步。
+  if (config.configPath) {
+    const { createSecurityIntegrityGuard } = await import(
+      '@octopi-agent/engine/harness/agent/config-integrity.js'
+    );
+    config.securityIntegrity = createSecurityIntegrityGuard({
+      configPath: config.configPath,
+    });
+  }
 
   // ── 宿主通知出口（fork IPC） ──
   const notify = (n: RunHostNotify): void => {
@@ -178,8 +188,12 @@ async function main(): Promise<void> {
   const providers = new Map<string, ModelProvider>();
   const resolvePluginProvider = (ref: string): PluginProviderRecord | undefined =>
     pluginManager.resolveProviderFactory(ref);
+  // F22 缝补全（对照基线 config-bridge）：wire dump 必须随 provider 构建注入，
+  // 否则 P0b 子进程执行路径的 LLM 调用无请求/响应留痕——OP-TOOL-1 裁决物证
+  // 恰好在 run 全走子进程后静默缺席（2026-11-11 复现时无响应体可查的直接原因）。
+  const wireDump = await createWireDumpSinkFromConfig(config.observability?.llmRequestDump);
   for (const [name, providerCfg] of Object.entries(config.modelProviders ?? {})) {
-    const provider = await createProviderFromConfig(name, providerCfg, { resolvePluginProvider });
+    const provider = await createProviderFromConfig(name, providerCfg, { resolvePluginProvider, wireDump });
     providers.set(name, provider);
     notify({ type: 'log', level: 'log', message: `[RunServe] Registered provider: ${name}` });
   }
@@ -263,6 +277,14 @@ async function main(): Promise<void> {
           memoryRestorers.get(agentId) as never,
         );
       },
+    },
+    // console 受控写署名同步（boot 自建守卫的 reattest 缝；gateway reattestSecurityConfig 转发）
+    reattestSecurity: (options) => {
+      const guard = config.securityIntegrity;
+      if (!guard?.reattest) {
+        throw new Error('run-serve-child: security guard not configured (configPath missing)');
+      }
+      return guard.reattest(options);
     },
   });
 

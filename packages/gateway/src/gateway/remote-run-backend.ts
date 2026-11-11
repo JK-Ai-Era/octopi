@@ -121,7 +121,20 @@ export class RemoteRunBackend {
   ): Promise<RemoteRunBackend> {
     const token = randomUUID();
     const bootPath = join(tmpdir(), `run-serve-boot-${randomUUID()}.json`);
-    writeRunServeBoot(bootPath, JSON.stringify({ ...boot, token }));
+    // boot 是纯数据交接面：securityIntegrity 活对象（recheck/reattest 方法）经
+    // JSON 会被剥成只剩 fingerprint 的残壳，子进程调用即 TypeError。剥离后由
+    // run-serve-child 按 configPath 自建守卫（service-topology §7.3 每实例锚定）。
+    // 有守卫却无 configPath = 子进程将静默失去漂移闸——fail-loud 拒启动。
+    if (boot.config.securityIntegrity && !boot.config.configPath) {
+      throw new Error(
+        'run_remote: securityIntegrity requires configPath in boot (live guard cannot cross JSON; child rebuilds from configPath)',
+      );
+    }
+    const { securityIntegrity: _liveGuard, ...bootConfig } = boot.config;
+    writeRunServeBoot(
+      bootPath,
+      JSON.stringify({ ...boot, config: bootConfig, token }),
+    );
 
     const entry = resolveWorkerUrl('./run-serve-child.js', import.meta.url);
     const env = { ...process.env };

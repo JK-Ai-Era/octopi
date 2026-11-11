@@ -958,6 +958,8 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const { resolveConfigFilePath } = await import('../config.js');
     const filePath = resolveConfigFilePath(configPath);
     gatewayConfig.securityIntegrity = createSecurityIntegrityGuard({ configPath: filePath });
+    // boot 纯数据交接无法携带活守卫（JSON 剥方法）；run 子进程按此路径自建
+    gatewayConfig.configPath = filePath;
   }
   // AgentRuntime 构造参数在 toGatewayConfig 已带上；此处仅防御显式覆盖
   if (config.agentRuntime) {

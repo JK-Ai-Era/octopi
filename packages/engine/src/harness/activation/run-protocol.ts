@@ -109,7 +109,12 @@ export type RunControlOp =
   /** 知识运行时状态同步（准入闸门输入；状态是 gateway 运行时已知值，非实时探测） */
   | { type: 'syncKnowledgeState'; state: KnowledgeStateWire }
   /** 七层上下文健康探针 */
-  | { type: 'contextHealth'; agentId?: string };
+  | { type: 'contextHealth'; agentId?: string }
+  /**
+   * console 受控写后重锚定安全指纹（ops P2 §8.4）。boot 纯数据无法携带活守卫，
+   * run 实例自建 guard 后由宿主经此 op 同步署名（service-topology §7.3）。
+   */
+  | { type: 'reattestSecurity'; expectHash: string; allowedChanged: string[] };
 
 /** AgentDefinition 线上传输别名（config-schema 数据对象，见 src/config-schema） */
 export type AgentDefinitionWire = Record<string, unknown>;

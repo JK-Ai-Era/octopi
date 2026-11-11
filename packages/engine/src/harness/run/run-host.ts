@@ -130,6 +130,14 @@ export interface RunHostOptions {
     patchMetadata(sessionId: string, updater: (meta: Record<string, unknown>) => void): Promise<void>;
     discardFileUndo(sessionId: string, agentId: string): Promise<DiscardFileEffectsResult>;
   };
+  /**
+   * console 受控写后重锚定安全指纹（ops P2 §8.4；boot 纯数据自建守卫的同步缝）。
+   * 缺省命中 reattestSecurity op 即 fail-loud（守卫漂移拒 run 不变）。
+   */
+  reattestSecurity?: (options: {
+    expectHash: string;
+    allowedChanged: string[];
+  }) => { previousFingerprint: string; fingerprint: string; changed: string[] };
 }
 
 interface Mounted {
@@ -464,7 +472,25 @@ export class RunHost implements RunBackend {
           }
           return { ok: true, result: await probe(op.agentId) };
         }
+        case 'reattestSecurity': {
+          if (!this.opts.reattestSecurity) {
+            return {
+              ok: false,
+              error: { message: 'run_host: reattestSecurity not wired (security guard missing)' },
+            };
+          }
+          const result = this.opts.reattestSecurity({
+            expectHash: op.expectHash,
+            allowedChanged: op.allowedChanged,
+          });
+          return { ok: true, result };
+        }
       }
+      // 未识别 op：fail-loud（静默吞会让调用方误以为已执行）
+      return {
+        ok: false,
+        error: { message: `run_host: unknown control op "${(op as { type: string }).type}"` },
+      };
     } catch (err) {
       return {
         ok: false,
