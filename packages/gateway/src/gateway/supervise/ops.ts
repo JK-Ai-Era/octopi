@@ -9,7 +9,7 @@
  */
 
 import type { FleetRunBackend, InstanceBackend } from './fleet-backend.js';
-import { InstanceRegistry, type InstanceRecord, type RouteConfig } from './registry.js';
+import { InstanceRegistry, RouteConfig, type InstanceRecord } from './registry.js';
 import { probeInstance, type ProbeOptions, type ProbeResult } from './probe.js';
 
 export interface FleetOpsDeps {
@@ -166,8 +166,29 @@ export class FleetOps {
     if (ready.length === 0) {
       throw new Error(`supervise: cannot promote "${version}" — no ready instance of that version`);
     }
-    this.deps.route.versionPointer = version;
-    this.deps.route.weights = new Map([[version, 100]]);
+    // Q5 合一：promote ≡ setWeights({target:100})——指针是 100/0 特例（单一账本）
+    this.setWeights({ [version]: 100 });
+  }
+
+  /**
+   * 权重运行态设置（P1-4 canary，§6）：会话级抽样分流。幂等、fail-loud。
+   * 每个 >0 权重版本须有 ready 副本（MIN-3 精神：拒空版本路由）。
+   * @param weights - 版本→百分比（和恰为 100）
+   * @returns void
+   */
+  setWeights(weights: Record<string, number>): void {
+    RouteConfig.setWeights(this.deps.route, weights);
+    for (const [version, w] of Object.entries(weights)) {
+      if (w <= 0) continue;
+      const ready = this.deps.registry
+        .listByState('ready')
+        .filter((r) => r.version === version);
+      if (ready.length === 0) {
+        throw new Error(
+          `supervise: setWeights "${version}" has no ready instance (weight ${w} would black-hole new sessions)`,
+        );
+      }
+    }
   }
 
   /**

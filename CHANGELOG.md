@@ -115,6 +115,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.0 (2026-11-12)
+
+### feat(gateway): P1-4 canary 权重 + 扩容（service-topology §6/§7，Q5 合一）
+
+- **会话级权重抽样**：`RouteConfig.weights` 转正（reserved → 实现）。新会话按权重抽版本（确定性 hash(sessionId)，同权重下稳定可重放、分布近似），版本内选最闲；**sticky 会话不迁移**（§7.1 粒度声明）。
+- **Q5 合一语义**：`versionPointer` = 单版本 100 的特例，`promote ≡ setWeights({target:100})`（单一账本，promote 收敛到 setWeights 单点）。多版本 canary 时指针不变（展示面）。
+- **setWeights fail-loud**：非负整数、和恰 100、非空；**拒黑洞**（>0 权重版本无 ready 副本即拒，MIN-3 精神）。
+- **REST**：`POST /api/v1/fleet/weights`、`POST /api/v1/fleet/scale`（`fleetStatus.route` 增 weights 快照）。
+- **扩容**：`FleetOps.scale(version, buildRef, n)`（少补 spawn、多退 drain，V4 语义已备）；负载判据纳入队列深度（inFlightRuns + queued，§7.1）。
+- 测试锚 `tests/canary-scale.test.ts` 五例（V3 分布/sticky 不迁移/fail-loud 三面/合一语义/V4 收敛/队列深度）；全量 4642 passed。
+
+---
+
 ## v0.111.2 (2026-11-12)
 
 ### feat(gateway): P1-3b run 事件归档 — Observer 归属收口（OP-P0B-1 ④，Q3=(a)）

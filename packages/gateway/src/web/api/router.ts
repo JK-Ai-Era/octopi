@@ -103,6 +103,31 @@ export class WebApiRouter {
           data: await this.gateway.fleetSpawn(body.version, body.buildRef, n),
         });
       }
+      if (relativePath === '/fleet/weights' && method === 'POST') {
+        const body = await this.readBody(req);
+        if (!body?.weights || typeof body.weights !== 'object') {
+          return this.json(res, 400, { ok: false, error: 'weights object is required' });
+        }
+        try {
+          this.gateway.fleetSetWeights(body.weights as Record<string, number>);
+          return this.json(res, 200, { ok: true, data: this.gateway.fleetStatus().route });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (relativePath === '/fleet/scale' && method === 'POST') {
+        const body = await this.readBody(req);
+        if (!body?.version || typeof body.n !== 'number') {
+          return this.json(res, 400, { ok: false, error: 'version and n are required' });
+        }
+        const outcome = await this.gateway.fleetScale(body.version, body.buildRef ?? 'self', body.n);
+        return this.json(res, 200, { ok: true, data: outcome });
+      }
+
       if (relativePath === '/fleet/promote' && method === 'POST') {
         const body = (await this.readBody(req)) as { version?: unknown };
         if (typeof body.version !== 'string') {

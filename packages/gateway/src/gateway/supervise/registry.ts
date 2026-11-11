@@ -45,6 +45,37 @@ export namespace RouteConfig {
       replicasPerVersion: options.replicasPerVersion ?? 1,
     };
   }
+
+  /**
+   * 权重运行态设置（P1-4 canary，service-topology-p1.md §6；Q5 合一语义：
+   * versionPointer = 单版本 100 的特例，promote ≡ setWeights({target:100})）。
+   * fail-loud：非负整数、和恰为 100、非空。
+   * @param route - 运行态路由配置
+   * @param weights - 版本→百分比
+   * @returns void
+   */
+  export function setWeights(route: RouteConfig, weights: Record<string, number>): void {
+    const entries = Object.entries(weights);
+    if (entries.length === 0) {
+      throw new Error('supervise: setWeights requires at least one version');
+    }
+    let sum = 0;
+    for (const [version, w] of entries) {
+      if (!Number.isInteger(w) || w < 0 || w > 100) {
+        throw new Error(`supervise: setWeights weight for "${version}" must be an integer in [0,100] (got ${String(w)})`);
+      }
+      sum += w;
+    }
+    if (sum !== 100) {
+      throw new Error(`supervise: setWeights requires weights summing to 100 (got ${sum})`);
+    }
+    route.weights = new Map(entries);
+    // 指针合一：单版本 100 时指针=该版本（多版本 canary 时指针保持不变，仅作展示面）
+    const positive = entries.filter(([, w]) => w > 0);
+    if (positive.length === 1) {
+      route.versionPointer = positive[0][0];
+    }
+  }
 }
 
 /**

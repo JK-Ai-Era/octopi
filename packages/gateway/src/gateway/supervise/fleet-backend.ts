@@ -500,26 +500,57 @@ export class FleetRunBackend {
       if (entry && entry.record.state === 'ready') return entry;
       this.sticky.delete(sessionId);
     }
-    return this.pickLeastLoaded();
+    // 新会话按权重抽版本（P1-4 canary §6；sticky 会话不迁移），版本内选最闲
+    return this.pickLeastLoaded(this.pickVersionForSession(sessionId));
   }
 
   private resolveForRun(sessionId: string): FleetEntry {
     return this.resolveForSession(sessionId);
   }
 
-  private pickLeastLoaded(): FleetEntry {
-    // 新会话只进 versionPointer 版本的 ready 副本（§4.2/§4.5：按 RouteConfig 定版本；
-    // draining 不接新会话，其 sticky 亲和在 resolveForSession 已保）
-    const pointer = this.route.versionPointer;
+  /**
+   * 新会话版本抽样（§6：会话级按权重抽，sticky 不迁移）。确定性 hash(sessionId)：
+   * 同会话在同权重下稳定落同版本（可测、可重放），分布近似权重。
+   * @param sessionId - 会话 id（抽样键）
+   * @returns 选中的版本
+   */
+  private pickVersionForSession(sessionId: string): string {
+    const weights = [...this.route.weights.entries()].filter(([, w]) => w > 0);
+    if (weights.length === 0) return this.route.versionPointer;
+    if (weights.length === 1) return weights[0][0];
+    let h = 0;
+    for (let i = 0; i < sessionId.length; i += 1) {
+      h = (h * 31 + sessionId.charCodeAt(i)) >>> 0;
+    }
+    const slot = h % 100;
+    let acc = 0;
+    for (const [version, w] of weights) {
+      acc += w;
+      if (slot < acc) return version;
+    }
+    return weights[weights.length - 1][0];
+  }
+
+  /**
+   * 版本内最闲副本（§4.2；负载判据 = inFlightRuns + queued，P1-4 §7 队列深度纳入）。
+   * version 未给时不限版本（contextHealth 等「任一可答」面）。
+   * @param version - 版本过滤（可选）
+   * @returns 最闲 ready 实例
+   */
+  private pickLeastLoaded(version?: string): FleetEntry {
+    // ready 副本才接新会话（§4.2/§4.5；draining 不接新，其 sticky 亲和在 resolveForSession 已保）
     const candidates = this.list().filter(
-      (e) => e.record.state === 'ready' && e.record.version === pointer,
+      (e) => e.record.state === 'ready' && (version === undefined || e.record.version === version),
     );
     if (candidates.length === 0) {
-      throw new Error(`supervise: no ready run instance for version pointer "${pointer}"`);
+      throw new Error(
+        `supervise: no ready run instance for version "${version ?? '*'}"`,
+      );
     }
+    const loadOf = (e: FleetEntry): number => e.record.load.inFlightRuns + e.record.load.queued;
     let best = candidates[0];
     for (const entry of candidates) {
-      if (entry.record.load.inFlightRuns < best.record.load.inFlightRuns) best = entry;
+      if (loadOf(entry) < loadOf(best)) best = entry;
     }
     return best;
   }

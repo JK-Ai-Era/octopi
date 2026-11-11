@@ -5857,15 +5857,44 @@ export class Gateway {
    */
   fleetStatus(): {
     instances: InstanceRecord[];
-    route: { versionPointer: string; replicasPerVersion: number };
+    route: {
+      versionPointer: string;
+      replicasPerVersion: number;
+      weights: Record<string, number>;
+    };
   } {
     return {
       instances: this.fleetRegistry.list(),
       route: {
         versionPointer: this.fleetRoute.versionPointer,
         replicasPerVersion: this.fleetRoute.replicasPerVersion,
+        weights: Object.fromEntries(this.fleetRoute.weights),
       },
     };
+  }
+
+  /**
+   * 权重运行态设置（P1-4 canary，service-topology-p1.md §6）。
+   * @param weights - 版本→百分比（和恰为 100；fail-loud）
+   * @returns void
+   */
+  fleetSetWeights(weights: Record<string, number>): void {
+    this.requireFleetOps().setWeights(weights);
+  }
+
+  /**
+   * 副本收敛（service-topology-p1.md §7）：少补 spawn、多退 drain。
+   * @param version - 版本标识
+   * @param buildRef - 构建产物根（补齐时用）
+   * @param n - 目标副本数
+   * @returns spawn 结果
+   */
+  async fleetScale(
+    version: string,
+    buildRef: string,
+    n: number,
+  ): Promise<{ ready: InstanceRecord[]; failed: Array<{ record: InstanceRecord; reason: string }> }> {
+    return this.requireFleetOps().scale(version, buildRef, n);
   }
 
   /**
