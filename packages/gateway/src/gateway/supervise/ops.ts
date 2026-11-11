@@ -71,18 +71,21 @@ export class FleetOps {
         backend = await this.deps.spawnInstance(version, buildRef, instanceId);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        record.state = 'failed';
+        this.deps.registry.setState(record.instanceId, 'failed');
         outcome.failed.push({ record, reason });
         continue;
       }
+      if (backend.info) {
+        record.port = backend.info.port;
+        record.pid = backend.info.pid;
+      }
       const result = await this.gate(backend);
       if (result.ok) {
-        record.state = 'ready';
-        record.lastProbe = Date.now();
+        this.deps.registry.setState(record.instanceId, 'ready');
         this.deps.fleet.register({ record, backend });
         outcome.ready.push(record);
       } else {
-        record.state = 'failed';
+        this.deps.registry.setState(record.instanceId, 'failed');
         outcome.failed.push({
           record,
           reason: result.checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail ?? 'failed'}`).join('; '),
@@ -114,7 +117,7 @@ export class FleetOps {
     const result = await this.gate(entry.backend);
     record.lastProbe = Date.now();
     if (!result.ok) {
-      record.state = 'failed';
+      this.deps.registry.setState(record.instanceId, 'failed');
       this.deps.fleet.unregister(instanceId);
       await entry.backend.stop().catch(() => undefined);
     }
@@ -185,8 +188,12 @@ export class FleetOps {
     if (record.state === 'failed') {
       throw new Error(`supervise: instance "${instanceId}" is failed (terminal); nothing to drain`);
     }
-    if (record.state === 'draining') return;
-    record.state = 'draining';
+    if (record.state !== 'draining') {
+      this.deps.registry.setState(record.instanceId, 'draining');
+    }
+    // MAJ-5/MIN-10：开始即疏散（sticky 迁走 + pulse 归属转移触发）；幂等，重试再调无害。
+    // 重入语义=继续等到 idle（上轮超时后重试不得假成功）。
+    this.deps.fleet.evacuate(instanceId);
 
     const deadline = Date.now() + (options?.drainTimeoutMs ?? 60_000);
     while (record.load.inFlightRuns > 0) {

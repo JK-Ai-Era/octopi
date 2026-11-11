@@ -115,7 +115,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.108.4 (2026-11-12)
+## v0.108.5 (2026-11-12)
+
+### fix(gateway): P0c 评审 MAJ 修复批 — 回执路由 / control 分类 / 跨版本自救 / 存活闭环
+
+- **MAJ-1 回执路由串台与泄漏**：回执 id（`ap-/ask-/ct-`）由进程内自增改 `randomUUID`（多实例同 id 碰撞 → A 的审批会批掉 B 的调用）；回执表终态即删（成败都删）；`unregister` 清该实例全部回执项。
+- **MAJ-2 control 分类漏网**：`syncKnowledgeState` 入 fleet-wide fan-out（每实例一份 knowledge 准入快照，漏同步=旧快照 fail-open）；`contextHealth` 归最闲实例透传（曾 unrouteable 恒失败、静默退化磁盘扫描）；`syncKnowledgeState`/`askUserReply` 调用点统走 fleet（原直连 run-0 绕过路由）。
+- **MAJ-3 跨版本自救被健康门卡死**：`/smoke` 为 v0.108.2 新增端点，旧构建 404 会被误判冒烟失败挡回滚（根需求「切回旧版本」失效）。`smoke()` 判 HTTP 状态；404 → `unavailable` 显式降级标记，健康门降级为 health+guard 判定并 warn（fail-loud, degrade explicitly）；`smoke()` 拒绝非 2xx。
+- **MAJ-5 存活闭环**：`RemoteRunBackend` 新增 `onExit` 回调——实例退出即移出路由面（sticky/pulse/回执随 unregister 清，防 sticky 会话黑洞）；drain **开始**即疏散（sticky 迁走 + pulse 归属转移触发，§5.2）；draining 的 sticky 亲和改为失效（修订 §7.1 旧语义：drain=停止接一切新 run，否则排空永不收敛）；drain 重入改为继续等到 idle（原超时后重试假成功）。
+- **MIN-1/8/14**：spawn 回填真实 port/pid（`InstanceBackend.info`）；探针类 fetchJson 带 30s 超时（`/runs` 长流不受限）；ops 状态迁移统一走 `registry.setState`（单一写路径）。
+- **验证**：新增回归锚 4 个（contextHealth/syncKnowledgeState 路由、回执终态即删+注销清理、draining 疏散、smoke 跨版本降级）；全量测试套件绿。
 
 ### fix(gateway): 委派工具挂载回归 — 缺省默认开启被误当禁用（P0b S2）
 

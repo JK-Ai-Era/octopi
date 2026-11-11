@@ -121,7 +121,7 @@ describe('FleetRunBackend routing', () => {
     expect(fleet.isInFlight('s1')).toBe(false);
   });
 
-  it('re-routes away from failed instance but keeps draining affinity', async () => {
+  it('re-routes away from failed and draining instances (MAJ-5: drain sheds affinity)', async () => {
     const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     const b = makeBackend('run-b');
@@ -131,12 +131,12 @@ describe('FleetRunBackend routing', () => {
     for await (const _ of fleet.startRun(req('s1'))) void _;
     expect(fleet.routeOf('s1')).toBe('run-a');
 
-    // draining：亲和保持
+    // draining：亲和也失效（MAJ-5 修订 §7.1——drain=停止接一切新 run，否则排空不收敛）
     fleet.list().find((e) => e.record.instanceId === 'run-a')!.record.state = 'draining';
     for await (const _ of fleet.startRun(req('s1'))) void _;
-    expect(fleet.routeOf('s1')).toBe('run-a');
+    expect(fleet.routeOf('s1')).toBe('run-b');
 
-    // failed：亲和失效，换 b
+    // failed：亲和失效，换 b（b 已承接 s1，重建场景）
     fleet.list().find((e) => e.record.instanceId === 'run-a')!.record.state = 'failed';
     for await (const _ of fleet.startRun(req('s1'))) void _;
     expect(fleet.routeOf('s1')).toBe('run-b');
@@ -278,6 +278,73 @@ describe('FleetRunBackend routing', () => {
     fleet.setPulseOwner('k:x', 'run-a');
     fleet.unregister('run-a');
     expect(fleet.resolvePulseOwner('k:x')).toBeUndefined();
+  });
+
+  it('routes contextHealth to least-loaded and fans out syncKnowledgeState (MAJ-2)', async () => {
+    const route = RouteConfig.seed({ versionPointer: 'self' });
+    const fleet = new FleetRunBackend({ route });
+    const a = makeBackend('run-a');
+    const b = makeBackend('run-b');
+    fleet.register({ record: makeRecord('run-a'), backend: a });
+    fleet.register({ record: makeRecord('run-b'), backend: b });
+    fleet.list().find((e) => e.record.instanceId === 'run-a')!.record.load.inFlightRuns = 3;
+
+    // contextHealth：诊断探针 → 最闲实例透传（曾 unrouteable 恒失败）
+    const probe = await fleet.control({ type: 'contextHealth', agentId: 'x' } as RunControlOp);
+    expect(probe.ok).toBe(true);
+    expect(b.controls.at(-1)).toEqual({ type: 'contextHealth', agentId: 'x' });
+    expect(a.controls).toHaveLength(0);
+
+    // syncKnowledgeState：每实例一份准入快照 → fan-out（曾直连 run-0 漏同步）
+    const sync = await fleet.control({ type: 'syncKnowledgeState', state: {} } as RunControlOp);
+    expect(sync.ok).toBe(true);
+    expect(a.controls.at(-1)).toEqual({ type: 'syncKnowledgeState', state: {} });
+    expect(b.controls.at(-1)).toEqual({ type: 'syncKnowledgeState', state: {} });
+  });
+
+  it('reply route: deletes on terminal failure too and clears on unregister (MAJ-1)', async () => {
+    const route = RouteConfig.seed({ versionPointer: 'self' });
+    const fleet = new FleetRunBackend({ route });
+    const a = makeBackend('run-a');
+    fleet.register({ record: makeRecord('run-a'), backend: a });
+
+    // 失败回执也是终态：表项必须删（否则永久泄漏）
+    fleet.setReplyRoute('clientTool:ct-x', 'run-a');
+    a.failControl = true;
+    const failed = await fleet.control({ type: 'clientToolResult', callId: 'ct-x', outcome: { ok: true, result: 1 } } as RunControlOp);
+    expect(failed.ok).toBe(false);
+    const retry = await fleet.control({ type: 'clientToolResult', callId: 'ct-x', outcome: { ok: true, result: 1 } } as RunControlOp);
+    expect(retry.ok).toBe(false);
+    if (!retry.ok) expect(retry.error.message).toContain('no reply route');
+
+    // 注销清全部回执项
+    a.failControl = false;
+    fleet.setReplyRoute('approval:ap-x', 'run-a');
+    fleet.unregister('run-a');
+    const gone = await fleet.control({ type: 'approvalReply', approvalId: 'ap-x', result: { approved: true } } as RunControlOp);
+    expect(gone.ok).toBe(false);
+    if (!gone.ok) expect(gone.error.message).toContain('no reply route');
+  });
+
+  it('draining instance sheds sticky affinity and new sessions route elsewhere (MAJ-5)', async () => {
+    const route = RouteConfig.seed({ versionPointer: 'self' });
+    const fleet = new FleetRunBackend({ route });
+    const a = makeBackend('run-a');
+    const b = makeBackend('run-b');
+    fleet.register({ record: makeRecord('run-a'), backend: a });
+    fleet.register({ record: makeRecord('run-b'), backend: b });
+
+    for await (const _ of fleet.startRun(req('s1'))) void _;
+    expect(fleet.routeOf('s1')).toBe('run-a');
+
+    // drain 开始疏散：sticky 迁走，后续 run 落 B（否则排空永不收敛）
+    fleet.evacuate('run-a');
+    fleet.list().find((e) => e.record.instanceId === 'run-a')!.record.state = 'draining';
+    for await (const _ of fleet.startRun(req('s1'))) void _;
+    expect(fleet.routeOf('s1')).toBe('run-b');
+    // draining 不接新会话
+    for await (const _ of fleet.startRun(req('s2'))) void _;
+    expect(fleet.routeOf('s2')).toBe('run-b');
   });
 });
 

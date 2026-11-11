@@ -58,15 +58,25 @@ export async function probeInstance(
   // ③ 冒烟（装配热路径 + no-LLM 应答；Q2 拍板含冒烟）
   try {
     const report = await backend.smoke();
-    checks.push(
-      report.ok
-        ? { name: 'smoke', ok: true }
-        : {
-            name: 'smoke',
-            ok: false,
-            detail: JSON.stringify(report.agents.map((a) => ({ agentId: a.agentId, checks: a.checks }))),
-          },
-    );
+    if (report.unavailable) {
+      // MAJ-3：旧构建无 /smoke（跨版本回滚窗口）——显式降级为 health+guard 判定，
+      // 自救（根需求：切回旧版本）不得被新端点卡死。降级如实可见（fail-loud, degrade explicitly）。
+      console.warn('[probe] smoke unavailable on this build (pre-v0.108.2); degraded to health+guard');
+      checks.push({
+        name: 'smoke',
+        ok: true,
+        detail: 'unavailable on this build; degraded to health+guard (cross-version)',
+      });
+    } else if (report.ok) {
+      checks.push({ name: 'smoke', ok: true });
+    } else {
+      const agents = Array.isArray(report.agents) ? report.agents : [];
+      checks.push({
+        name: 'smoke',
+        ok: false,
+        detail: JSON.stringify(agents.map((a) => ({ agentId: a.agentId, checks: a.checks }))),
+      });
+    }
   } catch (err) {
     checks.push({
       name: 'smoke',

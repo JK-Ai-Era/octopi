@@ -22,6 +22,7 @@ import type {
   LLMToolDefinition,
   ModelProvider,
 } from '@octopi-agent/core/interfaces/model-provider.js';
+import { randomUUID } from 'node:crypto';
 import { SessionRunnerDispatcher } from '../activation/index.js';
 import type { RunDispatcher, RunRequest, Trigger } from '../activation/index.js';
 import type { RunSmokeReport } from '../activation/run-protocol.js';
@@ -198,7 +199,6 @@ export class RunHost implements RunBackend {
   /** 客户端工具现况注册表（B3：mount 晚于 setClientTools 时重放；add 同名覆盖） */
   private readonly clientToolRegistry = new Map<string, RegisteredTool>();
   private knowledgeState: KnowledgeStateWire = 'starting';
-  private callSeq = 0;
 
   constructor(options: RunHostOptions) {
     this.opts = options;
@@ -538,7 +538,7 @@ export class RunHost implements RunBackend {
    * @returns 审批结果
    */
   askApproval(input: RunApprovalRequestInput): Promise<HitlAskResult> {
-    const approvalId = `ap-${++this.callSeq}`;
+    const approvalId = `ap-${randomUUID()}`;
     return new Promise<HitlAskResult>((resolve, reject) => {
       this.pendingApprovals.set(approvalId, resolve);
       try {
@@ -569,7 +569,7 @@ export class RunHost implements RunBackend {
     question: string;
     options?: string[];
   }): Promise<string> {
-    const askId = `ask-${++this.callSeq}`;
+    const askId = `ask-${randomUUID()}`;
     return new Promise<string>((resolve, reject) => {
       this.pendingAsks.set(askId, { resolve, reject });
       try {
@@ -984,7 +984,7 @@ export class RunHost implements RunBackend {
       definition: spec.definition,
       ...(spec.source === undefined ? {} : { source: spec.source }),
       handler: (args: Record<string, unknown>, context: ToolExecutionContext) => {
-        const callId = `ct-${++this.callSeq}`;
+        const callId = `ct-${randomUUID()}`;
         return new Promise<unknown>((resolve, reject) => {
           const abortSignal = context.abortSignal;
           let settled = false;

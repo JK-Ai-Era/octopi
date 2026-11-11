@@ -39,6 +39,8 @@ export interface InstanceBackend {
   smoke(): Promise<RunSmokeReport>;
   /** 停止实例（drain 收摊用；幂等） */
   stop(): Promise<void>;
+  /** 实例信息（registry 回填 port/pid 的真源；可选——假实现可省） */
+  info?: { port: number; pid: number };
 }
 
 /** 注册条目：事实（record）+ 执行面（backend） */
@@ -53,6 +55,8 @@ const FLEET_WIDE_OPS = new Set([
   'reloadAgent',
   'setClientTools',
   'reattestSecurity',
+  // MAJ-2：每实例都持有 knowledge 准入快照，必须逐实例同步（否则旧快照 fail-open）
+  'syncKnowledgeState',
 ]);
 
 export interface FleetRunBackendOptions {
@@ -106,6 +110,9 @@ export class FleetRunBackend {
     }
     for (const [key, id] of [...this.pulseOwner]) {
       if (id === instanceId) this.pulseOwner.delete(key);
+    }
+    for (const [key, id] of [...this.replyRoute]) {
+      if (id === instanceId) this.replyRoute.delete(key);
     }
     return removed;
   }
@@ -188,8 +195,22 @@ export class FleetRunBackend {
         return { ok: false, error: { message: `supervise: reply target "${owner}" for "${replyKey}" is gone` } };
       }
       const res = await entry.backend.control(op);
-      if (res.ok) this.replyRoute.delete(replyKey);
+      // 一问一答无论成败都是终态（MAJ-1：失败残留即泄漏）
+      this.replyRoute.delete(replyKey);
       return res;
+    }
+
+    if (op.type === 'contextHealth') {
+      // MAJ-2：诊断探针（agentId 维度，无 sessionId）——每实例全量装配，任一可答；
+      // 取最闲 ready 实例透传原始结果（不走 fan-out 的 appliedOn 形状）。
+      try {
+        return (await this.pickLeastLoaded().backend.control(op));
+      } catch (err) {
+        return {
+          ok: false,
+          error: { message: `supervise: contextHealth unreachable: ${err instanceof Error ? err.message : String(err)}` },
+        };
+      }
     }
 
     if (FLEET_WIDE_OPS.has(op.type)) {
@@ -263,6 +284,21 @@ export class FleetRunBackend {
       pulses: [...pulses.values()],
       ...(unreachableInstances.length > 0 ? { unreachableInstances } : {}),
     };
+  }
+
+  /**
+   * 疏散实例（drain 开始时调，幂等）：清其 sticky 亲和与 pulse 归属（§5.2「持有实例
+   * drain → 转移」）。归属实际转移由 PulseScheduler 下个 resync 周期执行（其他实例同 key 接棒）。
+   * @param instanceId - 实例标识
+   * @returns void
+   */
+  evacuate(instanceId: string): void {
+    for (const [sessionId, id] of [...this.sticky]) {
+      if (id === instanceId) this.sticky.delete(sessionId);
+    }
+    for (const [key, id] of [...this.pulseOwner]) {
+      if (id === instanceId) this.pulseOwner.delete(key);
+    }
   }
 
   // ── pulse lease 面（决策归 PulseScheduler，本类持表定向）──
@@ -351,8 +387,9 @@ export class FleetRunBackend {
     const stickyId = this.sticky.get(sessionId);
     if (stickyId) {
       const entry = this.entries.get(stickyId);
-      // failed 实例的亲和失效（换实例）；draining 保持亲和（会话亲和优先 §7.1）
-      if (entry && entry.record.state !== 'failed') return entry;
+      // 只有 ready 实例保有亲和（MAJ-5 修订 §7.1 旧语义）：drain = 停止接一切新 run
+      //（含 sticky 会话后续），否则在途归零可能永不收敛；failed 同样失效。
+      if (entry && entry.record.state === 'ready') return entry;
       this.sticky.delete(sessionId);
     }
     return this.pickLeastLoaded();

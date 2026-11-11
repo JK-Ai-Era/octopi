@@ -96,6 +96,8 @@ export async function* decodeRunStream(
 export interface RemoteRunBackendOptions {
   /** 宿主通知（审批/客户端工具/事件/重投）出口；缺省 fail-loud 留痕 */
   onNotify?: (notify: RunHostNotify) => void;
+  /** 子进程退出回调（MAJ-5 存活闭环）：宿主据此标 failed + 清路由面 */
+  onExit?: (code: number | null) => void;
   /** ready 握手超时（缺省 30s：首启含插件发现） */
   readyTimeoutMs?: number;
   /**
@@ -204,6 +206,7 @@ export class RemoteRunBackend {
     child.removeAllListeners('exit');
     child.on('exit', (code) => {
       console.warn(`[RunRemote] run instance exited (code ${String(code)})`);
+      options.onExit?.(code);
     });
     child.on('message', (msg: unknown) => {
       const m = msg as { kind?: string; notify?: RunHostNotify };
@@ -244,7 +247,7 @@ export class RemoteRunBackend {
    * @returns 执行结果（ok:false 不抛——调用方裁决）
    */
   async control(op: RunControlOp): Promise<RunControlResponse> {
-    const res = await this.fetchJson('POST', '/control', op);
+    const res = await this.fetchJson('POST', '/control', op, 30_000);
     return (await res.json()) as RunControlResponse;
   }
 
@@ -259,7 +262,15 @@ export class RemoteRunBackend {
 
   /** 冒烟（健康门 §4.3）：`POST /smoke` 独立通道——装配热路径自检，不是 run */
   async smoke(): Promise<RunSmokeReport> {
-    const res = await this.fetchJson('POST', '/smoke');
+    const res = await this.fetchJson('POST', '/smoke', undefined, 30_000);
+    if (res.status === 404) {
+      // MAJ-3：旧构建（pre-v0.108.2）无 /smoke——显式降级标记，健康门降级为 health+guard 判定，
+      // 跨版本回滚（根需求）不被新端点卡死
+      return { ok: false, unavailable: true, agents: [] };
+    }
+    if (!res.ok) {
+      throw new Error(`run_remote: smoke failed (HTTP ${res.status})`);
+    }
     return (await res.json()) as RunSmokeReport;
   }
 
@@ -269,7 +280,7 @@ export class RemoteRunBackend {
    * @returns 健康报告
    */
   async health(): Promise<RunBackendHealth> {
-    const res = await this.fetchJson('GET', '/health');
+    const res = await this.fetchJson('GET', '/health', undefined, 30_000);
     if (!res.ok) {
       throw new Error(`run_remote: health failed (HTTP ${res.status}): ${await this.errorText(res)}`);
     }
@@ -321,7 +332,12 @@ export class RemoteRunBackend {
     rmSync(this.bootPath, { force: true });
   }
 
-  private async fetchJson(method: string, path: string, body?: unknown): Promise<Response> {
+  private async fetchJson(
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs?: number,
+  ): Promise<Response> {
     return fetch(`http://127.0.0.1:${this.port}${path}`, {
       method,
       headers: {
@@ -329,6 +345,8 @@ export class RemoteRunBackend {
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      // MIN-8：探针类请求带超时（/runs 长流不传，不加限制）
+      ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
     });
   }
 

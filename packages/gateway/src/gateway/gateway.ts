@@ -1813,7 +1813,15 @@ export class Gateway {
     // 释放 Runner 后台 timer（BackfillTrigger / HealthProbe / SubsystemRuntime）+ 退役回收。
     // await 到位（m8）：否则 gateway 先退、boot/子进程清理与进程退出竞态
     try {
-      await this.runBackend?.stop();
+      for (const entry of this.fleet.list()) {
+        this.fleet.unregister(entry.record.instanceId);
+        await entry.backend.stop().catch((err: unknown) => {
+          console.warn(
+            `[Gateway] stop of "${entry.record.instanceId}" failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
+      this.runBackend = undefined;
     } catch {
       // stop 路径 fail-open，不阻断关闭
     }
@@ -3897,7 +3905,8 @@ export class Gateway {
   private pushKnowledgeStateToRun(): void {
     const state = this.getKnowledgeState() as never;
     try {
-      void this.runBackend?.control({ type: 'syncKnowledgeState', state }).catch((err: unknown) => {
+      // MAJ-2：经 fleet fan-out 同步全部实例（knowledge 准入快照每实例一份，旧快照会 fail-open）
+      void this.getRunBackend().control({ type: 'syncKnowledgeState', state }).catch((err: unknown) => {
         console.warn(
           '[Gateway] syncKnowledgeState failed:',
           err instanceof Error ? err.message : String(err),
@@ -5762,14 +5771,14 @@ export class Gateway {
           ...(n.options === undefined ? {} : { options: n.options }),
         })
           .then((answer) =>
-            this.runBackend?.control({
+            this.getRunBackend().control({
               type: 'askUserReply',
               askId: n.askId,
               outcome: { ok: true, answer },
             }),
           )
           .catch((err) =>
-            this.runBackend?.control({
+            this.getRunBackend().control({
               type: 'askUserReply',
               askId: n.askId,
               outcome: {

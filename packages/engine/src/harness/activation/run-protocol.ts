@@ -143,6 +143,11 @@ export interface PulseSpec {
  */
 export interface RunSmokeReport {
   ok: boolean;
+  /**
+   * 该构建无冒烟端点（跨版本：pre-v0.108.2）——消费方降级为 health+guard 判定（MAJ-3），
+   * 不得当作冒烟失败挡回滚。
+   */
+  unavailable?: boolean;
   agents: Array<{
     agentId: string;
     toolCount: number;

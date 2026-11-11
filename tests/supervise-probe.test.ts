@@ -96,6 +96,20 @@ describe('probeInstance (health gate)', () => {
     expect(result.checks.find((c) => c.name === 'securityGuard')!.ok).toBe(false);
   });
 
+  it('degrades to health+guard when smoke unavailable on old builds (MAJ-3: cross-version rollback)', async () => {
+    const backend = makeBackend();
+    // 旧构建（pre-v0.108.2）无 /smoke → RemoteRunBackend 报 unavailable
+    backend.smokeReport = { ok: false, unavailable: true, agents: [] };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await probeInstance(backend, { securityIntegrityConfigured: false });
+    expect(result.ok).toBe(true);
+    const smoke = result.checks.find((c) => c.name === 'smoke')!;
+    expect(smoke.ok).toBe(true);
+    expect(smoke.detail).toContain('degraded');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('fails loud on unreachable health', async () => {
     const backend = makeBackend();
     backend.failHealth = true;
