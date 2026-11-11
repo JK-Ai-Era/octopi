@@ -2021,15 +2021,38 @@ export class Gateway {
     console.log(
       `[Gateway] Security config re-attested via console apply（changed: ${result.changed.join(', ') || '无'}，${result.previousFingerprint.slice(0, 8)} → ${result.fingerprint.slice(0, 8)}）`,
     );
-    // 同步 run 实例守卫：失败降级 warning（gateway 已锚；子进程维持漂移拒 run，
+    // 漂移处置编排（P1-3，service-topology-p1.md §5；Q2=(a) 优先 reattest 重锚定，
+    // 失败实例滚动替换）：fleet 形态走 FleetOps.remediateDrift；单实例形态退化为
+    // 直接 control 同步。任一失败降级 warning（gateway 已锚；子进程维持漂移拒 run，
     // 与 config-apply 署名失败同 fail-closed 语义，重启采纳盘上配置兜底）。
-    if (this.runBackend) {
-      void this.runBackend
-        .control({
-          type: 'reattestSecurity',
-          expectHash: options.expectHash,
-          allowedChanged: options.allowedChanged,
+    const reattestOp = {
+      type: 'reattestSecurity' as const,
+      expectHash: options.expectHash,
+      allowedChanged: options.allowedChanged,
+    };
+    const fleetOps = this.fleetOps;
+    if (fleetOps) {
+      void fleetOps
+        .remediateDrift(reattestOp)
+        .then((res) => {
+          if (res.failed.length > 0) {
+            console.warn(
+              `[Gateway] drift remediation incomplete（失败实例保持漂移态，新 run 仍拒直至替换/重启）: ${res.failed.join('; ')}`,
+            );
+          } else if (res.replaced.length > 0) {
+            console.log(
+              `[Gateway] drift remediated（重锚定 ${res.reattested.length} 实例，滚动替换 ${res.replaced.join(', ')}）`,
+            );
+          }
         })
+        .catch((err: unknown) => {
+          console.warn(
+            `[Gateway] run-instance security re-attest failed（子进程守卫保持漂移，新 run 仍拒直至重启）: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    } else if (this.runBackend) {
+      void this.runBackend
+        .control(reattestOp)
         .then((res) => {
           if (!res.ok) {
             console.warn(

@@ -115,6 +115,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.111.1 (2026-11-12)
+
+### feat(gateway): P1-3a 漂移处置编排 — reattest 优先，失败滚动替换（service-topology §5，Q2=(a)）
+
+- **编排**：`FleetOps.remediateDrift` —— fleet-wide `reattestSecurity` fan-out → 重锚定成功实例留任，失败实例**滚动替换**（同 version/buildRef 新实例过健康门 → drain 老实例）。替换也失败 fail-loud 留痕（failed 清单），不静默。
+- **结构化 fan-out**：`FleetRunBackend.fanOut(op)` 返回 per-instance 成败明细（编排消费）；`control()` 的 fleet-wide 聚合复用同一实现（单一 fan-out 事实源），聚合行为不变（`result.perInstance` 只增字段）。
+- gateway `reattestSecurityConfig` 的 run 同步段升级为处置编排（fleet 形态）；单实例形态保持原 control 同步（对称语义）。
+- §7.3 漂移语义逐字不变（ops P2 拍板不重开）：每实例各自锚定、run 起点复核、漂移拒新 run 全 fleet 一致——本批只做处置（恢复），不改检测。
+- 测试锚 `tests/drift-remediate.test.ts` 三例（成功留任/失败滚换/替换失败留痕/结构化明细）；全量 4633 passed。
+- H7 mojibake 守卫抓到 fanOut 注释行内 `error?` 截断残留样式——改注释文案（不改守卫）。
+
+---
+
 ## v0.111.0 (2026-11-12)
 
 ### feat(gateway): P1-2 run lease 正式化 — 单飞闸门换骨（service-topology §7.2，OP-LEASE）

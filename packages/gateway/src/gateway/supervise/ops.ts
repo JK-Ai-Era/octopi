@@ -243,4 +243,44 @@ export class FleetOps {
   private async gate(backend: InstanceBackend): Promise<ProbeResult> {
     return probeInstance(backend, this.deps.probeOptions());
   }
+  /**
+   * 漂移处置（P1-3，service-topology-p1.md §5；Q2=(a) 优先 reattest 重锚定）：
+   * fleet-wide reattest fan-out → 对重锚定失败的实例滚动替换（同 version/buildRef
+   * 新实例过健康门 → drain 老实例）。替换也失败的 fail-loud 留痕，不静默。
+   *
+   * @param op - reattestSecurity 控制 op（expectHash/allowedChanged）
+   * @returns reattested（重锚定成功）/ replaced（滚换的原实例）/ failed（滚换也失败）
+   */
+  async remediateDrift(op: {
+    type: 'reattestSecurity';
+    expectHash: string;
+    allowedChanged: string[];
+  }): Promise<{ reattested: string[]; replaced: string[]; failed: string[] }> {
+    const perInstance = await this.deps.fleet.fanOut(op);
+    const reattested: string[] = [];
+    const replaced: string[] = [];
+    const failed: string[] = [];
+    for (const r of perInstance) {
+      if (r.ok) {
+        reattested.push(r.instanceId);
+        continue;
+      }
+      const entry = this.deps.fleet.list().find((e) => e.record.instanceId === r.instanceId);
+      if (!entry) continue; // 派发后即注销：无物可换
+      const { version, buildRef } = entry.record;
+      try {
+        const outcome = await this.spawn(version, buildRef, 1);
+        if (outcome.failed.length > 0) {
+          failed.push(`${r.instanceId}: replacement failed health gate: ${outcome.failed[0].reason}`);
+          continue;
+        }
+        await this.drain(r.instanceId);
+        replaced.push(r.instanceId);
+      } catch (err) {
+        failed.push(`${r.instanceId}: replacement errored: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { reattested, replaced, failed };
+  }
+
 }

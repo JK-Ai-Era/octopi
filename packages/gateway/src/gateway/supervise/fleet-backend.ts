@@ -221,6 +221,34 @@ export class FleetRunBackend {
   }
 
   /**
+   * 结构化 fan-out（P1-3 漂移处置编排用）：全部注册实例逐个派发，返回 per-instance
+   * 成败明细。control() 的 fleet-wide 聚合复用本方法（单一 fan-out 事实源）。
+   * @param op - fleet-wide 控制 op
+   * @returns 每实例结果数组（instanceId / ok / error 可选）
+   */
+  async fanOut(op: RunControlOp): Promise<
+    Array<{ instanceId: string; ok: boolean; error?: string }>
+  > {
+    const targets = [...this.entries.values()];
+    const results = await Promise.allSettled(
+      targets.map((entry) => entry.backend.control(op)),
+    );
+    return results.map((result, i) => {
+      const instanceId = targets[i].record.instanceId;
+      if (result.status === 'rejected') {
+        return {
+          instanceId,
+          ok: false,
+          error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        };
+      }
+      return result.value.ok
+        ? { instanceId, ok: true }
+        : { instanceId, ok: false, error: result.value.error.message };
+    });
+  }
+
+  /**
    * 控制派发：session-scoped → sticky 实例；fleet-wide → fan-out；pulse → 归属实例。
    * 未知 op 形态 fail-loud（不静默吞）。
    * @param op - 纯数据控制 op
@@ -288,16 +316,11 @@ export class FleetRunBackend {
       if (targets.length === 0) {
         return { ok: false, error: { message: `supervise: no instances for fleet-wide op "${op.type}"` } };
       }
-      const results = await Promise.allSettled(
-        targets.map((entry) => entry.backend.control(op)),
-      );
+      const perInstance = await this.fanOut(op);
       const failed: string[] = [];
-      for (const [i, result] of results.entries()) {
-        const instanceId = targets[i].record.instanceId;
-        if (result.status === 'rejected') {
-          failed.push(`${instanceId}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
-        } else if (!result.value.ok) {
-          failed.push(`${instanceId}: ${result.value.error.message}`);
+      for (const r of perInstance) {
+        if (!r.ok) {
+          failed.push(`${r.instanceId}: ${r.error}`);
         }
       }
       if (failed.length > 0) {
@@ -306,7 +329,13 @@ export class FleetRunBackend {
           error: { message: `supervise: fleet-wide "${op.type}" failed on ${failed.length}/${targets.length}: ${failed.join('; ')}` },
         };
       }
-      return { ok: true, result: { appliedOn: targets.map((t) => t.record.instanceId) } };
+      return {
+        ok: true,
+        result: {
+          appliedOn: perInstance.filter((r) => r.ok).map((r) => r.instanceId),
+          perInstance,
+        },
+      };
     }
 
     if ('sessionId' in op && typeof op.sessionId === 'string') {
