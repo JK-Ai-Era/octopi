@@ -19,6 +19,7 @@
 
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
 import { readTitleState } from '@octopi-agent/core/types/session.js';
+import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/channel-types.js';
 import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
@@ -5122,7 +5123,7 @@ export class Gateway {
       if (typeof html === 'string' && html.length > 64 * 1024) {
         record.args = {
           ...record.args,
-          html: `${html.slice(0, 2048)}…[${html.length} chars, assetId=${record.assetId ?? 'n/a'}]`,
+          html: `${html.slice(0, 2048)}${elidedCharsMarker(html.length, `assetId=${record.assetId ?? 'n/a'}`)}`,
         };
       }
       const next = prev.filter((c) => c.id !== record.id).concat(record);

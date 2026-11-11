@@ -78,7 +78,7 @@ describe('file_search L1 output cap', () => {
     expect(result.matches[0].file).toBe('big.txt');
     expect(result.matches[0].line).toBe(1);
     expect(result.matches[0].content.startsWith('hitme ')).toBe(true);
-    expect(result.matches[0].content).toContain('…[truncated]');
+    expect(result.matches[0].content).toContain('[octopi:truncated]');
     expect(result.matches[0].content.length).toBeLessThan(240);
     expect(result.outputCap.applied).toBe(true);
     expect(result.outputCap.stages).toEqual(['content_lines']);
@@ -107,7 +107,7 @@ describe('file_search L1 output cap', () => {
     for (const m of result.matches) {
       expect(m.before).toBeUndefined();
       expect(m.after).toBeUndefined();
-      expect(m.content).not.toContain('…[truncated]');
+      expect(m.content).not.toContain('[octopi:truncated]');
     }
     expect(result.truncated).toBe(true);
     expect(result.truncatedReason).toBe('l1_cap');
@@ -119,7 +119,7 @@ describe('file_search L1 output cap', () => {
     await writeFile(join(tmpDir, 'many.txt'), text);
 
     const tool = createFileSearchTool({
-      summary: { toolBindings: { file_search: { maxReturnChars: 4000 } } },
+      summary: { toolBindings: { file_search: { maxReturnChars: 4200 } } },
     });
     const result = (await tool.handler(
       { pattern: 'hitme', path: tmpDir, max_results: 200 },
@@ -129,12 +129,12 @@ describe('file_search L1 output cap', () => {
     expect(result.matches).toHaveLength(60);
     expect(result.outputCap.stages).toContain('preview_cap');
     expect(result.outputCap.previewKept).toBeLessThan(60);
-    expect(result.matches[0].content).not.toBe('…[preview omitted]');
-    expect(result.matches[59].content).toBe('…[preview omitted]');
+    expect(result.matches[0].content).not.toBe('[octopi:elided: preview]');
+    expect(result.matches[59].content).toBe('[octopi:elided: preview]');
     // 定位符零损失：每条保留唯一 file+line
     const locators = result.matches.map((m: any) => `${m.file}:${m.line}`);
     expect(new Set(locators).size).toBe(60);
-    expect(JSON.stringify(result.matches).length).toBeLessThanOrEqual(4000);
+    expect(JSON.stringify(result.matches).length).toBeLessThanOrEqual(4200);
     expect(result.truncated).toBe(true);
     expect(result.truncatedReason).toBe('l1_cap');
   });
@@ -158,7 +158,7 @@ describe('file_search L1 output cap', () => {
     for (const m of result.matches) {
       expect(m.file).toBe('many.txt');
       expect(typeof m.line).toBe('number');
-      expect(m.content).toBe('…[preview omitted]');
+      expect(m.content).toBe('[octopi:elided: preview]');
     }
   });
 
@@ -251,7 +251,7 @@ describe('file_search L1 output cap', () => {
     expect(result.outputCap.applied).toBe(true);
     expect(result.outputCap.stages).toEqual(['preview_cap']);
     expect(result.outputCap.stages).not.toContain('content_lines');
-    expect(result.matches.some((m: any) => m.content.includes('…[truncated]'))).toBe(false);
+    expect(result.matches.some((m: any) => m.content.includes('[octopi:truncated]'))).toBe(false);
     const capHint = result.hints.find((h: string) => h.includes('L1 output cap')) as string;
     expect(capHint).toContain('preview_cap');
     expect(capHint).not.toContain('content_lines');
@@ -276,6 +276,6 @@ describe('file_search L1 output cap', () => {
     const locators = result.matches.map((m: any) => `${m.file}:${m.line}`);
     expect(new Set(locators).size).toBe(60);
     // 预览全省略后仍可能超出预算——这是有意的取舍，不是 bug
-    expect(result.matches.every((m: any) => m.content === '…[preview omitted]')).toBe(true);
+    expect(result.matches.every((m: any) => m.content === '[octopi:elided: preview]')).toBe(true);
   });
 });

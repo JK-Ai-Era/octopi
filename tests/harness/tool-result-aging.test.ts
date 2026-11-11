@@ -221,7 +221,7 @@ describe('tool-result-aging plan', () => {
     ) as Record<string, unknown>;
     expect(String(out.command).startsWith('cd /repo && npm test')).toBe(true);
     // 85 字符 ≤ 头部上限 → 原样保留；关键是不能变成整体省略标记
-    expect(String(out.command)).not.toMatch(/^…\[\d+ chars\]$/);
+    expect(String(out.command)).not.toMatch(/^\[octopi:elided \d+ chars\]$/);
   });
 
   it('定位字段全保：path/pattern/glob 与命令头部不被省略（唯一锚点）', () => {
@@ -237,8 +237,8 @@ describe('tool-result-aging plan', () => {
     expect(out.path).toBe(args.path);
     expect(String(out.path)).not.toContain('chars]');
     // 正文仍被降级
-    expect(String(out.old_text)).toMatch(/^…\[\d+ chars\]$/);
-    expect(String(out.new_text)).toMatch(/^…\[\d+ chars\]$/);
+    expect(String(out.old_text)).toMatch(/^\[octopi:elided \d+ chars\]$/);
+    expect(String(out.new_text)).toMatch(/^\[octopi:elided \d+ chars\]$/);
     // 未退化为整体轮廓（否则键名全丢）
     expect(out._aged).toBeUndefined();
 
@@ -249,7 +249,7 @@ describe('tool-result-aging plan', () => {
     ) as Record<string, unknown>;
     // 命令保留头部（能看出「跑的是什么」），尾部用增量标记
     expect(String(cmd.command).startsWith('cd /repo && zzz')).toBe(true);
-    expect(String(cmd.command)).toMatch(/…\[\+\d+ chars\]$/);
+    expect(String(cmd.command)).toMatch(/\[octopi:elided \+\d+ chars\]$/);
     expect(String(cmd.command).length).toBeLessThan(130);
   });
 
@@ -257,8 +257,8 @@ describe('tool-result-aging plan', () => {
     const longPath = `/${'p'.repeat(500)}/file.ts`;
     const out = agedToolArgDigest('file_read', { path: longPath, extra: 'q'.repeat(2000) }, OPTS()) as Record<string, unknown>;
     // 超过 LOCATOR_KEEP_CHARS(200) 的罕见超长路径退化为标记
-    expect(String(out.path)).toMatch(/^…\[\d+ chars\]$/);
-    expect(out.extra).toMatch(/^…\[\d+ chars\]$/);
+    expect(String(out.path)).toMatch(/^\[octopi:elided \d+ chars\]$/);
+    expect(out.extra).toMatch(/^\[octopi:elided \d+ chars\]$/);
   });
 
   it('should scale the pointer with maxPointerChars (the knob is real)', () => {
@@ -418,10 +418,29 @@ describe('tool-call 参数随结果老化', () => {
     expect(Object.keys(args).sort()).toEqual(['new_string', 'old_string', 'path']);
     expect(args.path).toMatch(/^src\/f\d+\.ts$/);
     // 载荷长值被替换为长度标记
-    expect(String(args.old_string)).toMatch(/^…\[\d+ chars\]$/);
-    expect(String(args.new_string)).toMatch(/^…\[\d+ chars\]$/);
+    expect(String(args.old_string)).toMatch(/^\[octopi:elided \d+ chars\]$/);
+    expect(String(args.new_string)).toMatch(/^\[octopi:elided \d+ chars\]$/);
     // 摘要显著小于原文
     expect(agedCall.function.arguments.length).toBeLessThan(200);
+  });
+
+  it('预算账目：已降级值按固定成本计费，多键调用不得被标记挤进 _aged 兜底（评审 M2 回归）', () => {
+    // 15 个内容键 × 80 字符值：按标记字面长度计费会超 320 预算、退化为
+    // {_aged, outline} 丢掉全部键名；修复后键名必须全保
+    const args: Record<string, unknown> = {};
+    for (let i = 0; i < 15; i++) args[`field_${i}`] = 'x'.repeat(80);
+    const out = agedToolArgDigest('task_note', args, {
+      enabled: true,
+      ageToolArgs: true,
+      rawWindow: 10,
+      freezeBatch: 40,
+      maxPointerChars: 400,
+      maxAgedArgChars: 320,
+    }) as Record<string, unknown>;
+    expect(out._aged).toBeUndefined();
+    for (let i = 0; i < 15; i++) {
+      expect(String(out[`field_${i}`])).toMatch(/^\[octopi:elided \d+ chars\]$/);
+    }
   });
 
   it('ageToolArgs=false 时参数保持原文（红线可回退）', async () => {

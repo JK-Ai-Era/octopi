@@ -4,6 +4,7 @@
  * @module harness/capabilities/document/backends/plain
  */
 
+import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import type {
   DocumentExtractBackend,
   ExtractOptions,
@@ -42,7 +43,7 @@ export const plainTextBackend: DocumentExtractBackend = {
     const warnings: ExtractResult['warnings'] = [];
     const maxChars = options.maxTextChars && options.maxTextChars > 0 ? options.maxTextChars : 0;
     if (maxChars > 0 && text.length > maxChars) {
-      text = `${text.slice(0, maxChars)}\n\n…[truncated: ${text.length - maxChars} chars omitted]`;
+      text = `${text.slice(0, maxChars)}\n\n${elidedCharsMarker(text.length - maxChars)}`;
       warnings.push({
         code: 'PARTIAL_EXTRACT',
         message: `text truncated to maxTextChars=${maxChars}`,

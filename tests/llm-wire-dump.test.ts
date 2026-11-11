@@ -1246,3 +1246,226 @@ describe('wire dump — 响应留痕', () => {
     expect(response && 'text' in response).toBe(false);
   });
 });
+
+describe('响应留痕 — tool_call 原始参数（OP-TOOL-1 裁决物证）', () => {
+  test('stream 按 index 拼接 tool_call 原文，逐字节留痕', async () => {
+    class ToolCallStream extends FakeProvider {
+      async *stream(_request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
+        yield {
+          type: 'tool_call',
+          toolCall: { id: 'c1', name: 'file_edit', arguments: '{"new_text":"abc', index: 0 },
+        };
+        yield {
+          type: 'tool_call',
+          toolCall: { id: 'c1', arguments: 'def"}', index: 0 },
+        };
+        yield {
+          type: 'tool_call',
+          toolCall: { id: 'c2', name: 'shell', arguments: '{"command":"ls"}', index: 1 },
+        };
+        yield { type: 'done', finishReason: 'tool_calls', usage: { ...USAGE } };
+      }
+    }
+    const provider = new ToolCallStream([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_tc', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    // 消费完整个流才收尾
+    for await (const _chunk of wrapped.stream({ model: 'fake-model', messages: [] })) {
+      // drain
+    }
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_tc'));
+    const response = calls[0]?.result?.response as unknown as {
+      toolCalls?: Array<{ name: string; arguments: string; argumentsChars: number; raw: boolean }>;
+    };
+    expect(response.toolCalls).toHaveLength(2);
+    // index 0 的两段增量拼接为原文全文
+    expect(response.toolCalls?.[0]).toMatchObject({
+      name: 'file_edit',
+      arguments: '{"new_text":"abcdef"}',
+      argumentsChars: 21,
+      raw: true,
+    });
+    expect(response.toolCalls?.[1]).toMatchObject({
+      name: 'shell',
+      arguments: '{"command":"ls"}',
+      raw: true,
+    });
+  });
+
+  test('chat 无原文可用：序列化留痕并标注 raw:false', async () => {
+    class ToolCallChat extends FakeProvider {
+      async chat(_request: LLMRequest): Promise<LLMResponse> {
+        return {
+          content: '',
+          model: this.defaultModel,
+          finishReason: 'tool_calls',
+          toolCalls: [
+            { id: 'c1', name: 'task_note', arguments: { progress_note: 'ok' } } as never,
+          ],
+          usage: { ...USAGE },
+        };
+      }
+    }
+    const provider = new ToolCallChat([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_tc2', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    await wrapped.chat({ model: 'fake-model', messages: [] });
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_tc2'));
+    const response = calls[0]?.result?.response as unknown as {
+      toolCalls?: Array<{ name: string; arguments: string; raw: boolean }>;
+    };
+    expect(response.toolCalls?.[0]).toMatchObject({
+      name: 'task_note',
+      arguments: '{"progress_note":"ok"}',
+      raw: false,
+    });
+  });
+
+  test('超长 arguments 显式截断：记全长、标 truncated，绝不静默', async () => {
+    class HugeArgStream extends FakeProvider {
+      async *stream(_request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
+        yield {
+          type: 'tool_call',
+          toolCall: {
+            id: 'c1',
+            name: 'file_write',
+            arguments: JSON.stringify({ content: 'x'.repeat(70_000) }),
+            index: 0,
+          },
+        };
+        yield { type: 'done', finishReason: 'tool_calls', usage: { ...USAGE } };
+      }
+    }
+    const provider = new HugeArgStream([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_tc3', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    for await (const _chunk of wrapped.stream({ model: 'fake-model', messages: [] })) {
+      // drain
+    }
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_tc3'));
+    const trace = (
+      calls[0]?.result?.response as unknown as {
+        toolCalls?: Array<{ arguments: string; argumentsChars: number; truncated?: boolean }>;
+      }
+    )?.toolCalls?.[0];
+    expect(trace?.truncated).toBe(true);
+    // 头+尾保全：尾锚定证据（降级标记落在值尾）不得被截掉（评审 M6）
+    expect(trace?.arguments.startsWith('{"content":"xxx')).toBe(true);
+    expect(trace?.arguments.endsWith('x'.repeat(100) + '"}')).toBe(true);
+    expect(trace?.arguments).toContain('wire-dump capture');
+    // 全长保真：裁决时长度指纹（N=序列化长度）仍可对账
+    expect(trace?.argumentsChars).toBe(JSON.stringify({ content: 'x'.repeat(70_000) }).length);
+  });
+
+  test('无工具调用时不落 toolCalls 键（对称形态）', async () => {
+    const provider = new FakeProvider([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_tc4', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    await wrapped.chat({ model: 'fake-model', messages: [] });
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_tc4'));
+    const response = calls[0]?.result?.response as Record<string, unknown> | undefined;
+    expect(response && 'toolCalls' in response).toBe(false);
+  });
+
+  test('id 缺失且 index 缺失的聚合显式标 ambiguous（评审 M5）', async () => {
+    class NoIdNoIndex extends FakeProvider {
+      async *stream(_request: LLMRequest): AsyncGenerator<LLMStreamChunk> {
+        yield {
+          type: 'tool_call',
+          toolCall: { name: 'a', arguments: '{"x":1}' },
+        };
+        yield {
+          type: 'tool_call',
+          toolCall: { name: 'b', arguments: '{"y":2}' },
+        };
+        yield { type: 'done', finishReason: 'tool_calls', usage: { ...USAGE } };
+      }
+    }
+    const provider = new NoIdNoIndex([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_tc5', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    for await (const _chunk of wrapped.stream({ model: 'fake-model', messages: [] })) {
+      // drain
+    }
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_tc5'));
+    const toolCalls = (
+      calls[0]?.result?.response as unknown as {
+        toolCalls?: Array<{ ambiguous?: boolean; complete?: boolean; name: string }>;
+      }
+    )?.toolCalls;
+    // 两条无 id/index 的调用聚到同一槽但必须显式自白
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls?.[0].ambiguous).toBe(true);
+    expect(toolCalls?.[0].complete).toBe(true);
+  });
+
+  test('chat 解析失败的 toolCalls 标 parseError 且 raw:false（评审 m1）', async () => {
+    class ParseErrorChat extends FakeProvider {
+      async chat(_request: LLMRequest): Promise<LLMResponse> {
+        return {
+          content: '',
+          model: this.defaultModel,
+          finishReason: 'tool_calls',
+          toolCalls: [
+            {
+              id: 'c1',
+              name: 'probe',
+              arguments: {},
+              argumentsParseError: 'Unexpected token at position 0',
+            } as never,
+          ],
+          usage: { ...USAGE },
+        };
+      }
+    }
+    const provider = new ParseErrorChat([{ role: 'user', content: 'hi' }]);
+    const sink = createWireDumpSink({
+      dir: rootDir,
+      resolveContext: () => ({ sessionId: 'sess_tc6', agentId: 'default', runId: 'run-1' }),
+    });
+    const wrapped = withWireDump(provider, sink);
+
+    await wrapped.chat({ model: 'fake-model', messages: [] });
+    await sink.flush();
+
+    const calls = readWireDumpIndex(join(rootDir, 'sess_tc6'));
+    const trace = (
+      calls[0]?.result?.response as unknown as {
+        toolCalls?: Array<{ raw: boolean; parseError?: boolean; id?: string }>;
+      }
+    )?.toolCalls?.[0];
+    expect(trace?.parseError).toBe(true);
+    expect(trace?.raw).toBe(false);
+    expect(trace?.id).toBe('c1');
+  });
+});

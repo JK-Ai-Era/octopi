@@ -28,6 +28,7 @@ import type {
 import type { ToolResult as CoreToolResult } from '../core/types.js';
 import { callModel } from './call-model.js';
 import { classifyError } from './error-classifier.js';
+import { describeElisionHits, findElisionMarkers } from '../core/elision.js';
 import { formatUnknownToolError, suggestToolNames } from './tool-name-suggestion.js';
 
 /** 模型调用默认空闲超时（chunk 间最大静默，含首 token 等待），毫秒 */
@@ -836,6 +837,22 @@ async function prepareToolCall(
     }
   }
   args = tool.prepareArguments ? tool.prepareArguments(args) : args;
+
+  // 降级标记拒收（OP-TOOL-1）：参数含上下文降级占位符即拒绝执行——这些值是
+  // 老化视图的产物而非真实内容，历史上被静默执行后写坏文件/仓库/命令行。
+  // fail-loud 让模型回源重构；词汇表与检测语义的单一来源见 core/elision。
+  const elisionHits = findElisionMarkers(args);
+  if (elisionHits.length > 0) {
+    return {
+      kind: 'immediate',
+      result: {
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        content: `Error: ${describeElisionHits(elisionHits)}`,
+        isError: true,
+      },
+    };
+  }
 
   // 参数校验
   if (tool.validate) {

@@ -22,6 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TokenUsage } from '@octopi-agent/core/types/step.js';
+import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import type { LLMRequest, ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import { getOctopiHome } from '../../paths.js';
 import {
@@ -125,8 +126,69 @@ export interface WireCallResponseInfo {
   text?: string;
   /** 推理增量汇总（同截断；部分拒答只留 reasoning，须一并留痕） */
   reasoning?: string;
+  /** 响应中的工具调用原始留痕（见 {@link WireToolCallTrace}） */
+  toolCalls?: WireToolCallTrace[];
   /** 结束原因（stop / tool_calls / length / error） */
   finishReason?: string;
+}
+
+/**
+ * 响应中的工具调用原始留痕（OP-TOOL-1）
+ *
+ * 用途：OP-TOOL-1 事故（工具执行参数被 `…[N chars]` 降级标记污染）无法裁决
+ * 「标记是模型原始输出就有，还是引擎在派发前替换」——请求 dump 只有输入侧，
+ * 缺响应侧 tool_call 原文。这里把模型输出的 arguments **原文**留痕，
+ * 复现时与会话落盘/实际执行的参数逐字对比即可一锤定音。
+ */
+export interface WireToolCallTrace {
+  /** tool_call id（会话落盘的对账主键；缺失时按 index 聚合并标 ambiguous） */
+  id?: string;
+  name: string;
+  /**
+   * 模型原始 arguments 文本（stream 按增量拼接的原文；chat 无原文可用时
+   * 为解析后对象的 JSON 序列化——此时非逐字节原始，以 `raw: false` 标注）
+   */
+  arguments: string;
+  /**
+   * arguments 全长（字符；`arguments` 被截断时大于其长度）。raw:true 时为
+   * 原文长度；raw:false 时为序列化长度（非原文，长度指纹仅供参考）
+   */
+  argumentsChars: number;
+  /** arguments 超出 {@link TOOL_CALL_ARGS_CAPTURE_CAP} 被显式截断（头+尾保全，绝不静默） */
+  truncated?: true;
+  /** arguments 是否为逐字节原文（stream=true；chat 序列化=false） */
+  raw: boolean;
+  /** 模型输出的 arguments 是非法 JSON、解析侧已丢原文（chat 路径的最坏情况，显式标注） */
+  parseError?: true;
+  /** 无法可靠区分 tool_call 边界（id 与 index 全缺时的聚合）：内容可能混入多条调用 */
+  ambiguous?: true;
+  /** 流是否完整走到 done（false = 断流/提前退出，args 可能只是半截，勿当全量证据） */
+  complete?: boolean;
+}
+
+/**
+ * 单条 tool_call arguments 留痕上限（字符）：超出则头+尾保全、中间显式省略
+ * （降级标记是尾锚定形态，只留头部会挖掉唯一需要的证据——OP-TOOL-1 评审 M6）。
+ * 与 {@link RESPONSE_CAPTURE_HARD_CAP} 同为捕获护栏常数；如运营上需要按部署
+ * 调整再升配置字段（wire-dump 既有硬护栏先例：MAX_ERROR_MESSAGE_CHARS）。
+ */
+export const TOOL_CALL_ARGS_CAPTURE_CAP = 65_536;
+
+/** 超限时保留的尾部长度（尾锚定证据区） */
+const TOOL_CALL_ARGS_TAIL_KEEP = 16_384;
+
+/**
+ * chat 路径的 arguments 序列化（无原文可用；序列化失败不遮蔽真实响应）
+ *
+ * @param args - 解析后的参数对象
+ * @returns JSON 文本（失败降级为 String()）
+ */
+function stringifyArgsForTrace(args: unknown): string {
+  try {
+    return JSON.stringify(args ?? {}) ?? String(args);
+  } catch {
+    return String(args);
+  }
 }
 
 /**
@@ -136,18 +198,64 @@ export interface WireCallResponseInfo {
  * @param text - 响应正文
  * @param reasoning - 推理汇总
  * @param finishReason - 结束原因
- * @returns 留痕对象；三项皆空时 undefined
+ * @param toolCalls - 工具调用原始留痕（无工具调用时不传）
+ * @returns 留痕对象；四项皆空时 undefined
  */
 function buildWireResponse(
   text: string,
   reasoning: string,
   finishReason: string | undefined,
+  toolCalls?: WireToolCallTrace[],
 ): WireCallResponseInfo | undefined {
   const info: WireCallResponseInfo = {};
   if (text.length > 0) info.text = text;
   if (reasoning.length > 0) info.reasoning = reasoning;
+  if (toolCalls && toolCalls.length > 0) info.toolCalls = toolCalls;
   if (finishReason !== undefined) info.finishReason = finishReason;
   return Object.keys(info).length > 0 ? info : undefined;
+}
+
+/**
+ * 构造单条 tool_call 留痕：全文留痕、超上限显式截断（记全长，不静默）
+ *
+ * @param name - 工具名
+ * @param argsText - arguments 文本（stream 原文 / chat 序列化）
+ * @param raw - 是否逐字节原文
+ * @returns 留痕对象
+ */
+/**
+ * 构造单条 tool_call 留痕：超上限时头+尾保全、中间显式省略（记全长，不静默）
+ *
+ * @param name - 工具名
+ * @param argsText - arguments 文本（stream 原文 / chat 序列化）
+ * @param raw - 是否逐字节原文
+ * @param extra - id / complete / parseError / ambiguous 附加留痕
+ * @returns 留痕对象
+ */
+function buildToolCallTrace(
+  name: string,
+  argsText: string,
+  raw: boolean,
+  extra: Pick<WireToolCallTrace, 'id' | 'complete' | 'parseError' | 'ambiguous'> = {},
+): WireToolCallTrace {
+  const overCap = argsText.length > TOOL_CALL_ARGS_CAPTURE_CAP;
+  let argumentsText = argsText;
+  if (overCap) {
+    const headLen = TOOL_CALL_ARGS_CAPTURE_CAP - TOOL_CALL_ARGS_TAIL_KEEP;
+    const omitted = argsText.length - headLen - TOOL_CALL_ARGS_TAIL_KEEP;
+    argumentsText =
+      `${argsText.slice(0, headLen)}` +
+      `\n${elidedCharsMarker(omitted, 'wire-dump capture')}\n` +
+      `${argsText.slice(-TOOL_CALL_ARGS_TAIL_KEEP)}`;
+  }
+  return {
+    name,
+    arguments: argumentsText,
+    argumentsChars: argsText.length,
+    ...(overCap ? { truncated: true as const } : {}),
+    raw,
+    ...extra,
+  };
 }
 
 /** 单次调用的收尾句柄 */
@@ -627,11 +735,22 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
       const startedAt = Date.now();
       try {
         const res = await inner.chat(request);
+        let toolCalls: WireToolCallTrace[] | undefined;
+        if (res.toolCalls?.length) {
+          toolCalls = res.toolCalls.map((tc) =>
+            buildToolCallTrace(tc.name, stringifyArgsForTrace(tc.arguments), false, {
+              ...(tc.id ? { id: tc.id } : {}),
+              complete: true,
+              // 解析失败原文已丢（call-model 就地置 {}）：必须显式标注，防误当全量证据
+              ...(tc.argumentsParseError !== undefined ? { parseError: true as const } : {}),
+            }),
+          );
+        }
         handle?.finish({
           outcome: 'ok',
           usage: res.usage,
           durationMs: Date.now() - startedAt,
-          response: buildWireResponse(res.content, res.reasoning ?? '', res.finishReason),
+          response: buildWireResponse(res.content, res.reasoning ?? '', res.finishReason, toolCalls),
         });
         return res;
       } catch (err) {
@@ -657,12 +776,29 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
       let reasoningText = '';
       let contentChunksSeen = 0;
       let finishReason: string | undefined;
+      /**
+       * tool_call 原文留痕（OP-TOOL-1 裁决物证）：优先按 id 聚合、退化按 index，
+       * id 与 index 全缺时聚到同一槽并显式标 ambiguous（宁可标不可伪精确）
+       */
+      const toolCallTraces = new Map<string, { id?: string; name: string; args: string; ambiguous?: true }>();
+      const AMBIGUOUS_KEY = '\u0000ambiguous';
       try {
         for await (const chunk of inner.stream(request)) {
           if (ttftMs == null) ttftMs = Date.now() - startedAt;
           if (chunk.type === 'done') {
             sawDone = true;
             finishReason = chunk.finishReason;
+          }
+          if (chunk.type === 'tool_call' && chunk.toolCall) {
+            const tc = chunk.toolCall;
+            const key = tc.id ?? (tc.index !== undefined ? `idx:${tc.index}` : AMBIGUOUS_KEY);
+            const existing = toolCallTraces.get(key);
+            const entry = existing ?? { name: '', args: '' };
+            if (tc.id) entry.id = tc.id;
+            if (tc.name) entry.name = tc.name;
+            entry.args += tc.arguments ?? '';
+            if (existing && key === AMBIGUOUS_KEY) entry.ambiguous = true;
+            toolCallTraces.set(key, entry);
           }
           // done 携带全文的实现：仅当本流没有 content 增量时采用，避免正文重复一份
           if (chunk.type === 'content' && typeof chunk.content === 'string') {
@@ -683,11 +819,20 @@ export function withWireDump(inner: ModelProvider, sink: WireDumpSink): ModelPro
         failedErr = err;
         throw err;
       } finally {
+        const toolCalls = [...toolCallTraces.values()].map((entry) =>
+          buildToolCallTrace(entry.name, entry.args, true, {
+            ...(entry.id ? { id: entry.id } : {}),
+            ...(entry.ambiguous ? { ambiguous: true as const } : {}),
+            // 断流/提前退出的半截捕获必须与全量可辨（勿误判「模型只输出了一半」）
+            complete: sawDone || completed,
+          }),
+        );
         // 单个超大 chunk 也能顶穿上限：截断必须在累积之后
         const response = buildWireResponse(
           responseText.slice(0, RESPONSE_CAPTURE_HARD_CAP),
           reasoningText.slice(0, RESPONSE_CAPTURE_HARD_CAP),
           finishReason,
+          toolCalls,
         );
         handle.finish({
           // 正常读完但服务端没发 done 哨兵（代理断流/兼容实现）不等于消费者放弃：

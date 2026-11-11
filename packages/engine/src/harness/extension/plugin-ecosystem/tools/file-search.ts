@@ -22,6 +22,7 @@
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
+import { ELIDED_PREVIEW_MARK, TRUNCATED_MARK } from '@octopi-agent/core/elision.js';
 import type { FileHandle } from 'node:fs/promises';
 import {
   resolveSupportBinding,
@@ -126,11 +127,11 @@ const DEFAULT_MAX_FILE_BYTES = 50_000_000;
 /** L1 收缩后 content 预览行的字符上限（超长行是单条膨胀元凶；定位符不受影响） */
 const CONTENT_PREVIEW_CHARS = 200;
 
-/** content 行机械截断标记（机械截断 ≠ 摘要改写） */
-const CONTENT_TRUNCATED_MARK = '…[truncated]';
+/** content 行机械截断标记（机械截断 ≠ 摘要改写；词汇表单一来源：core/elision） */
+const CONTENT_TRUNCATED_MARK = TRUNCATED_MARK;
 
-/** 预览整条省略占位（file+line 永远全保） */
-const PREVIEW_OMITTED = '…[preview omitted]';
+/** 预览整条省略占位（file+line 永远全保；词汇表单一来源：core/elision） */
+const PREVIEW_OMITTED = ELIDED_PREVIEW_MARK;
 
 /** file_search L1 缺省预算（与 summary registry 缺省一致；可经 summary.tools.file_search.maxReturnChars 覆盖） */
 const DEFAULT_MAX_RETURN_CHARS = 8000;

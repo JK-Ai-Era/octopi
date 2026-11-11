@@ -8,6 +8,8 @@
  * 4. 类型安全（结构化结果的类型检查）
  */
 
+import { TRUNCATED_JSON_PREFIX, TRUNCATED_MARK } from '@octopi-agent/core/elision.js';
+
 export interface ToolValidatorConfig {
   /** 最大结果大小（字符数，默认 100000） */
   maxResultSize?: number;
@@ -208,7 +210,7 @@ export class ToolValidator {
    */
   private truncateResult(result: unknown, maxSize: number): unknown {
     if (typeof result === 'string') {
-      return result.slice(0, maxSize) + '\n[... truncated]';
+      return result.slice(0, maxSize) + '\n' + TRUNCATED_MARK;
     }
 
     try {
@@ -219,10 +221,10 @@ export class ToolValidator {
       if (typeof result === 'object' && result !== null) {
         // 简单策略：截断为字符串，保留类型信息
         const truncated = json.slice(0, maxSize);
-        return `[truncated JSON] ${truncated}`;
+        return `${TRUNCATED_JSON_PREFIX} ${truncated}`;
       }
 
-      return json.slice(0, maxSize) + '\n[... truncated]';
+      return json.slice(0, maxSize) + '\n' + TRUNCATED_MARK;
     } catch {
       return '[result serialization failed]';
     }

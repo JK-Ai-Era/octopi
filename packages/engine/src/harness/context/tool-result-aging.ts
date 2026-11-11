@@ -24,6 +24,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
+import { AGED_POINTER_PREFIX, TRUNCATED_MARK, elidedCharsMarker, elidedCommandTail, isElisionToken } from '@octopi-agent/core/elision.js';
 import { isTurnAnchor } from './layer-types.js';
 import { toolResultBody } from './tool-result-body.js';
 
@@ -89,7 +90,9 @@ const MIN_RESULT_OUTLINE_CHARS = 48;
  * 64 足以容纳常见路径，又远小于任何文件内容。
  */
 const ARG_VALUE_KEEP_CHARS = 64;
-const TRUNCATION_MARK = '…[truncated]';
+
+/** 已降级值在预算账目里的固定成本（标记是结构噪声，不按字面长度计费） */
+const ELIDED_VALUE_BUDGET_COST = '…';
 
 /**
  * 解析老化配置（缺省 = 拍板参数起点：40 条原文 / 批 20 / 指针 400 字符）
@@ -278,7 +281,7 @@ export function agedToolResultPointer(
       ? `error: ${tr.error}` // 防御性保真：错误文案不截断、不改写
       : `result ${resultBody.length} chars: ${truncateOutline(resultBody, resultBudget)}`;
   const text =
-    `[aged tool result · pointer] tool: ${tr.name ?? 'unknown'}; ` +
+    `${AGED_POINTER_PREFIX} tool: ${tr.name ?? 'unknown'}; ` +
     `args: ${argsOutline}; ${errorOrResult}; ` +
     'full output kept in session log — do NOT re-run unless the output is needed again';
 
@@ -291,7 +294,7 @@ export function agedToolResultPointer(
  *
  * 规则（机械、确定性、无 LLM）：
  * 1. **键名全保**——LLM 需要知道调用了哪个路径/命令才能在必要时重跑；
- * 2. 序列化长度超过 {@link ARG_VALUE_KEEP_CHARS} 的值替换为长度标记 `…[N chars]`；
+ * 2. 序列化长度超过 {@link ARG_VALUE_KEEP_CHARS} 的值替换为长度标记 `[octopi:elided N chars]`；
  * 3. 若仍是超预算，按「值从大到小、同大小按键名」顺序继续替换，保证确定性；
  * 4. 兜底：键名太多装不下时退化为整体轮廓截断。
  *
@@ -325,9 +328,16 @@ export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultA
   // 预算只约束「内容值」，定位字段不计入：
   // 否则一条绝对路径就能吃掉整个预算，反而先把唯一锚点挤掉（实测 path 均长 79，
   // 若计入预算，file_edit 这类调用会退化成「看不到改了哪个文件」）。
+  // 已降级值按固定小成本计费：标记串是不可再压的结构噪声，按字面长度计费会让
+  // 标记变长把多键调用挤进 _aged 兜底、反而丢键名（OP-TOOL-1 评审 M2：
+  // 命名空间标记 +12 字符曾把「键名全保」阈值从 ~17 键压到 10 键）。
   const contentChars = (): number =>
     safeJson(
-      Object.fromEntries(Object.entries(out).filter(([k]) => !ANCHOR_FIELDS.has(k))),
+      Object.fromEntries(
+        Object.entries(out)
+          .filter(([k]) => !ANCHOR_FIELDS.has(k))
+          .map(([k, v]) => [k, isElisionToken(v) ? ELIDED_VALUE_BUDGET_COST : v]),
+      ),
     ).length;
 
   const contentEntries = entries
@@ -347,9 +357,9 @@ export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultA
   return value;
 }
 
-/** 值被省略时的长度标记 */
+/** 值被省略时的长度标记（词汇表单一来源：core/elision） */
 function elidedMarker(chars: number): string {
-  return `…[${chars} chars]`;
+  return elidedCharsMarker(chars);
 }
 
 /**
@@ -395,7 +405,7 @@ function digestArgValue(key: string, value: unknown, size: number): unknown {
   if (COMMAND_FIELDS.has(key) && typeof value === 'string') {
     // 短命令原样保留；长命令保留头部（头部才是「跑了什么」的判据）
     if (value.length <= COMMAND_HEAD_CHARS) return value;
-    return `${value.slice(0, COMMAND_HEAD_CHARS)}…[+${value.length - COMMAND_HEAD_CHARS} chars]`;
+    return `${value.slice(0, COMMAND_HEAD_CHARS)}${elidedCommandTail(value.length - COMMAND_HEAD_CHARS)}`;
   }
   return elidedMarker(size);
 }
@@ -435,5 +445,5 @@ function safeJson(value: unknown): string {
  * @returns 轮廓文本
  */
 function truncateOutline(text: string, maxChars: number): string {
-  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}${TRUNCATION_MARK}`;
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}${TRUNCATED_MARK}`;
 }

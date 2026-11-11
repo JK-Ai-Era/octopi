@@ -20,6 +20,7 @@ import { statSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, resolve, sep } from 'node:path';
 import { killProcessTree, scrubEnv } from './process-isolation.js';
+import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 
 /** 白名单提权规则（§4） */
 export interface EscalationRule {
@@ -91,7 +92,9 @@ function envForExec(): NodeJS.ProcessEnv {
 const OUTPUT_CAP = 128 * 1024;
 
 function capOutput(text: string): string {
-  return text.length > OUTPUT_CAP ? `${text.slice(0, OUTPUT_CAP)}\n…[truncated ${text.length - OUTPUT_CAP} chars]` : text;
+  return text.length > OUTPUT_CAP
+    ? `${text.slice(0, OUTPUT_CAP)}\n${elidedCharsMarker(text.length - OUTPUT_CAP)}`
+    : text;
 }
 
 /**

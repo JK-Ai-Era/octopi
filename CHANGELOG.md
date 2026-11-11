@@ -115,6 +115,69 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.107.2 (2026-11-11)
+
+### fix(core/engine): OP-TOOL-1 — elision vocabulary namespaced + degraded tool args rejected at dispatch
+
+Context-aging degradation markers (`…[N chars]` etc.) were leaking into **live
+tool-call arguments** and being executed silently (placeholders written into
+files, used as git commit messages, run as shell commands). Mechanism
+adjudication (engine rewrite vs model-copied output) stays open — see `feat`
+below for the evidence capture that settles the next occurrence — but the fix
+does not depend on it:
+
+- **New `core/elision.ts`** — single source for degradation-marker vocabulary
+  (generation + detection): markers are now namespaced `[octopi:elided N chars]`
+  / `[octopi:elided +N chars]` / `[octopi:truncated]`, unmistakable as content
+  and non-copyable by accident. Old forms (`…[N chars]`, `…[truncated]`,
+  `…[preview omitted]`, `[... truncated]`, …) stay detectable for polluted
+  history.
+- **Dispatch-boundary guard** — `agent-loop.prepareToolCall` rejects any call
+  whose arguments contain degradation markers (whole-value / marker-suffixed /
+  prefix carriers / `_aged` fallback objects) with a fail-loud error that guides
+  the model to re-derive the value from source. One choke point covers every
+  tool; per-tool patching is not needed.
+- **All in-repo producers migrated to the vocabulary** (tool-result-aging args +
+  pointer, file-search preview/truncation, tool-validator result caps,
+  memory-steward evidence splices, gateway client-tool html summary). Detector
+  regexes for the result-side notice families (summary/gate, compact
+  mechanical notices) are pattern snapshots — their producers keep their own
+  wording; change there must update `core/elision.ts`.
+- **Budget accounting fix**: elided values count at a fixed cost in
+  `maxAgedArgChars`, so the longer namespaced markers cannot squeeze multi-key
+  calls into the `_aged` fallback (which would drop all keys and was larger than
+  the digest it replaced).
+
+**Breaking-ish note**: degraded-arg wire bytes change (marker form) — live
+sessions incur a one-time prefix-cache invalidation when their first aged view
+rebuilt. `ageToolArgs` semantics are unchanged (only results already aged;
+keys preserved; legal JSON; error results never degraded; write-once).
+
+**存量损害**：两条提交信息为占位符的历史 commit（`e886cb13`、`4f83515`）与
+会话内已污染的参数记录未改写（历史改写待拍板）；旧形态参数再次进入执行会被
+守卫拒收并可自愈。
+
+### feat(engine): wire dump records raw tool_call arguments on the response side
+
+`observability.llmRequestDump` previously captured request bodies only, so
+OP-TOOL-1 could not adjudicate "model raw output vs engine rewrite". Response
+traces now record per-tool-call `arguments` verbatim (stream: byte-exact
+accumulation keyed by id → index, `raw: true`; chat: serialized with
+`raw: false`), with `id`, `argumentsChars` (full length), explicit
+`truncated` (head+tail capture — tail-anchored marker evidence preserved),
+`complete` (stream cut detection), `parseError` and `ambiguous` flags. Nothing
+flows back into model context (disk-only).
+
+Verification: `npm run build` / `npm run lint` / `npm test` (4570 passed) /
+`arch/check-sync.sh` all green. Independent review (1 blocker + 8 major +
+10 minor) — B1 trailing-whitespace bypass, O(n²) marker scan, budget
+regression, missing trace `id`, head-only truncation and the vocabulary gaps
+are fixed in this batch; remaining debt: guard telemetry + retry circuit
+breaker, `trimSession` full-index re-parse cost, `TOOL_CALL_ARGS_CAPTURE_CAP`
+config exposure.
+
+---
+
 ## v0.107.1 (2026-11-11)
 
 ### fix(gateway): P0b review minors — stream terminal validation, client-tool bridge payload, boot perms, /runs robustness, shutdown await

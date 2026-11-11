@@ -6,6 +6,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SubsystemInput, SubsystemOutput, InjectedDependencies } from '@octopi-agent/engine/harness/collaboration/autonomous-subsystem/types.js';
@@ -121,7 +122,7 @@ function messagesToText(session: any, maxChars = 8000): string {
   if (joined.length <= maxChars) return joined;
   const headBudget = Math.floor(maxChars * 0.4);
   const tailBudget = maxChars - headBudget - 20;
-  return `${joined.slice(0, headBudget)}\n...[evidence truncated]...\n${joined.slice(-tailBudget)}`;
+  return `${joined.slice(0, headBudget)}\n${elidedCharsMarker(joined.length - headBudget - tailBudget)}\n${joined.slice(-tailBudget)}`;
 }
 
 /** 显式解析认知指令：deps → llmPort.cognitivePrompt → 同目录 SUBSYSTEM.md */
@@ -223,7 +224,7 @@ async function handler(input: SubsystemInput, deps?: InjectedDependencies): Prom
     if (sessionText.length > maxEvidenceChars) {
       const head = Math.floor(maxEvidenceChars * 0.4);
       const tail = Math.floor(maxEvidenceChars * 0.55);
-      sessionText = `${sessionText.slice(0, head)}\n...[evidence truncated]...\n${sessionText.slice(-tail)}`;
+      sessionText = `${sessionText.slice(0, head)}\n${elidedCharsMarker(sessionText.length - head - tail)}\n${sessionText.slice(-tail)}`;
     }
   }
 

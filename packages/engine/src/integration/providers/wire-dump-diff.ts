@@ -12,6 +12,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { AGED_POINTER_PREFIX } from '@octopi-agent/core/elision.js';
 import {
   wireUnitPayloads,
   type WireDumpIndexRecord,
@@ -249,7 +250,7 @@ export function compareWireCalls(prev: WireCallSummary, next: WireCallSummary): 
 }
 
 /** 历史老化指针的固定前缀（见 harness/context 的 aging 输出） */
-const AGED_POINTER_MARKER = '[aged tool result · pointer]';
+const AGED_POINTER_MARKER = AGED_POINTER_PREFIX;
 
 /** 老化扫描结果 */
 export interface WireAgingReport {
