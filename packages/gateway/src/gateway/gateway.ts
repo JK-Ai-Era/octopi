@@ -98,6 +98,7 @@ import { RemoteRunBackend } from './remote-run-backend.js';
 import { PulseScheduler } from './pulse-scheduler.js';
 import { FleetRunBackend } from './supervise/fleet-backend.js';
 import type { InstanceRecord } from './supervise/registry.js';
+import { RouteConfig } from './supervise/registry.js';
 import type {
   ClientToolVisibilitySnapshot,
   ClientToolWireSpec,
@@ -450,8 +451,10 @@ export class Gateway {
    */
   /** run 实例后端（P0b：执行面唯一 remote 实现；start() 时 fork run 实例子进程） */
   private runBackend?: RemoteRunBackend;
+  /** 路由期望状态（Q3=A：运行态 + config 播种；fleet 与 ops 同源） */
+  private readonly fleetRoute = RouteConfig.seed({ versionPointer: 'self' });
   /** fleet 路由面（P0c-2）：N 个 run 实例当一个服务路由；对内呈现 RunBackend 契约 */
-  private readonly fleet = new FleetRunBackend();
+  private readonly fleet = new FleetRunBackend({ route: this.fleetRoute });
   /** 脉搏调度器（P0c A′）：run 实例周期任务的唯一触发源（§5.4 触发面归 gateway） */
   private pulseScheduler?: PulseScheduler;
   /** 装配测试缝专用会话锁（生产锁在 run 实例进程内；见 assembly getSessionLock） */

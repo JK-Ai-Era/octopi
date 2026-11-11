@@ -75,7 +75,7 @@ const req = (sessionId: string): RunRequest => ({ sessionId, agentId: 'a' }) as 
 
 describe('FleetRunBackend routing', () => {
   it('keeps session affinity and picks least-loaded for new sessions', async () => {
-    const fleet = new FleetRunBackend();
+    const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     const b = makeBackend('run-b');
     fleet.register({ record: makeRecord('run-a'), backend: a });
@@ -97,7 +97,7 @@ describe('FleetRunBackend routing', () => {
   });
 
   it('rejects a second concurrent run on the same session (single-flight)', async () => {
-    const fleet = new FleetRunBackend();
+    const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     // 慢实例：startRun 产出前挂起
     a.startRun = () =>
@@ -122,7 +122,7 @@ describe('FleetRunBackend routing', () => {
   });
 
   it('re-routes away from failed instance but keeps draining affinity', async () => {
-    const fleet = new FleetRunBackend();
+    const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     const b = makeBackend('run-b');
     fleet.register({ record: makeRecord('run-a'), backend: a });
@@ -143,7 +143,7 @@ describe('FleetRunBackend routing', () => {
   });
 
   it('routes control ops by class: session sticky / fleet-wide fan-out / pulse owner', async () => {
-    const fleet = new FleetRunBackend();
+    const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     const b = makeBackend('run-b');
     fleet.register({ record: makeRecord('run-a'), backend: a });
@@ -184,7 +184,7 @@ describe('FleetRunBackend routing', () => {
   });
 
   it('routes point-to-point replies by notify-registered source (third op class)', async () => {
-    const fleet = new FleetRunBackend();
+    const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     const b = makeBackend('run-b');
     fleet.register({ record: makeRecord('run-a'), backend: a });
@@ -223,7 +223,7 @@ describe('FleetRunBackend routing', () => {
   });
 
   it('aggregates health (sum inFlight, max mounted, dedupe pulses, list unreachable)', async () => {
-    const fleet = new FleetRunBackend();
+    const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     const b = makeBackend('run-b');
     fleet.register({ record: makeRecord('run-a'), backend: a });
@@ -261,7 +261,7 @@ describe('FleetRunBackend routing', () => {
   });
 
   it('pulse inventory is per-instance and ownership rejects unregistered instances', async () => {
-    const fleet = new FleetRunBackend();
+    const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     fleet.register({ record: makeRecord('run-a'), backend: a });
 

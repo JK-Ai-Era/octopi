@@ -115,7 +115,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.108.2 (2026-11-12)
+## v0.108.3 (2026-11-12)
+
+### test(gateway): P0c-4 验收演练 — 自救 + 多活（真进程 e2e）
+
+- **自救演练**（§6 验收 1）：v-good 就位 → 故意起坏版本（入口存在但启动即炸的 fixture 构建）→ 起不来即 failed 终态、不入路由、**流量留旧版本**（新会话仍进 v-good）→ 修好过门 → promote → 新会话进 v-fixed → drain v-good（停机注销）。全链真进程。
+- **多活演练**（§6 验收 2）：同版本 2 副本（挂起 LLM 服务器制造在途）→ 两会话 sticky 分到**不同实例**（least-load 记账生效）→ 脉搏归属全 fleet **唯一持有者**（双副本同 key 自述 → 归属单实例，经归属实例打点应答）。
+- **语义修复（演练逼出的真缺口）**：`pickLeastLoaded` 按 `RouteConfig.versionPointer` 过滤版本（§4.2「新会话按 RouteConfig 定版本」——P0c-2 单版本下漏实现，promote 后露馅）；`FleetRunBackend` 构造注入共享 RouteConfig（与 FleetOps 同源）。无该版本 ready 副本时 fail-loud。
+- **验证**：演练 2/2 绿 + 全量测试套件 4606 绿。
 
 ### feat(gateway): P0c-3 健康门 + 版本化 spawn + 生命周期 ops
 

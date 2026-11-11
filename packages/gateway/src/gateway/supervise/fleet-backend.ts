@@ -28,7 +28,7 @@ import type {
   RunSmokeReport,
 } from '@octopi-agent/engine/harness/activation/run-protocol.js';
 import type { RunRequest } from '@octopi-agent/engine/harness/activation/index.js';
-import type { InstanceRecord } from './registry.js';
+import type { InstanceRecord, RouteConfig } from './registry.js';
 
 /** 实例级契约面（RemoteRunBackend 即其实现） */
 export interface InstanceBackend {
@@ -55,6 +55,14 @@ const FLEET_WIDE_OPS = new Set([
   'reattestSecurity',
 ]);
 
+export interface FleetRunBackendOptions {
+  /**
+   * 路由期望状态（§5.1，与 FleetOps 共享同一对象）：新会话只进
+   * versionPointer 版本的 ready 副本（§4.2）。
+   */
+  route: RouteConfig;
+}
+
 export class FleetRunBackend {
   private readonly entries = new Map<string, FleetEntry>();
   /** 会话亲和（§7.1）：sticky sessionId → instanceId */
@@ -65,6 +73,14 @@ export class FleetRunBackend {
   private readonly pulseOwner = new Map<string, string>();
   /** 回执路由表：notify 的 callId/approvalId/askId → 源实例（点对点回执第三类 op） */
   private readonly replyRoute = new Map<string, string>();
+  private readonly route: RouteConfig;
+
+  /**
+   * @param options - route（期望状态，与 FleetOps 共享同一对象；新会话按 versionPointer 定版本）
+   */
+  constructor(options: FleetRunBackendOptions) {
+    this.route = options.route;
+  }
 
   /**
    * 注册实例（重复 instanceId fail-loud）。
@@ -347,10 +363,14 @@ export class FleetRunBackend {
   }
 
   private pickLeastLoaded(): FleetEntry {
-    // 新会话只进 ready（§4.5：draining 不接新会话；其 sticky 亲和在 resolveForSession 已保）
-    const candidates = this.list().filter((e) => e.record.state === 'ready');
+    // 新会话只进 versionPointer 版本的 ready 副本（§4.2/§4.5：按 RouteConfig 定版本；
+    // draining 不接新会话，其 sticky 亲和在 resolveForSession 已保）
+    const pointer = this.route.versionPointer;
+    const candidates = this.list().filter(
+      (e) => e.record.state === 'ready' && e.record.version === pointer,
+    );
     if (candidates.length === 0) {
-      throw new Error('supervise: no ready run instance to route');
+      throw new Error(`supervise: no ready run instance for version pointer "${pointer}"`);
     }
     let best = candidates[0];
     for (const entry of candidates) {

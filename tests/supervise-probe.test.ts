@@ -52,9 +52,9 @@ function makeBackend(): FakeBackend {
 }
 
 function makeOps(options?: { securityIntegrityConfigured?: boolean; spawnFailFor?: string }) {
-  const fleet = new FleetRunBackend();
-  const registry = new InstanceRegistry();
   const route = RouteConfig.seed({ versionPointer: 'v1' });
+  const fleet = new FleetRunBackend({ route });
+  const registry = new InstanceRegistry();
   const spawned: FakeBackend[] = [];
   const deps: FleetOpsDeps = {
     fleet,

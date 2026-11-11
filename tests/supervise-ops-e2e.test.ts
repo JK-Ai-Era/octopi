@@ -65,9 +65,9 @@ describe('P0c-3 e2e: spawn → probe (health gate) → drain', () => {
   });
 
   it('gates a real instance through health + smoke + guard, then drains it', async () => {
-    const fleet = new FleetRunBackend();
-    const registry = new InstanceRegistry();
     const route = RouteConfig.seed({ versionPointer: 'self' });
+    const fleet = new FleetRunBackend({ route });
+    const registry = new InstanceRegistry();
     const ops = new FleetOps({
       fleet,
       registry,
@@ -111,9 +111,9 @@ describe('P0c-3 e2e: spawn → probe (health gate) → drain', () => {
   }, 60_000);
 
   it('failed spawn (bad buildRef) never enters routing (traffic stays on old)', async () => {
-    const fleet = new FleetRunBackend();
-    const registry = new InstanceRegistry();
     const route = RouteConfig.seed({ versionPointer: 'self' });
+    const fleet = new FleetRunBackend({ route });
+    const registry = new InstanceRegistry();
     const ops = new FleetOps({
       fleet,
       registry,
