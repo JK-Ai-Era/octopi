@@ -115,6 +115,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.1 (2026-11-12)
+
+### test(gateway): P1-5 验收演练 — V1 并发零冲突 + V6 撞锁取证
+
+- **V1（真进程验收）**：两个真 run 实例 + 两会话并发 run（假 LLM 即时回包）→ 会话文件各自完整独立（无交叉污染）、lease 各自持有、双双终态（`tests/fleet-v1-concurrency.test.ts`）。
+- **V6（OP-KNOW-LOCK 取证）**：`tests/knowledge-lock-forensics.test.ts` 钉实测行为——取证点 A：IPC 断连后 child 按设计继续服务（独立部署契约 ✓）；取证点 B：占锁存活下再拉起同库必拒 "already locked by PID"——**撞锁缺口实锤**（此前为推断）。完整接管随 knowledge 服务化设计（大哥拍板：P1 只取证）；当前报错已是指导型。
+- §11 演练矩阵至此：V1 ✓（本批）/ V2 ✓（v0.111.0 锚）/ V3 ✓（v0.112.0 锚）/ V4 ✓（v0.112.0 锚）/ V5 ✓（v0.111.1 编排锚）/ V6 ✓（本批）。
+
+---
+
 ## v0.112.0 (2026-11-12)
 
 ### feat(gateway): P1-4 canary 权重 + 扩容（service-topology §6/§7，Q5 合一）
