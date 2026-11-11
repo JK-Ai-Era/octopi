@@ -710,10 +710,11 @@ export class RunHost implements RunBackend {
     const agents: RunSmokeReport['agents'] = [];
     for (const [agentId, m] of this.mounted) {
       const checks: Array<{ name: string; ok: boolean; detail?: string }> = [];
-      const toolCount = m.handle.agent.tools.length;
+      const toolNames = m.handle.agent.tools.map((t) => t.name);
+      const toolCount = toolNames.length;
       checks.push(
         toolCount > 0
-          ? { name: 'tools', ok: true }
+          ? { name: 'tools', ok: true, detail: toolNames.join(',') }
           : { name: 'tools', ok: false, detail: 'empty tool surface' },
       );
       if (m.handle.contextHealth) {

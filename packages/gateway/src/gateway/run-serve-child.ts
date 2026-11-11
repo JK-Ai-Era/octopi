@@ -422,8 +422,11 @@ async function main(): Promise<void> {
       // S1 收口（arch/service-topology.md §9.5）：attach 的 runner 经本进程执行腿
       //（host.startRun：准入闸门 + in-flight 计数 + abort 判据），子 run 对退役判据
       // 可见，不再持裸 runner。
+      // 缺省默认开启（registry-types AgentDelegationPolicy）：一律经 effectiveDelegationPolicy
+      // 取生效值，勿直接读字段——未声明 delegation 的 agent 同样挂 delegate_*。
+      //（P0b S2 迁移时此处误用 `delegation !== undefined` 守卫，把缺省当禁用。）
       const { delegation, traits } = agent;
-      if (delegation !== undefined) {
+      {
         const { createDelegationRuntime, effectiveDelegationPolicy } = await import(
           '@octopi-agent/engine/harness/collaboration/delegation/wiring.js'
         );

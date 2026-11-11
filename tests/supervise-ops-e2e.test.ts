@@ -102,6 +102,8 @@ describe('P0c-3 e2e: spawn → probe (health gate) → drain', () => {
     expect(report.ok).toBe(true);
     expect(report.agents.length).toBeGreaterThan(0);
     expect(report.agents[0]!.toolCount).toBeGreaterThan(0);
+    // P0b S2 委派挂载回归锚：未声明 delegation 的 agent（缺省默认开启）必须挂 delegate_*
+    expect(report.agents[0]!.checks.find((c) => c.name === 'tools')!.detail).toContain('delegate_dispatch');
     expect(report.agents[0]!.checks.some((c) => c.name === 'contextHealth')).toBe(true);
 
     // drain：停机 + 注销

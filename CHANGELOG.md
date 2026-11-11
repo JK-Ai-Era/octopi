@@ -115,7 +115,13 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.108.3 (2026-11-12)
+## v0.108.4 (2026-11-12)
+
+### fix(gateway): 委派工具挂载回归 — 缺省默认开启被误当禁用（P0b S2）
+
+- **症状**：P0b 进程拆分后 `delegate_dispatch/list/get/cancel` 从 agent 工具面消失（未显式声明 `delegation` 的 agent 全部丢委派能力）。
+- **根因**：`run-serve-child.ts` 委派接线的外层守卫 `if (delegation !== undefined)` 直接读字段——把「未声明 = 缺省开启」（`registry-types.ts` AgentDelegationPolicy 明文：缺省默认具备委派能力，一律经 `effectiveDelegationPolicy()` 取生效值）当成「未声明 = 禁用」。P0b 前 gateway 侧 `wireDelegation` 判定正确（`effectiveDelegationPolicy(a.delegation).canDelegate`），S2 迁移时守卫语义换错。同型直接读字段点已全仓排查（仅此一处）。
+- **验证**：smoke 报告 tools 明细新增工具名清单；e2e 新增回归锚「未声明 delegation 的 agent 必须挂 `delegate_dispatch`」；全量测试套件绿。
 
 ### test(gateway): P0c-4 验收演练 — 自救 + 多活（真进程 e2e）
 
