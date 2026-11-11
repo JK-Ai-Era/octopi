@@ -109,9 +109,16 @@ export class FleetOps {
     }
     const entry = this.deps.fleet.list().find((e) => e.record.instanceId === instanceId);
     if (!entry) {
+      // MIN-12：按状态给明确答案（starting 卡住 ≠ 模糊的 not in routing）
+      if (record.state === 'starting') {
+        return {
+          ok: false,
+          checks: [{ name: 'fleet', ok: false, detail: 'instance stuck in "starting" (spawn did not complete gating)' }],
+        };
+      }
       return {
         ok: false,
-        checks: [{ name: 'fleet', ok: false, detail: 'not in routing (failed or never gated)' }],
+        checks: [{ name: 'fleet', ok: false, detail: `not in routing (state "${record.state}")` }],
       };
     }
     const result = await this.gate(entry.backend);
@@ -152,6 +159,13 @@ export class FleetOps {
    * @returns void
    */
   promote(version: string): void {
+    // MIN-3：promote 到空版本 = 全 fleet 无路由目标（新会话全炸）——fail-loud 拒绝
+    const ready = this.deps.registry
+      .listByState('ready')
+      .filter((r) => r.version === version);
+    if (ready.length === 0) {
+      throw new Error(`supervise: cannot promote "${version}" — no ready instance of that version`);
+    }
     this.deps.route.versionPointer = version;
     this.deps.route.weights = new Map([[version, 100]]);
   }
@@ -168,6 +182,15 @@ export class FleetOps {
     const outcome = await this.spawn(version, buildRef, n ?? this.deps.route.replicasPerVersion);
     if (outcome.failed.length === 0 && outcome.ready.length > 0) {
       this.promote(version);
+    } else if (outcome.ready.length > 0) {
+      // MIN-3：半败不切流量，且已过门实例不留孤儿（不接新会话也不收摊 = 双失）
+      for (const record of outcome.ready) {
+        await this.drain(record.instanceId).catch((err: unknown) => {
+          console.warn(
+            `[supervise] rollback cleanup drain of "${record.instanceId}" failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
     }
     return outcome;
   }

@@ -240,6 +240,14 @@ export class FleetRunBackend {
     }
 
     if ('sessionId' in op && typeof op.sessionId === 'string') {
+      // MIN-9：该会话从未跑过 run（无 sticky）时落到最闲实例——单机多实例下可能是
+      // 跨进程写同一会话文件（进程内 sessionLock 不跨进程）。P1 run lease 正式化；
+      // 这里显式留痕，不静默。
+      if (!this.sticky.has(op.sessionId)) {
+        console.warn(
+          `[supervise] session-scoped "${op.type}" for "${op.sessionId}" has no sticky instance (no prior run); routing to least-loaded — cross-process session writes are lease-unprotected until P1`,
+        );
+      }
       const entry = this.resolveForSession(op.sessionId);
       return entry.backend.control(op);
     }

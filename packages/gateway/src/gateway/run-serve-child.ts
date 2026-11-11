@@ -472,7 +472,11 @@ async function main(): Promise<void> {
             ok: true,
             ...(await host.health()),
             // 守卫在位自证（§4.3 健康门跨版本核查：配置有闸而实例 absent → 拒）
-            securityGuard: config.securityIntegrity ? 'armed' : 'absent',
+            // MIN-13：以「守卫能力在位」为准（recheck 可调），不是对象存在性代理
+          securityGuard:
+            config.securityIntegrity !== undefined && typeof config.securityIntegrity.recheck === 'function'
+              ? 'armed'
+              : 'absent',
           });
           return;
         }

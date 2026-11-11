@@ -115,7 +115,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.109.0 (2026-11-12)
+## v0.109.1 (2026-11-12)
+
+### fix(gateway): P0c 评审 MIN 批（代码件）— 状态卫生 / promote 防呆 / 跨进程写留痕 / 脉搏即时对账
+
+- **MIN-2**：registry 新增 `forget()`（failed 历史记录清理口，非 failed 拒绝——活实例必须 drain）。
+- **MIN-3**：`promote` 到无 ready 实例的版本 fail-loud（曾=新会话全 fleet 无路由目标）；`rollback` 半败收摊已过门实例（不留「不接新会话也不收摊」的孤儿）。
+- **MIN-9**：session-scoped control 无 sticky（该会话从未跑过 run）时显式 warn——单机多实例下可能是跨进程写同一会话文件（进程内锁不跨进程，E7）；P1 run lease 正式化前不留静默约束。
+- **MIN-11**：新增 `pulses_changed` notify——agent mount/retire 后调度器**立即** resync（曾最迟延迟一个 60s 周期，runOnStart 首跳同理）。
+- **MIN-12**：`probe` 对 `starting` 卡住实例给明确答案（不再模糊 not-in-routing）。
+- **MIN-13**：`securityGuard: armed` 改为**守卫能力自证**（recheck 可调），不再用对象存在性代理。
+- **NIT-2/6**：pulses 死分支清理；`setReplyRoute` 对未注册实例 warn 不抛（实例退出后迟到 notify 是合法竞态，曾产生 unhandled rejection）。
+- **NIT-1**（run-serve-child 委派块可读性壳）降级 deferred——纯可读性、缩进手术风险大于收益。
+- 全量 4614 passed。
 
 ### feat(gateway): P0c ops 运维入口 — fleet spawn/promote/rollback/drain 产品面可达
 

@@ -157,7 +157,7 @@ export class RunAssembly {
         contextWindow,
         systemPrompt: runSystemPrompt,
       },
-      ...(built.pulses === undefined ? {} : { pulses: built.pulses }),
+      pulses: built.pulses,
     };
   }
 
