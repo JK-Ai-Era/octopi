@@ -70,6 +70,23 @@ describe('constitution preamble assembly', () => {
     }
   });
 
+  it('降级标记禁令恒在 system 固定块（含 constitution off），与 purpose 注记同区', async () => {
+    const { ELISION_MARKER_SYSTEM_NOTE } = await import('@octopi-agent/core/elision.js');
+    for (const constitution of [{ mode: 'off' as const }, { mode: 'product' as const }]) {
+      const spa = createDefaultSystemPromptAssembler({ constitution });
+      const out = await spa.assemble({
+        sessionId: 's',
+        messages: [{ role: 'user', content: 'hi', timestamp: Date.now() } as any],
+        persona: 'persona-text',
+      });
+      expect(out.systemPrompt).toContain(ELISION_MARKER_SYSTEM_NOTE);
+      expect(out.systemPrompt.split(ELISION_MARKER_SYSTEM_NOTE).length - 1).toBe(1);
+      // 固定块在层正文之前（缓存稳定前缀）
+      expect(out.systemPrompt.indexOf(ELISION_MARKER_SYSTEM_NOTE))
+        .toBeLessThan(out.systemPrompt.indexOf('persona-text'));
+    }
+  });
+
   it('空装配路径（无 persona/层）也带 purpose 全局说明', async () => {
     const { TOOL_PURPOSE_SYSTEM_NOTE } = await import('@octopi-agent/engine/harness/agent/tool-purpose.js');
     const spa = createDefaultSystemPromptAssembler({ constitution: { mode: 'off' } });

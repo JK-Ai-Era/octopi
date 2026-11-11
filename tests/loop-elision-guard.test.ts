@@ -18,6 +18,7 @@ import {
   describeElisionHits,
   elidedCharsMarker,
   elidedCommandTail,
+  elidedValueMarker,
   findElisionMarkers,
 } from '@octopi-agent/core/elision.js';
 import type {
@@ -94,6 +95,26 @@ describe('findElisionMarkers — 当前词汇（octopi: 命名空间）', () => 
     const hits = findElisionMarkers({ args: { _aged: 'shell arguments elided', outline: 'head…' } });
     expect(hits).toHaveLength(1);
     expect(hits[0].form).toBe('structure');
+  });
+
+  it('对象形标记：elidedValueMarker 产物按 structure 命中（生成↔检测双向一致）', () => {
+    const hits = findElisionMarkers({ new_text: elidedValueMarker(522) });
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ path: 'arguments.new_text', form: 'structure' });
+  });
+
+  it('对象形标记：嵌套位置命中；字符串化变体按 whole 命中', () => {
+    const nested = findElisionMarkers({ steps: [{ note: elidedValueMarker(80, 'head kept') }] });
+    expect(nested).toHaveLength(1);
+    expect(nested[0].path).toBe('arguments.steps[0].note');
+
+    const stringified = findElisionMarkers({ new_text: '{"$octopi_elided": {"chars": 522}}' });
+    expect(stringified).toHaveLength(1);
+    expect(stringified[0].form).toBe('whole');
+  });
+
+  it('对象形标记不误伤：无 $octopi_elided 键的普通对象不命中', () => {
+    expect(findElisionMarkers({ config: { chars: 522 }, list: [1, 2, 3] })).toHaveLength(0);
   });
 });
 
@@ -245,6 +266,18 @@ describe('Loop 降级标记拒收（fail-loud，不挑工具）', () => {
         }),
         FINAL,
       ],
+      executed,
+    );
+    expect(executed).toHaveLength(0);
+  });
+
+  it('对象形标记参数：不执行（含字符串化变体）', async () => {
+    const executed: string[] = [];
+    await runOnce([toolCallResponse({ new_text: elidedValueMarker(522) }), FINAL], executed);
+    expect(executed).toHaveLength(0);
+
+    await runOnce(
+      [toolCallResponse({ new_text: '{"$octopi_elided": {"chars": 522}}' }), FINAL],
       executed,
     );
     expect(executed).toHaveLength(0);

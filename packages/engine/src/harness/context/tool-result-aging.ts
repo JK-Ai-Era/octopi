@@ -24,7 +24,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
-import { AGED_POINTER_PREFIX, TRUNCATED_MARK, elidedCharsMarker, elidedCommandTail, isElisionToken } from '@octopi-agent/core/elision.js';
+import { AGED_POINTER_PREFIX, TRUNCATED_MARK, elidedCommandTail, elidedValueMarker, isElisionToken } from '@octopi-agent/core/elision.js';
 import { isTurnAnchor } from './layer-types.js';
 import { toolResultBody } from './tool-result-body.js';
 
@@ -294,7 +294,7 @@ export function agedToolResultPointer(
  *
  * 规则（机械、确定性、无 LLM）：
  * 1. **键名全保**——LLM 需要知道调用了哪个路径/命令才能在必要时重跑；
- * 2. 序列化长度超过 {@link ARG_VALUE_KEEP_CHARS} 的值替换为长度标记 `[octopi:elided N chars]`；
+ * 2. 序列化长度超过 {@link ARG_VALUE_KEEP_CHARS} 的值替换为对象形标记 `{"$octopi_elided": {"chars": N}}`；
  * 3. 若仍是超预算，按「值从大到小、同大小按键名」顺序继续替换，保证确定性；
  * 4. 兜底：键名太多装不下时退化为整体轮廓截断。
  *
@@ -357,9 +357,15 @@ export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultA
   return value;
 }
 
-/** 值被省略时的长度标记（词汇表单一来源：core/elision） */
-function elidedMarker(chars: number): string {
-  return elidedCharsMarker(chars);
+/** 值被省略时的长度标记（对象形，词汇表单一来源：core/elision）
+ *
+ * 对象形而非文本形：文本标记与真实内容同形，会被模型当内容回抄进 tool call
+ * （OP-TOOL-1 实证污染源）；对象形语法类别上就不是内容，抄入 string 参数即
+ * schema 违规，执行边界守卫再兜底拒收。命令类字段的尾巴仍用文本形
+ * （`elidedCommandTail`——字符串内部截断无法对象化，守卫按值尾命中拒收）。
+ */
+function elidedMarker(chars: number): unknown {
+  return elidedValueMarker(chars);
 }
 
 /**

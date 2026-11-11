@@ -22,6 +22,7 @@ import { extractLayerQuery } from './layer-types.js';
 import type { ConceptGraphStore, MemoryStore, WisdomStore } from '../memory/types.js';
 import type { KnowledgeCatalogProvider } from '../knowledge/catalog-types.js';
 import { loadConstitution, type ConstitutionConfig } from './constitution/load-constitution.js';
+import { ELISION_MARKER_SYSTEM_NOTE } from '@octopi-agent/core/elision.js';
 import { TOOL_PURPOSE_SYSTEM_NOTE } from '../agent/tool-purpose.js';
 
 export interface SystemPromptAssembleInput {
@@ -90,12 +91,13 @@ export const TURN_SEMANTICS_MD = `## Turns (authoritative)
   do not assume old picks are still true.`;
 
 /**
- * 缓存稳定固定块（永远拼进 system）：Turn 信封阅读规则置首，purpose 全局说明随后。
+ * 缓存稳定固定块（永远拼进 system）：Turn 信封阅读规则置首，purpose 全局说明随后，
+ * 降级标记禁令殿后（工具注记区）。
  * purpose 详版+示例在此只写一次（方案 S）——schema 侧只留 TOOL_PURPOSE_PARAM 极短 stub。
  */
 function withFixedProtocolBlocks(systemPrompt: string): string {
   const body = systemPrompt.trim();
-  const head = `${TURN_SEMANTICS_MD}\n\n---\n\n${TOOL_PURPOSE_SYSTEM_NOTE}`;
+  const head = `${TURN_SEMANTICS_MD}\n\n---\n\n${TOOL_PURPOSE_SYSTEM_NOTE}\n\n---\n\n${ELISION_MARKER_SYSTEM_NOTE}`;
   return body ? `${head}\n\n---\n\n${body}` : head;
 }
 

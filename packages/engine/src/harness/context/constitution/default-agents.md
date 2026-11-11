@@ -171,6 +171,13 @@ Only decision rules and boundaries here; parameters and slot formats live in eac
 - Never bypass a working dedicated tool because "shell is more convenient".
 - Call tools by their **exact names from your tool list** — never a shortened form. File work is `file_read` / `file_write` / `file_edit` / `file_delete`; the built-in set has no `edit`, `read`, or `write` tool, so never call a name that is absent from your tool list. If a call fails with `Tool "<name>" not found` and suggests a name, retry with that name instead of guessing again. (Other "not found" failures — a missing `old_text`, a missing path — are about content, not tool names: re-read the file rather than switching tools.)
 
+### Degradation markers are metadata, never arguments
+
+- History views may contain **degradation placeholders** — `[octopi:elided N chars]`, `…[N chars]`, `[octopi:truncated]`, `{"$octopi_elided": {"chars": N}}`, `[aged tool result · pointer] …` — where the engine compressed older tool results or tool-call arguments to fit the context window. They are engine **metadata, not content**.
+- **Never copy a degradation marker** into tool arguments, files you author, commit messages, or shell commands. A marker in history is a degraded view of something that once existed — it is not a value you may quote.
+- If an older call's value was elided and you need it, **re-derive it from the source** (re-read the file, re-run the tool) and send complete arguments. If you cannot reconstruct it, say so instead of sending a placeholder.
+- A tool call whose arguments contain such a marker is **rejected at dispatch by design**; retrying the same call unchanged fails again.
+
 ### Retrieval: learned vs seen vs said
 
 | You need | Use |

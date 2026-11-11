@@ -236,9 +236,9 @@ describe('tool-result-aging plan', () => {
     // 锚点必须可读（此前 path 会被省略成 …[82 chars]，导致无法辨认改的是哪个文件）
     expect(out.path).toBe(args.path);
     expect(String(out.path)).not.toContain('chars]');
-    // 正文仍被降级
-    expect(String(out.old_text)).toMatch(/^\[octopi:elided \d+ chars\]$/);
-    expect(String(out.new_text)).toMatch(/^\[octopi:elided \d+ chars\]$/);
+    // 正文仍被降级（对象形标记——文本形会被模型当内容回抄，OP-TOOL-1）
+    expect(out.old_text).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
+    expect(out.new_text).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
     // 未退化为整体轮廓（否则键名全丢）
     expect(out._aged).toBeUndefined();
 
@@ -256,9 +256,9 @@ describe('tool-result-aging plan', () => {
   it('定位字段也装不下时才退化（宁可超预算也不丢锚点）', () => {
     const longPath = `/${'p'.repeat(500)}/file.ts`;
     const out = agedToolArgDigest('file_read', { path: longPath, extra: 'q'.repeat(2000) }, OPTS()) as Record<string, unknown>;
-    // 超过 LOCATOR_KEEP_CHARS(200) 的罕见超长路径退化为标记
-    expect(String(out.path)).toMatch(/^\[octopi:elided \d+ chars\]$/);
-    expect(out.extra).toMatch(/^\[octopi:elided \d+ chars\]$/);
+    // 超过 LOCATOR_KEEP_CHARS(200) 的罕见超长路径退化为对象形标记
+    expect(out.path).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
+    expect(out.extra).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
   });
 
   it('should scale the pointer with maxPointerChars (the knob is real)', () => {
@@ -405,7 +405,7 @@ describe('tool-call 参数随结果老化', () => {
     ];
   }
 
-  it('应按结果同步老化参数：键名保留、长值换成长度标记', async () => {
+  it('应按结果同步老化参数：键名保留、长值换成对象形标记', async () => {
     const engine = new DefaultContextEngine({ historyAging: { rawWindow: 0, freezeBatch: 1 } });
     const messages = [...argHeavyTurn(1000), ...argHeavyTurn(1000), ...argHeavyTurn(10)];
     const result = await engine.assemble({ sessionId: 's-args', messages, systemPrompt: 'sys', tools: [] });
@@ -417,9 +417,9 @@ describe('tool-call 参数随结果老化', () => {
     // 键名全保（LLM 需要知道改了哪个文件）
     expect(Object.keys(args).sort()).toEqual(['new_string', 'old_string', 'path']);
     expect(args.path).toMatch(/^src\/f\d+\.ts$/);
-    // 载荷长值被替换为长度标记
-    expect(String(args.old_string)).toMatch(/^\[octopi:elided \d+ chars\]$/);
-    expect(String(args.new_string)).toMatch(/^\[octopi:elided \d+ chars\]$/);
+    // 载荷长值被替换为对象形标记（文本形会被模型当内容回抄，OP-TOOL-1）
+    expect(args.old_string).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
+    expect(args.new_string).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
     // 摘要显著小于原文
     expect(agedCall.function.arguments.length).toBeLessThan(200);
   });
@@ -439,7 +439,7 @@ describe('tool-call 参数随结果老化', () => {
     }) as Record<string, unknown>;
     expect(out._aged).toBeUndefined();
     for (let i = 0; i < 15; i++) {
-      expect(String(out[`field_${i}`])).toMatch(/^\[octopi:elided \d+ chars\]$/);
+      expect(out[`field_${i}`]).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
     }
   });
 

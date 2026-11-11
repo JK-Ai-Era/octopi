@@ -115,6 +115,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.109.3 (2026-11-12)
+
+### fix(context): aged tool-call args switch to object-form elision markers + marker teaching notes (OP-TOOL-1)
+
+- **对象形降级标记**：参数侧整值降级从文本形 `[octopi:elided N chars]` 改为对象形 `{"$octopi_elided": {"chars": N}}`（`core/elision.ts` 新增 `elidedValueMarker`，`tool-result-aging` 整值替换迁移）。原因（wire 留痕实证）：文本标记与真实内容同形，会被模型从老化视图回抄进 tool call 参数造成执行污染（OP-TOOL-1）；对象形在语法类别上不是内容，抄入 string 参数即 schema 违规。字符串内部截断（命令尾、轮廓）仍文本形，由派发边界拒收兜底。
+- **检测同步**：`findElisionMarkers` 在工具派发边界同时拒收对象形标记、字符串化变体与全部旧词汇（fail-loud + 自愈指引不变）。
+- **教学面**：平台宪法 §E 新增「Degradation markers are metadata, never arguments」禁令小节；`ELISION_MARKER_SYSTEM_NOTE` 注入 system 固定块（TOOL_PURPOSE_SYSTEM_NOTE 之后）——生成 tool call 时的就近提醒。文案与词汇表同源。
+- **Breaking note**：对老化视图做字符串匹配的下游消费者需同步识别 `{"$octopi_elided": …}` 形态；老化视图中 schema 期望 string 的值位置可能出现对象（设计使然，session 持久层不受影响）。
+- 验证：全量 4621 测试绿（新增 11 用例：对象形/字符串化检测、派发拒收、注记恒在、不误伤）。
+
 ## v0.109.2 (2026-11-12)
 
 ### test(gateway): P0c 评审收尾批 — 演练真负例 / 触发结构断言 / 文档勘误

@@ -45,7 +45,52 @@
 // ── 生成端（当前词汇；参数侧降级生产者使用） ──
 
 /**
- * 值级省略标记：长值被省略时记录被省略的长度
+ * 对象形降级标记的保留键（结构上即「这个值已被降级」的自白）
+ *
+ * 为什么不复用文本标记：文本标记与真实内容同形（都是字符串值），模型模仿历史
+ * 调用形态时会把它当内容回抄进 tool call（OP-TOOL-1 的实际污染源）。对象形在
+ * 语法类别上就不是内容——`new_text` 之类的 string 参数抄入即 schema 违规，
+ * 执行边界（{@link findElisionMarkers}）兜底拒收。
+ */
+export const ELIDED_VALUE_KEY = '$octopi_elided';
+
+/**
+ * 值级降级标记（对象形）：长值被省略时记录被省略的长度
+ *
+ * 用于「整个值被替换」的场景（tool_call 参数老化）；字符串内部的机械截断
+ * 仍用文本形（{@link elidedCharsMarker} / {@link TRUNCATED_MARK}——截断是
+ * 字符串收尾，无法对象化）。
+ *
+ * @param chars - 被省略内容的长度（生产者口径：JSON 序列化长度）
+ * @param note - 可选补充说明（如 `head kept`）
+ * @returns 标记对象（如 `{"$octopi_elided": {"chars": 522}}`）
+ */
+export function elidedValueMarker(chars: number, note?: string): Record<string, unknown> {
+  return { [ELIDED_VALUE_KEY]: note ? { chars, note } : { chars } };
+}
+
+/**
+ * 值是否为对象形降级标记（廉价谓词；预算账目与 walk 复用）
+ *
+ * @param value - 待判值
+ * @returns 是否对象形标记
+ */
+export function isElidedValueObject(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    ELIDED_VALUE_KEY in (value as Record<string, unknown>)
+  );
+}
+
+/**
+ * 值级省略标记（文本形）：长值被省略时记录被省略的长度
+ *
+ * ⚠️ 参数侧「整值替换」请用对象形 {@link elidedValueMarker}；文本形仅用于
+ * 字符串内部截断的收尾标记（plain/privileged-exec/wire-dump/memory-steward）
+ * 与存量词汇的检测兼容。
  *
  * @param chars - 被省略内容的长度（生产者口径：JSON 序列化长度）
  * @param note - 可选补充说明（如 `assetId=…`），并入标记括号内
@@ -79,6 +124,16 @@ export const TRUNCATED_JSON_PREFIX = '[octopi:truncated JSON]';
 
 /** 老化结果指针前缀（生成在 tool-result-aging / wire-dump-diff，文本共用此常量） */
 export const AGED_POINTER_PREFIX = '[aged tool result · pointer]';
+
+/**
+ * 降级标记的系统提示全局说明（工具注记区；与词汇表同源，文案改动随词汇走）
+ *
+ * 位置契约：拼在 tool-call 工具说明的固定块（TOOL_PURPOSE_SYSTEM_NOTE 之后）——
+ * 模型生成 tool call 时注意力最贴身的位置。宪法层（default-agents.md §E）有
+ * 同主题的权威禁令；此处是就近提醒，两者内容须同向。
+ */
+export const ELISION_MARKER_SYSTEM_NOTE = `### Degradation markers are metadata, never arguments
+History views may contain degradation placeholders — \`[octopi:elided N chars]\`, \`…[N chars]\`, \`[octopi:truncated]\`, \`{"$octopi_elided": {"chars": N}}\`, \`[aged tool result · pointer] …\` — where the engine compressed older tool results or arguments. They are engine metadata, **not real content**. NEVER copy them into tool arguments, files you write, commit messages, or shell commands. If an older call's value was elided and you need it, re-derive it from the source (re-read the file, re-run the tool) and send complete arguments. Calls whose arguments contain these markers are rejected at dispatch — retrying unchanged fails again.`;
 
 // ── 检测端（新旧全词汇；执行边界拒收使用） ──
 
@@ -139,14 +194,36 @@ function clip(text: string): string {
   return text.length <= MAX_MARKER_IN_ERROR ? text : `${text.slice(0, MAX_MARKER_IN_ERROR)}…`;
 }
 
+/** JSON 文本解析（非 JSON/异常返回 undefined；检测器自身绝不抛错） */
+function safeParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** 值的安全序列化（仅入错误文案；异常退化为占位） */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return '[object]';
+  }
+}
+
 /**
  * 单值是否整值即降级标记（廉价谓词；预算账目等场景复用）
+ *
+ * 含对象形（{@link isElidedValueObject}）与文本形两族。
  *
  * @param value - 待判值
  * @returns 是否整值即标记
  */
 export function isElisionToken(value: unknown): boolean {
-  return typeof value === 'string' && MARKER_TOKEN_RE.test(value.trim());
+  return (
+    (typeof value === 'string' && MARKER_TOKEN_RE.test(value.trim())) || isElidedValueObject(value)
+  );
 }
 
 /**
@@ -185,6 +262,10 @@ function walk(value: unknown, path: string, hits: ElisionMarkerHit[], depth: num
       hits.push({ path, marker: AGED_FALLBACK_KEY, form: 'structure' });
       return;
     }
+    if (isElidedValueObject(value)) {
+      hits.push({ path, marker: clip(safeStringify(value)), form: 'structure' });
+      return;
+    }
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       walk(v, `${path}.${k}`, hits, depth + 1);
     }
@@ -197,6 +278,12 @@ function scanString(value: string, path: string, hits: ElisionMarkerHit[]): void
 
   // 整值即标记（含首尾空白容忍——B1：尾随换行不得绕过防线）
   if (trimmed.length <= WHOLE_MAX_CHARS && MARKER_TOKEN_RE.test(trimmed)) {
+    hits.push({ path, marker: clip(trimmed), form: 'whole' });
+    return;
+  }
+
+  // 整值即对象形标记的 JSON 文本（模型把对象标记抄成字符串的变体）
+  if (trimmed.length <= WHOLE_MAX_CHARS && trimmed.startsWith('{') && isElidedValueObject(safeParse(trimmed))) {
     hits.push({ path, marker: clip(trimmed), form: 'whole' });
     return;
   }
