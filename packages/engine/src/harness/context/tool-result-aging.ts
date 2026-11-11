@@ -24,7 +24,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
-import { AGED_POINTER_PREFIX, TRUNCATED_MARK, elidedCommandTail, elidedValueMarker, isElisionToken } from '@octopi-agent/core/elision.js';
+import { AGED_POINTER_PREFIX, TRUNCATED_MARK, elidedValueMarker, isElisionToken } from '@octopi-agent/core/elision.js';
 import { isTurnAnchor } from './layer-types.js';
 import { toolResultBody } from './tool-result-body.js';
 
@@ -53,7 +53,7 @@ export interface ToolResultAgingConfig {
   /**
    * 参数摘要的目标字符数（默认 320；**只约束内容值**，键名与定位字段不计入）
    *
-   * 定位字段（path/file/glob/pattern/cwd）与 command 头部是「这条调用碰了哪里」的唯一锚点，
+   * 定位字段（path/file/glob/pattern/cwd）与 command 是「这条调用碰了哪里」的唯一锚点，
    * 恒定保留；预算过小只会让内容值更快退化，不会丢锚点。
    */
   maxAgedArgChars?: number;
@@ -294,7 +294,7 @@ export function agedToolResultPointer(
  *
  * 规则（机械、确定性、无 LLM）：
  * 1. **键名全保**——LLM 需要知道调用了哪个路径/命令才能在必要时重跑；
- * 2. 序列化长度超过 {@link ARG_VALUE_KEEP_CHARS} 的值替换为对象形标记 `{"$octopi_elided": {"chars": N}}`；
+ * 2. 序列化长度超过 {@link ARG_VALUE_KEEP_CHARS} 的值替换为对象形标记 `{"$octopi_elided": {"chars": N}}`（锚点类——定位字段与命令——全保不降级）；
  * 3. 若仍是超预算，按「值从大到小、同大小按键名」顺序继续替换，保证确定性；
  * 4. 兜底：键名太多装不下时退化为整体轮廓截断。
  *
@@ -361,8 +361,7 @@ export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultA
  *
  * 对象形而非文本形：文本标记与真实内容同形，会被模型当内容回抄进 tool call
  * （OP-TOOL-1 实证污染源）；对象形语法类别上就不是内容，抄入 string 参数即
- * schema 违规，执行边界守卫再兜底拒收。命令类字段的尾巴仍用文本形
- * （`elidedCommandTail`——字符串内部截断无法对象化，守卫按值尾命中拒收）。
+ * schema 违规，执行边界守卫再兜底拒收。
  */
 function elidedMarker(chars: number): unknown {
   return elidedValueMarker(chars);
@@ -371,24 +370,22 @@ function elidedMarker(chars: number): unknown {
 /**
  * 定位字段：它们短、且是「这条调用到底碰了哪里」的唯一锚点，优先全保
  *
- * 实测：`path` 均长 79 字符（全保仅 +1.5% 请求体），而 `command` 均长 414
- * （全保 +8.6%）。因此路径类全保、命令类只留头部。
+ * 实测：`path` 均长 79 字符（全保仅 +1.5% 请求体），`command` 均长 414
+ * （全保 +8.6%）。路径类全保；命令类同样全保不截断（2026-11-12 拍板：截断
+ * 收益有限、文本尾标记却是回抄污染源——OP-TOOL-1 sed/grep 案半数案例）。
  */
 const LOCATOR_FIELDS = new Set(['path', 'file', 'glob', 'pattern', 'cwd']);
 
 /**
  * 锚点字段：不占用内容预算（否则定位信息会被内容载荷挤出）
  *
- * 定位字段与命令字段都属锚点——`command` 头部回答「跑了什么」，
- * 若让它和 `old_text` 之类抢同一个预算，多条命令一累加就会把头部整体省略掉。
+ * 定位字段与命令字段都属锚点——`command` 全文回答「跑了什么」，
+ * 若让它和 `old_text` 之类抢同一个预算，多条命令一累加就会把命令整体省略掉。
  */
 const ANCHOR_FIELDS = new Set([...LOCATOR_FIELDS, 'command', 'cmd']);
 
 /** 定位字段全保上限（超长的罕见路径才会退化为标记） */
 const LOCATOR_KEEP_CHARS = 200;
-
-/** 命令类字段保留的头部长度（其余用长度标记收尾） */
-const COMMAND_HEAD_CHARS = 100;
 
 /** 命令类字段名 */
 const COMMAND_FIELDS = new Set(['command', 'cmd']);
@@ -409,9 +406,10 @@ function digestArgValue(key: string, value: unknown, size: number): unknown {
   if (size <= ARG_VALUE_KEEP_CHARS) return value;
   if (isLocatorField(key) && size <= LOCATOR_KEEP_CHARS) return value;
   if (COMMAND_FIELDS.has(key) && typeof value === 'string') {
-    // 短命令原样保留；长命令保留头部（头部才是「跑了什么」的判据）
-    if (value.length <= COMMAND_HEAD_CHARS) return value;
-    return `${value.slice(0, COMMAND_HEAD_CHARS)}${elidedCommandTail(value.length - COMMAND_HEAD_CHARS)}`;
+    // 命令不截断、全保（2026-11-12 拍板）：截断省的量有限（锚点本就不占内容预算），
+    // 文本尾标记却是模型回抄污染源（OP-TOOL-1 sed/grep 案半数案例）。digest
+    // 恒 ≤ 原始 args（本字段与原值相同、其余字段只减不增），不引入新的无界增长。
+    return value;
   }
   return elidedMarker(size);
 }

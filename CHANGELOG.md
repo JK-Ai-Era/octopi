@@ -115,6 +115,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.3 (2026-11-12)
+
+### fix(context): stop truncating shell commands in aged tool-call args (OP-TOOL-1 follow-up)
+
+- **命令类字段（command/cmd）在参数老化摘要中全保、不截断**（大哥拍板）：截断收益有限（命令典型 50–414 字符，且锚点本就不占内容预算），文本尾标记 `…[octopi:elided +N chars]` 却是模型回抄污染源（OP-TOOL-1 sed/grep 案占污染案例半数）。全保后「抄历史命令」从污染行为变为合法重跑。digest 恒 ≤ 原始 args，不引入新的无界增长。
+- **代价记录**：shell 密集会话请求体较「头部 100 + 尾标记」方案增大（v0.86 实测口径：命令均长 414，全保 ≈ +8.6% 请求体）——经拍板接受。
+- `elidedCommandTail` 文本尾标记在 aging 侧退役（词汇表保留该形态，用于冻结历史存量的检测拒收）；`COMMAND_HEAD_CHARS` 常量删除；预算机制不动（命令本就锚点豁免）。
+- 验证：4647 测试绿（新增「超长命令全保」用例；命令断言改为全保相等）。
+
 ## v0.112.2 (2026-11-12)
 
 ### fix(gateway): P1 评审修复批 — 7 MAJ + 11 MIN（fresh-eyes 评审 del-fae8be78 核实后）

@@ -224,7 +224,7 @@ describe('tool-result-aging plan', () => {
     expect(String(out.command)).not.toMatch(/^\[octopi:elided \d+ chars\]$/);
   });
 
-  it('定位字段全保：path/pattern/glob 与命令头部不被省略（唯一锚点）', () => {
+  it('定位字段全保：path/pattern/glob 不被省略（唯一锚点）；命令全保不截断', () => {
     const args = {
       path: '/Users/jk/Projects/octopi/packages/engine/src/integration/providers/wire-dump-diff.ts',
       old_text: 'x'.repeat(1200),
@@ -247,10 +247,21 @@ describe('tool-result-aging plan', () => {
       { command: `cd /repo && ${'z'.repeat(400)}`, purpose: 'run tests' },
       OPTS(),
     ) as Record<string, unknown>;
-    // 命令保留头部（能看出「跑的是什么」），尾部用增量标记
-    expect(String(cmd.command).startsWith('cd /repo && zzz')).toBe(true);
-    expect(String(cmd.command)).toMatch(/\[octopi:elided \+\d+ chars\]$/);
-    expect(String(cmd.command).length).toBeLessThan(130);
+    // 命令全保不截断（2026-11-12 拍板）：截断收益有限，文本尾标记却是回抄污染源
+    expect(cmd.command).toBe(`cd /repo && ${'z'.repeat(400)}`);
+    expect(String(cmd.command)).not.toContain('octopi:elided');
+  });
+
+  it('超长命令也全保（锚点不进内容预算；digest 恒 ≤ 原始 args）', () => {
+    const huge = `cd /repo && ${'z'.repeat(5000)}`;
+    const out = agedToolArgDigest(
+      'shell',
+      { command: huge, purpose: 'run tests', note: 'n'.repeat(2000) },
+      OPTS(),
+    ) as Record<string, unknown>;
+    expect(out.command).toBe(huge);
+    // 内容载荷照常降级为对象形标记
+    expect(out.note).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
   });
 
   it('定位字段也装不下时才退化（宁可超预算也不丢锚点）', () => {
