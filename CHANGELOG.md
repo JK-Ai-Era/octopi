@@ -115,6 +115,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.111.2 (2026-11-12)
+
+### feat(gateway): P1-3b run 事件归档 — Observer 归属收口（OP-P0B-1 ④，Q3=(a)）
+
+- **归档链**：run 终态（execute 流 done/error 均算）→ Hub 导出槽 `getRunObservatory` timeline → `run_events_archived` notify 上行 → gateway 门面 append `<sid>.events.jsonl` 旁路（逐行纯数据、追加序、门面单写）。半途失败 run 的 timeline 也如实归档（半结果是历史的一部分）。
+- **回放读口**：`GET /api/v1/sessions/:id/events`（无历史=空数组，常态非错误）。实时面不变（session_event → WS）。
+- **协议演进（op 只增不改）**：`RunHostNotify` 新增 `run_events_archived`（纯数据打平，协议不引引擎类型）。
+- **顺带修复**：sessions 目录懒建（store 首写才建）会致归档 ENOENT 静默丢失——门面写归档前自建目录（目录归写者建）。
+- 观测面 fail-open 语义保持：归档失败 warn 不阻断 run 流。
+- 测试锚 `tests/run-events-archive.test.ts` 四例（落盘/读口顺序/追加并存/写失败不阻断）；全量 4637 passed。
+
+---
+
 ## v0.111.1 (2026-11-12)
 
 ### feat(gateway): P1-3a 漂移处置编排 — reattest 优先，失败滚动替换（service-topology §5，Q2=(a)）

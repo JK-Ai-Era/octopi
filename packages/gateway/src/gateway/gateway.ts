@@ -47,6 +47,7 @@ import type { Message } from '@octopi-agent/core/types.js';
 import { createHmac, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
 import { isTurnStartContent } from '@octopi-agent/engine/harness/context/turn-envelope.js';
 import { isTurnAnchor } from '@octopi-agent/engine/harness/context/layer-types.js';
@@ -5332,6 +5333,52 @@ export class Gateway {
    *
    * @param sessionId - 会话 id
    */
+  /**
+   * run 事件归档（P1-3b，Q3=(a)）：append `<sid>.events.jsonl` 旁路（逐行纯数据，
+   * 本门面单写）。失败 warn 不阻断（观测面 fail-open；文件可由事件源重放重建）。
+   * @param sessionId - 会话 id
+   * @param events - run timeline 事件（纯数据行）
+   * @returns Promise<void>
+   */
+  private async archiveRunEvents(
+    sessionId: string,
+    events: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    if (events.length === 0) return;
+    try {
+      const dir = join(getOctopiHome(), 'sessions');
+      // sessions 目录随 store 首写懒建；归档是门面写口，目录由写者建（勿吞 ENOENT 丢归档）
+      await mkdir(dir, { recursive: true });
+      const file = join(dir, `${sessionId}.events.jsonl`);
+      const lines = `${events.map((e) => JSON.stringify(e)).join('\n')}\n`;
+      await appendFile(file, lines, 'utf8');
+    } catch (err) {
+      console.warn(
+        `[Gateway] run events archive failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * run 事件回放读口（P1-3b）：读 `<sid>.events.jsonl` 归档行。无历史返回空数组
+   * （回放面常态，不是错误）。
+   * @param sessionId - 会话 id
+   * @returns 事件行（纯数据，时序为归档追加序）
+   */
+  async readSessionEvents(sessionId: string): Promise<Array<Record<string, unknown>>> {
+    const file = join(getOctopiHome(), 'sessions', `${sessionId}.events.jsonl`);
+    try {
+      const raw = await readFile(file, 'utf8');
+      return raw
+        .split('\n')
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+  }
+
   private async removeProjection(sessionId: string): Promise<void> {
     if (!this.sessionIndex) return;
     try {
@@ -5904,6 +5951,11 @@ export class Gateway {
       case 'session_removed':
         this.projectionThrottle.delete(n.sessionId);
         void this.removeProjection(n.sessionId);
+        return;
+      case 'run_events_archived':
+        // run 终态事件归档（P1-3b，Q3=(a)）：随会话 jsonl 旁路 <sid>.events.jsonl，
+        // 本门面单写（历史回放面；实时面仍走 session_event → WS）。
+        await this.archiveRunEvents(n.sessionId, n.events);
         return;
       case 'redispatch':
         try {

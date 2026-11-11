@@ -241,4 +241,10 @@ export type RunHostNotify =
    */
   | { type: 'session_saved'; sessionId: string }
   /** 会话删除已落盘（同上收口：gateway 门面据此删投影行） */
-  | { type: 'session_removed'; sessionId: string };
+  | { type: 'session_removed'; sessionId: string }
+  /**
+   * run 终态事件归档（P1-3b，Q3=(a)：随会话 jsonl 旁路、门面写）：Hub 导出槽
+   * timeline 上行，gateway 落 `<sid>.events.jsonl`（历史回放面）。事件为纯数据
+   * （RunTimelineEventView 打平，不含引擎类型）。
+   */
+  | { type: 'run_events_archived'; sessionId: string; events: Array<Record<string, unknown>> };

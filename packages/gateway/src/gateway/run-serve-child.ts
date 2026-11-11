@@ -563,6 +563,25 @@ async function main(): Promise<void> {
             if (!res.writableEnded) clientGone.abort(new Error('run-serve-child: client disconnected'));
           };
           res.on('close', onClose);
+          // run 终态事件归档（P1-3b，Q3=(a)）：Hub 导出槽 timeline 经 notify 上行，
+          // gateway 门面落 <sid>.events.jsonl（历史回放面）。观测失败 fail-open，不打断 run 流。
+          const archiveRunEvents = (sessionId: string): void => {
+            try {
+              const snapshot = observerHub.getRunObservatory(sessionId);
+              const events = (snapshot?.timeline ?? []) as unknown as Array<
+                Record<string, unknown>
+              >;
+              if (events.length > 0) {
+                notify({ type: 'run_events_archived', sessionId, events });
+              }
+            } catch (err) {
+              notify({
+                type: 'log',
+                level: 'warn',
+                message: `[RunServe] run events archive failed (timeline not archived): ${err instanceof Error ? err.message : String(err)}`,
+              });
+            }
+          };
           let stream: AsyncIterable<AgentEvent>;
           try {
             stream = host.startRun(runReq, clientGone.signal);
@@ -604,6 +623,7 @@ async function main(): Promise<void> {
               },
             });
           } finally {
+            archiveRunEvents(runReq.sessionId);
             res.off('close', onClose);
             res.end();
           }

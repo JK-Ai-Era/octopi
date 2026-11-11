@@ -191,6 +191,13 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: sessions });
       }
 
+      const sessionEventsMatch = /^\/sessions\/([^/]+)\/events$/.exec(relativePath);
+      if (sessionEventsMatch && method === 'GET') {
+        // run 事件回放读口（P1-3b，Q3=(a)）：读归档旁路；无历史=空数组
+        const events = await this.gateway.readSessionEvents(sessionEventsMatch[1]);
+        return this.json(res, 200, { ok: true, data: events });
+      }
+
       if (relativePath === '/sessions' && method === 'POST') {
         const body = await this.readBody(req);
         if (!body?.agentId) {
