@@ -115,7 +115,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.107.3 (2026-11-11)
+## v0.108.0 (2026-11-12)
+
+### feat(gateway): P0c-1 脉搏单源 — run 实例零 self-arm 定时器（方案 A′）
+
+- **触发面收口**（OP-P0B-1 ① 实现面）：backfill idle/gap 扫描、memory.health 探测、5 个 subsystem `source: schedule`（含 runOnStart 首跳）共 7 项周期触发全部改由 gateway `PulseScheduler` 单发驱动；run 实例装配面**零 `setInterval`**（sense engine `depthResetTimer` 一并惰性化）。§5.4「结构性保证，而非运行时去重」字面成立，多副本重复触发在结构上不可能。
+- **契约**：`PulseSpec` 自述（`health().pulses`，key 实例内唯一 `<agentId>:<base>`，opaque）+ `control { type: 'pulse', key }`（未知 key fail-loud，与未知 op 同纪律）；`runOnStart` 首跳由调度器随新 key 发出。
+- **pulse lease 归属**：`PulseScheduler` 持 key→instanceId 归属表（P0c-1 单实例恒持；P0c-2 多实例时失联转移）。resync 对账（增/删/周期变更）语义：拉取失败保持既有调度（fail-soft + warning）。
+- **行为等价**：backfill/health 单测直调扫描入口全绿；schedule-source 14 用例改造为脉搏驱动语义（register 不自跳、pulseSchedule 恰好一跳、unregister 后脉搏 fail-loud）。
+- **验证**：脉搏调度器单测 6 + 结构性锚 3（三源文件零 `setInterval`，防复发）+ 协议 e2e（自述/驱动/未知 key fail-loud）+ 全量测试套件绿。
+- **架构决策记录**：subsystem 拆独立服务复议后维持否决（写者归属 + 事务逃逸），重开条件见 `arch/service-topology-p0c.md` §3 复议记录（OP-TOPO-1 登记 store 归属缺口）。
 
 ### fix(gateway): run-instance security guard rebuild + child wire-dump provenance
 

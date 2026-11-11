@@ -43,10 +43,10 @@ interface RegisteredSubsystem {
   eventCount: number;
   /** 评估函数（编译后的 condition 或 conditionRef） */
   evaluator?: (ctx: SenseContext) => boolean | Promise<boolean>;
+  /** 触发回调（register 时的 onTrigger；脉搏驱动时复用） */
+  onTrigger: (ctx: SenseContext) => void;
   /** 该子系统持有的 EventBus 监听器（unregister 时拆除） */
   disposables: Disposable[];
-  /** schedule 模式的轮询定时器 */
-  scheduleTimer?: ReturnType<typeof setInterval>;
   /** 同一 entry 是否正在评估/触发（防止 await 期间并发穿透冷却） */
   inFlight?: boolean;
 }
@@ -87,8 +87,6 @@ export class SenseEngine {
   private subsystems = new Map<string, RegisteredSubsystem>();
   /** 全局传播深度追踪 */
   private depthTracker: DepthTracker = { depth: 0, chainStartTime: Date.now() };
-  /** 深度重置定时器 */
-  private depthResetTimer?: ReturnType<typeof setInterval>;
 
   constructor(config: SenseEngineConfig) {
     this.events = config.events;
@@ -97,11 +95,14 @@ export class SenseEngine {
     this.maxDepth = config.maxDepth ?? 5;
     this.depthResetIntervalMs = config.depthResetIntervalMs ?? 60000;
     this.evaluatorTimeoutMs = config.evaluatorTimeoutMs ?? 30_000;
+  }
 
-    // 定期重置深度计数器（防止长期运行后深度累积）
-    this.depthResetTimer = setInterval(() => {
+  /** 惰性深度重置（P0c A′：替代原 depthResetTimer setInterval——零 self-arm 定时器） */
+  private depthExceeded(): boolean {
+    if (Date.now() - this.depthTracker.chainStartTime >= this.depthResetIntervalMs) {
       this.depthTracker = { depth: 0, chainStartTime: Date.now() };
-    }, this.depthResetIntervalMs);
+    }
+    return this.depthTracker.depth >= this.maxDepth;
   }
 
   // ── 公共 API ──
@@ -129,6 +130,7 @@ export class SenseEngine {
       minEvents: spec.sense.filter?.minEvents ?? 1,
       eventCount: 0,
       evaluator,
+      onTrigger,
       disposables: [],
     };
     this.subsystems.set(spec.id, entry);
@@ -143,7 +145,9 @@ export class SenseEngine {
       }
     }
 
-    // schedule：interval 轮询；复用冷却/深度/condition/onTrigger
+    // schedule：周期 tick 与首跳**不再 self-arm**（P0c A′ 零常驻触发器）——
+    // 改由 gateway 脉搏调度器经 `pulseSchedule()` 单发驱动；runOnStart 首跳随
+    // `pulseSpecs()` 的 `runOnStart` 标记由调度器发出。
     // 双脉搏：schedule 子系统也可监听 filter.events（如 memory.health.* / 手动 request）
     if (spec.sense.source === 'schedule') {
       if (spec.sense.filter?.events) {
@@ -154,28 +158,11 @@ export class SenseEngine {
           entry.disposables.push(disposable);
         }
       }
-      const intervalMs = spec.sense.interval;
-      if (intervalMs && intervalMs > 0) {
-        entry.scheduleTimer = setInterval(() => {
-          void this.onScheduleTick(spec.id, onTrigger);
-        }, intervalMs);
-        if (typeof entry.scheduleTimer === 'object' && entry.scheduleTimer !== null && 'unref' in entry.scheduleTimer) {
-          (entry.scheduleTimer as NodeJS.Timeout).unref?.();
-        }
-      }
-      // 启动首跳：注册完成后补一次 tick（长 interval 首跳跨不过进程生命周期时的保底脉搏；
-      // setTimeout(0) 保证 builder 同步注册/依赖注入全部完成后才跑）
-      if (spec.sense.runOnStart) {
-        const starter = setTimeout(() => {
-          void this.onScheduleTick(spec.id, onTrigger);
-        }, 0);
-        starter.unref?.();
-      }
     }
   }
 
   /**
-   * 注销子系统：拆除其 EventBus 监听与 schedule 定时器
+   * 注销子系统：拆除其 EventBus 监听
    */
   unregister(subsystemId: string): void {
     const entry = this.subsystems.get(subsystemId);
@@ -185,11 +172,40 @@ export class SenseEngine {
       d.dispose();
     }
     entry.disposables = [];
-    if (entry.scheduleTimer) {
-      clearInterval(entry.scheduleTimer);
-      entry.scheduleTimer = undefined;
-    }
     this.subsystems.delete(subsystemId);
+  }
+
+  /**
+   * 脉搏声明（P0c A′）：全部 schedule 型子系统的周期声明，供装配层聚合。
+   */
+  pulseSpecs(): Array<{ key: string; intervalMs: number; runOnStart?: boolean }> {
+    const specs: Array<{ key: string; intervalMs: number; runOnStart?: boolean }> = [];
+    for (const [id, entry] of this.subsystems) {
+      if (entry.spec.sense.source !== 'schedule') continue;
+      const intervalMs = entry.spec.sense.interval;
+      if (!intervalMs || intervalMs <= 0) continue;
+      specs.push({
+        key: `subsystem.schedule:${id}`,
+        intervalMs,
+        runOnStart: entry.spec.sense.runOnStart,
+      });
+    }
+    return specs;
+  }
+
+  /**
+   * 脉搏入口：gateway 单发驱动一次 schedule tick（复用冷却/深度/condition）。
+   * 未注册或非 schedule 型 fail-loud。
+   */
+  async pulseSchedule(subsystemId: string): Promise<void> {
+    const entry = this.subsystems.get(subsystemId);
+    if (!entry) {
+      throw new Error(`sense-engine: unknown pulse subsystem "${subsystemId}"`);
+    }
+    if (entry.spec.sense.source !== 'schedule') {
+      throw new Error(`sense-engine: subsystem "${subsystemId}" is not schedule-sensed`);
+    }
+    await this.onScheduleTick(subsystemId, entry.onTrigger);
   }
 
   /**
@@ -204,7 +220,7 @@ export class SenseEngine {
     if (!entry) return false;
 
     // 检查并发深度
-    if (this.depthTracker.depth >= this.maxDepth) {
+    if (this.depthExceeded()) {
       return false;
     }
 
@@ -334,14 +350,6 @@ export class SenseEngine {
         d.dispose();
       }
       entry.disposables = [];
-      if (entry.scheduleTimer) {
-        clearInterval(entry.scheduleTimer);
-        entry.scheduleTimer = undefined;
-      }
-    }
-    if (this.depthResetTimer) {
-      clearInterval(this.depthResetTimer);
-      this.depthResetTimer = undefined;
     }
     this.subsystems.clear();
   }
@@ -391,7 +399,7 @@ export class SenseEngine {
       return;
     }
 
-    if (this.depthTracker.depth >= this.maxDepth) {
+    if (this.depthExceeded()) {
       return;
     }
 
@@ -447,7 +455,7 @@ export class SenseEngine {
       return;
     }
 
-    if (this.depthTracker.depth >= this.maxDepth) {
+    if (this.depthExceeded()) {
       return;
     }
 

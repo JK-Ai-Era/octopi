@@ -36,7 +36,6 @@ export class MemoryHealthProbe {
   private readonly limits: Record<MemoryType, number>;
   private readonly shadowBacklogLimit: number;
   private readonly now: () => number;
-  private timer?: ReturnType<typeof setInterval>;
 
   constructor(options: MemoryHealthProbeOptions) {
     this.events = options.events;
@@ -47,20 +46,19 @@ export class MemoryHealthProbe {
     this.now = options.now ?? (() => Date.now());
   }
 
-  start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => {
-      void this.check();
-    }, this.intervalMs);
-    (this.timer as { unref?: () => void }).unref?.();
+  /** 脉搏声明（P0c A′）：供装配层聚合成实例级 PulseSpec 列表 */
+  pulseSpecs(): Array<{ key: string; intervalMs: number }> {
+    return [{ key: 'memory.health', intervalMs: this.intervalMs }];
   }
 
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
+  /** 脉搏入口：gateway 单发驱动一次检查。未知 key fail-loud。 */
+  async pulse(key: string): Promise<string[]> {
+    if (key === 'memory.health') return this.check();
+    throw new Error(`memory-health-probe: unknown pulse key "${key}"`);
   }
+
+  /** P0c A′：检查已改脉搏驱动，无 self-arm 定时器可停（保留调用面兼容）。 */
+  stop(): void {}
 
   /** 立即检查一轮；返回发出的事件类型 */
   async check(): Promise<string[]> {

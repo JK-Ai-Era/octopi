@@ -95,6 +95,7 @@ import {
 import { AgentRuntime, ExplicitRouter } from '@octopi-agent/engine/harness/activation/index.js';
 import type { InProcessAgentHandle } from '@octopi-agent/engine/harness/activation/run-backend.js';
 import { RemoteRunBackend } from './remote-run-backend.js';
+import { PulseScheduler } from './pulse-scheduler.js';
 import type {
   ClientToolVisibilitySnapshot,
   ClientToolWireSpec,
@@ -447,6 +448,8 @@ export class Gateway {
    */
   /** run 实例后端（P0b：执行面唯一 remote 实现；start() 时 fork run 实例子进程） */
   private runBackend?: RemoteRunBackend;
+  /** 脉搏调度器（P0c A′）：run 实例周期任务的唯一触发源（§5.4 触发面归 gateway） */
+  private pulseScheduler?: PulseScheduler;
   /** 装配测试缝专用会话锁（生产锁在 run 实例进程内；见 assembly getSessionLock） */
   private readonly seamSessionLock = new InProcessSessionLock();
   /** 流式 adapter 引用（用于广播事件） */
@@ -1088,6 +1091,19 @@ export class Gateway {
       },
       { onNotify: (n) => void this.handleRunHostNotify(n) },
     );
+    // P0c A′ 脉搏单源：run 实例的周期任务由 gateway 调度器单发驱动（实例零 self-arm 定时器，
+    // arch/service-topology-p0c.md §3）。key 为实例自述的 opaque 键。
+    this.pulseScheduler = new PulseScheduler({
+      target: {
+        instanceId: 'run-0',
+        pulses: async () => (await this.runBackend!.health()).pulses ?? [],
+        pulse: async (key) => {
+          const r = await this.runBackend!.control({ type: 'pulse', key });
+          if (!r.ok) throw new Error(r.error.message);
+        },
+      },
+    });
+    await this.pulseScheduler.start();
     for (const agent of this.agents.values()) {
       this.registerRuntimeAgent(agent);
     }
@@ -1665,6 +1681,8 @@ export class Gateway {
     if (!this.started || this.stopping) return;
     this.stopping = true;
     this.started = false;
+    // 先停脉搏调度（不再向 run 实例发脉搏），再停执行面
+    this.pulseScheduler?.stop();
     try {
       await this.stopLifecycle();
     } finally {

@@ -114,7 +114,28 @@ export type RunControlOp =
    * console 受控写后重锚定安全指纹（ops P2 §8.4）。boot 纯数据无法携带活守卫，
    * run 实例自建 guard 后由宿主经此 op 同步署名（service-topology §7.3）。
    */
-  | { type: 'reattestSecurity'; expectHash: string; allowedChanged: string[] };
+  | { type: 'reattestSecurity'; expectHash: string; allowedChanged: string[] }
+  /**
+   * 脉搏（P0c 脉搏单源，arch/service-topology-p0c.md §3 方案 A′）：gateway 脉搏调度器
+   * 单发，副本收到后跑一次声明式 tick（原 self-arm 定时器的驱动源）。key 是实例自述的
+   * `PulseSpec.key`（opaque，gateway 不解释产品语义）。
+   */
+  | { type: 'pulse'; key: string };
+
+/**
+ * 脉搏声明（P0c A′）：run 实例装配后自述「我有哪些周期任务」，gateway 单发驱动。
+ * key 在实例内全局唯一（`<agentId>:<base>` 形态，产品语义不进 gateway）。
+ */
+export interface PulseSpec {
+  /** 实例内唯一脉搏键（opaque） */
+  key: string;
+  /** 周期（毫秒） */
+  intervalMs: number;
+  /** 归属 agent（诊断用） */
+  agentId?: string;
+  /** 首次收集后立即发一跳（替代原 runOnStart 自跳） */
+  runOnStart?: boolean;
+}
 
 /** AgentDefinition 线上传输别名（config-schema 数据对象，见 src/config-schema） */
 export type AgentDefinitionWire = Record<string, unknown>;

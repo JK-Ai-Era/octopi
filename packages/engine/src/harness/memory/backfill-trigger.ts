@@ -66,8 +66,6 @@ export class BackfillTrigger {
   private readonly now: () => number;
 
   private activity = new Map<string, ActivityState>();
-  private idleTimer?: ReturnType<typeof setInterval>;
-  private gapTimer?: ReturnType<typeof setInterval>;
   private disposables: Array<{ dispose(): void }> = [];
   private disposed = false;
 
@@ -85,7 +83,9 @@ export class BackfillTrigger {
     this.now = options.now ?? (() => Date.now());
   }
 
-  /** 订阅 lifecycle + 启动 idle/gap 扫描 */
+  /** 订阅 lifecycle 事件（硬收敛=执行面尾，随事件驱动保留）。
+   * 周期扫描（idle/gap）不再 self-arm——由 gateway 脉搏调度器经 `pulse()` 单发驱动
+   * （P0c A′：run 实例零常驻触发器，arch/service-topology-p0c.md §3）。 */
   start(): void {
     if (this.disposed) return;
 
@@ -113,27 +113,25 @@ export class BackfillTrigger {
         }
       }),
     );
+  }
 
-    this.idleTimer = setInterval(() => {
-      void this.scanIdle();
-    }, this.idleScanMs);
-    (this.idleTimer as { unref?: () => void }).unref?.();
+  /** 脉搏声明（P0c A′）：供装配层聚合成实例级 PulseSpec 列表 */
+  pulseSpecs(): Array<{ key: string; intervalMs: number }> {
+    return [
+      { key: 'backfill.idle', intervalMs: this.idleScanMs },
+      { key: 'backfill.gap', intervalMs: this.gapScanMs },
+    ];
+  }
 
-    this.gapTimer = setInterval(() => {
-      void this.scanGaps();
-    }, this.gapScanMs);
-    (this.gapTimer as { unref?: () => void }).unref?.();
+  /** 脉搏入口：gateway 单发驱动一次周期扫描。未知 key fail-loud。 */
+  async pulse(key: string): Promise<number> {
+    if (key === 'backfill.idle') return this.scanIdle();
+    if (key === 'backfill.gap') return this.scanGaps();
+    throw new Error(`backfill-trigger: unknown pulse key "${key}"`);
   }
 
   stop(): void {
-    if (this.idleTimer) {
-      clearInterval(this.idleTimer);
-      this.idleTimer = undefined;
-    }
-    if (this.gapTimer) {
-      clearInterval(this.gapTimer);
-      this.gapTimer = undefined;
-    }
+    // P0c A′：周期扫描已改脉搏驱动，无 self-arm 定时器可停。
   }
 
   dispose(): void {

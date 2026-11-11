@@ -254,6 +254,8 @@ export class RemoteRunBackend {
       mountedAgents: body.mountedAgents,
       inFlightRuns: body.inFlightRuns,
       retiredRunners: body.retiredRunners,
+      // 脉搏自述（P0c A′）：透传给 gateway 脉搏调度器
+      ...(body.pulses ? { pulses: body.pulses } : {}),
     };
   }
 

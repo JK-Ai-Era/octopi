@@ -428,6 +428,14 @@ export interface AgentBuildResult {
   registerTools: (tools: RegisteredTool[]) => void;
   /** ContextEngine 实例（手动压缩入口） */
   contextEngine?: import('../context/types.js').ContextEngine;
+  /**
+   * 脉搏注册表（P0c A′）：本 agent 声明的全部周期任务（key 已带 agentId 前缀、实例内唯一）。
+   * run 宿主聚合为实例级 PulseSpec 自述给 gateway 脉搏调度器；fire 为进程内驱动入口。
+   */
+  pulses: Array<{
+    spec: import('../activation/run-protocol.js').PulseSpec;
+    fire: () => Promise<unknown>;
+  }>;
   contextHealth: (agentId?: string) => Promise<import('../context/layer-health.js').ContextLayerHealth>;
 }
 
@@ -1508,6 +1516,14 @@ export class AgentBuilder {
       });
     }
 
+    // P0c A′ 脉搏注册表：本 agent 装配产物的全部周期任务（backfill 扫描 / health 探测 /
+    // 子系统 schedule），key 带 agentId 前缀保证实例内唯一；run 宿主聚合后自述给 gateway。
+    const pulseOwner = this._agentId ?? 'default';
+    const pulses: Array<{
+      spec: import('../activation/run-protocol.js').PulseSpec;
+      fire: () => Promise<unknown>;
+    }> = [];
+
     // 子系统装配：自动发现 + allow/deny 过滤 + 注册
     const allowlist = options?.subsystemAllowlist ?? this._subsystemAllowlist;
     const denylist = options?.subsystemDenylist ?? this._subsystemDenylist;
@@ -1641,6 +1657,14 @@ export class AgentBuilder {
         runner.setSubsystemRuntime(subsystemRuntime);
       }
 
+      // 子系统 schedule 脉搏（P0c A′：原 sense scheduleTimer/runOnStart 由 gateway 单发驱动）
+      for (const p of subsystemRuntime!.pulseSpecs()) {
+        pulses.push({
+          spec: { ...p, key: `${pulseOwner}:${p.key}`, agentId: this._agentId },
+          fire: () => subsystemRuntime!.pulse(p.key),
+        });
+      }
+
       // 补录脉搏：硬收敛 / idle 漂移 / 覆盖差
       // `memory.backfill.enabled=false` 时不启动 Trigger（省 LLM）；denylist 不注册子系统时同样不启动
       const backfillCfg = this._memoryConfig?.backfill;
@@ -1660,6 +1684,13 @@ export class AgentBuilder {
         });
         trigger.start();
         runner.setBackfillTrigger(trigger);
+        // idle/gap 周期扫描脉搏（P0c A′：硬收敛仍走事件，属执行面尾）
+        for (const p of trigger.pulseSpecs()) {
+          pulses.push({
+            spec: { ...p, key: `${pulseOwner}:${p.key}`, agentId: this._agentId },
+            fire: () => trigger.pulse(p.key),
+          });
+        }
       } else if (!backfillEnabled && registeredIds.has('memory.steward.backfill')) {
         console.log('[AgentBuilder] memory.backfill.enabled=false — auto backfill trigger off');
       }
@@ -1675,8 +1706,14 @@ export class AgentBuilder {
           shadowBacklogLimit: healthCfg?.shadowBacklogLimit,
           limits: healthCfg?.limits,
         });
-        probe.start();
         runner.setMemoryHealthProbe(probe);
+        // memory.health 探测脉搏（P0c A′）
+        for (const p of probe.pulseSpecs()) {
+          pulses.push({
+            spec: { ...p, key: `${pulseOwner}:${p.key}`, agentId: this._agentId },
+            fire: () => probe.pulse(p.key),
+          });
+        }
       }
     }
 
@@ -1706,6 +1743,7 @@ export class AgentBuilder {
       runner,
       mcpManager,
       runtime: subsystemRuntime,
+      pulses,
       events,
       store,
       registerTools,

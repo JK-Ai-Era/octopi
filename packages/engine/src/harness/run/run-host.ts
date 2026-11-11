@@ -176,6 +176,9 @@ export class RunHost implements RunBackend {
   readonly sessionLock: SessionLease;
   protected readonly opts: RunHostOptions;
   private readonly mounted = new Map<string, Mounted>();
+  /** 脉搏注册表（P0c A′）：key → 进程内驱动入口 + 自述元数据（gateway 单发驱动） */
+  private readonly pulseFire = new Map<string, () => Promise<unknown>>();
+  private readonly pulseSpecs = new Map<string, import('../activation/run-protocol.js').PulseSpec>();
   private readonly buildInFlight = new Map<string, Promise<InProcessAgentHandle>>();
   private readonly retiredRunners: SessionAwareRunner[] = [];
   private readonly runnerInflight = new WeakMap<SessionAwareRunner, number>();
@@ -222,6 +225,14 @@ export class RunHost implements RunBackend {
       dispatcher: this.wrapInflightTracking(spec.runner, inner),
     };
     this.mounted.set(spec.agentId, { handle, runner: spec.runner });
+    // 脉搏注册（P0c A′）：重复 key = 装配 bug，fail-loud
+    for (const p of spec.pulses ?? []) {
+      if (this.pulseFire.has(p.spec.key)) {
+        throw new Error(`run_backend: duplicate pulse key "${p.spec.key}"`);
+      }
+      this.pulseFire.set(p.spec.key, p.fire);
+      this.pulseSpecs.set(p.spec.key, p.spec);
+    }
     // B3：客户端工具重放——setClientTools 可能早于首个 mount（WS 注册工具后用户才发
     // 首条消息）。注册表现况补挂进新 agent；谓词对非注册工具恒放行，不影响常规工具面。
     if (this.clientToolRegistry.size > 0) {
@@ -298,6 +309,13 @@ export class RunHost implements RunBackend {
     const m = this.mounted.get(agentId);
     if (!m) return;
     this.mounted.delete(agentId);
+    // 该执行体的脉搏随退役拆除（key 带 agentId 前缀）
+    for (const key of [...this.pulseFire.keys()]) {
+      if (key.startsWith(`${agentId}:`)) {
+        this.pulseFire.delete(key);
+        this.pulseSpecs.delete(key);
+      }
+    }
     this.retireRunner(m.runner);
   }
 
@@ -484,6 +502,15 @@ export class RunHost implements RunBackend {
             allowedChanged: op.allowedChanged,
           });
           return { ok: true, result };
+        }
+        case 'pulse': {
+          // 脉搏单发（P0c A′）：gateway 调度器驱动一次声明式 tick；未知 key fail-loud
+          const fire = this.pulseFire.get(op.key);
+          if (!fire) {
+            return { ok: false, error: { message: `run_host: unknown pulse key "${op.key}"` } };
+          }
+          await fire();
+          return { ok: true, result: { pulsed: op.key } };
         }
       }
       // 未识别 op：fail-loud（静默吞会让调用方误以为已执行）
@@ -678,6 +705,7 @@ export class RunHost implements RunBackend {
       inFlightRuns += this.runnerInflight.get(runner) ?? 0;
     }
     return {
+      pulses: [...this.pulseSpecs.values()],
       mountedAgents: this.mounted.size,
       inFlightRuns,
       retiredRunners: this.retiredRunners.length,

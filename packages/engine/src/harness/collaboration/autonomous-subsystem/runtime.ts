@@ -404,6 +404,24 @@ export class SubsystemRuntime {
     this.signalBus.clear();
   }
 
+  /**
+   * 脉搏声明（P0c A′）：schedule 型子系统的周期声明，供装配层聚合为实例级 PulseSpec。
+   */
+  pulseSpecs(): Array<{ key: string; intervalMs: number; runOnStart?: boolean }> {
+    return this.senseEngine.pulseSpecs();
+  }
+
+  /**
+   * 脉搏入口：gateway 单发驱动一次 schedule tick。key 形态 `subsystem.schedule:<id>`。
+   */
+  async pulse(key: string): Promise<void> {
+    const prefix = 'subsystem.schedule:';
+    if (!key.startsWith(prefix)) {
+      throw new Error(`subsystem-runtime: unknown pulse key "${key}"`);
+    }
+    await this.senseEngine.pulseSchedule(key.slice(prefix.length));
+  }
+
   // ── 内部方法 ──
 
   /**

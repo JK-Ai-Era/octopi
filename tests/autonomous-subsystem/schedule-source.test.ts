@@ -41,14 +41,18 @@ describe('SenseEngine schedule source', () => {
     engine.dispose();
   });
 
-  it('ticks on interval', async () => {
+  it('does not self-arm; pulseSchedule drives one tick', async () => {
     const onTrigger = vi.fn();
     engine.register(
       makeSpec({ sense: { source: 'schedule', interval: 30, isolation: 'structured' } }),
       onTrigger,
     );
 
+    // P0c A′：register 不再自跳（run 实例零 self-arm 定时器，结构性断言面）
     await sleep(80);
+    expect(onTrigger).not.toHaveBeenCalled();
+
+    await engine.pulseSchedule('sched-sub');
     expect(onTrigger.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -60,9 +64,12 @@ describe('SenseEngine schedule source', () => {
       onTrigger,
     );
 
-    await sleep(120);
+    // 6 次脉搏在 120ms 内打点，cooldown 200ms → 只放行 1 次
+    for (let i = 0; i < 6; i++) {
+      await local.pulseSchedule('sched-sub');
+      await sleep(20);
+    }
     local.dispose();
-    // interval 20ms → ~6 ticks in 120ms, but cooldown 200ms → only 1
     expect(onTrigger).toHaveBeenCalledTimes(1);
   });
 
@@ -81,11 +88,11 @@ describe('SenseEngine schedule source', () => {
       onTrigger,
     );
 
-    await sleep(50);
+    await engine.pulseSchedule('sched-sub');
     expect(onTrigger).not.toHaveBeenCalled();
 
     engine.metricsStore.update('tick.allow', 1);
-    await sleep(50);
+    await engine.pulseSchedule('sched-sub');
     expect(onTrigger.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -95,23 +102,25 @@ describe('SenseEngine schedule source', () => {
       makeSpec({ sense: { source: 'schedule', interval: 20, isolation: 'structured' } }),
       onTrigger,
     );
-    await sleep(40);
-    const before = onTrigger.mock.calls.length;
-    expect(before).toBeGreaterThanOrEqual(1);
+    await engine.pulseSchedule('sched-sub');
+    expect(onTrigger.mock.calls.length).toBeGreaterThanOrEqual(1);
 
     engine.unregister('sched-sub');
-    await sleep(50);
-    expect(onTrigger.mock.calls.length).toBe(before);
+    // P0c A′：unregister 后脉搏 fail-loud（没有 timer 可停，驱动入口也没了）
+    await expect(engine.pulseSchedule('sched-sub')).rejects.toThrow(/unknown pulse subsystem/);
+    expect(onTrigger.mock.calls.length).toBe(1);
   });
 
-  it('re-register replaces previous timer without double fire', async () => {
+  it('re-register replaces previous entry without double fire', async () => {
     const onTrigger = vi.fn();
     const spec = makeSpec({ sense: { source: 'schedule', interval: 30, isolation: 'structured' } });
     engine.register(spec, onTrigger);
     engine.register(spec, onTrigger);
-    await sleep(70);
-    // single timer → not 2× rate (allow some jitter, but not double consistently)
-    expect(onTrigger.mock.calls.length).toBeLessThanOrEqual(3);
+    // P0c A′：无 timer 双份问题；一次脉搏恰好一次触发
+    await engine.pulseSchedule('sched-sub');
+    await engine.pulseSchedule('sched-sub');
+    expect(onTrigger.mock.calls.length).toBe(2);
+    expect(engine.pulseSpecs()).toHaveLength(1);
   });
 });
 
@@ -128,7 +137,7 @@ describe('SenseEngine trigger throttling', () => {
     engine.dispose();
   });
 
-  it('runOnStart fires one tick right after register', async () => {
+  it('runOnStart is declared to the scheduler; first pulse fires one tick', async () => {
     const onTrigger = vi.fn();
     engine.register(
       makeSpec({
@@ -137,14 +146,20 @@ describe('SenseEngine trigger throttling', () => {
       onTrigger,
     );
 
-    await sleep(30);
+    // P0c A′：register 不自跳；runOnStart 进脉搏声明（调度器首跳驱动）
+    expect(engine.pulseSpecs()).toEqual([
+      { key: 'subsystem.schedule:sched-sub', intervalMs: 100_000, runOnStart: true },
+    ]);
+    expect(onTrigger).not.toHaveBeenCalled();
+
+    await engine.pulseSchedule('sched-sub');
     expect(onTrigger).toHaveBeenCalledTimes(1);
-    // 首跳不带动后续（interval 100s 未到点）
+    // 首跳不带动后续（interval 100s 未到点，且无 self-arm）
     await sleep(30);
     expect(onTrigger).toHaveBeenCalledTimes(1);
   });
 
-  it('without runOnStart the first tick waits for interval', async () => {
+  it('without runOnStart no tick fires before pulse', async () => {
     const onTrigger = vi.fn();
     engine.register(
       makeSpec({ sense: { source: 'schedule', interval: 100_000, isolation: 'structured' } }),
@@ -153,6 +168,7 @@ describe('SenseEngine trigger throttling', () => {
 
     await sleep(60);
     expect(onTrigger).not.toHaveBeenCalled();
+    expect(engine.pulseSpecs()[0]?.runOnStart).toBeFalsy();
   });
 
   it('minEvents accumulates before firing and resets after trigger', async () => {

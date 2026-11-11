@@ -57,6 +57,11 @@ export interface RunAssemblyResult {
   runner: SessionAwareRunner;
   contextEngine?: ContextEngine;
   contextHealth?: (agentId?: string) => Promise<ContextLayerHealth>;
+  /** 脉搏注册表（P0c A′）：随 mount spec 进 RunHost 聚合自述 */
+  pulses: Array<{
+    spec: import('@octopi-agent/engine/harness/activation/run-protocol.js').PulseSpec;
+    fire: () => Promise<unknown>;
+  }>;
   registerTools: (tools: RegisteredTool[]) => void;
 }
 
@@ -152,6 +157,7 @@ export class RunAssembly {
         contextWindow,
         systemPrompt: runSystemPrompt,
       },
+      ...(built.pulses === undefined ? {} : { pulses: built.pulses }),
     };
   }
 
@@ -548,6 +554,7 @@ export class RunAssembly {
       contextEngine: built.contextEngine,
       contextHealth: built.contextHealth,
       registerTools: built.registerTools,
+      pulses: built.pulses,
     };
   }
 }

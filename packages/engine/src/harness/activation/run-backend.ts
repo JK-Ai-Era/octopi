@@ -57,6 +57,14 @@ export interface RunBackendMountSpec {
   contextHealth?: (agentId?: string) => Promise<ContextLayerHealth>;
   registerTools: (tools: RegisteredTool[]) => void;
   runConfigDefaults: Partial<RunConfig>;
+  /**
+   * 脉搏注册表（P0c A′）：该执行体声明的周期任务（key 实例内唯一）。
+   * RunHost 聚合到 `health().pulses` 自述；`control {type:'pulse'}` 按 key 驱动。
+   */
+  pulses?: Array<{
+    spec: import('./run-protocol.js').PulseSpec;
+    fire: () => Promise<unknown>;
+  }>;
 }
 
 /**
@@ -82,6 +90,11 @@ export interface RunBackendHealth {
   mountedAgents: number;
   inFlightRuns: number;
   retiredRunners: number;
+  /**
+   * 脉搏自述（P0c A′）：装配产物声明的全部 PulseSpec。gateway 脉搏调度器据此
+   * 单发驱动；也是「无 self-arm 定时器」结构性断言的自证面（清单有、定时器无）。
+   */
+  pulses?: import('../activation/run-protocol.js').PulseSpec[];
 }
 
 /**

@@ -376,6 +376,27 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
     }
   }, 60_000);
 
+  it('P0c A′：health 自述 pulses + control pulse 单发驱动（未知 key fail-loud）', async () => {
+    // 脉搏自述面：装配产物声明周期任务（subsystem schedules 随 autoLoad 载入）
+    const health = await backend.health();
+    expect(health.pulses).toBeDefined();
+    expect(health.pulses!.length).toBeGreaterThan(0);
+    expect(health.pulses!.some((p) => p.key.includes('subsystem.schedule:'))).toBe(true);
+    for (const p of health.pulses!) {
+      expect(p.intervalMs).toBeGreaterThan(0);
+    }
+
+    // 单发驱动：一跳一个 key
+    const key = health.pulses![0].key;
+    const control = await backend.control({ type: 'pulse', key });
+    if (!control.ok) throw new Error(`pulse failed: ${control.error.message}`);
+    expect(control.ok).toBe(true);
+
+    // 未知 key fail-loud（不静默吞）
+    const bad = await backend.control({ type: 'pulse', key: 'nope:missing' });
+    expect(bad.ok).toBe(false);
+  }, 30_000);
+
   it('m7：客户端断开 → run 被中止（不空转到 LLM 自然结束）', async () => {
     // 假 LLM 遇 SLOW_MARKER 挂 5s；断连后 run 须在 3s 内中止（in-flight 归零）。
     // 若 m7 缺失（close 不 abort），run 会继续迭代到 5s 自然结束 → 超时失败。
