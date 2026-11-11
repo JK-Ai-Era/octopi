@@ -24,6 +24,7 @@ import type {
 } from '@octopi-agent/core/interfaces/model-provider.js';
 import { SessionRunnerDispatcher } from '../activation/index.js';
 import type { RunDispatcher, RunRequest, Trigger } from '../activation/index.js';
+import type { RunSmokeReport } from '../activation/run-protocol.js';
 import type {
   AdmissionGateResult,
   InProcessAgentHandle,
@@ -697,6 +698,41 @@ export class RunHost implements RunBackend {
     } finally {
       release();
     }
+  }
+
+  /**
+   * 冒烟（健康门 §4.3，`POST /smoke`）：逐 agent 装配热路径自检——工具面枚举 +
+   * 一次 no-LLM 应答（contextHealth）。**不是 run，不占 run 语义**。
+   *
+   * @returns 冒烟报告（逐项如实入 checks；聚合 ok = 有 agent 且全部通过）
+   */
+  async smoke(): Promise<RunSmokeReport> {
+    const agents: RunSmokeReport['agents'] = [];
+    for (const [agentId, m] of this.mounted) {
+      const checks: Array<{ name: string; ok: boolean; detail?: string }> = [];
+      const toolCount = m.handle.agent.tools.length;
+      checks.push(
+        toolCount > 0
+          ? { name: 'tools', ok: true }
+          : { name: 'tools', ok: false, detail: 'empty tool surface' },
+      );
+      if (m.handle.contextHealth) {
+        try {
+          await m.handle.contextHealth(agentId);
+          checks.push({ name: 'contextHealth', ok: true });
+        } catch (err) {
+          checks.push({
+            name: 'contextHealth',
+            ok: false,
+            detail: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } else {
+        checks.push({ name: 'contextHealth', ok: true, detail: 'not wired (no context engine)' });
+      }
+      agents.push({ agentId, toolCount, checks });
+    }
+    return { ok: agents.length > 0 && agents.every((a) => a.checks.every((c) => c.ok)), agents };
   }
 
   async health(): Promise<RunBackendHealth> {

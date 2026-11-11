@@ -34,6 +34,7 @@ interface FakeBackend extends InstanceBackend {
   controls: RunControlOp[];
   failControl: boolean;
   healthSnapshot: RunBackendHealth;
+  stopped: boolean;
 }
 
 function makeBackend(instanceId: string): FakeBackend {
@@ -60,6 +61,13 @@ function makeBackend(instanceId: string): FakeBackend {
     async health(): Promise<RunBackendHealth> {
       return this.healthSnapshot;
     },
+    async smoke() {
+      return { ok: true, agents: [{ agentId: 'a', toolCount: 1, checks: [{ name: 'tools', ok: true }] }] };
+    },
+    async stop() {
+      this.stopped = true;
+    },
+    stopped: false,
   };
 }
 

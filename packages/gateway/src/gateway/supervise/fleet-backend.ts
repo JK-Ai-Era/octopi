@@ -25,6 +25,7 @@ import type {
   RunControlOp,
   RunControlResponse,
   PulseSpec,
+  RunSmokeReport,
 } from '@octopi-agent/engine/harness/activation/run-protocol.js';
 import type { RunRequest } from '@octopi-agent/engine/harness/activation/index.js';
 import type { InstanceRecord } from './registry.js';
@@ -34,6 +35,10 @@ export interface InstanceBackend {
   startRun(req: RunRequest): AsyncIterable<AgentEvent>;
   control(op: RunControlOp): Promise<RunControlResponse>;
   health(): Promise<RunBackendHealth>;
+  /** 冒烟（健康门 §4.3）：装配热路径自检，不是 run */
+  smoke(): Promise<RunSmokeReport>;
+  /** 停止实例（drain 收摊用；幂等） */
+  stop(): Promise<void>;
 }
 
 /** 注册条目：事实（record）+ 执行面（backend） */
@@ -48,7 +53,6 @@ const FLEET_WIDE_OPS = new Set([
   'reloadAgent',
   'setClientTools',
   'reattestSecurity',
-  'probeAgent',
 ]);
 
 export class FleetRunBackend {
@@ -343,7 +347,8 @@ export class FleetRunBackend {
   }
 
   private pickLeastLoaded(): FleetEntry {
-    const candidates = this.list().filter((e) => e.record.state === 'ready' || e.record.state === 'draining');
+    // 新会话只进 ready（§4.5：draining 不接新会话；其 sticky 亲和在 resolveForSession 已保）
+    const candidates = this.list().filter((e) => e.record.state === 'ready');
     if (candidates.length === 0) {
       throw new Error('supervise: no ready run instance to route');
     }

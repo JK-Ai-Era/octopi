@@ -97,6 +97,12 @@ export interface RunBackendHealth {
   pulses?: import('../activation/run-protocol.js').PulseSpec[];
   /** fleet 聚合时的不可达实例清单（单实例恒空；fail-loud 可见性，§4.2） */
   unreachableInstances?: string[];
+  /**
+   * 守卫在位状态（§4.3 健康门跨版本核查）：'armed'=实例按 configPath 自建了
+   * securityIntegrity 守卫；'absent'=未自建（旧版 run-serve-child 或未配）。
+   * 配置含 securityIntegrity 而实例报 absent → 健康门拒（防跨版本漂移闸 fail-open）。
+   */
+  securityGuard?: 'armed' | 'absent';
 }
 
 /**

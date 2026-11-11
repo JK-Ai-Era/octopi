@@ -465,7 +465,22 @@ async function main(): Promise<void> {
         const url = new URL(req.url ?? '/', 'http://127.0.0.1');
 
         if (req.method === 'GET' && url.pathname === '/health') {
-          sendJson(res, 200, { ok: true, ...(await host.health()) });
+          sendJson(res, 200, {
+            ok: true,
+            ...(await host.health()),
+            // 守卫在位自证（§4.3 健康门跨版本核查：配置有闸而实例 absent → 拒）
+            securityGuard: config.securityIntegrity ? 'armed' : 'absent',
+          });
+          return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/smoke') {
+          // 冒烟（§4.3）：先把全部声明 agent 装配起来（惰性 mount 的热路径强制走一遍），
+          // 再做装配自检；报告自带 ok，消费方据以把健康门
+          for (const def of boot.agentDefinitions ?? []) {
+            await host.ensureMounted(def.id as string, def);
+          }
+          sendJson(res, 200, await host.smoke());
           return;
         }
 

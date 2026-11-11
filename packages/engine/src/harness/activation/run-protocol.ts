@@ -137,6 +137,19 @@ export interface PulseSpec {
   runOnStart?: boolean;
 }
 
+/**
+ * 冒烟报告（健康门 §4.3）——`POST /smoke` 独立通道的应答（**不是 run，不占 run 语义**）。
+ * 逐 agent 装配热路径自检：工具面枚举 + 一次 no-LLM 应答（contextHealth）。
+ */
+export interface RunSmokeReport {
+  ok: boolean;
+  agents: Array<{
+    agentId: string;
+    toolCount: number;
+    checks: Array<{ name: string; ok: boolean; detail?: string }>;
+  }>;
+}
+
 /** AgentDefinition 线上传输别名（config-schema 数据对象，见 src/config-schema） */
 export type AgentDefinitionWire = Record<string, unknown>;
 

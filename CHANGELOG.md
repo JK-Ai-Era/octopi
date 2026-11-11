@@ -115,7 +115,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.108.1 (2026-11-12)
+## v0.108.2 (2026-11-12)
+
+### feat(gateway): P0c-3 健康门 + 版本化 spawn + 生命周期 ops
+
+- **健康门**（§4.3，Q2 落地含冒烟）：probe 链 = health 可达 → `POST /smoke` 冒烟 → **守卫在位核查**（配置含 securityIntegrity 而实例报 `absent` 即拒——收口跨版本漂移闸 fail-open 缺口）。冒烟为独立通道（不是 run）：强制走一遍惰性装配热路径 + 逐 agent 工具面枚举 + no-LLM 应答（contextHealth），报告 `RunSmokeReport` 如实入 checks。
+- **health 契约**：`securityGuard: 'armed' | 'absent'` 自证字段（run-serve-child 按 configPath 自建守卫的现地报告）。
+- **版本化 spawn**（§4.4）：`RemoteRunBackend.start` 支持 `buildRef`（构建产物根直指入口，跨版本拉起）；`RunVersion { version, buildRef }` 语义就位。
+- **FleetOps**（§5.2 原语）：`spawn`（逐个过健康门，failed 终态不入路由、流量留旧版本）/ `probe`（复检，拒则驱逐 + 停机）/ `scale`（对齐副本数，多退 drain 少补 spawn）/ `promote`（versionPointer 前移，Q3=A 运行态）/ `rollback`（旧构建起新实例 + promote，半败不切流量；§6 拍板 #6）/ `drain`（不接新会话 → 等在途 run → stop → 注销；幂等、failed 终态拒 drain、超时 fail-loud）。
+- **修复**：`pickLeastLoaded` 不再把新会话分给 draining 实例（§4.5「draining 不接新会话」；sticky 亲和仍保持）；FLEET_WIDE_OPS 清除不存在的 `probeAgent` op。
+- **验证**：supervise-probe 10（判据矩阵 + ops 状态机）+ supervise-fleet 9 + **真进程 e2e**（spawn→健康门→smoke→drain；坏 buildRef 拒入路由）+ 全量测试套件 4604 绿。
 
 ### feat(gateway): P0c-2 supervise 骨架 — fleet 路由（sticky 亲和 + 单飞）
 

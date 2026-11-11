@@ -22,6 +22,7 @@ import type {
 import type {
   RunControlOp,
   RunControlResponse,
+  RunSmokeReport,
   RunHostNotify,
   RunStreamEntry,
 } from '@octopi-agent/engine/harness/activation/run-protocol.js';
@@ -97,6 +98,11 @@ export interface RemoteRunBackendOptions {
   onNotify?: (notify: RunHostNotify) => void;
   /** ready 握手超时（缺省 30s：首启含插件发现） */
   readyTimeoutMs?: number;
+  /**
+   * 版本化 spawn（P0c-3 §4.4）：该版本构建产物根（其 run-serve-child.js 所在目录）。
+   * 缺省=同构建自举（resolveWorkerUrl 映射 dist）。跨版本协议兼容见 §6（op 只增不改）。
+   */
+  buildRef?: string;
 }
 
 export class RemoteRunBackend {
@@ -136,7 +142,10 @@ export class RemoteRunBackend {
       JSON.stringify({ ...boot, config: bootConfig, token }),
     );
 
-    const entry = resolveWorkerUrl('./run-serve-child.js', import.meta.url);
+    // 版本化 spawn（§4.4）：buildRef 直指该版本构建入口；缺省同构建自举
+    const entry = options.buildRef
+      ? join(options.buildRef, 'run-serve-child.js')
+      : resolveWorkerUrl('./run-serve-child.js', import.meta.url);
     const env = { ...process.env };
     // 子进程自有 IPC 通道；剥掉继承的通道标识（knowledge fork 同规）
     delete env.NODE_CHANNEL_FD;
@@ -248,6 +257,12 @@ export class RemoteRunBackend {
     return { port: this.port, pid: this.child.pid ?? -1 };
   }
 
+  /** 冒烟（健康门 §4.3）：`POST /smoke` 独立通道——装配热路径自检，不是 run */
+  async smoke(): Promise<RunSmokeReport> {
+    const res = await this.fetchJson('POST', '/smoke');
+    return (await res.json()) as RunSmokeReport;
+  }
+
   /**
    * 运行面健康（契约 health）。
    *
@@ -265,6 +280,7 @@ export class RemoteRunBackend {
       retiredRunners: body.retiredRunners,
       // 脉搏自述（P0c A′）：透传给 gateway 脉搏调度器
       ...(body.pulses ? { pulses: body.pulses } : {}),
+      ...(body.securityGuard ? { securityGuard: body.securityGuard } : {}),
     };
   }
 
