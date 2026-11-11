@@ -1074,6 +1074,16 @@
         }
       }
     },
+    "fleet": {
+      "type": "object",
+      "properties": {
+        "replicasPerVersion": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
     "modelCall": {
       "type": "object",
       "properties": {

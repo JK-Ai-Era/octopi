@@ -115,7 +115,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.108.5 (2026-11-12)
+## v0.109.0 (2026-11-12)
+
+### feat(gateway): P0c ops 运维入口 — fleet spawn/promote/rollback/drain 产品面可达
+
+- **MAJ-4 ops 生产可达**（评审：P0c-3/P0c-4 验收此前只在测试语境成立）：`FleetOps` 接入 gateway——`spawnRunInstance` 统一自举与版本化拉起（`buildRef:'self'` 走同构建，其余直指构建入口）；自举实例同登记 registry/fleet（roll-forward 闭环：spawn 新版本 → promote → drain 自举）。
+- **REST 入口**（`/api/v1/fleet/*`，鉴权随上游闸）：`GET /fleet`（事实+期望快照）、`POST /fleet/spawn|promote|rollback|drain`（参数校验 fail-loud）。
+- **MIN-4 config 播种**（Q3=A 落地）：`fleet.replicasPerVersion` 配置字段（Zod + HarnessConfig + toGatewayConfig 映射，顶层键分类护栏走 mapped）→ `RouteConfig` 播种；promote/rollback 仍为运行态。
+- **验证**：`/api/v1/fleet/*` 薄壳单测 4（路由/校验/透传）+ 配置映射护栏绿 + 全量 4614。
 
 ### fix(gateway): P0c 评审 MAJ 修复批 — 回执路由 / control 分类 / 跨版本自救 / 存活闭环
 

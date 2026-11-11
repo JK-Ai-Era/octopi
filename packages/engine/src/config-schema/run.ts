@@ -5,6 +5,13 @@
  */
 import { z } from 'zod';
 
+// ── Fleet（P0c supervise：RouteConfig config 播种，Q3=A；arch/service-topology-p0c.md §4.1）──
+
+export const FleetJsonConfigSchema = z.object({
+  /** 每版本期望副本数（RouteConfig.replicasPerVersion 播种值） */
+  replicasPerVersion: z.number().int().positive().optional(),
+});
+
 // ── Budget Policy（arch/budget-redesign.md：无 maxTokens/soft；键名仅 budgetPolicy）──
 
 export const BudgetPolicyJsonConfigSchema = z.object({

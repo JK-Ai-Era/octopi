@@ -271,6 +271,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     fileSend: config.fileSend,
     credentials: config.credentials,
     budgetPolicy: config.budgetPolicy,
+    fleet: config.fleet,
     context: config.context,
     contextEngine: config.contextEngine,
     runGuard: config.runGuard,

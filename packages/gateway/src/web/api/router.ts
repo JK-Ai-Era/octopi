@@ -81,6 +81,63 @@ export class WebApiRouter {
         });
       }
 
+      // ── fleet 运维面（MAJ-4）：ops 原语入口（arch/service-topology-p0c.md §5.2；鉴权随上游闸）──
+      if (relativePath === '/fleet' && method === 'GET') {
+        return this.json(res, 200, { ok: true, data: this.gateway.fleetStatus() });
+      }
+      if (relativePath === '/fleet/spawn' && method === 'POST') {
+        const body = (await this.readBody(req)) as {
+          version?: unknown;
+          buildRef?: unknown;
+          n?: unknown;
+        };
+        if (typeof body.version !== 'string' || typeof body.buildRef !== 'string') {
+          return this.json(res, 400, { ok: false, error: 'version and buildRef are required strings' });
+        }
+        const n = body.n === undefined ? 1 : body.n;
+        if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
+          return this.json(res, 400, { ok: false, error: 'n must be a positive integer' });
+        }
+        return this.json(res, 200, {
+          ok: true,
+          data: await this.gateway.fleetSpawn(body.version, body.buildRef, n),
+        });
+      }
+      if (relativePath === '/fleet/promote' && method === 'POST') {
+        const body = (await this.readBody(req)) as { version?: unknown };
+        if (typeof body.version !== 'string') {
+          return this.json(res, 400, { ok: false, error: 'version is required string' });
+        }
+        this.gateway.fleetPromote(body.version);
+        return this.json(res, 200, { ok: true, data: this.gateway.fleetStatus() });
+      }
+      if (relativePath === '/fleet/rollback' && method === 'POST') {
+        const body = (await this.readBody(req)) as {
+          version?: unknown;
+          buildRef?: unknown;
+          n?: unknown;
+        };
+        if (typeof body.version !== 'string' || typeof body.buildRef !== 'string') {
+          return this.json(res, 400, { ok: false, error: 'version and buildRef are required strings' });
+        }
+        const n = body.n === undefined ? undefined : body.n;
+        if (n !== undefined && (typeof n !== 'number' || !Number.isInteger(n) || n < 1)) {
+          return this.json(res, 400, { ok: false, error: 'n must be a positive integer' });
+        }
+        return this.json(res, 200, {
+          ok: true,
+          data: await this.gateway.fleetRollback(body.version, body.buildRef, n as number | undefined),
+        });
+      }
+      if (relativePath === '/fleet/drain' && method === 'POST') {
+        const body = (await this.readBody(req)) as { instanceId?: unknown };
+        if (typeof body.instanceId !== 'string') {
+          return this.json(res, 400, { ok: false, error: 'instanceId is required string' });
+        }
+        await this.gateway.fleetDrain(body.instanceId);
+        return this.json(res, 200, { ok: true, data: this.gateway.fleetStatus() });
+      }
+
       if (relativePath === '/agents' && method === 'GET') {
         return this.json(res, 200, {
           ok: true,

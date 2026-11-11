@@ -96,9 +96,10 @@ import { AgentRuntime, ExplicitRouter } from '@octopi-agent/engine/harness/activ
 import type { InProcessAgentHandle } from '@octopi-agent/engine/harness/activation/run-backend.js';
 import { RemoteRunBackend } from './remote-run-backend.js';
 import { PulseScheduler } from './pulse-scheduler.js';
-import { FleetRunBackend } from './supervise/fleet-backend.js';
+import { FleetRunBackend, type InstanceBackend } from './supervise/fleet-backend.js';
+import { FleetOps, type SpawnOutcome } from './supervise/ops.js';
 import type { InstanceRecord } from './supervise/registry.js';
-import { RouteConfig } from './supervise/registry.js';
+import { InstanceRegistry, RouteConfig } from './supervise/registry.js';
 import type {
   ClientToolVisibilitySnapshot,
   ClientToolWireSpec,
@@ -457,6 +458,10 @@ export class Gateway {
   private readonly fleet = new FleetRunBackend({ route: this.fleetRoute });
   /** 脉搏调度器（P0c A′）：run 实例周期任务的唯一触发源（§5.4 触发面归 gateway） */
   private pulseScheduler?: PulseScheduler;
+  /** 实例事实登记（MAJ-4：ops 的 registry；自举实例同登记） */
+  private readonly fleetRegistry = new InstanceRegistry();
+  /** 生命周期 ops（MAJ-4：§5.2 原语；web /api/v1/fleet/* 消费） */
+  private fleetOps?: FleetOps;
   /** 装配测试缝专用会话锁（生产锁在 run 实例进程内；见 assembly getSessionLock） */
   private readonly seamSessionLock = new InProcessSessionLock();
   /** 流式 adapter 引用（用于广播事件） */
@@ -1076,34 +1081,14 @@ export class Gateway {
 
     // ── run 实例进程（P0b：执行面唯一 remote 实现；§5.4 触发面/执行面分离）──
     // boot 纯数据交接（config + agentDefinitions + knowledge 端点）；执行腿随注册进触发面。
-    let knowledgeInfo: { baseUrl?: string; token?: string; state: string } = {
-      state: this.getKnowledgeState(),
-    };
-    try {
-      const kc = await this.getKnowledgeClient();
-      knowledgeInfo = { baseUrl: kc.baseUrl, token: kc.token, state: this.getKnowledgeState() };
-    } catch {
-      // knowledge 未配置：run 侧 knowledge 工具跳过（state: disabled/starting）
-    }
-    this.runBackend = await RemoteRunBackend.start(
-      {
-        octopiHome: getOctopiHome(),
-        config: this.config,
-        agentDefinitions: [...this.agents.values()] as unknown as Array<Record<string, unknown>>,
-        knowledge: {
-          ...(knowledgeInfo.baseUrl === undefined ? {} : { baseUrl: knowledgeInfo.baseUrl }),
-          ...(knowledgeInfo.token === undefined ? {} : { token: knowledgeInfo.token }),
-          state: knowledgeInfo.state as never,
-        },
-      },
-      { onNotify: (n) => void this.handleRunHostNotify(n, 'run-0') },
-    );
-    // P0c-2：实例入 fleet（事实登记 + 路由面）；P0c-3 版本化 spawn 扩多实例。
+    this.runBackend = await this.spawnRunInstance('run-0', 'self');
+    // P0c-2：实例入 fleet（事实登记 + 路由面）。
     // 换代语义：start() 重试/重启时同槽位先注销旧登记（旧实例进程已随上次 stop 收摊）。
     this.fleet.unregister('run-0');
+    this.fleetRegistry.remove('run-0');
     const record: InstanceRecord = {
       instanceId: 'run-0',
-      // 'self' 哨兵 = 与 gateway 同构建的自举实例（P0c-3 register(version, buildRef) 真版本化）
+      // 'self' 哨兵 = 与 gateway 同构建的自举实例
       version: 'self',
       buildRef: 'self',
       port: this.runBackend.info.port,
@@ -1112,7 +1097,20 @@ export class Gateway {
       startedAt: Date.now(),
       load: { inFlightRuns: 0, queued: 0 },
     };
+    this.fleetRegistry.add(record);
     this.fleet.register({ record, backend: this.runBackend });
+
+    // MAJ-4：ops 运维面（spawn/probe/scale/promote/rollback/drain）；自举实例同一 registry/fleet，
+    // roll-forward 闭环成立（spawn 新版本 → promote → drain 自举）。
+    // MIN-4：RouteConfig config 播种（Q3=A：运行态 + 播种，重启回落默认）。
+    this.fleetRoute.replicasPerVersion = this.config.fleet?.replicasPerVersion ?? 1;
+    this.fleetOps = new FleetOps({
+      fleet: this.fleet,
+      registry: this.fleetRegistry,
+      route: this.fleetRoute,
+      spawnInstance: (_version, buildRef, instanceId) => this.spawnRunInstance(instanceId, buildRef),
+      probeOptions: () => ({ securityIntegrityConfigured: this.config.securityIntegrity !== undefined }),
+    });
 
     // P0c A′ 脉搏单源：run 实例的周期任务由 gateway 调度器单发驱动（实例零 self-arm 定时器，
     // arch/service-topology-p0c.md §3）。key 为实例自述的 opaque 键；归属决策在调度器、
@@ -5641,6 +5639,110 @@ export class Gateway {
         signal.removeEventListener('abort', onAbort);
       }
     })();
+  }
+
+  /**
+   * 拉起一个 run 实例进程（自举与版本化 spawn 同一条路，MAJ-4）。
+   *
+   * @param instanceId - 分配的实例 id（notify 署名 / onExit 清理用）
+   * @param buildRef - 构建产物根（'self' = 同构建自举，走 resolveWorkerUrl）
+   * @returns 实例执行面（含 info: port/pid）
+   */
+  private async spawnRunInstance(instanceId: string, buildRef: string): Promise<RemoteRunBackend> {
+    let knowledgeInfo: { baseUrl?: string; token?: string; state: string } = {
+      state: this.getKnowledgeState(),
+    };
+    try {
+      const kc = await this.getKnowledgeClient();
+      knowledgeInfo = { baseUrl: kc.baseUrl, token: kc.token, state: this.getKnowledgeState() };
+    } catch {
+      // knowledge 未配置：run 侧 knowledge 工具跳过（state: disabled/starting）
+    }
+    return RemoteRunBackend.start(
+      {
+        octopiHome: getOctopiHome(),
+        config: this.config,
+        agentDefinitions: [...this.agents.values()] as unknown as Array<Record<string, unknown>>,
+        knowledge: {
+          ...(knowledgeInfo.baseUrl === undefined ? {} : { baseUrl: knowledgeInfo.baseUrl }),
+          ...(knowledgeInfo.token === undefined ? {} : { token: knowledgeInfo.token }),
+          state: knowledgeInfo.state as never,
+        },
+      },
+      {
+        buildRef: buildRef === 'self' ? undefined : buildRef,
+        onNotify: (n) => void this.handleRunHostNotify(n, instanceId),
+        onExit: (code) => {
+          // MAJ-5 存活闭环：崩溃实例不得留在路由面（sticky 会话黑洞 / 脉搏打空）
+          console.warn(
+            `[Gateway] run instance "${instanceId}" exited (code ${String(code)}); evicting from fleet (sticky/pulse/reply routes cleared)`,
+          );
+          this.fleet.unregister(instanceId);
+        },
+      },
+    );
+  }
+
+  // ── fleet 运维面（MAJ-4：§5.2 ops 原语的网关入口，web/api/router.ts 消费）──
+
+  /**
+   * fleet 状态快照（事实 + 期望）。
+   * @returns 实例记录 + 路由期望
+   */
+  fleetStatus(): {
+    instances: InstanceRecord[];
+    route: { versionPointer: string; replicasPerVersion: number };
+  } {
+    return {
+      instances: this.fleetRegistry.list(),
+      route: {
+        versionPointer: this.fleetRoute.versionPointer,
+        replicasPerVersion: this.fleetRoute.replicasPerVersion,
+      },
+    };
+  }
+
+  /**
+   * @param version - 版本标识
+   * @param buildRef - 构建产物根
+   * @param n - 副本数（缺省 1）
+   * @returns 过门/失败清单
+   */
+  async fleetSpawn(version: string, buildRef: string, n?: number): Promise<SpawnOutcome> {
+    return this.requireFleetOps().spawn(version, buildRef, n);
+  }
+
+  /**
+   * @param version - 目标版本
+   * @returns void
+   */
+  fleetPromote(version: string): void {
+    this.requireFleetOps().promote(version);
+  }
+
+  /**
+   * @param version - 回滚目标版本
+   * @param buildRef - 该版本构建产物根
+   * @param n - 副本数
+   * @returns spawn 结果（半败不切流量）
+   */
+  async fleetRollback(version: string, buildRef: string, n?: number): Promise<SpawnOutcome> {
+    return this.requireFleetOps().rollback(version, buildRef, n);
+  }
+
+  /**
+   * @param instanceId - 实例标识
+   * @returns void
+   */
+  async fleetDrain(instanceId: string): Promise<void> {
+    await this.requireFleetOps().drain(instanceId);
+  }
+
+  private requireFleetOps(): FleetOps {
+    if (!this.fleetOps) {
+      throw new Error('gateway: fleet ops not started');
+    }
+    return this.fleetOps;
   }
 
   /** run 实例路由面（无实例则 fail-loud：执行腿在实例入 fleet 前不可用） */

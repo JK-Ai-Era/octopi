@@ -29,6 +29,7 @@ export {
 export {
   AgentRuntimeJsonConfigSchema,
   BudgetPolicyJsonConfigSchema,
+  FleetJsonConfigSchema,
   ConcurrencyConfigSchema,
   RunGuardJsonConfigSchema,
 } from '@octopi-agent/engine/config-schema/run.js';

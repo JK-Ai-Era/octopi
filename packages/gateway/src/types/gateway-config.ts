@@ -13,6 +13,11 @@ export interface GatewayConfig {
    * 委派编排（arch/delegation.md §8）。
    * `maxActiveDelegationsPerSession` 是失控防护，不是并发闸（D9）。
    */
+  /** fleet 期望状态播种（P0c Q3=A；arch/service-topology-p0c.md §4.1） */
+  fleet?: {
+    /** 每版本期望副本数（RouteConfig.replicasPerVersion 播种值） */
+    replicasPerVersion?: number;
+  };
   delegation?: {
     maxActiveDelegationsPerSession?: number;
   };

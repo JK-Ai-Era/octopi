@@ -9,6 +9,7 @@ import { DefaultsSchema, ModelsConfigSchema } from './models.js';
 import {
   AgentRuntimeJsonConfigSchema,
   BudgetPolicyJsonConfigSchema,
+  FleetJsonConfigSchema,
   ConcurrencyConfigSchema,
   ModelCallConfigSchema,
   RunGuardJsonConfigSchema,
@@ -51,6 +52,8 @@ export const engineConfigSchema = z.object({
   plugins: PluginConfigSchema.optional(),
   budgetPolicy: BudgetPolicyJsonConfigSchema.optional(),
   runGuard: RunGuardJsonConfigSchema.optional(),
+  /** fleet 期望状态播种（P0c Q3=A：运行态 + config 播种） */
+  fleet: FleetJsonConfigSchema.optional(),
   modelCall: ModelCallConfigSchema.optional(),
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   schedules: SchedulesJsonConfigSchema.optional(),

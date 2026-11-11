@@ -904,6 +904,8 @@ export interface HarnessConfig {
   plugins?: PluginConfig;
   /** Run 安全阀 / 策略（budgetPolicy；无默认 token hard） */
   budgetPolicy?: BudgetPolicyJsonConfig;
+  /** fleet 期望状态播种（P0c Q3=A；arch/service-topology-p0c.md §4.1） */
+  fleet?: { replicasPerVersion?: number };
   /** 过程监督配置（行为监督；与 budget 组合） */
   runGuard?: RunGuardJsonConfig;
   /** 模型调用 watchdog 超时（modelCall 段） */
