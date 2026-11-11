@@ -156,6 +156,81 @@ describe('演练 1：自救（坏版本 → 健康门拒 → 流量留旧 → �
   }, 90_000);
 });
 
+describe('演练 1b：健康门真负例（MIN-6：过门被拒，非 fork 失败）', () => {
+  const spawned: InstanceBackend[] = [];
+
+  afterAll(async () => {
+    for (const backend of spawned) {
+      await backend.stop().catch(() => undefined);
+    }
+  });
+
+  it('rejects at the gate: boots fine but smoke fails (bad agent assembly)', async () => {
+    const route = RouteConfig.seed({ versionPointer: 'v-badasm' });
+    const fleet = new FleetRunBackend({ route });
+    const registry = new InstanceRegistry();
+    const ops = new FleetOps({
+      fleet,
+      registry,
+      route,
+      spawnInstance: async (_version, buildRef) => {
+        // 能 boot（fork + 握手成功）但装配坏：model provider 不存在 →
+        // 冒烟强制装配热路径时炸 → 健康门拒（走过 health/smoke/guard 三段的真拒）
+        const backend = await RemoteRunBackend.start(
+          {
+            ...boot(),
+            config: {
+              ...boot().config,
+              modelProviders: {},
+            },
+          } as never,
+          { buildRef, onNotify: () => undefined },
+        );
+        spawned.push(backend);
+        return backend;
+      },
+      probeOptions: () => ({ securityIntegrityConfigured: true }),
+    });
+
+    const outcome = await ops.spawn('v-badasm', BUILD_REF, 1);
+    expect(outcome.ready).toHaveLength(0);
+    expect(outcome.failed).toHaveLength(1);
+    const failure = outcome.failed[0]!;
+    expect(failure.record.state).toBe('failed');
+    // 真负例核心：失败原因是**健康门 checks 拒**（smoke/guard），不是 spawn 抛错
+    expect(failure.reason).toMatch(/smoke|securityGuard/);
+    expect(fleet.list()).toHaveLength(0);
+  }, 60_000);
+
+  it('rejects at the gate: cross-version guard absent while config expects one', async () => {
+    const route = RouteConfig.seed({ versionPointer: 'v-noguard' });
+    const fleet = new FleetRunBackend({ route });
+    const registry = new InstanceRegistry();
+    const ops = new FleetOps({
+      fleet,
+      registry,
+      route,
+      spawnInstance: async (_version, buildRef) => {
+        // 不给 configPath → 子进程无守卫（旧构建行为模拟）→ 配置期望有闸 → 健康门拒
+        const bootNoGuard = boot();
+        delete (bootNoGuard.config as { configPath?: string }).configPath;
+        const backend = await RemoteRunBackend.start(bootNoGuard, {
+          buildRef,
+          onNotify: () => undefined,
+        });
+        spawned.push(backend);
+        return backend;
+      },
+      probeOptions: () => ({ securityIntegrityConfigured: true }),
+    });
+
+    const outcome = await ops.spawn('v-noguard', BUILD_REF, 1);
+    expect(outcome.ready).toHaveLength(0);
+    expect(outcome.failed).toHaveLength(1);
+    expect(outcome.failed[0]!.reason).toContain('securityGuard');
+  }, 60_000);
+});
+
 describe('演练 2：多活（2 副本两实例，两会话分实例，脉搏归属唯一）', () => {
   const spawned: InstanceBackend[] = [];
 
@@ -215,6 +290,9 @@ describe('演练 2：多活（2 副本两实例，两会话分实例，脉搏归
     for (const keySet of perInstance.values()) {
       expect([...keySet].sort()).toEqual([...keys].sort());
     }
+    // MIN-7：调度表结构断言——每 key 恰一个 timer（恰一次/周期的结构保证）；
+    // 「fire 计数恒 1/周期」的时间语义在 pulse-scheduler 单测（fake timers 计数）覆盖
+    expect(scheduler.activeKeys().length).toBe(keys.size);
     // 每 key 归属唯一且指向已注册实例；经归属实例打点应答 ok（恰一次执行路径）
     for (const key of keys) {
       const owner = fleet.resolvePulseOwner(key);

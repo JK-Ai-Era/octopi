@@ -95,7 +95,10 @@ export interface RunBackendHealth {
    * 单发驱动；也是「无 self-arm 定时器」结构性断言的自证面（清单有、定时器无）。
    */
   pulses?: import('../activation/run-protocol.js').PulseSpec[];
-  /** fleet 聚合时的不可达实例清单（单实例恒空；fail-loud 可见性，§4.2） */
+  /**
+   * fleet 聚合时的不可达实例清单（单实例恒空；fail-loud 可见性，§4.2）。
+   * 现状：生产消费者仅 fleetStatus 诊断面（DOC-5 标注：诊断预留，非控制信号）。
+   */
   unreachableInstances?: string[];
   /**
    * 守卫在位状态（§4.3 健康门跨版本核查）：'armed'=实例按 configPath 自建了

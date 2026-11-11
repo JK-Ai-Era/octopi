@@ -115,7 +115,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.109.1 (2026-11-12)
+## v0.109.2 (2026-11-12)
+
+### test(gateway): P0c 评审收尾批 — 演练真负例 / 触发结构断言 / 文档勘误
+
+- **MIN-6 演练真负例**：新增「过门被拒」两例（真进程）——起得来但冒烟败（坏装配）与 guard absent（跨版本），失败原因必须是**健康门 checks 拒**而非 spawn 抛错（此前演练 1 的坏版本走 fork 失败分支，健康门从未被验证过）。
+- **MIN-7 触发结构断言**：多活演练补「每 key 恰一个调度 timer」（恰一次/周期的结构保证）；fire 计数时间语义由 pulse-scheduler 单测（fake timers）覆盖，演练覆盖边界如实记录（DOC-4）。
+- **MIN-5/DOC-1 勘正**：housekeeping 定时器（SessionLifecycleBridge 15s / SubsystemSessionManager 60s / providerPool 60s）登记入设计稿 §2——「零 self-arm」准确口径=「7 项产品周期触发为零」，历史条目「零 setInterval」为过度声明，以此勘正。
+- **DOC-2/3/4 + MAJ-5 语义同步**：`weights` 标 reserved（canary 归 P1）；版本注册口勘正（独立 `register()` deferred，`ops.spawn`+REST 即注册入口）；脉搏起跑延迟注记（已由 `pulses_changed` notify 收窄到 mount 即时）；drain 疏散语义修订入 §4.5。
+- **NIT-3**：无 context engine 的 agent 冒烟记 `skipped`（热路径未验证，如实）。**NIT-4 勘误**：v0.108.3 条目「10」条实为 9 条。**DOC-5**：`unreachableInstances` 标注诊断预留。
+- 全量 4616 passed。
 
 ### fix(gateway): P0c 评审 MIN 批（代码件）— 状态卫生 / promote 防呆 / 跨进程写留痕 / 脉搏即时对账
 

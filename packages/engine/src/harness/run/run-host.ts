@@ -729,7 +729,12 @@ export class RunHost implements RunBackend {
           });
         }
       } else {
-        checks.push({ name: 'contextHealth', ok: true, detail: 'not wired (no context engine)' });
+        // NIT-3：无 context engine 的 agent 没走到装配热路径——如实记 skipped，不算验证过
+        checks.push({
+          name: 'contextHealth',
+          ok: true,
+          detail: 'skipped: no context engine (assembly path not exercised on this agent)',
+        });
       }
       agents.push({ agentId, toolCount, checks });
     }
