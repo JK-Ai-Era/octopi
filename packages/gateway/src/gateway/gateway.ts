@@ -1138,6 +1138,7 @@ export class Gateway {
     // roll-forward 闭环成立（spawn 新版本 → promote → drain 自举）。
     // MIN-4：RouteConfig config 播种（Q3=A：运行态 + 播种，重启回落默认）。
     this.fleetRoute.replicasPerVersion = this.config.fleet?.replicasPerVersion ?? 1;
+    this.fleet.setLeaseTtlMs(this.config.fleet?.leaseTtlMs ?? 43_200_000);
     this.fleetOps = new FleetOps({
       fleet: this.fleet,
       registry: this.fleetRegistry,
@@ -5856,6 +5857,11 @@ export class Gateway {
    * @param instanceId - 来源实例（回执类 notify 登记点对点路由，P0c-2 第三类 op）
    */
   private async handleRunHostNotify(n: RunHostNotify, instanceId: string): Promise<void> {
+    // run lease 续租（P1-2，Q1：活动事件驱动 + 进程存活判据 + 超长 TTL 兜底）：
+    // 任何携带会话 id 的 notify 都是活动证明；run 终态/进程退出走 release/回收。
+    if ('sessionId' in n && typeof n.sessionId === 'string') {
+      this.fleet.renewRunLease(n.sessionId);
+    }
     // 回执路由登记：approvalReply / clientToolResult / askUserReply 按此回源实例
     if (n.type === 'approval_request') {
       this.fleet.setReplyRoute(`approval:${n.approvalId}`, instanceId);

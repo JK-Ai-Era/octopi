@@ -19,6 +19,7 @@
  * @module gateway/supervise/fleet-backend
  */
 
+import { randomUUID } from 'node:crypto';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import type { RunBackendHealth } from '@octopi-agent/engine/harness/activation/run-backend.js';
 import type {
@@ -59,20 +60,39 @@ const FLEET_WIDE_OPS = new Set([
   'syncKnowledgeState',
 ]);
 
+/**
+ * run lease 记录（§7.2，P1-2 单飞换骨）：同会话至多一个活动 run。
+ * TTL 是记录泄漏兜底（run 终态回调/onExit 丢失时可抢占回收）；
+ * 续租由 run-notify 活动事件驱动（Q1 拍板：事件+进程存活判据+超长 TTL）。
+ */
+interface RunLeaseRecord {
+  sessionId: string;
+  instanceId: string;
+  runId: string;
+  acquiredAt: number;
+  expiresAt: number;
+}
+
 export interface FleetRunBackendOptions {
   /**
    * 路由期望状态（§5.1，与 FleetOps 共享同一对象）：新会话只进
    * versionPointer 版本的 ready 副本（§4.2）。
    */
   route: RouteConfig;
+  /**
+   * run lease TTL（毫秒；配置字段 fleet.leaseTtlMs，缺省 12h——超长兜底语义，
+   * 活动事件持续续租，正常 run 终态即释放，TTL 只回收泄漏记录）。
+   */
+  leaseTtlMs?: number;
 }
 
 export class FleetRunBackend {
   private readonly entries = new Map<string, FleetEntry>();
   /** 会话亲和（§7.1）：sticky sessionId → instanceId */
   private readonly sticky = new Map<string, string>();
-  /** 单飞闸门（§5.1 run lease 近似）：同会话至多一个活动 run */
-  private readonly inFlightSessions = new Set<string>();
+  /** run lease 表（§7.2，P1-2）：同会话至多一个活动 run；TTL 兜底 + 活动事件续租 */
+  private readonly runLeases = new Map<string, RunLeaseRecord>();
+  private leaseTtlMs: number;
   /** pulse lease 归属表（§5.2）：key → 持有 instanceId */
   private readonly pulseOwner = new Map<string, string>();
   /** 回执路由表：notify 的 callId/approvalId/askId → 源实例（点对点回执第三类 op） */
@@ -84,6 +104,7 @@ export class FleetRunBackend {
    */
   constructor(options: FleetRunBackendOptions) {
     this.route = options.route;
+    this.leaseTtlMs = options.leaseTtlMs ?? 43_200_000;
   }
 
   /**
@@ -114,6 +135,9 @@ export class FleetRunBackend {
     for (const [key, id] of [...this.replyRoute]) {
       if (id === instanceId) this.replyRoute.delete(key);
     }
+    for (const [sid, lease] of [...this.runLeases]) {
+      if (lease.instanceId === instanceId) this.runLeases.delete(sid);
+    }
     return removed;
   }
 
@@ -125,29 +149,75 @@ export class FleetRunBackend {
   }
 
   /**
-   * run 派发：sticky + 单飞 + 最少负载分配（§4.2）。错误经事件流抛（契约错误面两形态之一）。
+   * run 派发：sticky + run lease + 最少负载分配（§4.2）。错误经事件流抛（契约错误面两形态之一）。
+   * lease 语义（§7.2，P1-2 单飞换骨）：同会话至多一个活动 run，冲突直拒 `lease_held`
+   * （带持有者 instanceId/runId/剩余 TTL——fail-loud 可见性）；TTL 过期记录可抢占回收。
    * @param req - run 请求（纯数据）
    * @returns 协议事件流
    */
   startRun(req: RunRequest): AsyncIterable<AgentEvent> {
     const self = this;
     return (async function* () {
-      if (self.inFlightSessions.has(req.sessionId)) {
+      const now = Date.now();
+      const held = self.runLeases.get(req.sessionId);
+      if (held && held.expiresAt > now) {
         throw new Error(
-          `supervise: session "${req.sessionId}" already has an in-flight run (single-flight)`,
+          `supervise: lease_held — session "${req.sessionId}" run lease held by instance ` +
+            `"${held.instanceId}" (run ${held.runId}, ttl ${held.expiresAt - now}ms remaining)`,
         );
       }
       const target = self.resolveForRun(req.sessionId);
-      self.inFlightSessions.add(req.sessionId);
+      const runId = randomUUID();
+      self.runLeases.set(req.sessionId, {
+        sessionId: req.sessionId,
+        instanceId: target.record.instanceId,
+        runId,
+        acquiredAt: now,
+        expiresAt: now + self.leaseTtlMs,
+      });
       self.sticky.set(req.sessionId, target.record.instanceId);
       target.record.load.inFlightRuns += 1;
       try {
         yield* target.backend.startRun(req);
       } finally {
-        self.inFlightSessions.delete(req.sessionId);
+        const cur = self.runLeases.get(req.sessionId);
+        if (cur?.runId === runId) self.runLeases.delete(req.sessionId);
         target.record.load.inFlightRuns = Math.max(0, target.record.load.inFlightRuns - 1);
       }
     })();
+  }
+
+  /**
+   * lease 续租（run-notify 活动事件驱动，Q1 拍板）：刷 TTL；无 lease 为 no-op。
+   * @param sessionId - 会话 id
+   * @returns void
+   */
+  renewRunLease(sessionId: string): void {
+    const held = this.runLeases.get(sessionId);
+    if (held) held.expiresAt = Date.now() + this.leaseTtlMs;
+  }
+
+  /**
+   * TTL 播种（config.fleet.leaseTtlMs；启动 config 播种区调用，与 replicasPerVersion 同区）。
+   * @param leaseTtlMs - TTL 毫秒（正整数）
+   * @returns void
+   */
+  setLeaseTtlMs(leaseTtlMs: number): void {
+    this.leaseTtlMs = leaseTtlMs;
+  }
+
+  /**
+   * lease 快照（诊断/拒信息）。
+   * @param sessionId - 会话 id
+   * @returns 当前 lease；无则 undefined
+   */
+  runLeaseSnapshot(
+    sessionId: string,
+  ): { instanceId: string; runId: string; expiresAt: number } | undefined {
+    const held = this.runLeases.get(sessionId);
+    return held
+      ? { instanceId: held.instanceId, runId: held.runId, expiresAt: held.expiresAt }
+      : undefined;
   }
 
   /**
@@ -383,10 +453,11 @@ export class FleetRunBackend {
 
   /**
    * @param sessionId - 会话 id
-   * @returns 该会话是否有活动 run（单飞闸门状态）
+   * @returns 该会话是否有活动 run（run lease 有效即在跑；TTL 过期视为泄漏记录）
    */
   isInFlight(sessionId: string): boolean {
-    return this.inFlightSessions.has(sessionId);
+    const held = this.runLeases.get(sessionId);
+    return held !== undefined && held.expiresAt > Date.now();
   }
 
   // ── 内部路由 ──

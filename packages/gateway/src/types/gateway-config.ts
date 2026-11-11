@@ -17,6 +17,8 @@ export interface GatewayConfig {
   fleet?: {
     /** 每版本期望副本数（RouteConfig.replicasPerVersion 播种值） */
     replicasPerVersion?: number;
+    /** run lease TTL 毫秒（P1-2 §7.2；活动事件续租 + 超长兜底回收） */
+    leaseTtlMs?: number;
   };
   delegation?: {
     maxActiveDelegationsPerSession?: number;

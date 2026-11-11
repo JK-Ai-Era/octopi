@@ -115,6 +115,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.111.0 (2026-11-12)
+
+### feat(gateway): P1-2 run lease 正式化 — 单飞闸门换骨（service-topology §7.2，OP-LEASE）
+
+- **lease 表**（FleetRunBackend 单一事实源，与 sticky/pulse 归属同居）：`acquire`（直拒语义）→ 活动事件 `renew` → run 终态 `release` → TTL 兜底回收。同会话至多一个活动 run 由 lease 钉死（§7.2）。
+- **拒语义换骨**：原单飞闸门（`inFlightSessions: Set`）退役；冲突错误改 `lease_held` fail-loud（带持有者 instanceId/runId/剩余 TTL）。**契约文案变化**：原 `(single-flight)` 错误文案不再出现。
+- **续租挂点（Q1 拍板）**：run-notify 活动事件驱动（任何携带 sessionId 的 notify 即活动证明）+ 进程存活判据（onExit/`unregister` 释放）+ 超长 TTL 兜底（泄漏记录可抢占回收，runId 判等防误删）。
+- **配置**：`fleet.leaseTtlMs`（毫秒，缺省 12h；schema + example 同步）。
+- **OP-TOPO-1 入表**：§3 表补 memory/wisdom/cognition 三行（P0–P1 写者=run 节点持 lease；P2 待议 store 服务化）。
+- 测试锚 `tests/run-lease.test.ts` 五例（lease_held 拒/终态释放/TTL 抢占/renew 刷期/unregister 对称清理）；全量 4630 passed。
+- 分布式 lease 后端（Redis/DB）仍开放（OP-LEASE 终态）：签名对齐 `DistributedSessionLease`，P2 换后端不动调用面。
+
+---
+
 ## v0.110.1 (2026-11-12)
 
 ### refactor(engine): P1-1b RunBackend 契约拆分 — 脚手架面归 RunHost 域（OP-P0B-1 ③）

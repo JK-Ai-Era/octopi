@@ -96,7 +96,7 @@ describe('FleetRunBackend routing', () => {
     expect(fleet.routeOf('s2')).toBe('run-a');
   });
 
-  it('rejects a second concurrent run on the same session (single-flight)', async () => {
+  it('rejects a second concurrent run on the same session (run lease, P1-2 换骨)', async () => {
     const fleet = new FleetRunBackend({ route: RouteConfig.seed({ versionPointer: 'self' }) });
     const a = makeBackend('run-a');
     // 慢实例：startRun 产出前挂起
@@ -116,7 +116,7 @@ describe('FleetRunBackend routing', () => {
     const second = (async () => {
       for await (const _ of fleet.startRun(req('s1'))) void _;
     })();
-    await expect(second).rejects.toThrow(/single-flight/);
+    await expect(second).rejects.toThrow(/lease_held/);
     await first;
     expect(fleet.isInFlight('s1')).toBe(false);
   });

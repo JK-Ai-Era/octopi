@@ -10,6 +10,11 @@ import { z } from 'zod';
 export const FleetJsonConfigSchema = z.object({
   /** 每版本期望副本数（RouteConfig.replicasPerVersion 播种值） */
   replicasPerVersion: z.number().int().positive().optional(),
+  /**
+   * run lease TTL（毫秒，P1-2 §7.2）：同会话至多一个活动 run 的兜底回收窗口。
+   * 活动事件持续续租、run 终态即释放；TTL 只回收泄漏记录（超长缺省 12h）。
+   */
+  leaseTtlMs: z.number().int().positive().optional(),
 });
 
 // ── Budget Policy（arch/budget-redesign.md：无 maxTokens/soft；键名仅 budgetPolicy）──
