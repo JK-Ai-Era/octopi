@@ -38,53 +38,6 @@ export interface AdmissionGateResult {
   state: unknown;
 }
 
-/**
- * mount 输入：构建工厂（P0a 在 gateway、P0b 迁至 run 实例）产出的执行体。
- *
- * @param agentId - agent id（挂载槽位键）
- * @param agent - 构建好的 Agent 实例
- * @param runner - 会话感知执行器（实现细节，句柄不外泄）
- * @param contextEngine - 上下文引擎（compact 控制面用）
- * @param contextHealth - 七层健康探针
- * @param registerTools - 动态工具注册口
- * @param runConfigDefaults - 执行腿缺省（agentId/contextWindow/systemPrompt；不含消息级 model 覆盖）
- */
-export interface RunBackendMountSpec {
-  agentId: string;
-  agent: Agent;
-  runner: SessionAwareRunner;
-  contextEngine?: ContextEngine;
-  contextHealth?: (agentId?: string) => Promise<ContextLayerHealth>;
-  registerTools: (tools: RegisteredTool[]) => void;
-  runConfigDefaults: Partial<RunConfig>;
-  /**
-   * 脉搏注册表（P0c A′）：该执行体声明的周期任务（key 实例内唯一）。
-   * RunHost 聚合到 `health().pulses` 自述；`control {type:'pulse'}` 按 key 驱动。
-   */
-  pulses?: Array<{
-    spec: import('./run-protocol.js').PulseSpec;
-    fire: () => Promise<unknown>;
-  }>;
-}
-
-/**
- * mount 返回：gateway 侧可见句柄（不含 Runner——Runner 是 backend 实现细节）。
- *
- * 命名即边界：`InProcess` 声明这些是**进程内活引用**（Agent 实例、闭包），跨不了进程
- * 边界，因此本类型是脚手架面——P0b 实例进程化时随 InProcessRunBackend 一起删除。
- * 远程契约面是纯数据 `control` 消息，不是句柄的 RPC stub；勿在本类型上追加方法
- * 当作扩展点（每加一个方法就多一块 P0b 的死重）。
- */
-export interface InProcessAgentHandle {
-  agentId: string;
-  agent: Agent;
-  contextEngine?: ContextEngine;
-  contextHealth?: (agentId?: string) => Promise<ContextLayerHealth>;
-  registerTools: (tools: RegisteredTool[]) => void;
-  /** 注册进 AgentRuntime 的执行腿（已含准入闸门 + in-flight 计数包装） */
-  dispatcher: RunDispatcher;
-}
-
 /** 运行面健康快照 */
 export interface RunBackendHealth {
   mountedAgents: number;
@@ -109,7 +62,12 @@ export interface RunBackendHealth {
 }
 
 /**
- * RunBackend —— run 托管契约（单一 remote 实现为终态；InProcess 仅 P0a 脚手架）。
+ * RunBackend —— run 托管契约（单一 remote 实现为终态）。
+ *
+ * 契约拆分（P1-1b，OP-P0B-1 ③）：P0a 脚手架面（mount/get/handles/
+ * mountedAgentIds/retire + InProcessAgentHandle/RunBackendMountSpec）已归
+ * RunHost 域（harness/run/run-host.ts）——执行体装配是 run 服务自身面，
+ * 不是 gateway 消费面。本契约只保留 gateway 侧消费面。
  *
  * 错误表面（fail-loud，两形态）：未装载时 `execute`/`compactSession` **同步抛错**；
  * 准入闸门拒 run 是**异步事件流内抛错**（消费方经 for-await 收到）。远程实现须把
@@ -122,36 +80,6 @@ export interface RunBackendHealth {
 export interface RunBackend extends RunDispatcher {
   /** 会话执行互斥（宪法 E1/E2；run lease 前身，P1 分布式化） */
   readonly sessionLock: SessionLease;
-
-  /**
-   * 装载一个 agent 执行体。同 agentId 已装载时抛错（fail-loud；
-   * 调用方须先 retire 旧体，防止旧 Runner 泄漏）。
-   *
-   * @param spec - 构建产物 + 执行腿缺省
-   * @returns gateway 侧句柄
-   */
-  mount(spec: RunBackendMountSpec): InProcessAgentHandle;
-
-  /**
-   * 取已装载句柄。
-   *
-   * @param agentId - agent id
-   * @returns 句柄；未装载返回 undefined
-   */
-  get(agentId: string): InProcessAgentHandle | undefined;
-
-  /** 全部句柄（遍历已装载 Agent 用） */
-  handles(): InProcessAgentHandle[];
-
-  /** 已装载 agent id 列表（热失效遍历用） */
-  mountedAgentIds(): string[];
-
-  /**
-   * 退役一个 agent 执行体（in-flight 跑完后回收，不抢单不断流；未装载为 no-op）。
-   *
-   * @param agentId - agent id
-   */
-  retire(agentId: string): void;
 
   /**
    * 会话压缩（控制面 op；与 run 共用 sessionLock 排队）。

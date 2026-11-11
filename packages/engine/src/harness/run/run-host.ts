@@ -28,10 +28,8 @@ import type { RunDispatcher, RunRequest, Trigger } from '../activation/index.js'
 import type { RunSmokeReport } from '../activation/run-protocol.js';
 import type {
   AdmissionGateResult,
-  InProcessAgentHandle,
   RunBackend,
   RunBackendHealth,
-  RunBackendMountSpec,
 } from '../activation/run-backend.js';
 import type {
   AgentDefinitionWire,
@@ -44,7 +42,10 @@ import type {
 } from '../activation/run-protocol.js';
 import type { RunApprovalRequestInput } from '../activation/run-protocol.js';
 import type { HitlAskResult } from '../governance/human-in-the-loop/decision-cache.js';
-import type { SessionAwareRunner } from './runner.js';
+import type { SessionAwareRunner, RunConfig } from './runner.js';
+import type { Agent } from './agent/index.js';
+import type { ContextEngine } from '../context/types.js';
+import type { ContextLayerHealth } from '../context/layer-health.js';
 import type { SessionData } from '../session/types.js';
 import type { DiscardFileEffectsResult } from '../extension/execution-environment/undo-log.js';
 import { isTurnAnchor } from '../context/layer-types.js';
@@ -172,6 +173,53 @@ export function isTurnInput(msg: Message | undefined): boolean {
     msg.role === 'user' &&
     (isTurnStartContent(msg.content) || isTurnAnchor(msg))
   );
+}
+
+/**
+ * mount 输入：构建工厂（run-assembly）产出的执行体（P1-1b 契约拆分自
+ * activation/run-backend 迁入：装配是 RunHost 自身面，不是 gateway 消费面）。
+ *
+ * @param agentId - agent id（挂载槽位键）
+ * @param agent - 构建好的 Agent 实例
+ * @param runner - 会话感知执行器（实现细节，句柄不外泄）
+ * @param contextEngine - 上下文引擎（compact 控制面用）
+ * @param contextHealth - 七层健康探针
+ * @param registerTools - 动态工具注册口
+ * @param runConfigDefaults - 执行腿缺省（agentId/contextWindow/systemPrompt；不含消息级 model 覆盖）
+ */
+export interface RunBackendMountSpec {
+  agentId: string;
+  agent: Agent;
+  runner: SessionAwareRunner;
+  contextEngine?: ContextEngine;
+  contextHealth?: (agentId?: string) => Promise<ContextLayerHealth>;
+  registerTools: (tools: RegisteredTool[]) => void;
+  runConfigDefaults: Partial<RunConfig>;
+  /**
+   * 脉搏注册表（P0c A′）：该执行体声明的周期任务（key 实例内唯一）。
+   * RunHost 聚合到 `health().pulses` 自述；`control {type:'pulse'}` 按 key 驱动。
+   */
+  pulses?: Array<{
+    spec: import('../activation/run-protocol.js').PulseSpec;
+    fire: () => Promise<unknown>;
+  }>;
+}
+
+/**
+ * mount 返回：RunHost 域内句柄（进程内活引用，P1-1b 自 RunBackend 契约迁入）。
+ *
+ * 命名即边界：`InProcess` 声明这些是**进程内活引用**（Agent 实例、闭包），跨不了进程
+ * 边界。远程契约面是纯数据 `control` 消息，不是句柄的 RPC stub；勿在本类型上追加方法
+ * 当作契约扩展点。
+ */
+export interface InProcessAgentHandle {
+  agentId: string;
+  agent: Agent;
+  contextEngine?: ContextEngine;
+  contextHealth?: (agentId?: string) => Promise<ContextLayerHealth>;
+  registerTools: (tools: RegisteredTool[]) => void;
+  /** 注册进 AgentRuntime 的执行腿（已含准入闸门 + in-flight 计数包装） */
+  dispatcher: RunDispatcher;
 }
 
 export class RunHost implements RunBackend {

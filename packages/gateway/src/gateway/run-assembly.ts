@@ -24,7 +24,7 @@ import type { AgentBuilder } from '@octopi-agent/engine/harness/agent/builder.js
 import type { Agent } from '@octopi-agent/engine/harness/run/agent/index.js';
 import type { ContextEngine } from '@octopi-agent/engine/harness/context/types.js';
 import type { ContextLayerHealth } from '@octopi-agent/engine/harness/context/layer-health.js';
-import type { RunBackendMountSpec } from '@octopi-agent/engine/harness/activation/run-backend.js';
+import type { RunBackendMountSpec } from '@octopi-agent/engine/harness/run/run-host.js';
 import type { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
 import {
   wrapProviderWithCircuitBreaker,

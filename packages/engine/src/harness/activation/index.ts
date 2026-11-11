@@ -51,7 +51,5 @@ export type {
 } from './types.js';
 export type {
   RunBackend,
-  InProcessAgentHandle,
   RunBackendHealth,
-  RunBackendMountSpec,
 } from './run-backend.js';

@@ -93,7 +93,7 @@ import {
   resolveToolCallPurpose,
 } from '@octopi-agent/engine/harness/agent/tool-purpose.js';
 import { AgentRuntime, ExplicitRouter } from '@octopi-agent/engine/harness/activation/index.js';
-import type { InProcessAgentHandle } from '@octopi-agent/engine/harness/activation/run-backend.js';
+import type { InProcessAgentHandle } from '@octopi-agent/engine/harness/run/run-host.js';
 import { RemoteRunBackend } from './remote-run-backend.js';
 import { PulseScheduler } from './pulse-scheduler.js';
 import { FleetRunBackend, type InstanceBackend } from './supervise/fleet-backend.js';

@@ -115,6 +115,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.110.1 (2026-11-12)
+
+### refactor(engine): P1-1b RunBackend 契约拆分 — 脚手架面归 RunHost 域（OP-P0B-1 ③）
+
+- **契约边界**：`RunBackend` 接口瘦身为 gateway 消费面（`execute`/`sessionLock`/`compactSession`/`health`/`disposeAll`）；P0a 脚手架面 `mount`/`get`/`handles`/`mountedAgentIds`/`retire` 从契约删除。
+- **类型归属**：`RunBackendMountSpec`/`InProcessAgentHandle` 迁 `harness/run/run-host.ts`（执行体装配是 run 服务自身面，不是 gateway 消费面）；`RunHost.mount` 活机制保留不变。激活域（activation）不再 re-export（依赖方向不变：run → activation）。
+- 行为冻结：全量 4625 passed（与拆分前一致）；纯类型面手术，零运行时行为变化。
+
+---
+
 ## v0.110.0 (2026-11-12)
 
 ### feat(gateway): P1-1a 检索投影收口 — 单写者=gateway 门面（service-topology §3）

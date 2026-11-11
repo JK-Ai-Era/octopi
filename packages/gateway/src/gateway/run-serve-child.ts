@@ -17,7 +17,7 @@ import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import type { AgentDefinition } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
-import type { RunBackendMountSpec } from '@octopi-agent/engine/harness/activation/run-backend.js';
+import type { RunBackendMountSpec } from '@octopi-agent/engine/harness/run/run-host.js';
 import { createDelegatedLegHandle } from '@octopi-agent/engine/harness/activation/delegated-run.js';
 import { assembleGlobalTools } from '@octopi-agent/engine/integration/tools/assemble.js';
 import {
