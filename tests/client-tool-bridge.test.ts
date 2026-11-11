@@ -119,13 +119,29 @@ describe('gateway 侧桥载荷还原（m2）', () => {
       new InMemorySessionStore(),
     );
     const controls: Array<Record<string, unknown>> = [];
-    (gateway as unknown as { runBackend: unknown }).runBackend = {
-      control: async (op: Record<string, unknown>) => {
-        controls.push(op);
-        return { ok: true };
+    // P0c-2：执行腿注入面从 runBackend 升级为 fleet 登记（传输缝语义不变）
+    (gateway as unknown as { fleet: { register: (e: unknown) => void } }).fleet.register({
+      record: {
+        instanceId: 'seam',
+        version: 'self',
+        buildRef: 'self',
+        port: 0,
+        pid: -1,
+        state: 'ready',
+        startedAt: Date.now(),
+        load: { inFlightRuns: 0, queued: 0 },
       },
-      stop: async () => undefined,
-    };
+      backend: {
+        startRun: () => {
+          throw new Error('seam: startRun not wired in this test seam');
+        },
+        control: async (op: Record<string, unknown>) => {
+          controls.push(op);
+          return { ok: true };
+        },
+        health: async () => ({ mountedAgents: 0, inFlightRuns: 0, retiredRunners: 0 }),
+      },
+    });
 
     const seen: Array<{
       messages: unknown;
@@ -144,18 +160,21 @@ describe('gateway 侧桥载荷还原（m2）', () => {
     });
 
     const gw = gateway as unknown as {
-      handleRunHostNotify(n: unknown): Promise<void>;
+      handleRunHostNotify(n: unknown, instanceId: string): Promise<void>;
     };
     const messages = [{ role: 'user', content: 'hi', timestamp: 1 }];
-    void gw.handleRunHostNotify({
-      type: 'client_tool_call',
-      callId: 'c1',
-      sessionId: 's1',
-      agentId: 'assistant',
-      toolName: 'html_ui',
-      args: {},
-      messages,
-    });
+    void gw.handleRunHostNotify(
+      {
+        type: 'client_tool_call',
+        callId: 'c1',
+        sessionId: 's1',
+        agentId: 'assistant',
+        toolName: 'html_ui',
+        args: {},
+        messages,
+      },
+      'seam',
+    );
     await Promise.resolve();
 
     // 载荷还原：不再是 messages: [] / abortSignal: undefined / as never
@@ -166,7 +185,7 @@ describe('gateway 侧桥载荷还原（m2）', () => {
     expect(() => seen[0]!.fileEffects.writeFile()).toThrow(/not_implemented/);
 
     // client_tool_cancel → per-call 中止信号生效
-    await gw.handleRunHostNotify({ type: 'client_tool_cancel', callId: 'c1', reason: 'run aborted' });
+    await gw.handleRunHostNotify({ type: 'client_tool_cancel', callId: 'c1', reason: 'run aborted' }, 'seam');
     expect(seen[0]!.abortSignal.aborted).toBe(true);
 
     // handler 结算后结果经 control 'clientToolResult' 回执（桩已记录）

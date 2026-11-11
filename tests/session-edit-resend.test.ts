@@ -70,9 +70,26 @@ describe('edit-resend (truncate aborted turn)', () => {
         },
       },
     });
-    (gateway as never as { runBackend: unknown }).runBackend = {
-      control: (op: never) => host.handleControl(op),
-    };
+    // P0c-2：执行腿注入面从 runBackend 升级为 fleet 登记（传输缝语义不变：control 直达本地内核）
+    (gateway as never as { fleet: { register: (e: unknown) => void } }).fleet.register({
+      record: {
+        instanceId: 'seam',
+        version: 'self',
+        buildRef: 'self',
+        port: 0,
+        pid: -1,
+        state: 'ready',
+        startedAt: Date.now(),
+        load: { inFlightRuns: 0, queued: 0 },
+      },
+      backend: {
+        startRun: () => {
+          throw new Error('seam: startRun not wired in this test seam');
+        },
+        control: (op: never) => host.handleControl(op),
+        health: async () => ({ mountedAgents: 0, inFlightRuns: 0, retiredRunners: 0 }),
+      },
+    });
   });
 
   it('truncate 从用户下标起丢掉中止残片；清除 abortedTurn 标记', async () => {

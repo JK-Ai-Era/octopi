@@ -240,6 +240,15 @@ export class RemoteRunBackend {
   }
 
   /**
+   * 实例信息（supervise 登记用）。
+   *
+   * @returns loopback 端口与子进程 pid
+   */
+  get info(): { port: number; pid: number } {
+    return { port: this.port, pid: this.child.pid ?? -1 };
+  }
+
+  /**
    * 运行面健康（契约 health）。
    *
    * @returns 健康报告

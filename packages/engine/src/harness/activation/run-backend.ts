@@ -95,6 +95,8 @@ export interface RunBackendHealth {
    * 单发驱动；也是「无 self-arm 定时器」结构性断言的自证面（清单有、定时器无）。
    */
   pulses?: import('../activation/run-protocol.js').PulseSpec[];
+  /** fleet 聚合时的不可达实例清单（单实例恒空；fail-loud 可见性，§4.2） */
+  unreachableInstances?: string[];
 }
 
 /**

@@ -115,7 +115,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.108.0 (2026-11-12)
+## v0.108.1 (2026-11-12)
+
+### feat(gateway): P0c-2 supervise 骨架 — fleet 路由（sticky 亲和 + 单飞）
+
+- **supervise/registry**：InstanceRegistry（事实登记，failed 终态不可复活、重复注册 fail-loud）+ RouteConfig（期望状态；Q3=A 拍板落地：运行态 + config 播种，`RouteConfig.seed()`，不落盘）。
+- **supervise/fleet-backend**：FleetRunBackend 对 gateway 呈现 RunBackend 契约——`startRun` sticky 亲和（§7.1）+ per-session 单飞闸门（§5.1 run lease 近似，同会话并发第二个 run 直拒）+ 最少负载分配；failed 实例亲和失效换实例，draining 保持亲和。
+- **control 四类路由**（实现期补全分类，已记设计稿 §4.2）：session-scoped → sticky 实例；fleet-wide 维护 op（retireAgent/reloadAgent/setClientTools/reattestSecurity/probeAgent）→ fan-out 全部实例（聚合失败指名实例，fail-loud）；`pulse` → 归属实例单发；**点对点回执**（`approvalReply`/`clientToolResult`/`askUserReply`，第三类——不带 sessionId，按 notify 源登记的回执路由表回源实例，一问一答成功即拆）。
+- **health 聚合**：inFlightRuns/retiredRunners 求和、mountedAgents 取 max（同批 agent 多副本）、pulses 按 key 去重、不可达实例列名（`unreachableInstances`，fail-loud 可见）。
+- **pulse lease 归属**：归属表移 FleetRunBackend（单一事实源）；PulseScheduler 多实例化——首见分配 / 持有实例消失转移 / key 消失拆除（resync 对账）。
+- **接线**：`getRunBackend()` 走 fleet（消费点零改动）；装配测试缝注入面从 monkey-patch `runBackend` 迁移为 `fleet.register`（3 个测试文件，传输缝语义不变）；`gateway.start()` 换代语义（同槽位先注销旧登记，重试路径不再撞防重复护栏）。
+- **验证**：supervise-fleet 9（路由四类/单飞/亲和/聚合/归属）+ pulse-scheduler 7（含归属转移）+ 全量测试套件 4593 绿。
 
 ### feat(gateway): P0c-1 脉搏单源 — run 实例零 self-arm 定时器（方案 A′）
 

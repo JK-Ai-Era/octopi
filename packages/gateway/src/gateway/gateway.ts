@@ -96,6 +96,8 @@ import { AgentRuntime, ExplicitRouter } from '@octopi-agent/engine/harness/activ
 import type { InProcessAgentHandle } from '@octopi-agent/engine/harness/activation/run-backend.js';
 import { RemoteRunBackend } from './remote-run-backend.js';
 import { PulseScheduler } from './pulse-scheduler.js';
+import { FleetRunBackend } from './supervise/fleet-backend.js';
+import type { InstanceRecord } from './supervise/registry.js';
 import type {
   ClientToolVisibilitySnapshot,
   ClientToolWireSpec,
@@ -448,6 +450,8 @@ export class Gateway {
    */
   /** run 实例后端（P0b：执行面唯一 remote 实现；start() 时 fork run 实例子进程） */
   private runBackend?: RemoteRunBackend;
+  /** fleet 路由面（P0c-2）：N 个 run 实例当一个服务路由；对内呈现 RunBackend 契约 */
+  private readonly fleet = new FleetRunBackend();
   /** 脉搏调度器（P0c A′）：run 实例周期任务的唯一触发源（§5.4 触发面归 gateway） */
   private pulseScheduler?: PulseScheduler;
   /** 装配测试缝专用会话锁（生产锁在 run 实例进程内；见 assembly getSessionLock） */
@@ -1089,18 +1093,37 @@ export class Gateway {
           state: knowledgeInfo.state as never,
         },
       },
-      { onNotify: (n) => void this.handleRunHostNotify(n) },
+      { onNotify: (n) => void this.handleRunHostNotify(n, 'run-0') },
     );
+    // P0c-2：实例入 fleet（事实登记 + 路由面）；P0c-3 版本化 spawn 扩多实例。
+    // 换代语义：start() 重试/重启时同槽位先注销旧登记（旧实例进程已随上次 stop 收摊）。
+    this.fleet.unregister('run-0');
+    const record: InstanceRecord = {
+      instanceId: 'run-0',
+      // 'self' 哨兵 = 与 gateway 同构建的自举实例（P0c-3 register(version, buildRef) 真版本化）
+      version: 'self',
+      buildRef: 'self',
+      port: this.runBackend.info.port,
+      pid: this.runBackend.info.pid,
+      state: 'ready',
+      startedAt: Date.now(),
+      load: { inFlightRuns: 0, queued: 0 },
+    };
+    this.fleet.register({ record, backend: this.runBackend });
+
     // P0c A′ 脉搏单源：run 实例的周期任务由 gateway 调度器单发驱动（实例零 self-arm 定时器，
-    // arch/service-topology-p0c.md §3）。key 为实例自述的 opaque 键。
+    // arch/service-topology-p0c.md §3）。key 为实例自述的 opaque 键；归属决策在调度器、
+    // 归属表在 fleet（§5.2 pulse lease，单一事实源）。
     this.pulseScheduler = new PulseScheduler({
-      target: {
-        instanceId: 'run-0',
-        pulses: async () => (await this.runBackend!.health()).pulses ?? [],
+      fleet: {
+        pulseInventory: () => this.fleet.pulseInventory(),
         pulse: async (key) => {
-          const r = await this.runBackend!.control({ type: 'pulse', key });
+          const r = await this.fleet.control({ type: 'pulse', key });
           if (!r.ok) throw new Error(r.error.message);
         },
+        setPulseOwner: (key, instanceId) => this.fleet.setPulseOwner(key, instanceId),
+        resolvePulseOwner: (key) => this.fleet.resolvePulseOwner(key),
+        clearPulseOwner: (key) => this.fleet.clearPulseOwner(key),
       },
     });
     await this.pulseScheduler.start();
@@ -5608,12 +5631,12 @@ export class Gateway {
     })();
   }
 
-  /** run 实例后端（未起则 fail-loud：执行腿在 gateway.start() 前不可用） */
-  private getRunBackend(): RemoteRunBackend {
-    if (!this.runBackend) {
+  /** run 实例路由面（无实例则 fail-loud：执行腿在实例入 fleet 前不可用） */
+  private getRunBackend(): FleetRunBackend {
+    if (this.fleet.list().length === 0) {
       throw new Error('run backend not started (gateway.start() must run first)');
     }
-    return this.runBackend;
+    return this.fleet;
   }
 
   /**
@@ -5621,8 +5644,17 @@ export class Gateway {
    * inbox 重投 / 命令注册 / 日志。
    *
    * @param n - 宿主通知（纯数据）
+   * @param instanceId - 来源实例（回执类 notify 登记点对点路由，P0c-2 第三类 op）
    */
-  private async handleRunHostNotify(n: RunHostNotify): Promise<void> {
+  private async handleRunHostNotify(n: RunHostNotify, instanceId: string): Promise<void> {
+    // 回执路由登记：approvalReply / clientToolResult / askUserReply 按此回源实例
+    if (n.type === 'approval_request') {
+      this.fleet.setReplyRoute(`approval:${n.approvalId}`, instanceId);
+    } else if (n.type === 'client_tool_call') {
+      this.fleet.setReplyRoute(`clientTool:${n.callId}`, instanceId);
+    } else if (n.type === 'ask_user_request') {
+      this.fleet.setReplyRoute(`askUser:${n.askId}`, instanceId);
+    }
     switch (n.type) {
       case 'log':
         console[n.level](n.message);
