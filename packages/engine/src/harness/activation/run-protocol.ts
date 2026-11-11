@@ -233,4 +233,12 @@ export type RunHostNotify =
       commands: Array<{ definition: CommandDefinition; ref: string }>;
     }
   /** run 侧日志转发（保 [Gateway] 前缀文案的运维 grep 面） */
-  | { type: 'log'; level: 'log' | 'warn' | 'error'; message: string };
+  | { type: 'log'; level: 'log' | 'warn' | 'error'; message: string }
+  /**
+   * 会话写入已落盘（P1-1 投影收口：检索投影单写者=gateway 门面，§3 表）。
+   * run 节点直写会话文件后发此通知（载荷只有 id），gateway 侧节流补投影；
+   * 投影可重建非权威（I2），通知丢失仅滞后检索，由 rebuild 兜底。
+   */
+  | { type: 'session_saved'; sessionId: string }
+  /** 会话删除已落盘（同上收口：gateway 门面据此删投影行） */
+  | { type: 'session_removed'; sessionId: string };

@@ -115,6 +115,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.110.0 (2026-11-12)
+
+### feat(gateway): P1-1a 检索投影收口 — 单写者=gateway 门面（service-topology §3）
+
+- **投影写者归属**（OP-P0B-1 ② 收口第一半）：`sessions.index.db` 写者从 run 节点迁至 **gateway 门面**（§3 表「session 服务」单机形态）。run 节点直写会话文件后只发 `session_saved`/`session_removed` 通知（载荷仅 id），gateway 节流补投影（每会话 3s 窗口合并高频消息写）。
+- **零消息会话立即可检索**：gateway 侧会话创建/元数据补丁经 store 投影钩子即时入索引，不再依赖 run boot 对齐（验收锚 `tests/session-projection.test.ts` ①）。
+- **检索不降级**：run 侧历史端口保留**只读** prefilter 消费（同一 index db 只读连接）——单写者纪律不破，search 工具仍走索引预筛；`ensureSchema` 幂等 DDL 归 gateway 首建。
+- **协议演进（op 只增不改）**：`RunHostNotify` 新增 `session_saved` / `session_removed`。
+- **I2 语义保持**：投影可重建非权威，投影失败仅 warn 降级 scan-only，不阻断权威写（锚 ④）。
+- 节流边界如实声明：通知丢失/节流滞后只影响检索新鲜度，rebuild 兜底。
+- 全量 4625 passed。
+
+---
+
 ## v0.109.3 (2026-11-12)
 
 ### fix(context): aged tool-call args switch to object-form elision markers + marker teaching notes (OP-TOOL-1)

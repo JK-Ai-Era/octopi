@@ -325,14 +325,39 @@ export interface SessionModelView {
 /**
  * 无显式 store 时，在 OCTOPI_HOME/sessions 创建持久化 JSONL store。
  * 禁止改回 SqliteSessionStore（已删除；见 arch/session-history-search.md）。
+ *
+ * P1-1 投影收口（§3 表：检索投影单写者=gateway 门面）：默认 store 挂
+ * sessions.index.db 投影 sink（I2：可重建非权威，失败降级不阻断权威写）。
+ * run 节点侧写入经 `session_saved` 通知回来补投影（见 handleRunHostNotify）。
  */
-async function createDefaultStore(_agents: AgentDefinition[]): Promise<SessionStore<SessionData>> {
+async function createDefaultStore(_agents: AgentDefinition[]): Promise<{
+  store: SessionStore<SessionData>;
+  index: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined;
+}> {
   const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
   const { join } = await import('node:path');
   const { JsonlSessionStore } = await import('@octopi-agent/engine/integration/storage/jsonl.js');
-  return new JsonlSessionStore({
+  let index: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined;
+  try {
+    const { createSqliteSessionIndex } = await import(
+      '@octopi-agent/engine/integration/storage/session-index.js'
+    );
+    index = await createSqliteSessionIndex({
+      dbPath: join(getOctopiHome(), 'sessions.index.db'),
+    });
+    await index.ensureSchema();
+  } catch (err) {
+    // 投影可重建（I2）：索引不可用仅降级 scan-only 检索，不阻断会话权威写
+    console.warn(
+      `[Gateway] session index unavailable (scan-only search): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    index = undefined;
+  }
+  const store = new JsonlSessionStore({
     sessionsDir: join(getOctopiHome(), 'sessions'),
+    ...(index === undefined ? {} : { index }),
   });
+  return { store, index };
 }
 
 /**
@@ -409,6 +434,10 @@ export class Gateway {
   private pluginsDiscovered = false;
   /** Session Store */
   private store!: SessionStore<SessionData>;
+  /** 检索投影（P1-1 单写者=gateway 门面；I2 可重建非权威，undefined=降级 scan-only） */
+  private sessionIndex?: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend;
+  /** 投影补差节流（per session，run 写后通知合并；见 handleRunHostNotify） */
+  private readonly projectionThrottle = new Map<string, { last: number; timer?: ReturnType<typeof setTimeout> }>();
   /** Gateway 配置 */
   private config: GatewayConfig;
   /** DM 作用域 */
@@ -471,7 +500,10 @@ export class Gateway {
   /** 每个 provider 的熔断器 */
   private circuitBreakers = new Map<string, CircuitBreaker>();
   /** 默认 store 的异步初始化 Promise（未传入 store 时） */
-  private _defaultStorePromise?: Promise<SessionStore<SessionData>>;
+  private _defaultStorePromise?: Promise<{
+    store: SessionStore<SessionData>;
+    index: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend | undefined;
+  }>;
   /** Web Runtime pending approvals（confirmHighRisk / confirmEffect） */
   private pendingApprovals = new Map<string, PendingApprovalView>();
   private approvalResolvers = new Map<
@@ -900,7 +932,9 @@ export class Gateway {
    */
   private async ensureStore(): Promise<void> {
     if (this._defaultStorePromise) {
-      this.store = await this._defaultStorePromise;
+      const { store, index } = await this._defaultStorePromise;
+      this.store = store;
+      this.sessionIndex = index;
       this._defaultStorePromise = undefined;
     }
   }
@@ -5219,6 +5253,8 @@ export class Gateway {
     const update = this.store.updateMetadata?.bind(this.store);
     if (update) {
       await update(sessionId, mutate);
+      // updateMetadata 不走 save 的投影钩子：显式补投影（I2 可重建非权威，失败仅 warn）
+      await this.upsertProjection(sessionId);
       return;
     }
     // 老 store 无 updateMetadata：退化为串行 load-modify-save（metadata 合并仍由 save 保证）
@@ -5246,6 +5282,65 @@ export class Gateway {
       next.catch(() => {}),
     );
     await next;
+  }
+
+  /**
+   * 补检索投影（P1-1 单写者=gateway 门面）。I2：投影可重建非权威，失败仅 warn，
+   * 不阻断权威写；索引缺失（降级 scan-only）时为空操作。
+   *
+   * @param sessionId - 会话 id
+   */
+  private async upsertProjection(sessionId: string): Promise<void> {
+    if (!this.sessionIndex) return;
+    try {
+      const data = await this.store.load(sessionId);
+      if (!data) return;
+      await this.sessionIndex.upsertFromSession(sessionId, data);
+    } catch (err) {
+      console.warn(
+        `[Gateway] session index upsert failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 删投影行（会话删除；I2 同 upsertProjection 的降级语义）。
+   *
+   * @param sessionId - 会话 id
+   */
+  private async removeProjection(sessionId: string): Promise<void> {
+    if (!this.sessionIndex) return;
+    try {
+      await this.sessionIndex.remove(sessionId);
+    } catch (err) {
+      console.warn(
+        `[Gateway] session index remove failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * run 写后通知的节流补投影：每会话窗口内至多一次 upsert（合并高频消息写）。
+   * 通知丢失/节流滞后只影响检索新鲜度（非权威，rebuild 兜底），不丢权威数据。
+   *
+   * @param sessionId - 会话 id
+   */
+  private scheduleProjectionUpsert(sessionId: string): void {
+    const THROTTLE_MS = 3_000;
+    const entry = this.projectionThrottle.get(sessionId) ?? { last: 0 };
+    const now = Date.now();
+    if (entry.timer !== undefined) return; // 已有待跑的补差，合并即可
+    if (now - entry.last >= THROTTLE_MS) {
+      entry.last = now;
+      void this.upsertProjection(sessionId);
+    } else {
+      entry.timer = setTimeout(() => {
+        entry.timer = undefined;
+        entry.last = Date.now();
+        void this.upsertProjection(sessionId);
+      }, THROTTLE_MS - (now - entry.last));
+    }
+    this.projectionThrottle.set(sessionId, entry);
   }
 
   getClientToolCall(callId: ClientToolCallId): ClientToolCall | undefined {
@@ -5772,6 +5867,14 @@ export class Gateway {
     switch (n.type) {
       case 'log':
         console[n.level](n.message);
+        return;
+      case 'session_saved':
+        // P1-1 投影收口：run 节点写后通知，节流补投影（单写者=gateway 门面）
+        this.scheduleProjectionUpsert(n.sessionId);
+        return;
+      case 'session_removed':
+        this.projectionThrottle.delete(n.sessionId);
+        void this.removeProjection(n.sessionId);
         return;
       case 'redispatch':
         try {

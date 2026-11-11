@@ -116,30 +116,42 @@ async function main(): Promise<void> {
 
   // ── 执行宿主装配（与 gateway 构造同源；零触发面组件） ──
   const events = new DefaultEventBus();
-  // session 检索投影（I2：可重建、失败不阻断权威写）——挂在写者侧 store 上；
-  // 索引缺失时历史端口降级 scan-only（显式 warn，不静默）
-  let sessionIndex:
+  // session 检索投影收口（P1-1，§3 表：投影单写者=gateway 门面）。本进程直写
+  // 会话文件后只发通知（载荷仅 id），gateway 节流补投影；投影可重建非权威（I2），
+  // 通知丢失仅滞后检索。run 侧对 sessions.index.db 只读，不写（多进程单写者纪律）。
+  const sessionIndexSink: import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexSink =
+    {
+      upsertFromSession: async (sessionId: string) => {
+        notify({ type: 'session_saved', sessionId });
+      },
+      remove: async (sessionId: string) => {
+        notify({ type: 'session_removed', sessionId });
+      },
+    };
+  // 历史检索端口的 prefilter 消费（只读连同一 index db；写方法不调）。
+  // ensureSchema 是幂等 DDL（首建归 gateway）；索引不可用时降级 scan-only（显式 warn）。
+  let sessionIndexReader:
     | import('@octopi-agent/engine/integration/storage/session-index.js').SessionIndexBackend
     | undefined;
   try {
     const { createSqliteSessionIndex } = await import(
       '@octopi-agent/engine/integration/storage/session-index.js'
     );
-    sessionIndex = await createSqliteSessionIndex({
+    sessionIndexReader = await createSqliteSessionIndex({
       dbPath: join(boot.octopiHome, 'sessions.index.db'),
     });
-    await sessionIndex.ensureSchema();
+    await sessionIndexReader.ensureSchema();
   } catch (err) {
     notify({
       type: 'log',
       level: 'warn',
       message: `[RunServe] session index unavailable (scan-only search): ${err instanceof Error ? err.message : String(err)}`,
     });
-    sessionIndex = undefined;
+    sessionIndexReader = undefined;
   }
   const store = new JsonlSessionStore({
     sessionsDir: join(boot.octopiHome, 'sessions'),
-    ...(sessionIndex === undefined ? {} : { index: sessionIndex }),
+    index: sessionIndexSink,
   });
   const pluginManager = new PluginManager({
     loadPaths: config.plugins?.loadPaths ?? [],
@@ -334,7 +346,7 @@ async function main(): Promise<void> {
       sessionAcl,
       archiveDir: join(boot.octopiHome, 'archives'),
       historyScope: 'participated',
-      ...(sessionIndex === undefined ? {} : { index: sessionIndex }),
+      ...(sessionIndexReader === undefined ? {} : { index: sessionIndexReader }),
       resolveAgentMax: () => undefined,
     },
     documentPort,
