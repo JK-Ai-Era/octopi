@@ -115,6 +115,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.4 (2026-11-13)
+
+### feat(tenancy): registry module — 租户与定义面第一增量
+
+多租户 MVP（T1a，`arch/multi-tenancy.md`）：新增 `harness/governance/registry`（RegistryDatabase + RegistryService），承载租户与定义面权威数据（Q12：`OCTOPI_HOME/registry.db`，gateway 进程内起步、API 按服务化契约）。
+
+- **实体**（§3）：tenants / users / agents / bindings / mounts / knowledge_sources。所有权锚=tenantId；agents 带 `ownerUserId`（管理归属）+ `visibility`（private|tenant）——「一用户一租户」是策略默认（registerUser 一事务建 tenant+user），schema 上 userId≠tenantId 分字段，未来 org 模型零迁移。
+- **边界强制**（「租户内是引用，跨租户是集成」）：跨租户 owner / binding / mount 一律 fail-loud 拒绝（platform 公共库是跨租户共享唯一合法形态）；管理授权=owner 或平台 admin（Q13：首个注册用户=admin）；`assertSameTenant` 为委派/参与边界的执行点（T4 接线）。
+- **可见性**：listAgents（private 仅 owner、tenant 租户共享）；listVisibleSources=挂载库 ∪ 本租户公共 ∪ platform 公共（§6 检索上下文语义）。
+
+**breaking note**：无（纯新增模块，未接入任何现有消费面；`docs/domains.yaml` module_catalog 登记 governance/registry）。
+
+**验证**：`tests/registry.test.ts` 15/15（注册/归属/可见性/授权/绑定/挂载/同租户断言）；全量 4718 绿；lint 0；arch/check-sync 绿。
+
 ## v0.113.3 (2026-11-13)
 
 ### docs(compact): 摘要请求前缀缓存修复的生产复验结论

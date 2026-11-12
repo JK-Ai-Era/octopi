@@ -8,3 +8,4 @@ export * from './security/index.js';
 export * from './human-in-the-loop/index.js';
 export * from './credentials/index.js';
 export * from './accounting/index.js';
+export * from './registry/index.js';

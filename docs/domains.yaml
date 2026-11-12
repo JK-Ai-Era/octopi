@@ -284,6 +284,7 @@ module_catalog:
   - { id: governance/human-in-the-loop, domain: governance }
   - { id: governance/credentials, domain: governance }
   - { id: governance/accounting, domain: governance }
+  - { id: governance/registry, domain: governance }
 
   # Session
   - { id: session, domain: session }
