@@ -29,7 +29,8 @@
  * 记忆旁路见 memory.steward.*（docs/memory.md）。
  *
  *     workspace/
- *       default/                       ← agent 沙箱目录（工具操作 cwd）
+ *       <tenantId>/                    ← 租户段（arch/multi-tenancy.md §4 前缀隔离）
+ *         <agentId>/                   ← agent 沙箱目录（工具操作 cwd）
  *
  * 使用方式：
  * ```ts
@@ -49,6 +50,8 @@ import {
   DEFAULT_OCTOPI_HOME,
   OCTOPI_HOME_ENV,
   getOctopiHome,
+  agentHomeDir,
+  agentWorkspaceDir,
 } from '@octopi-agent/engine/paths.js';
 
 export { DEFAULT_OCTOPI_HOME, OCTOPI_HOME_ENV, getOctopiHome };
@@ -156,7 +159,7 @@ const LEGACY_PERSONA_MOVES: Array<{ from: string; to: string }> = [
 // ── 默认配置模板 ──
 
 export function generateDefaultConfig(homeDir: string, agentId: string = 'default'): object {
-  const agentHome = join(homeDir, 'agents', agentId);
+  const agentHome = agentHomeDir(homeDir, agentId);
   return {
     $schema: './node_modules/octopi-agent/octopi.schema.json',
     models: {
@@ -181,7 +184,7 @@ export function generateDefaultConfig(homeDir: string, agentId: string = 'defaul
       {
         id: agentId,
         home: agentHome,
-        workspace: join(homeDir, 'workspace', agentId),
+        workspace: agentWorkspaceDir(homeDir, undefined, agentId),
         model: 'openai/gpt-5.5',
         skillDirectory: join(agentHome, 'skills'),
         tools: { allow: ['*'] },
@@ -299,21 +302,24 @@ function migrateLegacyPersonaFiles(agentHome: string): string[] {
  *
  * @param agentId - Agent ID
  * @param homeDir - Octopi 系统根目录
+ * @param tenantId - 归属租户（arch/multi-tenancy.md §4）；缺省 DEFAULT_TENANT_ID
  * @returns 创建的目录列表
  */
 export async function ensureAgentDirs(
   agentId: string,
   homeDir: string = getOctopiHome(),
+  tenantId?: string,
 ): Promise<{ created: string[]; existed: string[]; migrated: string[] }> {
   const created: string[] = [];
   const existed: string[] = [];
 
   // Home 目录（persona / skills 的根目录）
-  const agentHome = join(homeDir, 'agents', agentId);
+  const agentHome = agentHomeDir(homeDir, agentId);
   ensureDirTracked(agentHome, created, existed);
 
-  // Workspace 目录（沙箱，agent 工具操作的 cwd）
-  ensureDirTracked(join(homeDir, 'workspace', agentId), created, existed);
+  // Workspace 目录（沙箱，agent 工具操作的 cwd）：workspace/<tenantId>/<agentId>/ 前缀隔离。
+  // 存量显式配置的 workspace 路径不搬家（§5 渐进）；本脚手架只出规范布局。
+  ensureDirTracked(agentWorkspaceDir(homeDir, tenantId, agentId), created, existed);
 
   // Home 下的文件系统子目录。
   // memory/wisdom 不在此列：由 AgentDatabase（SQLite agent.db）承载。

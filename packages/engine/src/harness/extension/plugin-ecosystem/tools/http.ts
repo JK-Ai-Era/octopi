@@ -17,6 +17,7 @@ import {
   type ToolSummarySupport,
 } from '../../../context/capabilities/summary/index.js';
 import type { CredentialStore } from '../../../governance/credentials/store.js';
+import { getRunScope } from '../../../run/run-scope.js';
 import {
   guardedRequest,
   type NetworkGuardOptions,
@@ -122,8 +123,12 @@ export function createHttpRequestTool(options?: HttpRequestToolOptions): Registe
         const requireBindings =
           context?.requireCredentialBindings === true ||
           options?.requireBindings === true;
+        // 凭证域归属（arch/multi-tenancy.md §4）：run 归属租户锚定解析域（平台 ∪ 本域）；
+        // 无 run 归属 = 宿主面（信任边界）——租户 run 由 Runner principal.tenantId 兜底锚定
+        const runTenantId = getRunScope()?.principal?.tenantId;
         const resolved = await store.resolve(credentialName, HTTP_CONSUMER, {
           requireBindings: requireBindings ? true : undefined,
+          ...(runTenantId ? { tenantId: runTenantId } : {}),
         });
         if (!resolved) {
           throw new Error(`credential not found or secret unavailable: ${credentialName}`);

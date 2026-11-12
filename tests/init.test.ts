@@ -48,8 +48,8 @@ describe('init', () => {
       expect(existsSync(join(home, 'memory'))).toBe(false);
       expect(existsSync(join(home, 'wisdom'))).toBe(false);
 
-      // Agent workspace 目录
-      expect(existsSync(join(tempDir, 'workspace/default'))).toBe(true);
+      // Agent workspace 目录（§4 规范布局：workspace/<tenantId>/<agentId>/）
+      expect(existsSync(join(tempDir, 'workspace/default/default'))).toBe(true);
 
       // Persona：根目录 AGENTS.md + persona/ 下的补充人格
       expect(existsSync(join(home, 'AGENTS.md'))).toBe(true);
@@ -146,7 +146,7 @@ describe('init', () => {
 
       expect(existsSync(join(tempDir, 'agents/my-agent/AGENTS.md'))).toBe(true);
       expect(existsSync(join(tempDir, 'agents/my-agent/persona/10-soul.md'))).toBe(true);
-      expect(existsSync(join(tempDir, 'workspace/my-agent'))).toBe(true);
+      expect(existsSync(join(tempDir, 'workspace/default/my-agent'))).toBe(true);
 
       const config = JSON.parse(readFileSync(join(tempDir, 'octopi.json'), 'utf-8'));
       expect(config.agents[0].id).toBe('my-agent');
@@ -193,7 +193,7 @@ describe('init', () => {
       expect(existsSync(join(home, 'extract/events'))).toBe(false);
       expect(existsSync(join(home, 'memory'))).toBe(false);
       expect(existsSync(join(home, 'wisdom'))).toBe(false);
-      expect(existsSync(join(tempDir, 'workspace/new-agent'))).toBe(true);
+      expect(existsSync(join(tempDir, 'workspace/default/new-agent'))).toBe(true);
       expect(result.created.length).toBeGreaterThan(0);
     });
 

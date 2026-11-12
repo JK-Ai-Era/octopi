@@ -16,7 +16,7 @@ import {
 import { createInterface } from 'node:readline/promises';
 import { dirname, join, resolve } from 'node:path';
 import type { CliArgs } from '../args.js';
-import { expandHomePath, getOctopiHome } from '@octopi-agent/engine/paths.js';
+import { agentHomeDir, agentWorkspaceDir, expandHomePath, getOctopiHome } from '@octopi-agent/engine/paths.js';
 import { validateConfig } from '../../config-schema.js';
 import {
   applyConfigMigrations,
@@ -711,14 +711,15 @@ export function applyLayoutFixes(
         ? resolve(a.home)
         : typeof a.persona === 'string'
           ? resolve(a.persona)
-          : join(home, 'agents', id);
+          : agentHomeDir(home, id);
 
     mkdirSync(agentHome, { recursive: true });
     mkdirSync(join(agentHome, 'skills'), { recursive: true });
+    // 路径派生单一来源（engine/paths；评审 MIN-17）：显式 config 优先，缺省走规范布局
     const workspace =
       typeof a.workspace === 'string' && a.workspace
         ? resolve(expandHomePath(a.workspace.trim()))
-        : join(home, 'workspace', id);
+        : agentWorkspaceDir(home, undefined, id);
     mkdirSync(workspace, { recursive: true });
 
     for (const { from, to } of LEGACY_PERSONA_MOVES) {

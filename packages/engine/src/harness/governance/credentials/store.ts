@@ -14,6 +14,7 @@ import {
   type CredentialConsumerRef,
   type CredentialKind,
   type CredentialMeta,
+  type CredentialScopeRef,
   type CredentialWrite,
   type ResolvedCredential,
   type SecretMode,
@@ -102,6 +103,23 @@ export class CredentialStore {
       throw new Error('secretMode=file requires secretFile');
     }
 
+    // 域（§4）：唯一键 (name, scope_level, scope_key)——同名分域各存各的，不互覆。
+    // 先校验后归一化（评审 MAJ-3）：非 global 域必须显式 key；global 不得携带异域 key
+    const scopeLevel = write.scope?.level ?? 'global';
+    let scopeKey: string;
+    if (scopeLevel === 'global') {
+      const key = write.scope?.key?.trim();
+      if (key && key !== 'global') {
+        throw new Error('scope.level=global must not carry a tenant/agent key');
+      }
+      scopeKey = 'global';
+    } else {
+      scopeKey = write.scope?.key?.trim() ?? '';
+      if (!scopeKey) {
+        throw new Error(`scope.level=${scopeLevel} requires scope.key (e.g. tenantId for level=tenant)`);
+      }
+    }
+
     let cipher: Buffer | null = null;
     let nonce: Buffer | null = null;
     if (mode === 'encrypted') {
@@ -109,15 +127,14 @@ export class CredentialStore {
         const enc = encryptSecret(write.secretValue);
         cipher = enc.cipher;
         nonce = enc.nonce;
-      } else if (!this.hasCipher(write.name)) {
+      } else if (!this.hasCipher(write.name, scopeLevel, scopeKey)) {
         throw new Error('secretMode=encrypted requires secretValue');
       }
     }
 
-    const existing = this.get(write.name);
+    const existingRow = this.findByScope(write.name, scopeLevel, scopeKey);
+    const existing = existingRow ? rowToMeta(existingRow) : null;
     const id = existing?.id ?? `cred_${randomUUID().slice(0, 12)}`;
-    const scopeLevel = write.scope?.level ?? 'global';
-    const scopeKey = scopeLevel === 'global' ? 'global' : (write.scope?.key ?? 'global');
 
     this.db.raw
       .prepare(
@@ -126,7 +143,7 @@ export class CredentialStore {
           secret_mode, secret_env, secret_cipher, secret_nonce, secret_file,
           scope_level, scope_key, created_at, updated_at, last_used_at, expires_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(name) DO UPDATE SET
+        ON CONFLICT(name, scope_level, scope_key) DO UPDATE SET
           kind=excluded.kind,
           description=excluded.description,
           username=excluded.username,
@@ -137,8 +154,6 @@ export class CredentialStore {
           secret_cipher=COALESCE(excluded.secret_cipher, credentials.secret_cipher),
           secret_nonce=COALESCE(excluded.secret_nonce, credentials.secret_nonce),
           secret_file=excluded.secret_file,
-          scope_level=excluded.scope_level,
-          scope_key=excluded.scope_key,
           updated_at=excluded.updated_at,
           expires_at=excluded.expires_at`,
       )
@@ -163,23 +178,59 @@ export class CredentialStore {
         write.expiresAt ?? existing?.expiresAt ?? null,
       );
 
-    return this.get(write.name)!;
+    return rowToMeta(this.findByScope(write.name, scopeLevel, scopeKey)!);
   }
 
-  private hasCipher(name: string): boolean {
-    const row = this.db.raw
-      .prepare(`SELECT secret_cipher FROM credentials WHERE name = ?`)
-      .get(name) as { secret_cipher?: unknown } | undefined;
+  /** 按域精确定位（唯一键 (name, scope_level, scope_key)） */  private findByScope(
+    name: string,
+    scopeLevel: string,
+    scopeKey: string,
+  ): Record<string, unknown> | undefined {
+    return this.db.raw
+      .prepare('SELECT * FROM credentials WHERE name = ? AND scope_level = ? AND scope_key = ?')
+      .get(name, scopeLevel, scopeKey) as Record<string, unknown> | undefined;
+  }
+
+  /**
+   * 域内按名定位（§4 域分离）：
+   * - 有归属租户：本租户私有（level=tenant, key=tenantId）优先——同名遮蔽平台同名；
+   *   平台域兜底；他租户私有对本域不存在（不泄露存在性）。
+   * - 无归属：**平台域**（level != tenant，含管理域 project/agent/plugin），不含任何
+   *   租户私有行——租户密文只经归属租户解析（MAJ-10/评审 MIN-18：unattributed 解析
+   *   不得成为读他租户密文的旁路）。管理面（get/list/delete）仍可不带域查看全量元数据。
+   */
+  private findRow(name: string, tenantId?: string): Record<string, unknown> | undefined {
+    if (tenantId) {
+      return (
+        this.findByScope(name, 'tenant', tenantId) ??
+        (this.db.raw
+          .prepare(
+            `SELECT * FROM credentials WHERE name = ? AND scope_level != 'tenant' ORDER BY created_at, rowid LIMIT 1`,
+          )
+          .get(name) as Record<string, unknown> | undefined)
+      );
+    }
+    return this.db.raw
+      .prepare(
+        `SELECT * FROM credentials WHERE name = ? AND scope_level != 'tenant' ORDER BY created_at, rowid LIMIT 1`,
+      )
+      .get(name) as Record<string, unknown> | undefined;
+  }
+
+  private hasCipher(name: string, scopeLevel: string, scopeKey: string): boolean {
+    const row = this.findByScope(name, scopeLevel, scopeKey);
     return Boolean(row?.secret_cipher);
   }
 
   /**
-   * 读元数据（无密文）
+   * 读元数据（无密文）。
+   * 同名跨域（遮蔽）时：给 scope 精确定位；不给取最早登记（宿主面确定性视图）。
+   *
+   * @param name - 凭证名
+   * @param scope - 域（level/key）；缺省不限域
    */
-  get(name: string): CredentialMeta | null {
-    const row = this.db.raw
-      .prepare(`SELECT * FROM credentials WHERE name = ?`)
-      .get(name) as Record<string, unknown> | undefined;
+  get(name: string, scope?: CredentialScopeRef): CredentialMeta | null {
+    const row = scope ? this.findByScope(name, scope.level, scope.key) : this.findRow(name);
     return row ? rowToMeta(row) : null;
   }
 
@@ -190,12 +241,47 @@ export class CredentialStore {
     return rows.map(rowToMeta);
   }
 
-  delete(name: string): boolean {
-    const meta = this.get(name);
-    if (!meta) return false;
-    this.db.raw.prepare(`DELETE FROM credential_bindings WHERE credential_id = ?`).run(meta.id);
-    const res = this.db.raw.prepare(`DELETE FROM credentials WHERE id = ?`).run(meta.id);
-    return Number(res.changes ?? 0) > 0;
+  /**
+   * 删除凭证（含绑定）。同名跨域且未给 scope = 歧义 fail-loud——域唯一后
+   * name 不再是唯一身份，静默删错行等于数据事故。
+   *
+   * @param name - 凭证名
+   * @param scope - 域（level/key）；缺省不限域
+   * @returns 是否删除了记录
+   */
+  delete(name: string, scope?: CredentialScopeRef): boolean {
+    const metas = this.findAll(name, scope);
+    if (metas.length === 0) return false;
+    if (metas.length > 1 && !scope) {
+      throw new Error(`credential "${name}" matches multiple domains; pass scope to delete`);
+    }
+    let deleted = false;
+    for (const meta of metas) {
+      this.db.raw.prepare(`DELETE FROM credential_bindings WHERE credential_id = ?`).run(meta.id);
+      const res = this.db.raw.prepare(`DELETE FROM credentials WHERE id = ?`).run(meta.id);
+      deleted = deleted || Number(res.changes ?? 0) > 0;
+    }
+    return deleted;
+  }
+
+  /** 按名（可选域）取全部匹配行 */
+  private findAll(name: string, scope?: CredentialScopeRef): CredentialMeta[] {
+    const rows = scope
+      ? [this.findByScope(name, scope.level, scope.key)].filter(Boolean)
+      : (this.db.raw
+          .prepare('SELECT * FROM credentials WHERE name = ? ORDER BY created_at, rowid')
+          .all(name) as Record<string, unknown>[]);
+    return rows.map((r) => rowToMeta(r as Record<string, unknown>));
+  }
+
+  /** 按名（可选域）定位唯一行；歧义 fail-loud（写路径专用） */
+  private requireNamed(name: string, scope?: CredentialScopeRef): CredentialMeta {
+    const metas = this.findAll(name, scope);
+    if (metas.length === 0) throw new Error(`credential not found: ${name}`);
+    if (metas.length > 1 && !scope) {
+      throw new Error(`credential "${name}" matches multiple domains; pass scope`);
+    }
+    return metas[0];
   }
 
   /**
@@ -233,9 +319,7 @@ export class CredentialStore {
     consumer?: import('./types.js').CredentialConsumerRef | null,
     options?: import('./types.js').ResolveCredentialOptions,
   ): Promise<ResolvedCredential | null> {
-    const row = this.db.raw
-      .prepare(`SELECT * FROM credentials WHERE name = ?`)
-      .get(name) as Record<string, unknown> | undefined;
+    const row = this.findRow(name, options?.tenantId);
     if (!row) return null;
 
     const meta = rowToMeta(row);
@@ -262,11 +346,7 @@ export class CredentialStore {
     knownMeta?: CredentialMeta,
     knownRow?: Record<string, unknown>,
   ): Promise<string | null> {
-    const row =
-      knownRow ??
-      (this.db.raw.prepare(`SELECT * FROM credentials WHERE name = ?`).get(name) as
-        | Record<string, unknown>
-        | undefined);
+    const row = knownRow ?? this.findRow(name, options?.tenantId);
     if (!row) return null;
 
     const meta = knownMeta ?? rowToMeta(row);
@@ -277,7 +357,8 @@ export class CredentialStore {
     // 只紧不松：显式 true 可收紧；false/undefined 不得覆盖 store 级 requireBindings
     const require =
       options?.requireBindings === true || this.requireBindings === true;
-    const bindings = this.listBindings(name);
+    // 绑定检查按命中行的域定位（遮蔽场景不得串查平台同名行的绑定表）
+    const bindings = this.listBindings(name, meta.scope);
     if (require && bindings.length === 0) {
       throw new Error(
         `credential "${name}" has no bindings and requireBindings is enabled`,
@@ -330,9 +411,15 @@ export class CredentialStore {
     return secret;
   }
 
-  bind(consumer: CredentialConsumerRef, name: string): void {
-    const meta = this.get(name);
-    if (!meta) throw new Error(`credential not found: ${name}`);
+  /**
+   * 绑定消费方。同名跨域且未给 scope = 歧义 fail-loud。
+   *
+   * @param consumer - 消费方
+   * @param name - 凭证名
+   * @param scope - 域（level/key）；缺省不限域
+   */
+  bind(consumer: CredentialConsumerRef, name: string, scope?: CredentialScopeRef): void {
+    const meta = this.requireNamed(name, scope);
     this.db.raw
       .prepare(
         `INSERT OR IGNORE INTO credential_bindings (credential_id, consumer_kind, consumer_id, created_at)
@@ -341,9 +428,15 @@ export class CredentialStore {
       .run(meta.id, consumer.kind, consumer.id, Date.now());
   }
 
-  unbind(consumer: CredentialConsumerRef, name: string): void {
-    const meta = this.get(name);
-    if (!meta) return;
+  /**
+   * 解绑消费方。同名跨域且未给 scope = 歧义 fail-loud。
+   *
+   * @param consumer - 消费方
+   * @param name - 凭证名
+   * @param scope - 域（level/key）；缺省不限域
+   */
+  unbind(consumer: CredentialConsumerRef, name: string, scope?: CredentialScopeRef): void {
+    const meta = this.requireNamed(name, scope);
     this.db.raw
       .prepare(
         `DELETE FROM credential_bindings WHERE credential_id = ? AND consumer_kind = ? AND consumer_id = ?`,
@@ -351,8 +444,14 @@ export class CredentialStore {
       .run(meta.id, consumer.kind, consumer.id);
   }
 
-  listBindings(name: string): Array<{ kind: string; id: string }> {
-    const meta = this.get(name);
+  /**
+   * 列绑定（按命中行 id；同名跨域给 scope 定位）。
+   *
+   * @param name - 凭证名
+   * @param scope - 域（level/key）；缺省不限域（取最早登记）
+   */
+  listBindings(name: string, scope?: CredentialScopeRef): Array<{ kind: string; id: string }> {
+    const meta = this.get(name, scope);
     if (!meta) return [];
     const rows = this.db.raw
       .prepare(

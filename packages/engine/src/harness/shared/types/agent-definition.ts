@@ -30,6 +30,12 @@ export interface ModelConfig {
 /** Agent 定义（产品装配形状，非内核合同） */
 export interface AgentDefinition {
   id: string;
+  /**
+   * 归属租户（arch/multi-tenancy.md §4 隔离矩阵）。
+   * 缺省视作 DEFAULT_TENANT_ID（配置 agent / 存量注册表条目）；
+   * 决定 workspace 派生路径与 audit/credentials 域。
+   */
+  tenantId?: string;
   /** Agent home 目录：persona、skills、sessions、extract 的根目录 */
   home: string;
   /** 沙箱工作目录：agent 工具操作的 cwd */

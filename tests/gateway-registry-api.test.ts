@@ -51,7 +51,12 @@ async function call(
 }
 
 function routerWith(registry: RegistryService | undefined): WebApiRouter {
-  const stub = { getRegistry: () => registry };
+  const stub = {
+    getRegistry: () => registry,
+    // T2 运行时桥钩子（无桥宿主形态：数据面可用、不产运行时）
+    attachRegistryAgent: async () => true,
+    detachRegistryAgent: () => {},
+  };
   return new WebApiRouter({ gateway: stub as unknown as Gateway });
 }
 

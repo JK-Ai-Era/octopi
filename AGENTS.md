@@ -90,7 +90,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
     AGENTS.md           # main persona (loaded first by loadPersona)
     persona/            # supplemental persona (*.md, numeric prefix for order)
     skills/             # skillDirectory target
-  workspace/<id>/       # tool sandbox cwd
+  workspace/<tenantId>/<agentId>/   # tool sandbox cwd (tenant-prefixed; arch/multi-tenancy.md §4)
 ```
 
 ---

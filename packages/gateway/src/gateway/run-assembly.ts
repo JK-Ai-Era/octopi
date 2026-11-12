@@ -242,6 +242,7 @@ export class RunAssembly {
     const wired = await wireAgentBuilder(builder, {
       model: finalProvider,
       agentId: agent.id,
+      tenantId: agent.tenantId,
       workspace: agent.workspace,
       home: agent.home,
       persona:

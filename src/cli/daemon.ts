@@ -1282,5 +1282,16 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     startedAt: new Date().toISOString(),
   });
 
+  // T2 registry 桥（arch/multi-tenancy.md §4）：registry 托管 agent → 物化 + 可跑定义。
+  // 每次物化现读配置盘（热更可见；与 ConfigApplyService 同一 FileConfigService 语义）。
+  {
+    const { createRegistryAgentBridge } = await import('../registry-bridge.js');
+    const { FileConfigService } = await import('../config-service.js');
+    const rawSource = new FileConfigService({ configPath });
+    gateway.setRegistryAgentBridge(
+      createRegistryAgentBridge({ getRawConfig: () => rawSource.read().raw }),
+    );
+  }
+
   await gateway.start();
 }

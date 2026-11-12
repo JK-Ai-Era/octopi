@@ -115,6 +115,32 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.7 (2026-11-13)
+
+### feat(tenancy): T2 家当隔离——workspace/home 物化 + registry 可跑桥 + credentials 域分离 + audit 归属（MVP T2）
+
+多租户 MVP 第二期（arch/multi-tenancy.md §4 隔离矩阵）落地，判据「两租户各跑 agent，互不可见家当」以双租户 run 演练实证（tests/tenancy-run-isolation.test.ts）。
+
+- **路径派生单一来源**（`engine/paths.ts`）：`agentHomeDir`/`agentWorkspaceDir` 派生 `agents/<agentId>/` 与 `workspace/<tenantId>/<agentId>/`（含路径段穿越守卫）。显式 config `workspace` 优先（§5 渐进、存量不搬家）；`ensureAgentDirs`/doctor/config 面统一走派生。
+- **registry→可跑桥**（`src/registry-bridge.ts` + gateway `attachRegistryAgent`）：registry agent 记录 → 物化家当 + AgentDefinition（id/tenantId/home/workspace 由记录+派生注入）→ registerAgent → run。create / PATCH（定义变更）/ 启动装载三路收口；响应面 `runtimeAttached` + `runtimeAttachError` 如实报告。
+- **audit 归属接线**（§9.1-4 销账）：`builder.tenantId()` → `SubsystemRuntimeConfig.tenantId` → AuditWriter 打标；AgentDefinition.tenantId 全链贯通（wire spec → run-assembly → builder → runner）。
+- **credentials 域分离**：`scope_level='tenant'`（key=tenantId）租户私有域 vs 平台域；归属解析域 = 平台 ∪ 本域（私有同名遮蔽平台）；无归属解析 = 仅平台域（租户密文只经归属解析）；管理面写路径同名跨域歧义 fail-loud。归属经 `RunScope.principal.tenantId`（Runner 缺省锚 agent 归属；claim 与归属冲突 fail-loud）→ http_request credential 解析。
+
+### fix(tenancy): T2 独立评审修复批（del-77342d6e，8 MAJ 处置）
+
+- **registry definition 改白名单**（name/description/model/persona/tools/skills/contextEngine）：治理面（effectPolicy/maxSessionRights/delegation/channelBindings/knowledge/subsystems…）与身份/机器坐标键宿主派生、出现即拒——黑名单挡不住租户写 `effectPolicy:{mode:'host'}` 自提权；effectPolicy 恒派生 `{mode:'workspace'}`。
+- **`${...}` env 引用一律拒**：租户 definition 不进 `${ENV}` 展开管线（宿主 env 含 provider key，对租户输入不可见）。
+- **credentials v1→v2 迁移原子化**：单事务重建 + 失败 ROLLBACK + 残表先清 + 唯一索引并入事务（半迁移库不得被使用）。
+- **scope key 先验后归一**：非 global 域缺 key 拒写孤儿行；global 不得携带异域 key。
+- **无归属解析限平台域**：封掉「租户身份 → config agent run → 无归属解析 → 读他租户密文」旁路（评审 MAJ-10 实证级组合洞）。
+- 管理面 get/delete/bind/unbind/listBindings 全部域定位（遮蔽场景不串行）；attach 失败如实回报不假成功；PATCH 仅定义变更才重挂运行时；builder.tenantId 拒空串。
+
+BREAKING: ① credentials.db 唯一键 `(name)` → `(name, scope_level, scope_key)`，同名凭证可分域共存（打开时自动迁移）；② 新物化 workspace 布局 = `workspace/<tenantId>/<agentId>/`（显式 config 不变）；③ registry agent definition 收紧为白名单 + 禁 env 引用（此前透传任意键的 definition 会被拒）；④ 无归属凭证解析不再触达租户私有行（管理面元数据不受影响）。
+
+已知边界（arch/multi-tenancy.md §9.1）：session 租户 → 派发 principal 接线随 T4（config agent 上的租户会话暂为平台域解析）；registry agent 删除不回收家当；legacy 平面布局与 `default` 租户段前缀同形的共存边角。
+
+---
+
 ## v0.113.6 (2026-11-13)
 
 ### feat(tenancy): session/audit 租户键控（MVP T1c）

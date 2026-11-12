@@ -178,6 +178,8 @@ export interface AgentWireSpec {
   /** 已解析/已包装的主模型 provider */
   model: ModelProvider;
   agentId: string;
+  /** 归属租户（arch/multi-tenancy.md §4）；缺省 DEFAULT_TENANT_ID，透传 audit 打标与家当派生 */
+  tenantId?: string;
   workspace?: string;
   /** agent 文件态持久目录（persona/skills） */
   home?: string;
@@ -303,6 +305,10 @@ export async function wireAgentBuilder(
   const agentHome = spec.home ? expandHomePath(spec.home.trim()) : undefined;
   // agentId 无条件接线（审计分区 / 工具域对称）；home 只决定 agent 文件态目录
   builder.agentId(spec.agentId);
+  // 归属租户透传（audit 打标 / 家当派生域）；缺省不设 = 存量 DEFAULT 语义
+  if (spec.tenantId) {
+    builder.tenantId(spec.tenantId);
+  }
   if (spec.home) {
     builder.agentHome(spec.home);
   }

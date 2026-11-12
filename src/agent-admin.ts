@@ -9,6 +9,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
+import { agentHomeDir, agentWorkspaceDir } from '@octopi-agent/engine/paths.js';
 import { ensureAgentDirs, getOctopiHome } from './init.js';
 
 /** scaffold 选项 */
@@ -17,6 +18,8 @@ export interface ScaffoldAgentOptions {
   agentsMd?: string;
   /** workspace 目录路径（`~` 由调用方展开为绝对路径）；缺省用脚手架默认 */
   workspace?: string;
+  /** 归属租户（脚手架布局用）；缺省 DEFAULT_TENANT_ID */
+  tenantId?: string;
 }
 
 export class AgentFileAdmin {
@@ -30,16 +33,17 @@ export class AgentFileAdmin {
   }
 
   /**
-   * agent 文件态标准路径（与 octopi init 布局同源）
+   * agent 文件态标准路径（与 octopi init 布局同源；派生单一来源 = engine/paths）
    *
    * @param agentId - agent id
+   * @param tenantId - 归属租户；缺省 DEFAULT_TENANT_ID
    * @returns home / workspace / skillDirectory 绝对路径
    */
-  pathsOf(agentId: string): { home: string; workspace: string; skillDirectory: string } {
-    const home = join(this.homeDir, 'agents', agentId);
+  pathsOf(agentId: string, tenantId?: string): { home: string; workspace: string; skillDirectory: string } {
+    const home = agentHomeDir(this.homeDir, agentId);
     return {
       home,
-      workspace: join(this.homeDir, 'workspace', agentId),
+      workspace: agentWorkspaceDir(this.homeDir, tenantId, agentId),
       skillDirectory: join(home, 'skills'),
     };
   }
@@ -65,7 +69,7 @@ export class AgentFileAdmin {
     if (agentId === '.' || agentId === '..' || agentId.includes('/') || agentId.includes('\\')) {
       throw new Error(`invalid agent id: ${agentId}`);
     }
-    await ensureAgentDirs(agentId, this.homeDir);
+    await ensureAgentDirs(agentId, this.homeDir, opts.tenantId);
     if (opts.agentsMd !== undefined) {
       // 仅在 AGENTS.md 缺失时写：重建同 id agent 不覆盖既有 persona（用户数据）
       const agentsMdPath = join(this.homeOf(agentId), 'AGENTS.md');

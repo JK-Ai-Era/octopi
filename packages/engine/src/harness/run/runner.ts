@@ -65,6 +65,31 @@ import {
 import { isToolPermitted } from '../governance/session-acl/tool-rights.js';
 import { resolveToolCapabilities } from '../extension/execution-environment/tool-capabilities.js';
 
+/**
+ * principal 归属补全（arch/multi-tenancy.md §4）：调用方 claim 优先；
+ * tenantId 缺省锚 agent 归属租户（host truth，非 claim）。无任何输入 = undefined。
+ *
+ * @param principal - 调用方转发的 principal（RunRequest 真源）
+ * @param tenantId - agent 归属租户（Runner 配置）
+ * @returns 补全后的 principal
+ */
+function withTenantPrincipal(
+  principal: RunScope['principal'],
+  tenantId: string | undefined,
+): RunScope['principal'] {
+  if (!principal && !tenantId) return undefined;
+  // 两者都有且不一致 = fail-loud（评审 MIN-9：不静默换租户身份）
+  if (principal?.tenantId && tenantId && principal.tenantId !== tenantId) {
+    throw new Error(
+      `principal tenant mismatch: claim=${principal.tenantId} agent=${tenantId} (cross-tenant identity is not accepted)`,
+    );
+  }
+  return {
+    ...principal,
+    ...(principal?.tenantId || !tenantId ? {} : { tenantId }),
+  };
+}
+
 /** 运行器配置 */
 export interface SessionAwareRunnerConfig {
   /**
@@ -191,6 +216,8 @@ export interface SessionAwareRunnerConfig {
   effectPolicy?: import("../extension/execution-environment/effect-policy.js").EffectPolicyConfig;
   /** credentials.requireBindings（SEC-3c）：无绑定凭证不可 resolve */
   requireCredentialBindings?: boolean;
+  /** 归属租户（arch/multi-tenancy.md §4）：RunScope.principal.tenantId 缺省锚（凭证域解析/归属）；缺省 = 宿主面语义 */
+  tenantId?: string;
   confirmEffect?: import("../extension/execution-environment/effect-policy.js").ConfirmEffect;
   /** 附件轻量意图分流的默认 provider（仅无 Gateway 模型快照时回退）。 */
   defaultIntentProvider?: import('@octopi-agent/core/interfaces/model-provider.js').ModelProvider;
@@ -1843,7 +1870,9 @@ export class SessionAwareRunner {
       const runScope: RunScope = {
         ...runIdentity,
         runId,
-        principal: effectiveRunConfig.principal,
+        // principal 归属补全：调用方 claim 优先；tenantId 缺省锚 agent 归属（host truth，非 claim）。
+        // 凭证域解析（credentials §4）从本字段取归属——无归属 = 宿主面（信任边界，MAJ-3 语义）。
+        principal: withTenantPrincipal(effectiveRunConfig.principal, this.config.tenantId),
         prompt: getTextContent(input.content),
         resolvedModel: resolvedModel ?? undefined,
         extensionSnapshotBudgetTokens: this.config.extensionSnapshotBudgetTokens,

@@ -8,7 +8,12 @@ export type CredentialKind = 'bearer' | 'basic' | 'api_key' | 'header_map' | 'oa
 
 export type SecretMode = 'env' | 'encrypted' | 'file';
 
-export type CredentialScopeLevel = 'global' | 'project' | 'agent' | 'plugin';
+/**
+ * 凭证域（arch/multi-tenancy.md §4 credentials 行）：
+ * - `global` / `project` / `agent` / `plugin` = 平台域（宿主管理；租户可引）
+ * - `tenant` = 租户私有域（key = tenantId）；租户只引自己的 + 平台域
+ */
+export type CredentialScopeLevel = 'global' | 'project' | 'agent' | 'plugin' | 'tenant';
 
 export interface CredentialScopeRef {
   level: CredentialScopeLevel;
@@ -78,6 +83,12 @@ export interface ResolveCredentialOptions {
   consumer?: CredentialConsumerRef | null;
   /** 覆盖 store 级 requireBindings（untrusted 严档 / 配置） */
   requireBindings?: boolean;
+  /**
+   * 请求方归属租户（§4 域分离）。
+   * 在场：解析域 = 平台域 ∪ 本租户私有域（私有同名**遮蔽**平台同名）；他租户私有对本域不存在。
+   * 缺场 = 宿主面（信任边界，与 query 自报收口同语义）：不限域。
+   */
+  tenantId?: string;
 }
 
 export function defaultCredentialHeaders(input: {

@@ -583,6 +583,12 @@ export class Gateway {
   private sessionSchedules?: import('@octopi-agent/engine/harness/session/schedules/service.js').SessionScheduleService;
   /** 租户与定义面（arch/multi-tenancy.md，Q12）：registry.db 进程内单例 */
   private registry?: import('@octopi-agent/engine/harness/governance/registry/service.js').RegistryService;
+  /** registry 托管 agent 运行时桥（T2）：家当物化 + 定义换装；宿主注入（daemon，start 前） */
+  private registryAgentBridge?: {
+    materialize(
+      record: import('@octopi-agent/engine/harness/governance/registry/types.js').AgentRecord,
+    ): Promise<AgentDefinition>;
+  };
   /** 会话标题更新去重（同 session 并发只跑一次） */
   private titleUpdatePromises = new Map<string, Promise<void>>();
   /** 进行中又有新触发时的 trailing 标记 */
@@ -1158,6 +1164,18 @@ export class Gateway {
       const { join } = await import('node:path');
       this.registry = await RegistryService.create({ dbPath: join(getOctopiHome(), 'registry.db') });
       console.log('[Gateway] RegistryService ready (registry.db)');
+      // T2 桥接线：registry 托管 agent 装载为可跑定义（物化 + 注册）；单个失败不阻启动
+      if (this.registryAgentBridge) {
+        for (const record of this.registry.listAllAgents()) {
+          try {
+            await this.attachRegistryAgent(record);
+          } catch (err) {
+            console.warn(
+              `[Gateway] registry agent ${record.agentId} attach failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+      }
     }
 
     console.log('[Gateway] Starting...');
@@ -1392,6 +1410,50 @@ export class Gateway {
    */
   getRegistry(): import('@octopi-agent/engine/harness/governance/registry/service.js').RegistryService | undefined {
     return this.registry;
+  }
+
+  /**
+   * 注入 registry agent 运行时桥（arch/multi-tenancy.md T2；daemon 在 start() 前调用）。
+   *
+   * @param bridge - 家当物化 + 定义换装实现（suite 侧 registry-bridge）
+   */
+  setRegistryAgentBridge(bridge: {
+    materialize(
+      record: import('@octopi-agent/engine/harness/governance/registry/types.js').AgentRecord,
+    ): Promise<AgentDefinition>;
+  }): void {
+    this.registryAgentBridge = bridge;
+  }
+
+  /**
+   * registry 托管 agent → 可跑注册（物化家当 + registerAgent + 失效旧构建）。
+   * 定义不完整/非法时抛错（调用方决定是否降级；启动装载按单个失败告警继续）。
+   *
+   * @param record - registry agent 记录（归属与身份权威）
+   * @returns 是否实际挂上运行时（未接桥 = false，数据面可用但不产运行时）
+   */
+  async attachRegistryAgent(
+    record: import('@octopi-agent/engine/harness/governance/registry/types.js').AgentRecord,
+  ): Promise<boolean> {
+    const bridge = this.registryAgentBridge;
+    if (!bridge) {
+      // 显式降级：数据面 CRUD 与运行时装配是两份契约；未接桥 = 不产运行时（库嵌入形态）
+      console.warn(`[Gateway] registry agent ${record.agentId}: runtime bridge not configured (data plane only)`);
+      return false;
+    }
+    const def = await bridge.materialize(record);
+    this.registerAgent(def);
+    await this.invalidateAgentBuild(record.agentId);
+    return true;
+  }
+
+  /**
+   * registry agent 运行时摘除（删除/退役；数据面删除归 RegistryService）。
+   *
+   * @param agentId - agent id
+   */
+  detachRegistryAgent(agentId: string): void {
+    this.removeAgent(agentId);
   }
 
   /**

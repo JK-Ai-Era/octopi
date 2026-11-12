@@ -262,6 +262,16 @@ export class RegistryService {
   }
 
   /**
+   * 列出全部 agent（宿主管理面：启动装载 / 对账；租户过滤的可见列表用 listAgents）。
+   */
+  listAllAgents(): AgentRecord[] {
+    const rows = this.db.raw
+      .prepare('SELECT * FROM agents ORDER BY created_at')
+      .all() as Record<string, unknown>[];
+    return rows.map(rowToAgent);
+  }
+
+  /**
    * 更新 agent（写权限：owner 或平台 admin）。
    *
    * @param input - agentId + viewerUserId + 变更补丁

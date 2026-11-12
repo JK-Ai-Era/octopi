@@ -7,6 +7,7 @@
  */
 import { isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 
 /**
  * 展开 `~` 前缀为用户主目录（Windows/Linux/macOS 通用）。
@@ -60,4 +61,54 @@ export const OCTOPI_HOME_ENV = 'OCTOPI_HOME';
  */
 export function getOctopiHome(): string {
   return resolve(process.env[OCTOPI_HOME_ENV] ?? DEFAULT_OCTOPI_HOME);
+}
+
+// ── 家当路径派生（arch/multi-tenancy.md §4 隔离矩阵的单一来源） ──
+
+/** 路径段守卫：目录名不得为空 / 含分隔符 / 含 `..`（containment 安全判定点） */
+function assertPathSegment(segment: string, label: string): string {
+  if (
+    !segment ||
+    segment === '.' ||
+    segment === '..' ||
+    segment.includes('/') ||
+    segment.includes('\\') ||
+    segment.includes('\0')
+  ) {
+    throw new Error(`invalid ${label} path segment: ${JSON.stringify(segment)}`);
+  }
+  return segment;
+}
+
+/**
+ * agent home 物化路径（§4：`agents/<agentId>/`，registry 标注 tenantId）。
+ *
+ * @param octopiHome - OCTOPI_HOME 绝对路径
+ * @param agentId - agent id（registry 管理的为 UUID；配置 agent 为配置 id）
+ * @returns agent home 目录
+ */
+export function agentHomeDir(octopiHome: string, agentId: string): string {
+  return join(octopiHome, 'agents', assertPathSegment(agentId, 'agent id'));
+}
+
+/**
+ * agent workspace 物化路径（§4：`workspace/<tenantId>/<agentId>/` 路径前缀隔离）。
+ * 显式配置的 `agents[].workspace` 优先于本派生（§5 渐进迁移：存量配置不搬家）。
+ *
+ * @param octopiHome - OCTOPI_HOME 绝对路径
+ * @param tenantId - 归属租户；缺省 `DEFAULT_TENANT_ID`（存量/未接身份层）
+ * @param agentId - agent id
+ * @returns agent workspace 目录
+ */
+export function agentWorkspaceDir(
+  octopiHome: string,
+  tenantId: string | undefined,
+  agentId: string,
+): string {
+  return join(
+    octopiHome,
+    'workspace',
+    assertPathSegment(tenantId ?? DEFAULT_TENANT_ID, 'tenant id'),
+    assertPathSegment(agentId, 'agent id'),
+  );
 }

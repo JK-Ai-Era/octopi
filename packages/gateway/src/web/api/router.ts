@@ -1989,7 +1989,16 @@ export class WebApiRouter {
             : {}),
           ...(typeof body.homeRef === 'string' ? { homeRef: body.homeRef } : {}),
         });
-        return this.json(res, 201, { ok: true, data: agent });
+        // T2 运行时装配：物化 + 注册；定义不完整/非法时显式降级（数据面已建，PATCH/startup 重试）
+        const attach = await this.attachWithDegrade(agent);
+        return this.json(res, 201, {
+          ok: true,
+          data: {
+            ...agent,
+            runtimeAttached: attach.attached,
+            ...(attach.error ? { runtimeAttachError: attach.error } : {}),
+          },
+        });
       } catch (err) {
         return sendError(err);
       }
@@ -2010,13 +2019,26 @@ export class WebApiRouter {
           if (typeof body.definition === 'string') patch.definition = body.definition;
           if (body.visibility === 'private' || body.visibility === 'tenant') patch.visibility = body.visibility;
           if (body.homeRef === null || typeof body.homeRef === 'string') patch.homeRef = body.homeRef;
+          const updated = registry.updateAgent({ agentId, viewerUserId: user.userId, patch });
+          // 定义变更才重物化 + 重注册（评审 MIN-5：name/visibility 更新不动运行时）
+          if (patch.definition === undefined) {
+            return this.json(res, 200, { ok: true, data: updated });
+          }
+          const attach = await this.attachWithDegrade(updated);
           return this.json(res, 200, {
             ok: true,
-            data: registry.updateAgent({ agentId, viewerUserId: user.userId, patch }),
+            data: {
+              ...updated,
+              runtimeAttached: attach.attached,
+              ...(attach.error ? { runtimeAttachError: attach.error } : {}),
+            },
           });
         }
         if (method === 'DELETE') {
           const deleted = registry.deleteAgent({ agentId, viewerUserId: user.userId });
+          if (deleted) {
+            this.gateway.detachRegistryAgent(agentId as string);
+          }
           return this.json(res, 200, { ok: true, data: { deleted } });
         }
         return this.json(res, 405, { ok: false, error: `method ${method} not allowed` });
@@ -2053,6 +2075,26 @@ export class WebApiRouter {
     }
 
     return this.json(res, 404, { ok: false, error: `registry route not found: ${relativePath}` });
+  }
+
+  /**
+   * registry agent 运行时挂载（显式降级：失败不吞，如实返回状态与原因供响应面携带）。
+   *
+   * @param agent - registry agent 记录
+   * @returns 是否挂上；失败时附原因（响应面 `runtimeAttachError`）
+   */
+  private async attachWithDegrade(
+    agent: import('@octopi-agent/engine/harness/governance/registry/types.js').AgentRecord,
+  ): Promise<{ attached: boolean; error?: string }> {
+    try {
+      return { attached: await this.gateway.attachRegistryAgent(agent) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[WebApi] registry agent ${String(agent.agentId)} runtime attach failed: ${message}`,
+      );
+      return { attached: false, error: message };
+    }
   }
 
   private json(res: ServerResponse, status: number, payload: unknown): boolean {

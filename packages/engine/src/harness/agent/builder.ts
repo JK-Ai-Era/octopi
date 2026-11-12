@@ -671,6 +671,8 @@ export class AgentBuilder {
   private _agentHome?: string;
   /** 逻辑 agentId（观测 / 子系统审计用） */
   private _agentId?: string;
+  /** 归属租户（arch/multi-tenancy.md §4）：audit 打标 / 家当派生域；缺省 = DEFAULT_TENANT_ID 语义 */
+  private _tenantId?: string;
   /** Deferred until build so .pluginTools() and .agentId() order is immaterial. */
   private _pluginToolRecords: readonly import('../extension/plugin-ecosystem/plugins/contribution-registry.js').PluginToolRecord[] = [];
 
@@ -1170,6 +1172,16 @@ export class AgentBuilder {
     return this;
   }
 
+  /** 归属租户（audit 打标 / 家当派生域；arch/multi-tenancy.md §4） */
+  tenantId(id: string): this {
+    const trimmed = id.trim();
+    if (!trimmed) {
+      throw new Error('tenantId must be non-empty');
+    }
+    this._tenantId = trimmed;
+    return this;
+  }
+
   /** 直接设置 systemPrompt（优先于 persona 目录） */
   systemPrompt(prompt: string): this {
     this._systemPrompt = prompt;
@@ -1267,6 +1279,8 @@ export class AgentBuilder {
       this._runnerConfig?.sessionTaskService ?? new SessionTaskService(store, events);
     this._runnerConfig = {
       ...this._runnerConfig,
+      // 归属租户补全（Runner principal 缺省锚）：显式 runnerConfig 优先，顺序不可变
+      ...(this._tenantId && !this._runnerConfig?.tenantId ? { tenantId: this._tenantId } : {}),
       sessionTaskService,
     };
 
@@ -1557,6 +1571,7 @@ export class AgentBuilder {
         },
         auditDir: this._subsystemAuditDir,
         agentId: this._agentId,
+        tenantId: this._tenantId,
         securityEnforcement,
       });
 
