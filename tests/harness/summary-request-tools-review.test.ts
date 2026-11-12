@@ -40,7 +40,7 @@ const SUMMARY = '1. Goal & status: ok.\n2. Open items: none.\n3. Conclusions: n/
 describe('textify 旁路不带工具面（评审 MAJ-1）', () => {
   it('无 llmPrefix → 走 textify：summarizeFn 不得收到 tools/toolChoice', async () => {
     const engine = createCompactEngine();
-    let seen: { tools?: LLMToolDefinition[]; toolChoice?: string } | undefined;
+    let seen: { tools?: LLMToolDefinition[] } | undefined;
 
     await engine.compactMessages([userMsg('a'), userMsg('b')], {
       mode: 'structure_only',
@@ -56,7 +56,7 @@ describe('textify 旁路不带工具面（评审 MAJ-1）', () => {
     });
 
     expect(seen?.tools).toBeUndefined();
-    expect(seen?.toolChoice).toBeUndefined();
+    expect(Object.keys(seen ?? {})).not.toContain('toolChoice');
   });
 });
 
@@ -150,12 +150,12 @@ describe('摘要输出诚实性（评审 MAJ-2 / MIN-3）', () => {
     );
   });
 
-  it('意外 tool_call → 抛 summarize_tool_call_emitted（toolChoice:none 是约束不是保证）', async () => {
+  it('意外 tool_call → 抛 summarize_tool_call_emitted（不再有 toolChoice 兜底）', async () => {
     const summarize = createProviderSummarize(
       providerReturning('tool_calls', [{ id: 'c1', name: 'shell', arguments: '{}' }]),
     );
     await expect(
-      summarize([{ role: 'user', content: 'x' } as LLMMessage], { tools: TOOLS, toolChoice: 'none' }),
+      summarize([{ role: 'user', content: 'x' } as LLMMessage], { tools: TOOLS }),
     ).rejects.toThrow(/summarize_tool_call_emitted/);
   });
 

@@ -33,11 +33,11 @@ export function createProviderSummarize(
     const response = await provider.chat({
       messages,
       model: options?.model,
-      // 摘要请求带会话同形工具面时固定禁用调用：模型只许产出摘要正文。
-      // tools 原样透传（不裁剪/不重排）——前缀缓存按字节比对。
-      ...(opts?.tools && opts.tools.length > 0
-        ? { tools: opts.tools, toolChoice: opts.toolChoice ?? ('none' as const) }
-        : {}),
+      // 摘要请求带会话同形工具面：前缀缓存是 tools → system → messages，缺 tools 会整段冷 prefill。
+      // 不带 toolChoice（2026-11-13 实测）：'none' 在部分 provider（DeepSeek 系）会让服务端
+      // 把 tools 从 prompt 渲染中剔除，反而落到另一个缓存空间、前缀零重叠。「禁止调用」由
+      // 摘要指令 + summarize_tool_call_emitted fail-loud 守卫承担，不依赖 provider 的软提示。
+      ...(opts?.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
       // 未显式配置即不发送：由模型配置（ModelInfo.temperature）或服务端默认决定
       temperature: options?.temperature,
       // P3：run 中止 / 摘要超时都靠这个 signal 取消在飞请求（provider 侧 fetch 已接 signal）
@@ -61,8 +61,9 @@ export function createProviderSummarize(
     if (response.finishReason === 'length') {
       throw new Error('summarize_output_truncated: provider stopped at max_tokens');
     }
-    // 工具面为重放缓存前缀而完整发送（toolChoice:'none' 是给模型的约束，不是保证）。
-    // 若 provider/自定义实现忽略该约束产生 tool_call，正文就不是摘要——宁可失败。
+    // 工具面为重放缓存前缀而完整发送，摘要轮本不该产生 tool_call（指令已明确要求纯文本）。
+    // 不带 toolChoice 约束后，本守卫是唯一硬防线：若 provider 仍冒 tool_call，正文就不是
+    // 摘要——宁可失败，交 onSummarizeFail 显式降级（禁止静默半截/错型产物）。
     if (response.toolCalls && response.toolCalls.length > 0) {
       throw new Error('summarize_tool_call_emitted: summary turn produced a tool call');
     }

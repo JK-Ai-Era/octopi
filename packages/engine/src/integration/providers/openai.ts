@@ -386,11 +386,6 @@ export class OpenAIProvider implements ModelProvider {
           },
         };
       });
-      // tool_choice 与 tools 同发：摘要请求带全会话工具面保缓存前缀，同时禁止调用。
-      // （OpenAI Chat Completions 支持 'none' | 'auto' | 'required'；不影响缓存前缀。）
-      if (request.toolChoice !== undefined) {
-        body.tool_choice = request.toolChoice;
-      }
     }
 
     return body;

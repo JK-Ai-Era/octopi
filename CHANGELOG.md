@@ -115,6 +115,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.2 (2026-11-13)
+
+### fix(compact): 摘要请求不再发送 `toolChoice`——它在部分 provider 会破坏前缀缓存
+
+**问题**：v0.112.10/v0.113.0 让摘要请求带上与会话请求逐字节同形的工具面，但同时也固定了 `toolChoice:'none'`，并在注释里断言「该字段不进缓存键」。生产复验（v0.113.1，DeepSeek 官方 API）证明后半句是错的：wire body 的 1136 条消息与会话请求逐条 SHA256 **完全一致**、`toolsHash` 相同、`toolCount=60`，缓存却只命中 3.7%（`cached 10,624 / 290,700`）。
+
+**根因**：`tool_choice:'none'` 不是对所有 provider 中性的标记。受控实验（固定前缀，只改请求形态）：`tools` + 无 `tool_choice` → 8117 prompt tokens；`tools` + `tool_choice:'none'` → 6286，差值恰好是工具面。DeepSeek 系会把 tools 整个从 prompt 渲染中剔除，于是请求落入「无工具面」的另一个缓存空间，与会话前缀零重叠。对照 Anthropic:Messages（火山 ark）同实验 `{"type":"none"}` 与省略**完全等价**（`cache_read` 不变），故这是协议实现差异，不是协议规范。
+
+**修法**：一律不发 `toolChoice`。删除 `LLMRequest.toolChoice`、两个适配器的 `tool_choice` 映射、`SummarizeFunction` opts 的 `toolChoice`（零兼容过渡，不留死字段——保留一个「存在即安全」的字段正是本次误判的入口）。「禁止摘要轮产生 tool_call」改由摘要指令 + `summarize_tool_call_emitted` fail-loud 守卫承担：软提示不保证正确性，硬守卫才能，且失败是响亮的（交 `onSummarizeFail` 显式降级）。
+
+**breaking note**：`LLMRequest.toolChoice` 与 `SummarizeFunction` opts 的 `toolChoice` 已移除。自定义 Provider 若曾读取该字段需同步删除；内置两个适配器已不再输出 `tool_choice`。
+
+**验证**：定向测试 24 例通过（`summary-request-tools` / `-review` / `anthropic-provider`）；`npm run build` 通过。生产端缓存命中待下一轮手动压缩复验。
+
+---
+
 ## v0.113.1 (2026-11-13)
 
 ### fix(providers): Anthropic 线上编码统一角色交替（连续 user 归一）

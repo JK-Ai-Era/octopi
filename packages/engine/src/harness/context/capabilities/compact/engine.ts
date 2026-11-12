@@ -312,13 +312,17 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
             previousSummary: opts.previousSummary,
             maxTokens: providerMaxTokens,
             // 工具面同形（2026-11-12）：缓存前缀 = tools → system → messages，缺 tools 时
-            // 前缀从第一字节断开，整段历史退化为冷 prefill。带 tools 同时固定 toolChoice
-            // 'none'，禁止摘要轮产生 tool_call（不改变缓存前缀字节）。
+            // 前缀从第一字节断开，整段历史退化为冷 prefill。
             // 只在 prefix 分支发：textify 分支 system 不同、缓存必 miss，带工具面是纯成本
             // 且会挤占窗口（评审 MAJ-1）。
-            ...(usePrefix && prefixTools && prefixTools.length > 0
-              ? { tools: prefixTools, toolChoice: 'none' as const }
-              : {}),
+            //
+            // 不传 toolChoice（2026-11-13 实测）：'none' 不是对所有 provider 中性的标记。
+            // DeepSeek 收到 tool_choice:'none' 会把 tools 整个从 prompt 渲染中剔除
+            //（实测 prompt 8117 → 6286 tokens），于是落入「无工具面」那个独立缓存空间，
+            // 与会话前缀零重叠（实测 3.7% 命中）。Anthropic 侧才是中性的。
+            // 「禁止调用」由指令 + summarize_tool_call_emitted fail-loud 守卫承担——
+            // 为了一个 provider-specific 的软提示牺牲整段前缀缓存不划算。
+            ...(usePrefix && prefixTools && prefixTools.length > 0 ? { tools: prefixTools } : {}),
             ...(opts.signal ? { signal: opts.signal } : {}),
             // outputTokens 真值收集（2026-11-08）：摘要产物体量以 provider 实测为准
             onUsage: (u) => {

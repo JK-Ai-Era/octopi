@@ -460,16 +460,6 @@ export class AnthropicProvider implements ModelProvider {
     }
     if (tools && tools.length > 0) {
       anthropicRequest.tools = tools;
-      // toolChoice 只在带 tools 时有意义（Anthropic 无 tools 时忽略/报错）。
-      // 注意：本字段不参与缓存键——前缀缓存只看 tools+system+messages 的字节。
-      if (request.toolChoice !== undefined) {
-        const choice: Record<'auto' | 'required' | 'none', { type: string }> = {
-          auto: { type: 'auto' },
-          required: { type: 'any' },
-          none: { type: 'none' },
-        };
-        anthropicRequest.tool_choice = choice[request.toolChoice];
-      }
     }
 
     return anthropicRequest;

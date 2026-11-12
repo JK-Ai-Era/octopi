@@ -51,8 +51,6 @@ export type SummarizeFunction = (
      * 调用方提供的实现应原样透传给 provider，不要裁剪/重排。
      */
     tools?: LLMToolDefinition[];
-    /** 工具选择约束：带 tools 的摘要请求固定传 'none'，禁止摘要轮产生 tool_call */
-    toolChoice?: 'auto' | 'required' | 'none';
     /**
      * 中止信号（P3）：run 中止或摘要预算超时都必须能取消在飞请求，
      * 否则 UI 只能干等到 provider 侧超时（2026-11-07 事故：2.13MB 非流式请求挂 20+ 分钟）。

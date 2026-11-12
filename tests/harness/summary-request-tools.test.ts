@@ -9,8 +9,11 @@
  * 红线：
  * 1. 摘要请求必须带与会话请求**同一实例**的工具面（core `buildToolDefinitions` 产出），
  *    引擎不得裁剪/重排/二次加工；
- * 2. 带工具面的摘要请求固定 `toolChoice: 'none'`——清单照发（保缓存）但禁止调用
- *    （摘要轮不许冒出 tool_call）；
+ * 2. **不发 `toolChoice`**（2026-11-13 实测修正，推翻本条原先的 'none' 要求）：
+ *    'none' 并非对所有 provider 中性的标记——DeepSeek 系收到它会把 tools 整个从 prompt
+ *    渲染中剔除（实测 8117 → 6286 tokens），落入「无工具面」的另一缓存空间，与会话前缀
+ *    零重叠（实测 cached 10,624 / 290,700 = 3.7%）。禁止 tool_call 改由摘要指令 +
+ *    `summarize_tool_call_emitted` fail-loud 守卫承担；
  * 3. 不提供工具面时不编造 tools（缺省 = 不发送，窗口钳制相应不含工具成本）。
  */
 
@@ -71,10 +74,10 @@ const PREFIX: LLMMessage[] = [
 ];
 
 describe('摘要请求工具面同形（前缀缓存红线）', () => {
-  it('llmTools 原样透传给 summarizeFn，并固定 toolChoice=none', async () => {
+  it('llmTools 原样透传给 summarizeFn，且不带 toolChoice（provider 会按它重排前缀）', async () => {
     const engine = createCompactEngine();
     let seenTools: LLMToolDefinition[] | undefined;
-    let seenChoice: string | undefined;
+    let seenOpts: Record<string, unknown> | undefined;
     let captured: LLMMessage[] = [];
 
     await engine.compactMessages([userMsg('q1'), userMsg('q2')], {
@@ -86,22 +89,24 @@ describe('摘要请求工具面同形（前缀缓存红线）', () => {
       summarizeFn: async (msgsIn, opts) => {
         captured = msgsIn;
         seenTools = opts?.tools;
-        seenChoice = opts?.toolChoice;
+        seenOpts = opts as Record<string, unknown> | undefined;
         return '1. Goal & status: ok.\n2. Open items: none.\n3. Conclusions: n/a.\n4. Evidence: none.';
       },
     });
 
     // 同一实例（不复制、不重排）：字节相同才有缓存命中可言
     expect(seenTools).toBe(TOOLS);
-    expect(seenChoice).toBe('none');
+    // 不带 toolChoice：'none' 在 DeepSeek 系会让服务端把 tools 剔出 prompt，
+    // 落到「无工具面」的另一个缓存空间（2026-11-13 实测 3.7% 命中）。回归防线。
+    expect(Object.keys(seenOpts ?? {})).not.toContain('toolChoice');
     // 指令仍只挂尾部，前缀不动
     expect(captured.slice(0, PREFIX.length)).toEqual(PREFIX);
     expect(captured.length).toBe(PREFIX.length + 1);
   });
 
-  it('未提供 llmTools 时不编造工具面、不带 toolChoice', async () => {
+  it('未提供 llmTools 时不编造工具面、也不带 toolChoice', async () => {
     const engine = createCompactEngine();
-    let seen: { tools?: LLMToolDefinition[]; toolChoice?: string } | undefined;
+    let seen: Record<string, unknown> | undefined;
 
     await engine.compactMessages([userMsg('q1'), userMsg('q2')], {
       mode: 'structure_only',
@@ -110,7 +115,7 @@ describe('摘要请求工具面同形（前缀缓存红线）', () => {
       targetTokens: 50,
       requestView: { messages: PREFIX, tools: [] },
       summarizeFn: async (_msgs, opts) => {
-        seen = opts;
+        seen = opts as Record<string, unknown> | undefined;
         return '1. Goal & status: ok.\n2. Open items: none.\n3. Conclusions: n/a.\n4. Evidence: none.';
       },
     });
@@ -121,10 +126,10 @@ describe('摘要请求工具面同形（前缀缓存红线）', () => {
 
   it('接线锚：proactive 路径把 assemble 收到的工具面原样带到摘要请求（事故复现防线）', async () => {
     let seenTools: LLMToolDefinition[] | undefined;
-    let seenChoice: string | undefined;
+    let seenOpts: Record<string, unknown> | undefined;
     const summarize: SummarizeFunction = async (_messages, opts) => {
       seenTools = opts?.tools;
-      seenChoice = opts?.toolChoice;
+      seenOpts = opts as Record<string, unknown> | undefined;
       return '1. Goal & status: ok.\n2. Open items: none.\n3. Conclusions: n/a.\n4. Evidence: none.';
     };
     const engine = new DefaultContextEngine({
@@ -164,38 +169,34 @@ describe('摘要请求工具面同形（前缀缓存红线）', () => {
         },
       },
     ]);
-    expect(seenChoice).toBe('none');
+    expect(Object.keys(seenOpts ?? {})).not.toContain('toolChoice');
   });
 
-  it('Anthropic wire body：tools 保留 + tool_choice {type:none}', () => {
+  it('Anthropic wire body：tools 保留，但不再发 tool_choice', () => {
     const provider = new AnthropicProvider({ apiKey: 'test', models: ['claude-sonnet-4-6'] });
     const body = provider.wireBodyFor(
       {
         messages: [{ role: 'user', content: 'summarize this' }],
         tools: TOOLS,
-        toolChoice: 'none',
       },
       'chat',
     );
     expect((body.tools as unknown[]).length).toBe(2);
-    expect(body.tool_choice).toEqual({ type: 'none' });
-
-    // 未指定 toolChoice 时不得凭空出现该字段（会话主请求走的就是这条路）
-    const plain = provider.wireBodyFor({ messages: [{ role: 'user', content: 'hi' }] }, 'chat');
-    expect(plain.tool_choice).toBeUndefined();
+    // tool_choice:'none' 在部分 provider 会把 tools 剔出 prompt，前缀缓存零重叠。
+    // 既不依赖它约束模型，就一律不发（Anthropic 侧本是中性的，也一并收口为单一形态）。
+    expect(body.tool_choice).toBeUndefined();
   });
 
-  it('OpenAI wire body：tools 保留 + tool_choice "none"', () => {
+  it('OpenAI wire body：tools 保留，但不再发 tool_choice', () => {
     const provider = new OpenAIProvider({ apiKey: 'test', models: ['gpt-5-mini'] });
     const body = provider.wireBodyFor(
       {
         messages: [{ role: 'user', content: 'summarize this' }],
         tools: TOOLS,
-        toolChoice: 'none',
       },
       'chat',
     );
     expect((body.tools as unknown[]).length).toBe(2);
-    expect(body.tool_choice).toBe('none');
+    expect(body.tool_choice).toBeUndefined();
   });
 });
