@@ -9,6 +9,7 @@
 
 import type { Message } from '@octopi-agent/core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { RequestView } from '@octopi-agent/core/loop/types.js';
 import type { SummarizeFunction } from './capabilities/compact/types.js';
 
 export type { LLMMessage, LLMToolDefinition };
@@ -204,8 +205,12 @@ export interface ContextCompactSnapshot {
 
 // ── 组装结果 ──
 
-export interface AssembleResult {
-  /** 组装好的 LLM 消息 */
+export interface AssembleResult extends RequestView {
+  /**
+   * 组装好的 LLM 消息（来自 {@link RequestView}）
+   *
+   * 与 `tools` 一起构成缓存前缀的原子单位；调用方不得只转发一半。
+   */
   messages: LLMMessage[];
   /** 实际 token 数（由 TokenEstimator 提供） */
   estimatedTokens: number;

@@ -115,6 +115,29 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.0 (2026-11-12)
+
+### refactor(context): 请求视图统一装配（会话与摘要共用一次工具面解析）
+
+**动因**（大哥拍板 2026-11-12）：v0.112.10 修的是「摘要请求漏了 tools」这个症状，但结构性根因还在——会话请求与摘要请求**各自拼装**缓存前缀的两半：`AssembleResult` 类型上只承诺 `messages`，于是每个消费者都必须自己去解析工具面（loop 用 `buildToolDefinitions(context.tools)`、摘要用调用方传的 `llmTools`）。完整性靠调用点自觉，下次调装配逻辑仍可能只改一边而静默烧前缀。
+
+**做法**（纯结构收敛；评审 del-b5ffc13a 后补齐两处真正收口）：
+
+- **`RequestView`**（core `loop/types.ts`）：`{ messages, tools }`，缓存前缀的原子单位——**类型上取不到一半**。
+- **`convertToLlm` 契约加宽**为 `Promise<LLMMessage[] | RequestView>`。返回视图时 loop 以其中的 tools 为准、不再自推；返回旧签名（数组）时回落 `buildToolDefinitions(context.tools)`。视图分支带运行时校验：缺 `tools` 数组时回落并 `console.warn`（不让半迁移实现抛 TypeError 或静默交出空工具面）。
+- **`AssembleResult extends RequestView`**：`assemble()` 一次产出两半，且类型定义只有一个来源（不再结构复制）。
+- **`CompactOptions.llmPrefix + llmTools` → 单个 `requestView`**：原子性延伸过 compact 边界。此前拆成两个可选参数，「只传消息忘了工具」在类型上合法——评审指出这正是本次事故仍可复现的入口。manual 路径同时删除调用方单独传 `llmPrefix` 的能力（无外部调用者），杜绝消息与工具面异源。
+- **`buildRequestView`** 是引擎唯一前缀出口；`aging` 为显式入参（装配侧不重推）；尾部指令由 compact 引擎独占追加（删掉未使用的 `tail` 参数，避免两个追加点）。
+- **删掉 `buildLlmMessages` 的 `tools` 死参数**：该参数从未被函数体使用。它的存在让「视图 = system+messages+tools」看起来成立，实际只有前两者——正是事故的认知成因。
+- **前缀指纹护栏**（`context/prefix-fingerprint.ts`）：tools / system / messages 三项独立哈希，`diffPrefixFingerprint` 指出**哪一项**不同（此前只能看到 `cached=0`）。按 `(sessionId, agentId)` 键控；工具面哈希按数组引用缓存，避免每 step 重复 sha1。
+- **空工具面告警**：`AssembleResult.tools` 必填但 `tools: []` 也能通过编译；装配面非空而引擎返回空时显式告警——否则 agent 会静默失去全部工具能力。
+
+**breaking note**：`AssembleResult` 需要 `tools`；`CompactOptions` 的 `llmPrefix`/`llmTools` 已被 `requestView` 取代（类型层直接报错，不留兼容层）。自定义 `ContextEngine` 若返回空 `tools`，会得到显式告警而非静默降级。`convertToLlm` 旧签名仍受支持。
+
+**验证**：4695 passed / 7 skipped（464 files）；`npm run lint` 0（含 typecheck:tests）；`arch/check-sync.sh` 全绿。新增 `request-view-unification.test.ts`（loop 消费视图工具面、旧签名回落、指纹四项判定）与 `request-view-guards.test.ts`（空工具面告警、compact 边界原子透传）。
+
+**残留边界（如实记录，不假装修好）**：`transformLlmMessages` 在 `convertToLlm` **之后**运行（`agent.ts`），插件迭代快照等 hook 会改写 wire 消息——此时摘要前缀与主请求的 messages 半区可能不同，指纹只直接比对了 tools。彻底收口需把最终 wire 视图纳入 step 快照，留待 P2。manual 压缩的 aging 计划仍由 `compactStructural` 从会话存储消息独立推导（纯函数，内容相同则结果相同），无 run 可复用。
+
 ## v0.112.10 (2026-11-12)
 
 ### fix(compact): 摘要请求带会话同形工具面（前缀缓存 0 命中根治）

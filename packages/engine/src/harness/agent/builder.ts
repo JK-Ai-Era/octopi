@@ -1914,7 +1914,8 @@ export class AgentBuilder {
         snapshot?.contextWindow != null && snapshot.contextWindow > 0
           ? snapshot.contextWindow
           : undefined;
-      const result = await contextEngine.assemble({
+      // ── 请求视图：messages + tools 一次产出，loop 不再自推工具面 ──
+      const assembled = await contextEngine.assemble({
         sessionId,
         agentId,
         modelKey: snapshot?.ref,
@@ -1953,12 +1954,27 @@ export class AgentBuilder {
           bus.emit(event);
         },
       });
+      // 请求视图两半：messages 与 tools 同批交给 loop（缓存前缀的另一半，禁各自拼装）
+      const { messages: llmMessages } = assembled;
+      // 契约护栏（REVIEW del-b5ffc13a MAJ-1）：`AssembleResult.tools` 是必填字段，但
+      // `tools: []` 同样能通过编译——那会让模型静默失去**全部**工具能力（loop 以视图为准）。
+      // 装配面非空而引擎返回空 = 契约违背（多半是迁移只改了一半），显式告警。
+      const requestTools = assembled.tools;
+      if (Array.isArray(requestTools) && requestTools.length === 0 && tools.length > 0) {
+        console.warn(
+          `[AgentBuilder] context engine returned an empty tool face while ${tools.length} tools ` +
+            `are registered (session=${sessionId}) — the agent loses ALL tool capability; ` +
+            `an engine that intends this must be changed deliberately`,
+        );
+      }
+      const resultEstimated = assembled.estimatedTokens;
+      const resultReadingSource = assembled.readingSource;
       // 压缩覆盖/摘要正文由转换记录账本持久（记录先落盘后发视图）；
       // 旧 compactState 快照回写已随记录模型退役（迁移读口仍在 run 起点）。
       // Observer P1：LLM 实际输入视图（ContextEngine 出口）
       // 真源 = hub.recordLlmMessages；事件只带 summarizeLlmMessages，避免双套统计/覆盖全文
       if (this._observerHub?.isEnabled() && this._observerHub.getConfig().channels['context.llm']) {
-        const llmInput = result.messages.map((m) => ({
+        const llmInput = llmMessages.map((m) => ({
           role: m.role as string,
           content: m.content as unknown,
         }));
@@ -1966,7 +1982,7 @@ export class AgentBuilder {
           sessionId,
           agentId,
           messages: llmInput,
-          estimatedTokens: result.estimatedTokens,
+          estimatedTokens: resultEstimated,
         });
         this._events?.emit({
           type: 'run.scope.llm',
@@ -1977,7 +1993,7 @@ export class AgentBuilder {
             sessionId,
             agentId,
             summary: summarizeLlmMessages(llmInput),
-            estimatedTokens: result.estimatedTokens,
+            estimatedTokens: resultEstimated,
           },
         });
       }
@@ -1985,16 +2001,17 @@ export class AgentBuilder {
       // 按 session 键控——共享 Agent 单例下并发会话各取自己的估算，不串号。
       // readingSource（评审 F5）：读数是校准/实测锚定/裸估算——生产日志可判定读数可信度
       const pressure = {
-        estimatedTokens: result.estimatedTokens,
+        estimatedTokens: resultEstimated,
         contextWindow,
-        readingSource: result.readingSource,
+        readingSource: resultReadingSource,
       };
       this._contextPressureBySession.set(sessionId, pressure);
       this._lastContextPressure = pressure;
 
       // droppedSummary 不得进 system（动态注记打穿前缀缓存）。
       // 本轮直接不投递；压缩语义由消息侧 contextSummary 承载。
-      return result.messages;
+      // 请求视图：工具面与 messages 同批交给 loop（缓存前缀的另一半）
+      return { messages: llmMessages, tools: requestTools };
     });
     agent.setOnAfterStep(async (identity, usage, step) => {
       // 身份只信调用方显式传入（40-engineering #8 单源）：runner 事件循环跑在 run 的

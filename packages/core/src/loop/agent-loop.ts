@@ -200,11 +200,33 @@ export async function* agentLoop(
       currentContext.messages = await transformContext(currentContext.messages, signal);
     }
 
-    // ── 2. 消息格式转换（内部格式 → LLM 格式） ──
-    const toolDefs = buildToolDefinitions(currentContext.tools);
-    const normalizedLlmMessages: LLMMessage[] = convertToLlm
+    // ── 2. 消息格式转换（内部格式 → LLM 请求视图） ──
+    // 工具面(2026-11-12)：convertToLlm 可返回 RequestView（messages+tools 原子产出），
+    // 此时工具面以它为准——loop 不再自行推导，保证会话请求与摘要请求同形前缀逐字节
+    // 同源。返回旧签名（LLMMessage[]）时回落到 context.tools 推导（向后兼容）。
+    const normalized = convertToLlm
       ? await convertToLlm(currentContext.messages, signal)
       : normalizeMessagesForLlm(currentContext.messages);
+    // 联合类型的运行时校验（评审 del-b5ffc13a MIN-2）：分区迁移中的实现可能返回
+    // `{ messages }` 半成品或缺 tools。此时**回落到 context.tools 推导**而不是抛
+    // TypeError——保留能力、显式告警，绝不让工具面静默变空。
+    const normalizedLlmMessages: LLMMessage[] = Array.isArray(normalized)
+      ? normalized
+      : normalized.messages;
+    // 工具面（REVIEW del-b5ffc13a MIN-2）：视图分支必须真的带 tools 数组。分区迁移中的
+    // 实现可能只改了 messages 一半——此时回落到 context.tools 推导（保留能力），
+    // 而不是在下面 `toolDefs.length` 上抛 TypeError。显式空数组仍然尊重（引擎决策）。
+    const viewTools = Array.isArray(normalized) ? undefined : normalized.tools;
+    const toolDefs: LLMToolDefinition[] = Array.isArray(viewTools)
+      ? viewTools
+      : buildToolDefinitions(currentContext.tools);
+    if (!Array.isArray(normalized) && !Array.isArray(viewTools)) {
+      // 显式告警而非静默：部分迁移的实现会让工具面退回到 context.tools。
+      // 循环层不引 logger（Layer 0 零依赖），沿用 EventBus 的 console.warn 先例。
+      console.warn(
+        '[agent-loop] convertToLlm returned a view without a tools array; fell back to context.tools',
+      );
+    }
     const llmMessages = transformLlmMessages
       ? await transformLlmMessages(normalizedLlmMessages)
       : normalizedLlmMessages;

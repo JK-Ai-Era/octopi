@@ -169,7 +169,9 @@ describe('Builder 默认接线', () => {
       longMsgs.push({ role: 'user', content: `msg-${i} ` + 'x'.repeat(200), timestamp: Date.now() });
     }
     agent.setSystemPrompt('You are test.');
-    const llm = await agent.config.convertToLlm!(longMsgs);
+    const view = await agent.config.convertToLlm!(longMsgs);
+    // 契约（2026-11-12）：convertToLlm 返回请求视图（messages + tools）
+    const llm = Array.isArray(view) ? view : view.messages;
     expect(llm.length).toBeGreaterThan(0);
     // 若走了 LLM 摘应，provider 应被调用；若未溢出则不强制
     // 至少验证 convertToLlm 不抛错且返回 system 消息

@@ -118,19 +118,16 @@ export interface CompactOptions {
   /** 会话模型输出上限（评审 F5）：保险丝不得越过模型自身的 max output */
   maxOutputTokens?: number;
   /**
-   * 缓存前缀：会话 LLM 请求同形 system+history。
+   * 缓存前缀 = **请求视图**（messages + tools 原子单位，见 core `RequestView`）。
+   *
+   * 为什么是一个字段而不是两个：提示缓存的前缀顺序是 tools → system → messages。
+   * 拆成 `llmPrefix` + `llmTools` 两个可选参数时，"只传消息忘了工具"在类型上合法，
+   * 摘要请求会静默退化为冷 prefill（2026-11-12 实测：384k 输入 0 命中、203s）。
+   * 一个字段 + 必填 tools = 该错误在类型层无法表达。
+   *
    * summarizeFn 路径只许尾部追加指令；禁止改写前缀字节。
    */
-  llmPrefix?: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[];
-  /**
-   * 缓存前缀的工具面（与会话请求逐字节相同的 LLMToolDefinition 列表）。
-   *
-   * 提示缓存的前缀顺序是 tools → system → messages：只对齐 system+history 而不带 tools，
-   * 前缀从第一个字节就断开，整段历史退化为冷 prefill（2026-11-12 实测：384k 输入
-   * 0 命中、203s）。必须由调用方用与 loop 同一映射（core `buildToolDefinitions`）
-   * 从 run 级工具清单生成——禁止手抄字段表。
-   */
-  llmTools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
+  requestView?: import('@octopi-agent/core/loop/types.js').RequestView;
   /**
    * 回声比对源覆盖（P2）：前缀含既有摘要占位时，占位正文不得参与回声判定——
    * 模型复用/续写上一份交接书不是「复读原文」。缺省回落到前缀文本投影。

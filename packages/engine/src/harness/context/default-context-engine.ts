@@ -22,6 +22,7 @@
 import type { Message } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { RequestView } from '@octopi-agent/core/loop/types.js';
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -54,6 +55,7 @@ import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { compactStateKey } from './compact-key.js';
 import { HookedCompactEngine } from '../extension/plugin-ecosystem/hooks/compaction-integration.js';
 import { isTurnAnchor, isScheduleNotice } from './layer-types.js';
+import { fingerprintRequestView } from './prefix-fingerprint.js';
 import { createCompactEngine } from './capabilities/compact/index.js';
 import type { CompactEngine, CompactOutcome } from './capabilities/compact/index.js';
 import {
@@ -203,6 +205,19 @@ export class DefaultContextEngine implements ContextEngine {
   private orphanWarned = new Set<string>();
   /** P1-a 校准台账：ratio 按 model 分键，observe/calibrate 唯一出入口 */
   private sizeLedger = new ContextSizeLedger();
+  /**
+   * 最近一次会话请求的工具面前缀指纹（按 sessionId）。
+   *
+   * 只为可观测：摘要请求的前缀必须与它同形才能命中缓存。tools 在一个会话生命周期内
+   * 近乎不变，一旦摘要请求的 toolsHash 与之不同，就是真问题（2026-11-12 事故形状）。
+   * 只告警不断言——摘要前缀与「当前」请求本就可能不同（折叠阶梯）。
+   */
+  /** 最近一次工具面哈希（按数组引用缓存，避免每 step 重复 sha1） */
+  private lastToolsHash?: { ref: LLMToolDefinition[]; hash: string };
+  private lastRequestTools = new Map<
+    string,
+    { hash: string; count: number; toolsRef: LLMToolDefinition[] }
+  >();
 
   constructor(config?: DefaultContextEngineConfig) {
     const tokenEstimator = config?.tokenEstimator ?? new HeuristicTokenEstimator();
@@ -275,6 +290,13 @@ export class DefaultContextEngine implements ContextEngine {
     } = params;
     // E4：引擎内部状态键 = (sessionId, agentId)
     const stateKey = compactStateKey(sessionId, agentId);
+    // 可观测护栏（2026-11-12）：记下本次会话请求的工具面前缀指纹，供摘要路径比对。
+    // tools 在会话生命周期内近乎不变，摘要请求与之不同 = 缓存必 miss 且此前完全不可见。
+    this.lastRequestTools.set(stateKey, {
+      hash: this.toolsHashOf(tools),
+      count: tools.length,
+      toolsRef: tools,
+    });
     const ledger = await this.loadLedger(sessionId, agentId, messages, loadCompactState);
     this.restoreGatesFromLedger(stateKey, ledger);
 
@@ -335,7 +357,7 @@ export class DefaultContextEngine implements ContextEngine {
           cached: true,
         });
       }
-      const llmMessages = this.buildLlmMessages(folded.view, systemPrompt, tools, agingPlan);
+      const llmMessages = this.buildLlmMessages(folded.view, systemPrompt, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       const decision = this.sizeLedger.decisionTokensWithSource(
         this.calKey(stateKey, modelKey),
@@ -353,6 +375,7 @@ export class DefaultContextEngine implements ContextEngine {
           (folded.applied.some((r) => r.spans.length > 0)
             ? 'Structural compact view (contextWindow unknown)'
             : undefined),
+        tools,
         summary: this.deriveSummary(ledger),
       };
     }
@@ -453,7 +476,7 @@ export class DefaultContextEngine implements ContextEngine {
       estimator.estimateMessages(applyAgingToMessages(ms, overflowAgingPlan, overflowAgingOpts)) <=
       effectiveMessagesLimit;
     if (selection.overflow.length === 0 && fits(view)) {
-      const llmMessages = this.buildLlmMessages(view, systemPrompt, tools, agingPlan);
+      const llmMessages = this.buildLlmMessages(view, systemPrompt, agingPlan);
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       const decision = this.sizeLedger.decisionTokensWithSource(
         this.calKey(stateKey, modelKey),
@@ -469,6 +492,7 @@ export class DefaultContextEngine implements ContextEngine {
         readingSource: decision.source,
         systemPrompt,
         droppedSummary: proactiveDroppedSummary,
+        tools,
         summary: this.deriveSummary(ledger),
       };
     }
@@ -519,18 +543,19 @@ export class DefaultContextEngine implements ContextEngine {
         durationMs: Date.now() - overflowStart,
         cancelled: true,
       });
-      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
+      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
       return {
-        messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
+        messages: this.buildLlmMessages(view, systemPrompt, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
         estimatedTokens: this.sizeLedger.decisionTokensWithSource(
           this.calKey(stateKey, modelKey),
-          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) +
+          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) +
             rawEstimator.estimateTools(tools),
           this.states.get(stateKey)?.lastUsageAnchor,
         ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
-        readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+        readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
         systemPrompt,
         droppedSummary: proactiveDroppedSummary,
+        tools,
         summary: this.deriveSummary(ledger),
       };
     }
@@ -576,18 +601,19 @@ export class DefaultContextEngine implements ContextEngine {
           durationMs: Date.now() - overflowStart,
           cancelled: true,
         });
-      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
+      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
         return {
-          messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
+          messages: this.buildLlmMessages(view, systemPrompt, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
           estimatedTokens: this.sizeLedger.decisionTokensWithSource(
           this.calKey(stateKey, modelKey),
-          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) +
+          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) +
             rawEstimator.estimateTools(tools),
           this.states.get(stateKey)?.lastUsageAnchor,
         ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
-          readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+          readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
           systemPrompt,
           droppedSummary: proactiveDroppedSummary,
+          tools,
           summary: this.deriveSummary(ledger),
         };
       }
@@ -607,18 +633,19 @@ export class DefaultContextEngine implements ContextEngine {
             'This session is no longer suitable for continued work, or the current model does not fit the task scale — start a new session or switch to a model with a larger context window.',
           durationMs: Date.now() - overflowStart,
         });
-      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
+      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
         return {
-          messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan),
+          messages: this.buildLlmMessages(view, systemPrompt, overflowAgingPlan),
           estimatedTokens: this.sizeLedger.decisionTokensWithSource(
           this.calKey(stateKey, modelKey),
-          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) +
+          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) +
             rawEstimator.estimateTools(tools),
           this.states.get(stateKey)?.lastUsageAnchor,
         ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
-          readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+          readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
           systemPrompt,
           droppedSummary: proactiveDroppedSummary,
+          tools,
           summary: this.deriveSummary(ledger),
         };
       }
@@ -670,25 +697,26 @@ export class DefaultContextEngine implements ContextEngine {
         error: `overflow_convergence_failed: ${err instanceof Error ? err.message : String(err)}`,
         durationMs: Date.now() - overflowStart,
       });
-      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
+      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
       return {
-        messages: this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan),
+        messages: this.buildLlmMessages(view, systemPrompt, overflowAgingPlan),
         estimatedTokens: this.sizeLedger.decisionTokensWithSource(
           this.calKey(stateKey, modelKey),
-          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) +
+          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) +
             rawEstimator.estimateTools(tools),
           this.states.get(stateKey)?.lastUsageAnchor,
         ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
-        readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+        readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
         systemPrompt,
         droppedSummary: proactiveDroppedSummary,
+        tools,
         summary: this.deriveSummary(ledger),
       };
     }
 
     // 8. 构建 LLM 消息（发送视图带本轮 overflow aging——豁免版只影响本次请求，
     // 下一 turn 正常规则照常（视图级、原文不动、天然可撤销）
-    const llmMessages = this.buildLlmMessages(view, systemPrompt, tools, overflowAgingPlan);
+    const llmMessages = this.buildLlmMessages(view, systemPrompt, overflowAgingPlan);
     const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
     const decision = this.sizeLedger.decisionTokensWithSource(
       this.calKey(stateKey, modelKey),
@@ -703,6 +731,7 @@ export class DefaultContextEngine implements ContextEngine {
       readingSource: decision.source,
       systemPrompt,
       droppedSummary: droppedSummary ?? proactiveDroppedSummary,
+      tools,
       summary: this.deriveSummary(ledger),
     };
   }
@@ -820,7 +849,7 @@ export class DefaultContextEngine implements ContextEngine {
     const conversation = view.filter(
       (m) => m.metadata?.source !== 'contextSummary' && m.metadata?.source !== 'contextLedger',
     );
-    return this.buildLlmMessages(conversation, systemPrompt, [], agingPlan)
+    return this.buildLlmMessages(conversation, systemPrompt, agingPlan)
       .map((m) => String(m.content ?? ''))
       .join('\n');
   }
@@ -1356,7 +1385,16 @@ export class DefaultContextEngine implements ContextEngine {
       // P2（2026-11-07）：前缀 = **折叠视图**，与主会话请求逐字节同形 → 吃前缀缓存。
       // 旧实现用原 messages（全部历史）：折叠生效后两者形状不同 → 缓存 0 命中，
       // 且每次重压都把已压缩过的中段原封不动再发一遍（实测 2.13MB 请求、provider 不返回）。
-      const llmPrefix = this.buildLlmMessages(folded.view, systemPrompt, tools, agingPlan);
+      // 请求视图（原子产物）：messages 与 tools 同批解析，摘要请求原样复用这份前缀。
+      // 旧实现只取 messages 半区、tools 由调用方另传——2026-11-12 前缀缓存事故的形状。
+      const view = this.buildRequestView({
+        messages: folded.view,
+        systemPrompt,
+        tools,
+        aging: agingPlan,
+      });
+      const llmPrefix = view.messages;
+      this.checkSummaryToolFace(stateKey, view.tools);
       // 回声源排除既有摘要占位：模型续写上一份交接书不是「复读原文」
       const echoSource = this.buildEchoSource(folded.view, systemPrompt, agingPlan);
       // P3 可观测：摘要请求即将发出——如实上报请求体量与预算，UI 不再只显示「进行中」。
@@ -1400,10 +1438,9 @@ export class DefaultContextEngine implements ContextEngine {
         contextWindow: params.contextWindow,
         maxOutputTokens: params.maxOutputTokens,
         onSummarizeFail: 'truncate',
-        llmPrefix,
-        // 工具面同形（2026-11-12）：缓存前缀 = tools → system → messages。
-        // 只对齐 system+history 会让前缀从第一字节断开（实测 384k 输入 0 命中、203s）。
-        llmTools: tools,
+        // 原子前缀（messages + tools）：一个入参，漏一半在类型层不成立。
+        // 缓存前缀 = tools → system → messages，二者必须同批产出（2026-11-12 事故）。
+        requestView: view,
         echoSource,
         signal: summarizeBudget.signal,
         // F22：cache-miss 旁路透传可观测事件
@@ -1536,11 +1573,9 @@ export class DefaultContextEngine implements ContextEngine {
     summarize?: SummarizeFunction;
     estimator: TokenEstimator;
     compactTargetTokens?: number;
-    /** 缓存前缀：会话同形 system+history；有则摘要只尾部追加指令 */
-    llmPrefix?: LLMMessage[];
     /** F22：cache-miss 旁路事件出口（manual 单发压缩的可观测性，与 proactive/overflow 对称） */
     emit?: ContextEmitFn;
-    /** 同形前缀原料：systemPrompt 齐备且无现成 llmPrefix 时引擎内建（与 assemble 的 buildLlmMessages 同源） */
+    /** 同形前缀原料：systemPrompt 齐备时引擎内建前缀（与 assemble 同一 buildRequestView 出口） */
     systemPrompt?: string;
     tools?: LLMToolDefinition[];
     /** task 快照：交接式摘要指令尾部注入（B0 易变块走 content 尾部，不进 system） */
@@ -1579,18 +1614,25 @@ export class DefaultContextEngine implements ContextEngine {
     // 缺 system/tools），toast 数字与顶栏永远对不上。
     const rawRequestViewTokens = (fold: { view: Message[] }): number =>
       estimateLLMMessages(
-        this.buildLlmMessages(fold.view, systemText ?? '', params.tools ?? [], agingPlan),
+        this.buildLlmMessages(fold.view, systemText ?? '', agingPlan),
       ) + raw.estimateTools(params.tools ?? []);
     const tokensBefore = rawRequestViewTokens(folded);
-    // P2：前缀 = 折叠视图（与主会话请求同形）；调用方显式给的前缀仍优先
-    const llmPrefix =
-      params.llmPrefix ??
-      (systemText
-        ? this.buildLlmMessages(folded.view, systemText, params.tools ?? [], agingPlan)
-        : undefined);
-    // 回声源只对引擎自建的前缀生效（调用方前缀的形状我们无从得知，回落到前缀投影）
+    // P2：前缀 = 折叠视图（与主会话请求同形）。
+    // 只能由 buildRequestView 产出（messages+tools 原子）——不接受调用方单独塞
+    // messages：那正是「两半各走一路」的入口（评审 del-b5ffc13a MIN-4）。
+    const requestView = systemText
+      ? this.buildRequestView({
+          messages: folded.view,
+          systemPrompt: systemText,
+          tools: params.tools ?? [],
+          aging: agingPlan,
+        })
+      : undefined;
+    const llmPrefix = requestView?.messages;
+    this.checkSummaryToolFace(compactStateKey(sessionId, params.agentId), requestView?.tools ?? params.tools ?? []);
+    // 回声源只用引擎自建的前缀形状（前缀=调用方视图时形状不可知）
     const echoSource =
-      !params.llmPrefix && llmPrefix
+      llmPrefix
         ? this.buildEchoSource(folded.view, systemText ?? '', agingPlan)
         : undefined;
     const protectFirstN = this.config.protectFirstN;
@@ -1683,9 +1725,7 @@ export class DefaultContextEngine implements ContextEngine {
         contextWindow: params.contextWindow,
         maxOutputTokens: params.maxOutputTokens,
         onSummarizeFail: 'truncate',
-        llmPrefix,
-        // 工具面同形（2026-11-12）：manual 与 proactive 同一契约，缺 tools = 0 缓存命中
-        llmTools: params.tools,
+        requestView,
         echoSource,
         signal: manualBudget.signal,
         // F8R-06：manual 路 cache-miss 旁路同样可观测（no_prefix/window_guard/window_exhausted）
@@ -1824,8 +1864,7 @@ export class DefaultContextEngine implements ContextEngine {
     summarize?: SummarizeFunction;
     compactTargetTokens?: number;
     /** 缓存前缀：会话同形 system+history */
-    llmPrefix?: LLMMessage[];
-    /** 同形前缀原料：与会话请求同源的 systemPrompt（tools 文档随 system 文本）；无 llmPrefix 时引擎内建 */
+    /** 同形前缀原料：与会话请求同源的 systemPrompt（工具面随它同批产出，不可单独传） */
     systemPrompt?: string;
     tools?: LLMToolDefinition[];
     /** task 快照：交接式摘要指令尾部注入 */
@@ -1853,7 +1892,6 @@ export class DefaultContextEngine implements ContextEngine {
       summarize: input.summarize,
       estimator,
       compactTargetTokens: input.compactTargetTokens,
-      llmPrefix: input.llmPrefix,
       systemPrompt: input.systemPrompt,
       tools: input.tools,
       taskSnapshot: input.taskSnapshot,
@@ -2032,14 +2070,83 @@ export class DefaultContextEngine implements ContextEngine {
   }
 
   /**
-   * 构建 LLM 消息格式
+   * 工具面指纹（按数组引用记忆，NIT-9）。
    *
-   * 将内部 Message 格式转换为 LLM Message 格式。
+   * sha1(JSON.stringify(tools)) 在每个 LLM step 的 assemble 出口都会跑一次；工具面
+   * 在一步之内几乎总是不变的同一实例，按引用复用可把常态成本降到一次比较。
+   *
+   * @param tools - 工具面
+   * @returns 哈希（16 位）
+   */
+  private toolsHashOf(tools: LLMToolDefinition[]): string {
+    const cached = this.lastToolsHash;
+    if (cached && cached.ref === tools) return cached.hash;
+    const hash = fingerprintRequestView({ messages: [], tools }).toolsHash;
+    this.lastToolsHash = { ref: tools, hash };
+    return hash;
+  }
+
+  /**
+   * 摘要前缀工具面校验（可观测护栏，2026-11-12）。
+   *
+   * tools 在会话生命周期内近乎不变；摘要请求的 toolsHash 与最近一次会话请求不同，
+   * 就说明前缀从第一字节断开，缓存必然 miss。这里只告警不断言——摘要前缀与「当前」
+   * 请求本就可能不同（折叠阶梯是逐轮追加的），但工具面不该变。
+   *
+   * @param stateKey - 引擎状态键（sessionId + agentId，与 compactStateKey 同源）
+   * @param tools - 摘要请求即将使用的工具面
+   * @returns 无（异常情况打印告警）
+   */
+  private checkSummaryToolFace(stateKey: string, tools: LLMToolDefinition[]): void {
+    const last = this.lastRequestTools.get(stateKey);
+    if (!last) return; // 无基线（如 manual 压缩发生在任何 assemble 之前）——不虚构告警
+    const hash = this.toolsHashOf(tools);
+    if (hash === last.hash) return;
+    console.warn(
+      `[ctx] summary tool face differs from last session request ` +
+        `(key=${stateKey}, summary=${tools.length} tools, session=${last.count}) — ` +
+        `prefix cache will miss; check tool-face resolution`,
+    );
+  }
+
+  /**
+   * 构建**请求视图**：前缀的 messages 与 tools 同批产出（缓存前缀的原子单位）。
+   *
+   * 会话请求与摘要请求（proactive / manual）都经此产出前缀。这样"改装配逻辑忘了一边"
+   * 在结构上不可能发生：没有哪条路径能只拿到 messages 或只拿到 tools。
+   *
+   * @param input.messages - 已折叠的视图（领域消息）
+   * @param input.systemPrompt - 会话托管 system 文本（逐字取自上一轮请求，不重建）
+   * @param input.tools - 已解析的工具面（调用方与 run 同源解析，禁自行拼装）
+   * @param input.aging - 老化计划（上游决策；此处不重新推导，避免静默推进）
+   * @returns 请求视图
+   */
+  private buildRequestView(input: {
+    messages: Message[];
+    systemPrompt: string;
+    tools: LLMToolDefinition[];
+    aging: ToolResultAgingPlan;
+  }): RequestView {
+    // 只产出前缀两半；尾部摘要指令由 compact 引擎独占追加（单一追加点，
+    // 否则重压/旁路会出现两条尾部指令——评审 del-b5ffc13a NIT-8）。
+    return {
+      messages: this.buildLlmMessages(input.messages, input.systemPrompt, input.aging),
+      tools: input.tools,
+    };
+  }
+
+  /**
+   * 构建 LLM 消息格式（前缀的 messages 半区）
+   *
+   * 注意：这里刻意**不接受 tools**。缓存前缀的原子产物是 `RequestView`
+   * （messages + tools 同批产出，见 core `RequestView`）；一个收了 tools 却不用的参数
+   * 会让读者误以为「视图=system+messages+tools」，2026-11-12 的前缀缓存事故正是这样
+   * 发生的（摘要请求看着"同形"，实际整包 tools 缺失）。
+   * 需要成对产出时请用 {@link buildRequestView}。
    */
   private buildLlmMessages(
     messages: Message[],
     systemPrompt: string,
-    tools: LLMToolDefinition[],
     aging: ToolResultAgingPlan,
   ): LLMMessage[] {
     const result: LLMMessage[] = [];

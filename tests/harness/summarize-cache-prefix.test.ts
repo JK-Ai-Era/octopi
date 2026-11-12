@@ -34,7 +34,7 @@ describe('compact 引擎缓存前缀', () => {
       protectTail: 0,
       targetTokens: 50,
       summarizeFn: summarize,
-      llmPrefix,
+      requestView: { messages: llmPrefix, tools: [] },
     });
 
     expect(out.view?.length).toBe(1);
@@ -71,7 +71,7 @@ describe('compact 引擎缓存前缀', () => {
         captured = msgs;
         return '## Conversation Summary\nv2';
       },
-      llmPrefix,
+      requestView: { messages: llmPrefix, tools: [] },
     });
     expect(String(captured[0]!.content)).toBe('SYS');
     const tail = String(captured[captured.length - 1]!.content);

@@ -33,6 +33,7 @@ export { formatUnknownToolError, suggestToolNames } from './tool-name-suggestion
 
 // ── 类型 ──
 export type {
+  RequestView,
   AgentContext,
   AgentTool,
   LoopToolResult,

@@ -82,8 +82,7 @@ describe('摘要请求工具面同形（前缀缓存红线）', () => {
       protectHead: 0,
       protectTail: 0,
       targetTokens: 50,
-      llmPrefix: PREFIX,
-      llmTools: TOOLS,
+      requestView: { messages: PREFIX, tools: TOOLS },
       summarizeFn: async (msgsIn, opts) => {
         captured = msgsIn;
         seenTools = opts?.tools;
@@ -109,7 +108,7 @@ describe('摘要请求工具面同形（前缀缓存红线）', () => {
       protectHead: 0,
       protectTail: 0,
       targetTokens: 50,
-      llmPrefix: PREFIX,
+      requestView: { messages: PREFIX, tools: [] },
       summarizeFn: async (_msgs, opts) => {
         seen = opts;
         return '1. Goal & status: ok.\n2. Open items: none.\n3. Conclusions: n/a.\n4. Evidence: none.';

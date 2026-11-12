@@ -396,8 +396,9 @@ export class Agent {
       extensionSnapshotBudgetTokens: options?.runScope?.extensionSnapshotBudgetTokens,
       iteration: options?.runScope?.iteration,
       systemPrompt: options?.runScope?.systemPrompt ?? context.systemPrompt,
-      // 与请求 toolDefs 同源：loop 实发 = buildToolDefinitions(currentContext.tools)
-      // （agent-loop；undefined = 0 工具）。
+      // 与请求工具面同源：ContextEngine 的请求视图（RequestView.tools）由同一批
+      // AgentTool 解析；loop 以视图为准，仅在旧签名（数组）时回落
+      // buildToolDefinitions(currentContext.tools)。
       // M-6：活读（getter）而非快照——beforeStep 可 Object.assign 替换 tools 数组，
       // 快照会让估算按 run 起点工具面、请求按 run 中途工具面（错位估算 = 毒样本）。
       // Nit 3（评审 del-e1ee43ef）：不回退 options.runScope.tools——那是「宿主宣告清单」，

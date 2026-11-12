@@ -39,7 +39,7 @@ describe('ContextEngine wiring', () => {
       info: { id: 'spy', name: 'spy' },
       async assemble(params: AssembleParams): Promise<AssembleResult> {
         seen.push(params.sessionId);
-        return { messages: [], estimatedTokens: 0, systemPrompt: params.systemPrompt };
+        return { messages: [], tools: [], estimatedTokens: 0, systemPrompt: params.systemPrompt };
       },
     };
     const builder = new AgentBuilder().model(mockProvider()).contextEngine(spyEngine);
@@ -62,6 +62,7 @@ describe('ContextEngine wiring', () => {
             { role: 'system', content: 'sys' },
             { role: 'user', content: 'hi' },
           ],
+          tools: [],
           estimatedTokens: 10,
           systemPrompt: 'sys',
           droppedSummary: '丢掉了旧工具输出',
@@ -70,7 +71,9 @@ describe('ContextEngine wiring', () => {
     };
     const builder = new AgentBuilder().model(mockProvider()).contextEngine(spyEngine);
     const { agent } = await builder.buildAgent();
-    const llm = await agent.config.convertToLlm!([msg('x')]);
+    const view = await agent.config.convertToLlm!([msg('x')]);
+    // 契约（2026-11-12）：convertToLlm 返回请求视图（messages + tools 同批产出）
+    const llm = Array.isArray(view) ? view : view.messages;
     expect(llm[0]?.role).toBe('system');
     expect(String((llm[0] as { content?: string }).content)).not.toContain('丢掉了旧工具输出');
     expect(String((llm[0] as { content?: string }).content)).toBe('sys');

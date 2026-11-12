@@ -302,13 +302,46 @@ export interface StepHooksConfig {
  * - ToolHooksConfig: 工具执行钩子
  * - StepHooksConfig: 模型轮控制钩子
  */
+// ============================================================
+// 请求视图（缓存前缀的原子产物）
+// ============================================================
+
+/**
+ * 一次 LLM 请求的完整视图：**消息与工具面同批产出**。
+ *
+ * 为什么要成对：prompt 缓存的前缀顺序是 `tools → system → messages`。
+ * 只要 tools 与 messages 分别由不同调用点各自拼装，任何一侧漏改都会让前缀
+ * 从第一字节断开，而症状只是「cached=0 + 变慢」——从 2026-11-12 事故学到的教训是：
+ * 完整性不能靠调用点的自觉，要由类型保证「取不到一半」。
+ *
+ * 约定：
+ * - 缓存敏感场景（会话请求、摘要请求）必须消费同一份 RequestView；
+ * - 唯一允许的差异是**尾部追加**（摘要指令），绝不前置或插队；
+ * - `aging` 由上游决定并作为入参传入，装配侧不重新推导（否则会静默推进老化而烧前缀）。
+ */
+export interface RequestView {
+  /** 已转换成 provider 消息格式的完整前缀（system 在首位，与 wire 请求一一对应） */
+  messages: LLMMessage[];
+  /** 与 messages 同批解析的工具面；空数组表示该请求不带 tools */
+  tools: LLMToolDefinition[];
+}
+
 export interface AgentLoopConfig extends ToolHooksConfig, StepHooksConfig {
   // ── 核心（唯一必需） ──
   model: ModelProvider;
 
   // ── 消息格式边界 ──
-  /** 内部消息格式 → LLM 消息格式。不传则直接透传。 */
-  convertToLlm?: (messages: Message[], signal?: AbortSignal) => Promise<LLMMessage[]>;
+  /**
+   * 内部消息格式 → LLM 请求视图。
+   *
+   * 返回 {@link RequestView} 时，工具面以它为准——loop 不再自行推导，
+   * 保证会话请求与摘要请求（同形前缀）工具面逐字节同源。
+   * 返回 `LLMMessage[]`（旧签名）时，loop 回落到 `buildToolDefinitions(context.tools)`。
+   */
+  convertToLlm?: (
+    messages: Message[],
+    signal?: AbortSignal,
+  ) => Promise<LLMMessage[] | RequestView>;
   /** Provider request-only projection; never assigned to the mutable message workspace. */
   transformLlmMessages?: (messages: LLMMessage[]) => Promise<LLMMessage[]>;
 

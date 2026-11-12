@@ -47,8 +47,8 @@ describe('textify 旁路不带工具面（评审 MAJ-1）', () => {
       protectHead: 0,
       protectTail: 0,
       targetTokens: 50,
-      // 给了工具面，但没有前缀 → 旁路分支
-      llmTools: TOOLS,
+      // 只给工具面、没有前缀消息 → 旁路分支（requestView.messages 为空）
+      requestView: { messages: [], tools: TOOLS },
       summarizeFn: async (_msgs, opts) => {
         seen = opts;
         return SUMMARY;

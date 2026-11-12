@@ -338,7 +338,9 @@ describe('压缩摘要 Session 持久化', () => {
       lastProactiveTokens: 100,
     });
 
-    const llm = await agent.config.convertToLlm!([userMsg('hi')]);
+    const view = await agent.config.convertToLlm!([userMsg('hi')]);
+    // 契约（2026-11-12）：convertToLlm 返回请求视图（messages + tools）
+    const llm = Array.isArray(view) ? view : view.messages;
     expect(llm.length).toBeGreaterThan(0);
     expect(agent.getSessionCompactState('s1', 'default')?.summary).toContain('from-disk');
     expect(agent.getSessionCompactState('s1', 'default')?.lastProactiveMessageCount).toBe(2);

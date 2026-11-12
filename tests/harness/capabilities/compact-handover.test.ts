@@ -48,7 +48,7 @@ describe('交接式摘要：指令形态与注入', () => {
       protectHead: 0,
       protectTail: 0,
       summarizeFn: summarize,
-      llmPrefix: prefix,
+      requestView: { messages: prefix, tools: [] },
       taskSnapshot: '<session_tasks>\n- [t1] open | 批次2\n</session_tasks>',
       foldRange: { replacedCount: 3, total: 8, preservedTail: 3 },
     });
@@ -278,7 +278,7 @@ describe('闸门判据边界与窗口护栏（评审 F2/F3/F4/F5）', () => {
       protectHead: 0,
       protectTail: 0,
       summarizeFn: summarize,
-      llmPrefix: prefix,
+      requestView: { messages: prefix, tools: [] },
     });
     expect(summarize).toHaveBeenCalledTimes(2);
     expect(out.summary).toBe(CLEAN_HANDOFF);
@@ -342,7 +342,7 @@ describe('闸门判据边界与窗口护栏（评审 F2/F3/F4/F5）', () => {
       protectHead: 0,
       protectTail: 18,
       summarizeFn: summarize,
-      llmPrefix: prefix,
+      requestView: { messages: prefix, tools: [] },
       contextWindow: 3000,
     });
 

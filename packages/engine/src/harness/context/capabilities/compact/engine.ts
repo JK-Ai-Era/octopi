@@ -230,25 +230,25 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         foldRange: opts.foldRange,
         taskSnapshot: opts.taskSnapshot,
       });
-      // 缓存优先：llmPrefix（会话同形 system+history）+ 尾部 user 指令。
+      // 缓存优先：requestView（会话同形 tools+system+history）+ 尾部 user 指令。
       // 禁止把指令塞进 system 或重排历史——否则打穿前缀缓存。
       const buildPrefixed = (): LLMMessage[] => [
-        ...opts.llmPrefix!,
+        ...opts.requestView?.messages!,
         { role: 'user', content: prompt.tailUser },
       ];
-      // 无 llmPrefix 回退「policy system + 文本化中段」（旁路/旧调用）：
+      // 无 requestView 回退「policy system + 文本化中段」（旁路/旧调用）：
       // tool_call-only assistant / 缺 tool_call_id 的 tool 消息会被严格网关 400。
       const buildTextify = (): LLMMessage[] => [
         { role: 'system', content: prompt.instruction },
         { role: 'user', content: buildHandoverUserContent(opts, middleText) },
       ];
-      // 回声比对源 = 模型实际看到的会话文本投影（评审 F2）：llmPrefix 分支含 head/middle/tail
+      // 回声比对源 = 模型实际看到的会话文本投影（评审 F2）：前缀分支含 head/middle/tail
       // 全量历史，只比 middleText 会漏掉 head/tail 区回声；指令本身不得进比对源（四段式标题
       // 会合法出现在输出里）。
       const prefixEchoSource = (): string =>
-        (opts.llmPrefix ?? []).map((m) => String(m.content ?? '')).join('\n');
+        (opts.requestView?.messages ?? []).map((m) => String(m.content ?? '')).join('\n');
 
-      let usePrefix = Boolean(opts.llmPrefix?.length);
+      let usePrefix = Boolean(opts.requestView?.messages?.length);
       let llmMessages = usePrefix ? buildPrefixed() : buildTextify();
       // 回声源：仅前缀分支才用调用方覆盖（前缀含既有摘要占位时，占位正文不得参与判定）；
       // textify 分支的比对源必须是它自己发给模型的文本（middleText）
@@ -262,12 +262,12 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       // 算进输入成本，否则「放得下」的判定会漏掉整包 tool schema（几十 k tokens）。
       // 只有 prefix 分支才发 tools——textify 分支 system 指令不同、缓存必 miss，
       // 带工具面是纯成本，还会把旁路本身顶出窗口（2026-11-12 评审 MAJ-1）。
-      const toolsTokensFor = (withTools: boolean): number =>
-        withTools && opts.llmTools?.length
-          ? ((opts.estimator as { estimateTools?: (t: LLMToolDefinition[]) => number } | undefined)
-              ?.estimateTools?.(opts.llmTools)) ??
-            new HeuristicTokenEstimator().estimateTools(opts.llmTools)
-          : 0;
+      const prefixTools = opts.requestView?.tools;
+      const toolsTokensFor = (withTools: boolean): number => {
+        if (!withTools || !prefixTools?.length) return 0;
+        const est = opts.estimator as { estimateTools?: (t: LLMToolDefinition[]) => number } | undefined;
+        return est?.estimateTools?.(prefixTools) ?? new HeuristicTokenEstimator().estimateTools(prefixTools);
+      };
       const windowCapOf = (msgs: LLMMessage[], withTools: boolean): number =>
         clampSummaryProviderCap({
           hardCap,
@@ -316,8 +316,8 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
             // 'none'，禁止摘要轮产生 tool_call（不改变缓存前缀字节）。
             // 只在 prefix 分支发：textify 分支 system 不同、缓存必 miss，带工具面是纯成本
             // 且会挤占窗口（评审 MAJ-1）。
-            ...(usePrefix && opts.llmTools && opts.llmTools.length > 0
-              ? { tools: opts.llmTools, toolChoice: 'none' as const }
+            ...(usePrefix && prefixTools && prefixTools.length > 0
+              ? { tools: prefixTools, toolChoice: 'none' as const }
               : {}),
             ...(opts.signal ? { signal: opts.signal } : {}),
             // outputTokens 真值收集（2026-11-08）：摘要产物体量以 provider 实测为准
