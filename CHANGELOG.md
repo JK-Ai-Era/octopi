@@ -115,6 +115,36 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.9 (2026-11-13)
+
+### fix(client-tools): 工具面粘滞 + 快照 TTL 续期——消除客户端工具上下线烧毁前缀缓存
+
+**问题**：`tools` schema 位于提示缓存前缀最前（`tools → system → messages`），任何增删都让整段历史从第 0 字节起失效。客户端工具（`html_ui` / `photo_capture` / `send_file`）原先随会话 liveness 实时增删，切换会话即触发一次 `57 ↔ 60` 的工具面振荡。
+
+**生产实测**（`default-web-1794485634331`，mimo-v2.6-pro，命中价仅为未命中的 0.83%）：
+
+| 时间 | 变化 | cached / total | 全价重算 |
+|---|---|---|---|
+| 00:46:49 | 57 → 60 | 30,592 / 100,876 | 70,284 |
+| 04:46:43 | 60 → 57 | 25,472 / 120,791 | 95,319 |
+| 05:08:39 | 57 → 60 | 30,976 / 155,191 | 124,215 |
+| 05:16:42 | 60 → 57 | 52,096 / 138,206 | 86,110 |
+
+合计 **375,928 token** 全价重算（≈¥1.13 + 四次 10–15 万 token 冷 prefill），而同一会话稳态命中率为 99.x%。
+
+**修法（方案 A：见过即保留）**：
+
+- **工具面粘滞**：`ClientToolsHost` 累积 `everLive`（会话 → 曾 live 过的工具名），`ClientToolVisibilitySnapshot` 新增 `everLive` 字段；run 侧谓词与进程内 `createVisibilityFilter` 均改按 `everLive` 判定——某会话见过某客户端工具后，该会话生命周期内它始终可见。
+- **不因 provider 失效卸载**：`reapStale` / `unregisterClientTools` 不再 `uninstallTool`，`installed` 变为网关生命周期内的累积集；能力面变化仍广播 `client_tools.changed`（UI 依据），只推空 ops 的纯可见性刷。
+- **调用期校验**：`materializeClientTool` 在派发前检查 `live`，确认离线时立即返回 `client_unavailable`（响亮、可重试），不再挂到 TTL 超时。快照过期 = liveness 未知 → 不误拒，交调用自身 TTL 兜底。
+- **TTL 续期缺陷**：`startVisibilityRefresh` 的 `key === last` 守卫使稳态下 `expiresAt` 永不刷新（注释声称「空 ops = 纯可见性刷」，实现却在刷新前 `return`），90s 后整批客户端工具被判不可见。改为无条件周期推空 ops。
+
+**取舍**（已拍板）：权限/参与者 ACL 收窄（`filterToolsForSessionRights`）**保持从工具面摘除**——那是安全边界，烧前缀是必须付出的代价。只有 liveness 抖动改走粘滞。
+
+**影响面**：`ClientToolVisibilitySnapshot` 新增可选 `everLive`（缺省回落 `live`，旧网关兼容）；`unregisterClientTools` 返回值语义由「全局卸载名」改为「会话级能力面移除名」，与它同时广播的 `client_tools.changed` 事件一致。
+
+---
+
 ## v0.113.8 (2026-11-13)
 
 ### feat(tenancy): T3a 检索租户上下文强制——knowledge 租户闸 + 断言链 + 写归属
@@ -130,6 +160,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 **评审（del-37149829）**：5 MAJ 中 MAJ-1/2/3/5 已修（详见 `arch/multi-tenancy.md` §10.2），MAJ-4 控制面读口租户闸随 T3b；MIN 结构性项（client 实例级 tenant provider、2N 查询、platform 保留字、client 分支测试锚）登记 T3b 边界。
 
 **边界（T3b）**：registry sources/mounts HTTP 面与受管注册入口（归属 claim 的权威来源）、控制面读口租户闸、§9.1-1 检索投影租户列。
+
+## v0.113.7 (2026-11-13)
 
 ### feat(tenancy): T2 家当隔离——workspace/home 物化 + registry 可跑桥 + credentials 域分离 + audit 归属（MVP T2）
 

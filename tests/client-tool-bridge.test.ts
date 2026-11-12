@@ -38,7 +38,13 @@ describe('run 侧桥配对（m2）', () => {
     await host.handleControl({
       type: 'setClientTools',
       ops: [{ op: 'add', tool: wireTool('html_ui') }],
-      visibility: { installed: ['html_ui'], live: [], expiresAt: Date.now() + 60_000 },
+      visibility: {
+        installed: ['html_ui'],
+        // 桥接上下文无 run scope 时 sessionId 记为 'unknown'（见 registered-tool-adapter）；
+        // 方案 A 的调用期校验要求该 (session, tool) 确实 live，判定「确认离线」才拒绝。
+        live: [{ sessionId: 'unknown', toolName: 'html_ui' }],
+        expiresAt: Date.now() + 60_000,
+      },
     } as never);
 
     let captured: {
@@ -98,6 +104,84 @@ describe('run 侧桥配对（m2）', () => {
     // 幂等：重复 abort 不再补发通知
     ac.abort();
     expect(notifies.filter((n) => n.type === 'client_tool_cancel')).toHaveLength(1);
+  });
+
+  it('确认离线 → client_unavailable 立即失败，不派发也不悬挂（方案 A 配套）', async () => {
+    const notifies: Array<Record<string, unknown>> = [];
+    const host = makeHost({
+      notify: (n: Record<string, unknown>) => {
+        notifies.push(n);
+      },
+    });
+    let captured: {
+      execute: (
+        id: string,
+        args: unknown,
+        signal?: AbortSignal,
+      ) => Promise<{ content: unknown; isError?: boolean }>;
+    } | undefined;
+    const agent = {
+      tools: [],
+      setToolVisibilityFilter: vi.fn(),
+      setTools: vi.fn((tools: unknown[]) => {
+        captured = (tools as Array<never>).find(
+          (t: { name?: string }) => t.name === 'html_ui',
+        ) as never;
+      }),
+    };
+    host.mount({
+      agentId: 'a1',
+      agent,
+      runner: fakeRunner() as never,
+      registerTools: () => undefined,
+      runConfigDefaults: {},
+    } as never);
+
+    // 工具面已安装（sticky 保留），但该会话没有 live provider 且快照新鲜 → 确认离线
+    await host.handleControl({
+      type: 'setClientTools',
+      ops: [{ op: 'add', tool: wireTool('html_ui') }],
+      visibility: { installed: ['html_ui'], live: [], expiresAt: Date.now() + 60_000 },
+    } as never);
+    expect(captured).toBeDefined();
+
+    const r = await captured!.execute('tc-offline', {}, new AbortController().signal);
+    expect(r.content).toMatchObject({ error: 'client_unavailable' });
+    // 没有派发到客户端（省掉一次注定超时的往返）
+    expect(notifies.some((n) => n.type === 'client_tool_call')).toBe(false);
+  });
+
+  it('快照过期 → liveness 未知，不误拒（交调用自身 TTL 兜底）', async () => {
+    const host = makeHost({ notify: () => undefined });
+    let captured: { execute: (id: string, args: unknown, signal?: AbortSignal) => Promise<{ content: unknown }> } | undefined;
+    const agent = {
+      tools: [],
+      setToolVisibilityFilter: vi.fn(),
+      setTools: vi.fn((tools: unknown[]) => {
+        captured = (tools as Array<never>).find(
+          (t: { name?: string }) => t.name === 'html_ui',
+        ) as never;
+      }),
+    };
+    host.mount({
+      agentId: 'a1',
+      agent,
+      runner: fakeRunner() as never,
+      registerTools: () => undefined,
+      runConfigDefaults: {},
+    } as never);
+    await host.handleControl({
+      type: 'setClientTools',
+      ops: [{ op: 'add', tool: wireTool('html_ui') }],
+      visibility: { installed: ['html_ui'], live: [], expiresAt: Date.now() - 1 },
+    } as never);
+
+    const ac = new AbortController();
+    const pending = captured!.execute('tc-stale', {}, ac.signal);
+    ac.abort();
+    const r = await pending;
+    // 未被 client_unavailable 短路，走的是正常派发/中止路径
+    expect((r.content as { error?: string }).error).toBe('cancelled');
   });
 });
 

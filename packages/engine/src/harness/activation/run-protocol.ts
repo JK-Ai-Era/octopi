@@ -49,13 +49,26 @@ export interface ClientToolWireSpec {
  * 事件可挂，生产者只能是时间刷），run 侧本地求值（stale 窗口 = 推送间隔，已声明收敛）。
  */
 export interface ClientToolVisibilitySnapshot {
-  /** ClientToolHost 已安装的客户端工具名（非安装名单内的工具恒可见） */
+  /** ClientToolHost 已安装的客户端工具名（累积：网关生命周期内不卸载，保证工具面恒定） */
   installed: string[];
-  /** 当前有 live provider 的 (session, tool) 对 */
+  /**
+   * 当前有 live provider 的 (session, tool) 对——**仅用于调用期 liveness 校验**。
+   * 不参与工具面过滤：liveness 抖动不得改变 LLM 可见的 tools schema
+   * （tools 在缓存前缀最前，任何增删都会让整段历史前缀失效）。
+   */
   live: Array<{ sessionId: string; toolName: string }>;
   /**
-   * 快照有效期（epoch ms）：过期后 run 侧按 fail-safe 收敛——已安装的客户端工具
-   * 一律不可见（liveness 未知时宁缺勿滥；pre-P0b 实时求值 = 无 live provider 即隐藏）。
+   * 会话内「曾经 live 过」的 (session, tool) 对——**工具面粘滞依据**（方案 A）。
+   * 一旦某会话见过某客户端工具，该会话生命周期内它始终保持可见；
+   * 客户端不可用时由调用期返回 `client_unavailable`（响亮失败、可重试），
+   * 而不是把工具从 schema 里摘掉。
+   * 缺省（旧网关）= 回落 `live`。
+   */
+  everLive?: Array<{ sessionId: string; toolName: string }>;
+  /**
+   * 快照有效期（epoch ms）：**只约束调用期 liveness 判定的可信度**。
+   * 过期 ≠ 工具面收缩（那会烧前缀）；过期时调用期检查退化为「照常派发」，
+   * 由调用自身 TTL 兜底。
    */
   expiresAt: number;
 }

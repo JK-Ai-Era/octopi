@@ -25,6 +25,7 @@ import {
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import type { ClientStreamTransport } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import type { RegisteredTool } from '@octopi-agent/core/types/tools.js';
+import type { ClientToolVisibilitySnapshot } from '@octopi-agent/engine/harness/activation/run-protocol.js';
 
 export interface ClientToolHostDeps {
   registry: ClientToolRegistry;
@@ -94,6 +95,11 @@ export class ClientToolHost {
   private readonly deps: ClientToolHostDeps;
   /** 已装进 tool 面的名字 → RegisteredTool */
   private installed = new Map<ClientToolName, RegisteredTool>();
+  /**
+   * 会话 → 曾 live 过的客户端工具名（方案 A 工具面粘滞的数据源）。
+   * 只增不减（网关生命周期内），随 installed 收口防无界增长。
+   */
+  private readonly everLive = new Map<string, Set<ClientToolName>>();
   private calls = new Map<ClientToolCallId, PendingCall>();
   /** 终态 call 短期保留（内存；权威在 persistCall） */
   private recentTerminal: ClientToolCall[] = [];
@@ -113,27 +119,49 @@ export class ClientToolHost {
 
   /** 会话 tool 面过滤：Client Tool 仅在本 session 有 live provider 时可见 */
   createVisibilityFilter(): (sessionId: string, toolName: string) => boolean {
+    // 进程内路径（gateway 直接 build agent）与 run 侧快照谓词共用同一粘滞语义：
+    // 见过即保留，liveness 抖动不改工具面（见 visibilitySnapshot 注释）。
     return (sessionId, toolName) => {
       if (!this.installed.has(toolName)) return true;
-      return this.deps.registry.hasLiveProvider(sessionId, toolName);
+      if (this.deps.registry.hasLiveProvider(sessionId, toolName)) {
+        const perSession = this.everLive.get(sessionId) ?? new Set<ClientToolName>();
+        perSession.add(toolName);
+        this.everLive.set(sessionId, perSession);
+        return true;
+      }
+      return this.everLive.get(sessionId)?.has(toolName) ?? false;
     };
   }
 
   /**
    * 可见性快照（createVisibilityFilter 谓词的数据化）：随 setClientTools 同步给
-   * run 实例，run 侧本地求值（stale 窗口 = 推送间隔，已声明收敛）。
+   * run 实例，run 侧本地求值。
    *
-   * @returns 快照（安装名 + live 对）
+   * 两套语义分开：`live` 只供**调用期** liveness 校验；`everLive` 供**工具面粘滞**
+   * （方案 A）。工具面绝不能随 liveness 抖动而变——`tools` 位于缓存前缀最前。
+   *
+   * @returns 快照（安装名 + live 对 + 曾 live 对 + 有效期）
    */
-  visibilitySnapshot(): {
-    installed: string[];
-    live: Array<{ sessionId: string; toolName: string }>;
-    expiresAt: number;
-  } {
+  visibilitySnapshot(): ClientToolVisibilitySnapshot {
     const installed = [...this.installed.keys()];
+    const installedSet = new Set(installed);
+    const live = this.deps.registry.livePairs(installed);
+    // 累积「曾 live」：工具面粘滞的唯一依据。按 installed 收口防无界增长
+    for (const pair of live) {
+      const perSession = this.everLive.get(pair.sessionId) ?? new Set<string>();
+      perSession.add(pair.toolName);
+      this.everLive.set(pair.sessionId, perSession);
+    }
+    const everLive: Array<{ sessionId: string; toolName: string }> = [];
+    for (const [sessionId, names] of this.everLive) {
+      for (const toolName of names) {
+        if (installedSet.has(toolName)) everLive.push({ sessionId, toolName });
+      }
+    }
     return {
       installed,
-      live: this.deps.registry.livePairs(installed),
+      live,
+      everLive,
       // 有效期 = provider live TTL（刷新间隔的 ~3 倍：容忍两次刷丢才失效）
       expiresAt: Date.now() + (this.deps.providerLiveTtlMs ?? 90_000),
     };
@@ -141,19 +169,18 @@ export class ClientToolHost {
 
   /**
    * 可见性周期刷新（M2-5）：TTL 过期是「心跳缺失」的缺因态——没有事件可挂，
-   * 生产者只能是时间刷。diff 后推送（无变化不打扰 wire）；空 ops = 纯可见性刷。
+   * 生产者只能是时间刷，因此**必须无条件续期**。
+   *
+   * 曾经的「内容未变则不推」守卫会让稳态下 `expiresAt` 永不刷新，90s 后整批
+   * 客户端工具被判不可见（注释与实现相反）。工具面增删本就由 register/unregister/
+   * reapStale 即时推送，此处只做纯可见性刷（空 ops）。
    */
   startVisibilityRefresh(): void {
     if (this.refreshTimer) return;
     const ttl = this.deps.providerLiveTtlMs ?? 90_000;
     const interval = Math.max(5_000, Math.floor(ttl / 3));
-    let last = '';
     this.refreshTimer = setInterval(() => {
       try {
-        const snap = this.visibilitySnapshot();
-        const key = JSON.stringify({ i: snap.installed, l: snap.live });
-        if (key === last) return;
-        last = key;
         this.deps.syncAgentTools([]);
       } catch {
         // 刷失败不打断主路径（下一拍再试）
@@ -183,19 +210,16 @@ export class ClientToolHost {
     return { alive };
   }
 
-  /** 剔除超时 provider 并卸下全局 tool 面上已无 live 提供者的名字 */
+  /** 剔除超时 provider 并广播能力面变化。
+   *
+   * **不卸载工具面**（方案 A：会话内「见过即保留」）：`tools` schema 位于缓存前缀
+   * 最前，一次增删会让整段历史前缀失效（生产实测单次 70k–124k token 全价重算）。
+   * provider 失效只影响调用期 liveness 判定，不再影响 LLM 可见的工具面。
+   */
   private reapStale(now = Date.now()): void {
     const stale = this.deps.registry.expireStaleProviders(now);
     if (stale.length === 0) return;
-    const ops: Array<{ op: 'remove'; name: string }> = [];
-    const globallyRemoved = new Set<string>();
     for (const entry of stale) {
-      for (const name of entry.removedNames) {
-        if (!this.deps.registry.hasAnyProvider(name) && this.uninstallTool(name)) {
-          ops.push({ op: 'remove', name });
-          globallyRemoved.add(name);
-        }
-      }
       if (entry.removedNames.length > 0) {
         this.deps.emitSessionEvent(entry.sessionId, {
           type: 'client_tools.changed',
@@ -209,7 +233,8 @@ export class ClientToolHost {
         });
       }
     }
-    if (ops.length > 0) this.deps.syncAgentTools(ops);
+    // 刷新可见性快照（空 ops）：让 run 侧尽快看到 liveness 变化，但工具面不动
+    this.deps.syncAgentTools([]);
   }
 
   /**
@@ -255,7 +280,8 @@ export class ClientToolHost {
   }
 
   /**
-   * 客户端下线。无 provider 的 tool 名从 tool 面移除。
+   * 客户端下线。**工具面不卸载**（方案 A）：provider 移除只让该 (session, tool)
+   * 失去 liveness，工具仍留在 schema 里，调用期返回 `client_unavailable`。
    */
   unregisterClientTools(input: {
     sessionId: string;
@@ -263,16 +289,8 @@ export class ClientToolHost {
   }): { removedNames: string[] } {
     this.reapStale();
     const { removedNames } = this.deps.registry.unregisterClientProviders(input);
-    const ops: Array<{ op: 'remove'; name: string }> = [];
-    const globallyRemoved: string[] = [];
-    for (const name of removedNames) {
-      // 仅当全局（所有 session）都没有 provider 时才从 tool 面卸下
-      if (!this.deps.registry.hasAnyProvider(name) && this.uninstallTool(name)) {
-        ops.push({ op: 'remove', name });
-        globallyRemoved.push(name);
-      }
-    }
-    if (ops.length > 0) this.deps.syncAgentTools(ops);
+    // 刷新可见性快照（空 ops）：liveness 变化立即同步，工具面保持不变
+    if (removedNames.length > 0) this.deps.syncAgentTools([]);
 
     if (removedNames.length > 0) {
       this.deps.emitSessionEvent(input.sessionId, {
@@ -336,7 +354,7 @@ export class ClientToolHost {
       'client_unavailable',
     );
 
-    return { removedNames: globallyRemoved };
+    return { removedNames };
   }
 
   listSessionCalls(sessionId: string): ClientToolCall[] {
@@ -659,12 +677,6 @@ export class ClientToolHost {
       return createSourceStreamTool(descriptor, { transport, openChannel, handleKey });
     }
     return createSinkStreamTool(descriptor, { transport, openChannel, handleKey });
-  }
-
-  private uninstallTool(name: ClientToolName): boolean {
-    if (!this.installed.delete(name)) return false;
-    this.deps.unregisterGlobalTool(name);
-    return true;
   }
 }
 

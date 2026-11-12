@@ -110,7 +110,42 @@ describe('客户端工具快照语义（注册表 + mount 重放 + 过期 fail-s
     expect(agent.setToolVisibilityFilter).toHaveBeenCalled();
   });
 
-  it('快照过期 → 已安装客户端工具 fail-safe 隐藏；未过期按 live 对（M2-5）', () => {
+  it('工具面粘滞：见过即保留，liveness/快照过期都不收缩 schema（方案 A）', () => {
+    const host = makeHost();
+    void host.handleControl({
+      type: 'setClientTools',
+      ops: [{ op: 'add', tool: clientTool('html_ui') }],
+      visibility: {
+        installed: ['html_ui'],
+        live: [{ sessionId: 's1', toolName: 'html_ui' }],
+        everLive: [{ sessionId: 's1', toolName: 'html_ui' }],
+        expiresAt: Date.now() + 60_000,
+      },
+    } as never);
+    const fresh = host.buildVisibilityPredicate();
+    expect(fresh('s1', 'html_ui')).toBe(true);
+    expect(fresh('s1', 'shell')).toBe(true); // 非安装名单恒可见
+    // 没见过该工具的会话不可见（粘滞不等于全放行）
+    expect(fresh('s2', 'html_ui')).toBe(false);
+
+    // provider 掉线 + 快照过期：工具面**不变**（否则 tools 前缀失效，整段历史全价重算）
+    void host.handleControl({
+      type: 'setClientTools',
+      ops: [],
+      visibility: {
+        installed: ['html_ui'],
+        live: [],
+        everLive: [{ sessionId: 's1', toolName: 'html_ui' }],
+        expiresAt: Date.now() - 1,
+      },
+    } as never);
+    const stale = host.buildVisibilityPredicate();
+    expect(stale('s1', 'html_ui')).toBe(true); // 见过即保留
+    expect(stale('s1', 'shell')).toBe(true);
+    expect(stale('s2', 'html_ui')).toBe(false);
+  });
+
+  it('旧网关未带 everLive → 回落 live（向后兼容）', () => {
     const host = makeHost();
     void host.handleControl({
       type: 'setClientTools',
@@ -121,20 +156,8 @@ describe('客户端工具快照语义（注册表 + mount 重放 + 过期 fail-s
         expiresAt: Date.now() + 60_000,
       },
     } as never);
-    const fresh = host.buildVisibilityPredicate();
-    expect(fresh('s1', 'html_ui')).toBe(true);
-    expect(fresh('s1', 'shell')).toBe(true); // 非安装名单恒可见
-    void host.handleControl({
-      type: 'setClientTools',
-      ops: [],
-      visibility: {
-        installed: ['html_ui'],
-        live: [{ sessionId: 's1', toolName: 'html_ui' }],
-        expiresAt: Date.now() - 1,
-      },
-    } as never);
-    const stale = host.buildVisibilityPredicate();
-    expect(stale('s1', 'html_ui')).toBe(false); // 过期 = liveness 未知 → 宁缺勿滥
-    expect(stale('s1', 'shell')).toBe(true);
+    const p = host.buildVisibilityPredicate();
+    expect(p('s1', 'html_ui')).toBe(true);
+    expect(p('s2', 'html_ui')).toBe(false);
   });
 });

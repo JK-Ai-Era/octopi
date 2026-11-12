@@ -1054,6 +1054,14 @@ export class RunHost implements RunBackend {
       definition: spec.definition,
       ...(spec.source === undefined ? {} : { source: spec.source }),
       handler: (args: Record<string, unknown>, context: ToolExecutionContext) => {
+        // 方案 A 配套：工具面粘滞保留 schema，因此这里必须响亮拒绝「确认离线」的调用，
+        // 而不是挂到 TTL 超时（模型拿到可读错误即可换路，代价远小于重建前缀缓存）。
+        if (this.isClientToolConfirmedOffline(context.sessionId, spec.definition.name)) {
+          return Promise.resolve({
+            error: 'client_unavailable',
+            hint: `客户端工具 "${spec.definition.name}" 当前没有在线连接；该端重新连接后可重试`,
+          });
+        }
         const callId = `ct-${randomUUID()}`;
         return new Promise<unknown>((resolve, reject) => {
           const abortSignal = context.abortSignal;
@@ -1109,13 +1117,33 @@ export class RunHost implements RunBackend {
   /** 可见性谓词（快照求值；宿主 onBuilt 在构建期装到 agent 上） */
   buildVisibilityPredicate(): (sessionId: string, toolName: string) => boolean {
     const snapshot = this.visibilitySnapshot;
+    // 方案 A（工具面粘滞）：已安装的客户端工具对某会话**见过即永久可见**。
+    // liveness 抖动绝不改变 LLM 可见的 tools schema——`tools` 位于缓存前缀最前，
+    // 一次增删会让整段历史前缀失效（生产实测 70k–124k token 全价重算/次）。
+    // 客户端真的不在线时，由调用期返回 `client_unavailable`（响亮、可重试）。
+    // 快照过期同样不收缩工具面；过期只让调用期校验退化为「照常派发」。
+    const sticky = snapshot.everLive ?? snapshot.live;
     return (sessionId, toolName) => {
       if (!snapshot.installed.includes(toolName)) return true;
-      // 新鲜度契约（M2-5）：快照过期 = liveness 未知 → fail-safe 收敛为不可见
-      //（宁缺勿滥；pre-P0b 实时求值语义 = 无 live provider 即隐藏）。
-      if (Date.now() > snapshot.expiresAt) return false;
-      return snapshot.live.some((e) => e.sessionId === sessionId && e.toolName === toolName);
+      return sticky.some((e) => e.sessionId === sessionId && e.toolName === toolName);
     };
+  }
+
+  /**
+   * 调用期 liveness 校验（方案 A 的配套）：工具留在 schema 里，但真的没有 live
+   * provider 时立刻响亮失败，而不是挂到 TTL 超时。
+   *
+   * 快照过期 = liveness 未知 → 不阻断（交调用自身 TTL 兜底），避免误拒。
+   *
+   * @param sessionId - 会话 id
+   * @param toolName - 客户端工具名
+   * @returns true = 可信地不在线（拒绝调用）
+   */
+  private isClientToolConfirmedOffline(sessionId: string, toolName: string): boolean {
+    const snapshot = this.visibilitySnapshot;
+    if (Date.now() > snapshot.expiresAt) return false;
+    if (!snapshot.installed.includes(toolName)) return false;
+    return !snapshot.live.some((e) => e.sessionId === sessionId && e.toolName === toolName);
   }
 
   private requireSessionWriter(): NonNullable<RunHostOptions['sessionWriter']> {

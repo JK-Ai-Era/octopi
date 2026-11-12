@@ -2,7 +2,7 @@
  * Client Tool Host（Gateway 侧）— pending / 路由 / resolve
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { makeToolContext } from './helpers/tool-context.js';
 import { ClientToolRegistry, ClientStreamTransport } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/client-tools/index.js';
 import type {
@@ -58,7 +58,7 @@ function makeHost() {
 }
 
 describe('ClientToolHost', () => {
-  it('installs tools on register and removes when last provider leaves', () => {
+  it('installs tools on register; unregister keeps the tool installed (tool surface is sticky)', () => {
     const { host, registered, unregistered, agentOps } = makeHost();
     const r1 = host.registerClientTools({
       sessionId: 's1',
@@ -70,9 +70,14 @@ describe('ClientToolHost', () => {
     expect(agentOps.length).toBe(1);
 
     const r2 = host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'web-1' });
+    // 会话级能力面确实少了一个 provider（UI 事件依据）
     expect(r2.removedNames).toEqual(['note_form']);
-    expect(unregistered).toEqual(['note_form']);
+    // 但工具面不卸载：`tools` 位于缓存前缀最前，增删会让整段历史前缀失效（方案 A）。
+    // 第二拍是空 ops 的纯可见性刷新，不是 remove。
+    expect(unregistered).toEqual([]);
     expect(agentOps.length).toBe(2);
+    expect(agentOps[1]).toEqual([]);
+    expect(host.visibilitySnapshot().installed).toEqual(['note_form']);
   });
 
   it('emits client_tools.changed with session-level added/removed names', () => {
@@ -99,6 +104,52 @@ describe('ClientToolHost', () => {
     const unreg = events.filter((e) => e.type === 'client_tools.changed').at(-1);
     expect(unreg?.data.removedNames).toEqual(['note_form']);
     expect(unreg?.data.toolNames).toEqual(['photo_capture']);
+  });
+
+  it('工具面粘滞：会话见过即保留可见性，liveness 抖动不改变 tools schema（方案 A）', () => {
+    const { host } = makeHost();
+    const filter = host.createVisibilityFilter();
+    // 未安装 = 不是客户端工具（谓词对非客户端工具恒放行；此处工具本就不在列表里）
+    expect(filter('s1', 'note_form')).toBe(true);
+
+    host.registerClientTools({ sessionId: 's1', clientInstanceId: 'web-1', descriptors: [noteForm] });
+    expect(filter('s1', 'note_form')).toBe(true);
+    const before = host.visibilitySnapshot();
+    expect(before.installed).toEqual(['note_form']);
+    expect(before.everLive).toEqual([{ sessionId: 's1', toolName: 'note_form' }]);
+
+    // provider 掉线（切换会话/关标签页）——可见性**不变**
+    host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'web-1' });
+    expect(filter('s1', 'note_form')).toBe(true);
+    const after = host.visibilitySnapshot();
+    expect(after.installed).toEqual(['note_form']);
+    expect(after.live).toEqual([]);
+    expect(after.everLive).toEqual([{ sessionId: 's1', toolName: 'note_form' }]);
+    // 其他会话仍未见过 → 恒不可见（粘滞 ≠ 全放行）
+    expect(filter('s2', 'note_form')).toBe(false);
+
+    // 重新上线：工具面完全不变，前缀缓存不受影响
+    host.registerClientTools({ sessionId: 's1', clientInstanceId: 'web-1', descriptors: [noteForm] });
+    const again = host.visibilitySnapshot();
+    expect(again.installed).toEqual(['note_form']);
+    expect(again.everLive).toEqual([{ sessionId: 's1', toolName: 'note_form' }]);
+  });
+
+  it('可见性周期刷新无条件续期（内容未变也必须推，否则 TTL 到期整批消失）', () => {
+    vi.useFakeTimers();
+    try {
+      const { host, agentOps } = makeHost();
+      host.registerClientTools({ sessionId: 's1', clientInstanceId: 'web-1', descriptors: [noteForm] });
+      const baseline = agentOps.length;
+      host.startVisibilityRefresh();
+      // 稳态（内容无变化）连推两拍
+      vi.advanceTimersByTime(90_000);
+      expect(agentOps.length).toBeGreaterThan(baseline);
+      expect(agentOps.at(-1)).toEqual([]); // 空 ops = 纯可见性刷
+      host.stopVisibilityRefresh();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not emit client_tools.changed when re-registering same tools', () => {
@@ -380,7 +431,7 @@ describe('ClientToolHost', () => {
     expect(out.error).toBe('client_unavailable');
   });
 
-  it('keeps global tool installed while another session still provides it', () => {
+  it('keeps the shared tool registered for every session once installed (sticky surface)', () => {
     const { host, registered, unregistered } = makeHost();
     host.registerClientTools({
       sessionId: 's1',
@@ -394,13 +445,15 @@ describe('ClientToolHost', () => {
     });
     expect(registered.filter((t) => t.definition.name === 'note_form')).toHaveLength(1);
 
+    // 逐个下线：会话级能力面各自减少，但工具面（全局 tool 列表）始终不卸载
     const r = host.unregisterClientTools({ sessionId: 's1', clientInstanceId: 'web-1' });
-    expect(r.removedNames).toEqual([]);
+    expect(r.removedNames).toEqual(['note_form']);
     expect(unregistered).toEqual([]);
 
     const r2 = host.unregisterClientTools({ sessionId: 's2', clientInstanceId: 'web-2' });
     expect(r2.removedNames).toEqual(['note_form']);
-    expect(unregistered).toEqual(['note_form']);
+    expect(unregistered).toEqual([]);
+    expect(host.visibilitySnapshot().installed).toEqual(['note_form']);
   });
 
   it('host abortSignal cancels pending call', async () => {
