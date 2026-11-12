@@ -3051,11 +3051,18 @@ export class Gateway {
     // E4：compact 键使用调用方 agentId（缺省 primary）；不静默改键
     const effectiveAgentId = agentId ?? session.primaryAgentId ?? session.agentId;
     // 解析（systemPrompt/tools/摘要绑定/进度双缝）在 run 侧（RunHost）；未挂载即懒建。
-    const res = await this.getRunBackend().control({
-      type: 'compact',
-      sessionId,
-      agentId: effectiveAgentId,
-    });
+    // 传输层预算：**不设限**（显式 null）。三段构成不可预算——session 锁等待（同会话
+    // run 在跑则排队，上界=run 时长）+ 首次 mount 装配 + summarize LLM 调用（任务层
+    // summarizeTimeoutMs 已兜底降级）。设任何固定界都会把「还在排队/跑」误报成失败
+    // （任务侧照常落盘）；UI 侧有「压缩中…」+ 计时反馈，非零反馈假死（MAJ-2 修法）。
+    const res = await this.getRunBackend().control(
+      {
+        type: 'compact',
+        sessionId,
+        agentId: effectiveAgentId,
+      },
+      { timeoutMs: null },
+    );
     if (!res.ok) throw new Error(res.error.message);
     return res.result as import('@octopi-agent/engine').CompactTransportOutcome;
   }

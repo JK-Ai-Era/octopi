@@ -115,6 +115,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.5 (2026-11-12)
+
+### fix(compact): compact transport budget — UI 压缩超时误报修复
+
+- **症状**：手动压缩报 `HTTP 400: The operation was aborted due to timeout`，但账本照常落盘（实测 06:29:16 摘要记录已写、摘要已进上下文视图）——**压缩成功被误报成失败**。
+- **根因**：`RemoteRunBackend.control` 固定 30s 传输超时 < compact 任务实际时长——compact op 在 run 侧要等 session 锁（同会话 run 在跑则排队，上界=run 时长）+ 首次 mount 装配 + summarize LLM 调用（任务预算 `summarizeTimeoutMs` 默认 300s）。传输层先 abort 报错，任务侧照常跑完。
+- **修复**：compact 的传输预算**恒不设限**（显式 `null`）——锁等待无上界，设任何固定界都会把「还在排队/跑」误报成失败；任务层 `summarizeTimeoutMs` 超时降级兜底不变，UI「压缩中…」+ 计时即反馈通道（非零反馈假死）。`control` 三态语义：options 缺省 = 30s（轻量 op 不变）、显式 `null` = 不设限、`number` = 该预算。
+- **评审 MAJ-2**：三态必须用显式 `null` 表达「不设限」——`options?.timeoutMs ?? 30_000` 会把显式不设限兜回 30s，退回误报症状；回归锚含 transport 层 signal 三态断言（缺省有 signal / null 无 signal / number 有 signal）。
+- 测试：`compact-timeout-budget`（恒 null ×3 预算档 + transport 三态）。
+
 ## v0.112.4 (2026-11-12)
 
 ### fix(observer): cross-process observer bridge — webui 上下文/Run 页签接通

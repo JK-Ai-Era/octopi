@@ -241,13 +241,22 @@ export class RemoteRunBackend {
   }
 
   /**
-   * 会话级控制 op（契约 control）。
+   * 控制 op。
    *
-   * @param op - 纯数据控制 op
-   * @returns 执行结果（ok:false 不抛——调用方裁决）
+   * @param op - 会话级/实例级控制操作
+   * @param options.timeoutMs - 传输层预算：缺省 30s；显式 `null` = 不设传输超时
+   *   （长任务无预算形态，如 summarizeTimeoutMs=0 的 compact）。长任务 op 的预算必须
+   *   ≥ 任务层预算——传输层预算 < 任务层预算会把「还在跑」误报成失败（任务侧照常落盘）。
    */
-  async control(op: RunControlOp): Promise<RunControlResponse> {
-    const res = await this.fetchJson('POST', '/control', op, 30_000);
+  async control(
+    op: RunControlOp,
+    options?: { timeoutMs?: number | null },
+  ): Promise<RunControlResponse> {
+    // 三态：timeoutMs 缺省/undefined = 30s；显式 null = 不设传输超时；number = 该预算。
+    // 不能用 ?? 兜底——显式 null（不设限）会被兜回 30s，退回误报症状（MAJ-2）。
+    const raw = options?.timeoutMs;
+    const timeoutMs = raw === null ? undefined : (raw ?? 30_000);
+    const res = await this.fetchJson('POST', '/control', op, timeoutMs);
     return (await res.json()) as RunControlResponse;
   }
 

@@ -34,7 +34,7 @@ import type { InstanceRecord, RouteConfig } from './registry.js';
 /** 实例级契约面（RemoteRunBackend 即其实现） */
 export interface InstanceBackend {
   startRun(req: RunRequest): AsyncIterable<AgentEvent>;
-  control(op: RunControlOp): Promise<RunControlResponse>;
+  control(op: RunControlOp, options?: { timeoutMs?: number | null }): Promise<RunControlResponse>;
   health(): Promise<RunBackendHealth>;
   /** 冒烟（健康门 §4.3）：装配热路径自检，不是 run */
   smoke(): Promise<RunSmokeReport>;
@@ -227,14 +227,18 @@ export class FleetRunBackend {
    * 结构化 fan-out（P1-3 漂移处置编排用）：全部注册实例逐个派发，返回 per-instance
    * 成败明细。control() 的 fleet-wide 聚合复用本方法（单一 fan-out 事实源）。
    * @param op - fleet-wide 控制 op
+   * @param options.timeoutMs - 传输层预算透传
    * @returns 每实例结果数组（instanceId / ok / error 可选）
    */
-  async fanOut(op: RunControlOp): Promise<
+  async fanOut(
+    op: RunControlOp,
+    options?: { timeoutMs?: number | null },
+  ): Promise<
     Array<{ instanceId: string; ok: boolean; error?: string }>
   > {
     const targets = [...this.entries.values()];
     const results = await Promise.allSettled(
-      targets.map((entry) => entry.backend.control(op)),
+      targets.map((entry) => entry.backend.control(op, options)),
     );
     return results.map((result, i) => {
       const instanceId = targets[i].record.instanceId;
@@ -257,7 +261,7 @@ export class FleetRunBackend {
    * @param op - 纯数据控制 op
    * @returns 执行结果（ok:false 不抛——调用方裁决）
    */
-  async control(op: RunControlOp): Promise<RunControlResponse> {
+  async control(op: RunControlOp, options?: { timeoutMs?: number | null }): Promise<RunControlResponse> {
     if (op.type === 'pulse') {
       const owner = this.pulseOwner.get(op.key);
       if (!owner) {
@@ -273,7 +277,7 @@ export class FleetRunBackend {
           error: { message: `supervise: pulse owner "${owner}" for key "${op.key}" is gone` },
         };
       }
-      return entry.backend.control(op);
+      return entry.backend.control(op, options);
     }
 
     // 点对点回执（实现期暴露的第三类 op）：notify 出处已登记源实例，按回执键定向；
@@ -295,7 +299,7 @@ export class FleetRunBackend {
       if (!entry) {
         return { ok: false, error: { message: `supervise: reply target "${owner}" for "${replyKey}" is gone` } };
       }
-      const res = await entry.backend.control(op);
+      const res = await entry.backend.control(op, options);
       // 一问一答无论成败都是终态（MAJ-1：失败残留即泄漏）
       this.replyRoute.delete(replyKey);
       return res;
@@ -305,7 +309,7 @@ export class FleetRunBackend {
       // MAJ-2：诊断探针（agentId 维度，无 sessionId）——每实例全量装配，任一可答；
       // 取最闲 ready 实例透传原始结果（不走 fan-out 的 appliedOn 形状）。
       try {
-        return (await this.pickLeastLoaded().backend.control(op));
+        return (await this.pickLeastLoaded().backend.control(op, options));
       } catch (err) {
         return {
           ok: false,
@@ -319,7 +323,7 @@ export class FleetRunBackend {
       if (targets.length === 0) {
         return { ok: false, error: { message: `supervise: no instances for fleet-wide op "${op.type}"` } };
       }
-      const perInstance = await this.fanOut(op);
+      const perInstance = await this.fanOut(op, options);
       const failed: string[] = [];
       for (const r of perInstance) {
         if (!r.ok) {
@@ -351,7 +355,7 @@ export class FleetRunBackend {
         );
       }
       const entry = this.resolveForSession(op.sessionId);
-      return entry.backend.control(op);
+      return entry.backend.control(op, options);
     }
 
     return {
