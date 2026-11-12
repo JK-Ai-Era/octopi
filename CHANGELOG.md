@@ -115,7 +115,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.113.7 (2026-11-13)
+## v0.113.8 (2026-11-13)
+
+### feat(tenancy): T3a 检索租户上下文强制——knowledge 租户闸 + 断言链 + 写归属
+
+多租户 MVP T3 首批（`arch/multi-tenancy.md` §6）：检索域 = 本租户 ∪ platform 公共库，跨租户不出界。
+
+- **租户闸单点执法**：`KnowledgeSourceStore.isTenantVisible` 从网关漏斗解耦——原租户检查内嵌在 `isGatewayVisible` 且依赖 gatewayId，单网关多租户部署下从不运行。语义：platform 域（`PLATFORM_TENANT_ID='platform'` 新保留哨兵）= broker/运维面全量；其余只见本域 ∪ platform；**无归属 fail-closed 到 DEFAULT 域**（存量语义，不做全量放行）。检索/读/catalog/session overlay 全部经 `isVisible` 单一收口。
+- **归属锚**：工具与 turn 级 grounding、context catalog 从 `getRunScope()?.principal?.tenantId ?? DEFAULT_TENANT_ID` 取 run 租户（禁参数伪造），经 `HybridSearchOptions.tenantId` / `isVisible(identity)` / client `x-octopi-tenant` 头到同一执法点。
+- **租户断言链**（`resolveTenantClaim`，http-bridge 双鉴权点同源）：gateway 的 Knowledge Service token 域 = platform（受信 broker），读口按断言收窄；租户 token 只可断言本域；越域/重复头按未认证拒（fail-loud 不回落）。client 的 search/read/catalog/chunks/grounding 全带断言头。
+- **写归属护栏**：`registerSource` 打标 = claim 在场打 claim 域；platform token 无 claim **显式降级 default 域** + 告警（永不放大成 platform 共享；公共库必须显式 claim `'platform'`）。源写权限 = 网关漏斗 ⊕ 租户域（`assertSourceWritable`，platform 运维豁免），堵同 gateway 下跨租户 PATCH/DELETE。
+- 判据 drill（run 级真工具路径）：两租户各跑 agent 调 knowledge_search，命中域 = 本域 ∪ platform、互不出界；DEFAULT 域语义与断言校验各有锚（`tests/knowledge-tenant-domain.test.ts`）。
+
+**评审（del-37149829）**：5 MAJ 中 MAJ-1/2/3/5 已修（详见 `arch/multi-tenancy.md` §10.2），MAJ-4 控制面读口租户闸随 T3b；MIN 结构性项（client 实例级 tenant provider、2N 查询、platform 保留字、client 分支测试锚）登记 T3b 边界。
+
+**边界（T3b）**：registry sources/mounts HTTP 面与受管注册入口（归属 claim 的权威来源）、控制面读口租户闸、§9.1-1 检索投影租户列。
 
 ### feat(tenancy): T2 家当隔离——workspace/home 物化 + registry 可跑桥 + credentials 域分离 + audit 归属（MVP T2）
 

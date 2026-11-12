@@ -356,7 +356,11 @@ export class RunAssembly {
             async () => {
               try {
                 const client = await this.deps.getKnowledgeClient();
-                const items = await client.catalog(agentIdForCatalog);
+                const { getRunScope } = await import('@octopi-agent/engine/harness');
+                const { DEFAULT_TENANT_ID } = await import('@octopi-agent/core/types.js');
+                // 归属锚（T3，评审 MAJ-3）：catalog 与检索同口径按 run 租户收窄
+                const tenantId = getRunScope()?.principal?.tenantId ?? DEFAULT_TENANT_ID;
+                const items = await client.catalog(agentIdForCatalog, { tenantId });
                 return items as import('@octopi-agent/engine/harness/knowledge/catalog-types.js').KnowledgeCatalogItem[];
               } catch {
                 return [];

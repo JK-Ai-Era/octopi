@@ -4,10 +4,33 @@
  * 主线程不得跑 Knowledge 业务/SQLite；只转发，保证 /health 在引擎忙时仍可答。
  */
 
+import { PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
+
 export interface KnowledgeTokenInfo {
   token: string;
   tenantId: string;
   gatewayId: string;
+}
+
+/**
+ * 租户断言（受信 gateway 上行，arch/multi-tenancy.md T3）：
+ * `x-octopi-tenant` = 调用方断言的 run 归属租户（与 X-Registry-Token 同族的归属通道）。
+ * token 域 = PLATFORM（跨域受信）→ 断言任意域放行；token 域 = 其他 → 只可断言本域。
+ * 无断言 = token 域（旧语义）。
+ *
+ * @param tokenTenantId - token 绑定域
+ * @param claimed - 请求断言的租户（可缺省）
+ * @returns 生效域；断言越域时 `{ error }`（调用方按 401/403 拒）
+ */
+export function resolveTenantClaim(
+  tokenTenantId: string,
+  claimed: string | undefined,
+): { tenantId: string } | { error: 'tenant_mismatch' } {
+  if (!claimed) return { tenantId: tokenTenantId };
+  if (tokenTenantId === PLATFORM_TENANT_ID || tokenTenantId === claimed) {
+    return { tenantId: claimed };
+  }
+  return { error: 'tenant_mismatch' };
 }
 
 /**

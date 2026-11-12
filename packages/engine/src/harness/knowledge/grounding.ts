@@ -5,10 +5,11 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
-import { getTextContent } from '@octopi-agent/core/types.js';
+import { getTextContent, DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { ChunkHit, KnowledgeIndexStore } from './index-store.js';
 import type { KnowledgeHitLog } from './hit-log.js';
 import type { AutoGroundPort } from './retriever.js';
+import { getRunScope } from '../run/run-scope.js';
 
 /** 消息 metadata.source 标记 */
 export const KNOWLEDGE_GROUNDING_SOURCE = 'knowledgeGrounding' as const;
@@ -196,6 +197,8 @@ export class GroundingAssembler {
     const decision = await this.retriever.autoGround(query, {
       agentId: input.agentId ?? 'default',
       sessionId: input.sessionId,
+      // 归属锚（T3，与检索工具同源）：turn 级 grounding 注入同样不得跨租户取材
+      tenantId: getRunScope()?.principal?.tenantId ?? DEFAULT_TENANT_ID,
       limit: Math.max(8, this.maxChunks * 2),
     });
 

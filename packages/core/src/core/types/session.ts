@@ -14,6 +14,9 @@ export type TenantId = string & { readonly __brand: 'TenantId' };
 /** 缺省租户：存量数据与未接身份层的创建路径（arch/multi-tenancy.md §5） */
 export const DEFAULT_TENANT_ID = 'default' as TenantId;
 
+/** 平台公共域哨兵：platform 公共资产（§6 跨租户共享唯一合法形态）——对所有租户可见 */
+export const PLATFORM_TENANT_ID = 'platform' as TenantId;
+
 /** Session 元数据 */
 export interface SessionMeta {
   id: string;

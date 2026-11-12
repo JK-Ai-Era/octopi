@@ -12,7 +12,7 @@ import type {
   ListSourcesQuery,
 } from './query-service.js';
 import type { KnowledgeServiceToken } from './http-app.js';
-import { matchKnowledgeToken } from './http-bridge.js';
+import { matchKnowledgeToken, resolveTenantClaim } from './http-bridge.js';
 import { promotionThresholdsFromParams } from './http-params.js';
 
 export interface ReadHttpDeps {
@@ -28,6 +28,8 @@ export interface ReadHttpDeps {
 type AuthContext = {
   tenantId: string;
   gatewayId: string;
+  /** 是否携带显式租户断言（x-octopi-tenant） */
+  claimed?: boolean;
   agentId?: string;
   sessionId?: string;
 };
@@ -427,5 +429,10 @@ export function authenticateRead(
 ): AuthContext | null {
   const hit = matchKnowledgeToken(tokens, req.headers.authorization);
   if (!hit) return null;
-  return { tenantId: hit.tenantId, gatewayId: hit.gatewayId };
+  // 租户断言（T3）：x-octopi-tenant 上行；重复头/越域断言按未认证拒（fail-loud，不回落）
+  const claim = req.headers['x-octopi-tenant'];
+  if (Array.isArray(claim)) return null;
+  const resolved = resolveTenantClaim(hit.tenantId, claim ? claim : undefined);
+  if ('error' in resolved) return null;
+  return { tenantId: resolved.tenantId, gatewayId: hit.gatewayId, claimed: Boolean(claim) };
 }

@@ -7,12 +7,14 @@
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { KnowledgeIndexStore } from '../../../knowledge/index-store.js';
 import type { KnowledgeRetriever } from '../../../knowledge/retriever.js';
 import type { KnowledgeSourceStore } from '../../../knowledge/source-store.js';
 import type { KnowledgeClient } from '../../../knowledge/client.js';
 import { asSourceId } from '../../../knowledge/types.js';
 import { wrapUntrustedKnowledgeBlock } from '../../../knowledge/grounding.js';
+import { getRunScope } from '../../../run/run-scope.js';
 
 export interface KnowledgeToolOptions {
   retriever: KnowledgeRetriever;
@@ -32,11 +34,14 @@ export interface KnowledgeClientToolOptions {
   maxReadChars?: number;
 }
 
-function resolveIds(context: unknown): { agentId: string; sessionId?: string } {
+function resolveIds(context: unknown): { agentId: string; sessionId?: string; tenantId: string } {
   const ctx = (context ?? {}) as { agentId?: string; sessionId?: string };
   return {
     agentId: ctx.agentId?.trim() || 'default',
     sessionId: ctx.sessionId?.trim() || undefined,
+    // 归属锚（arch/multi-tenancy.md §4/§6）：run 归属租户（禁止参数伪造）；
+    // 未接身份层 = DEFAULT 域（存量语义）
+    tenantId: getRunScope()?.principal?.tenantId ?? DEFAULT_TENANT_ID,
   };
 }
 
@@ -81,13 +86,14 @@ export function createKnowledgeSearchTool(options: KnowledgeToolOptions): Regist
       const query = String(args.query ?? '').trim();
       if (!query) return { hits: [], error: 'query is required' };
       const limit = Math.min(Number(args.limit) || maxResults, 20);
-      const { agentId, sessionId } = resolveIds(context);
+      const { agentId, sessionId, tenantId } = resolveIds(context);
       const sourceId = args.source_id ? String(args.source_id).trim() : '';
       const sourceName = args.source ? String(args.source).trim() : '';
 
       const result = await options.retriever.search(query, {
         agentId,
         sessionId,
+        tenantId,
         limit,
         sourceIds: sourceId ? [sourceId] : undefined,
         source: sourceName || undefined,
@@ -144,12 +150,12 @@ export function createKnowledgeReadTool(options: KnowledgeToolOptions): Register
     },
     handler: async (args, context) => {
       const maxChars = Math.min(Number(args.max_chars) || maxReadChars, 32_000);
-      const { agentId, sessionId } = resolveIds(context);
+      const { agentId, sessionId, tenantId } = resolveIds(context);
       const chunkId = args.chunk_id ? String(args.chunk_id) : '';
 
       const canSee = (sourceId: string): boolean => {
         const src = options.sourceStore.get(sourceId);
-        return src ? options.sourceStore.isVisible(src, agentId, sessionId) : false;
+        return src ? options.sourceStore.isVisible(src, agentId, sessionId, { tenantId }) : false;
       };
 
       if (chunkId) {
@@ -246,11 +252,11 @@ export function createKnowledgeClientTools(
     handler: async (args, context) => {
       const query = String(args.query ?? '').trim();
       if (!query) return { hits: [], error: 'query is required' };
-      const { agentId, sessionId } = resolveIds(context);
+      const { agentId, sessionId, tenantId } = resolveIds(context);
       const limit = Math.min(Number(args.limit) || maxResults, 20);
       try {
         await client.ensurePrincipal(agentId).catch(() => undefined);
-        const result = await client.search(agentId, query, { sessionId, limit });
+        const result = await client.search(agentId, query, { sessionId, limit, tenantId });
         const hits = (result.hits ?? []) as Array<{
           sourceId?: string;
           sourceIds?: string[];
@@ -298,7 +304,7 @@ export function createKnowledgeClientTools(
     },
     handler: async (args, context) => {
       const maxChars = Math.min(Number(args.max_chars) || maxReadChars, 32_000);
-      const { agentId } = resolveIds(context);
+      const { agentId, tenantId } = resolveIds(context);
       try {
         await client.ensurePrincipal(agentId).catch(() => undefined);
         const chunkId = args.chunk_id ? String(args.chunk_id) : '';
@@ -309,6 +315,7 @@ export function createKnowledgeClientTools(
           chunkId
             ? { chunkId }
             : { sourceId, path },
+          { tenantId },
         );
         if (!data?.found) {
           return { found: false, error: 'chunk not found' };

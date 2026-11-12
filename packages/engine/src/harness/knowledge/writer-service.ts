@@ -6,6 +6,7 @@
  */
 
 import type { KnowledgeDatabase } from './db.js';
+import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import { KnowledgeSourceStore } from './source-store.js';
 import { KnowledgeIndexStore } from './index-store.js';
 import { MembershipStore } from './membership-store.js';
@@ -29,6 +30,8 @@ import type { EmbeddingProvider } from '../memory/sqlite/embedding.js';
 export interface WriteIdentity {
   tenantId: string;
   gatewayId: string;
+  /** 是否携带显式租户断言（x-octopi-tenant）；归属打标区分「显式」与「token 域回落」 */
+  claimed?: boolean;
 }
 
 export interface WriteAbortStats {
@@ -356,6 +359,18 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     delete input.registered_by;
     delete input.tenantId;
     delete input.tenant_id;
+    // 归属打标（arch/multi-tenancy.md §6，评审 MAJ-1 修配套）：
+    // - claim 在场 = 显式归属（含显式 claim 'platform' = 公共库）
+    // - platform token 无 claim = 受信 broker 的未声明建档 → 降级 default 域（存量语义，
+    //   永不放大成 platform 共享）并告警
+    // - 租户 token 无 claim = token 域（旧语义不变）
+    let ownerTenant = identity.tenantId;
+    if (!identity.claimed && identity.tenantId === PLATFORM_TENANT_ID) {
+      ownerTenant = DEFAULT_TENANT_ID;
+      console.warn(
+        `[Knowledge] registerSource without ownership claim stamped to "${DEFAULT_TENANT_ID}" domain; assert x-octopi-tenant to declare ownership`,
+      );
+    }
     const src = this.sources.register(input as unknown as KnowledgeSourceInput);
     this.db.raw
       .prepare(
@@ -365,7 +380,7 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
       .run(
         identity.gatewayId,
         typeof input.visibility === 'string' ? input.visibility : 'private',
-        identity.tenantId,
+        ownerTenant,
         src.id,
       );
     void this.ingest.ingestSource(src.id, { full: true }).catch((e) => {
@@ -382,11 +397,9 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     patch: Record<string, unknown>,
   ): Promise<KnowledgeSource | null> {
     const row = this.db.raw
-      .prepare('SELECT registered_by FROM knowledge_sources WHERE id = ?')
-      .get(sourceId) as { registered_by?: string } | undefined;
-    if (row?.registered_by && row.registered_by !== identity.gatewayId) {
-      throw Object.assign(new Error('not source owner'), { code: 'not_resource_owner' });
-    }
+      .prepare('SELECT registered_by, tenant_id FROM knowledge_sources WHERE id = ?')
+      .get(sourceId) as { registered_by?: string; tenant_id?: string } | undefined;
+    this.assertSourceWritable(identity, row, sourceId);
     const updated = this.sources.update(sourceId, patch as never);
     if (!updated) return null;
     if (typeof patch.visibility === 'string') {
@@ -406,11 +419,9 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
       throw Object.assign(new Error('source not found'), { code: 'source_not_found' });
     }
     const row = this.db.raw
-      .prepare('SELECT registered_by FROM knowledge_sources WHERE id = ?')
-      .get(sourceId) as { registered_by?: string } | undefined;
-    if (row?.registered_by && row.registered_by !== identity.gatewayId) {
-      throw Object.assign(new Error('not source owner'), { code: 'not_resource_owner' });
-    }
+      .prepare('SELECT registered_by, tenant_id FROM knowledge_sources WHERE id = ?')
+      .get(sourceId) as { registered_by?: string; tenant_id?: string } | undefined;
+    this.assertSourceWritable(identity, row, sourceId);
     // 先停在途 parse/embed：否则 purge 让出窗口内 upsert 会把 File/Chunk 再写回来
     this.ingest.abortJobs({ sourceId });
     const purged = await this.memberships.unclaimAllForSourceAsync(sourceId, (fileId) =>
@@ -492,16 +503,38 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     });
   }
 
+  /**
+   * 源写权限（arch/multi-tenancy.md §6，评审 MAJ-5）：
+   * 网关漏斗（registered_by）⊕ 租户域（tenant_id）——platform 身份 = 运维豁免；
+   * 租户身份只可写本域源。缺行按无约束放行（老库/投影缺失），由调用方的 not-found 路径兜底。
+   */
+  private assertSourceWritable(
+    identity: WriteIdentity,
+    row: { registered_by?: string; tenant_id?: string } | undefined,
+    sourceId: string,
+  ): void {
+    if (row?.registered_by && row.registered_by !== identity.gatewayId) {
+      throw Object.assign(new Error('not source owner'), { code: 'not_resource_owner' });
+    }
+    if (
+      row?.tenant_id &&
+      identity.tenantId !== PLATFORM_TENANT_ID &&
+      row.tenant_id !== identity.tenantId
+    ) {
+      throw Object.assign(new Error(`source ${sourceId} belongs to another tenant domain`), {
+        code: 'not_resource_owner',
+      });
+    }
+  }
+
   private async assertSourceOwner(identity: WriteIdentity, sourceId: string): Promise<void> {
     const row = this.db.raw
-      .prepare('SELECT registered_by FROM knowledge_sources WHERE id = ?')
-      .get(sourceId) as { registered_by?: string } | undefined;
+      .prepare('SELECT registered_by, tenant_id FROM knowledge_sources WHERE id = ?')
+      .get(sourceId) as { registered_by?: string; tenant_id?: string } | undefined;
     if (!row) {
       throw Object.assign(new Error('source not found'), { code: 'source_not_found' });
     }
-    if (row.registered_by && row.registered_by !== identity.gatewayId) {
-      throw Object.assign(new Error('not source owner'), { code: 'not_resource_owner' });
-    }
+    this.assertSourceWritable(identity, row, sourceId);
   }
 
   async reindexSource(sourceId: string): Promise<void> {

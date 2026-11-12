@@ -144,7 +144,7 @@ export class KnowledgeClient {
   search(
     agentId: string,
     q: string,
-    opts?: { sessionId?: string; limit?: number },
+    opts?: { sessionId?: string; limit?: number; tenantId?: string },
   ): Promise<{ hits: unknown[]; keywordHits: number; vectorHits: number }> {
     const qs = new URLSearchParams({ q });
     if (opts?.sessionId) qs.set('sessionId', opts.sessionId);
@@ -153,7 +153,7 @@ export class KnowledgeClient {
       'GET',
       `/v1/principals/${encodeURIComponent(agentId)}/search?${qs}`,
       undefined,
-      undefined,
+      this.tenantHeaders(opts?.tenantId),
       { read: true },
     );
   }
@@ -165,6 +165,7 @@ export class KnowledgeClient {
     opts?: {
       sessionId?: string;
       limit?: number;
+      tenantId?: string;
       recall?: 'off' | 'hint' | 'hybrid' | 'inject';
     },
   ): Promise<{
@@ -183,7 +184,7 @@ export class KnowledgeClient {
       'GET',
       `/v1/principals/${encodeURIComponent(agentId)}/ground?${qs}`,
       undefined,
-      undefined,
+      this.tenantHeaders(opts?.tenantId),
       { read: true },
     );
   }
@@ -292,12 +293,12 @@ export class KnowledgeClient {
     );
   }
 
-  catalog(agentId: string): Promise<unknown[]> {
+  catalog(agentId: string, opts?: { tenantId?: string }): Promise<unknown[]> {
     return this.request(
       'GET',
       `/v1/principals/${encodeURIComponent(agentId)}/catalog`,
       undefined,
-      undefined,
+      this.tenantHeaders(opts?.tenantId),
       { read: true },
     );
   }
@@ -354,6 +355,7 @@ export class KnowledgeClient {
     agentId: string,
     sourceId: string,
     path: string,
+    opts?: { tenantId?: string },
   ): Promise<
     Array<{ id: string; text: string; startLine: number; endLine: number; ordinal: number; path: string }>
   > {
@@ -362,7 +364,7 @@ export class KnowledgeClient {
       'GET',
       `/v1/principals/${encodeURIComponent(agentId)}/chunks?${qs}`,
       undefined,
-      undefined,
+      this.tenantHeaders(opts?.tenantId),
       { read: true },
     );
   }
@@ -370,6 +372,7 @@ export class KnowledgeClient {
   read(
     agentId: string,
     body: { chunkId?: string; sourceId?: string; path?: string },
+    opts?: { tenantId?: string },
   ): Promise<{
     found: boolean;
     path?: string;
@@ -378,7 +381,17 @@ export class KnowledgeClient {
     text?: string;
     chunkCount?: number;
   }> {
-    return this.request('POST', `/v1/principals/${encodeURIComponent(agentId)}/read`, body);
+    return this.request(
+      'POST',
+      `/v1/principals/${encodeURIComponent(agentId)}/read`,
+      body,
+      this.tenantHeaders(opts?.tenantId),
+    );
+  }
+
+  /** 租户断言头（T3，arch/multi-tenancy.md §6）：token=platform 时上行 run 归属域 */
+  private tenantHeaders(tenantId?: string): Record<string, string> | undefined {
+    return tenantId ? { 'x-octopi-tenant': tenantId } : undefined;
   }
 
   getVisibility(agentId: string): Promise<{
@@ -506,6 +519,8 @@ export class ClientKnowledgeGrounding {
     return (await this.client.autoGround(opts.agentId, query, {
       ...(opts.sessionId != null ? { sessionId: opts.sessionId } : {}),
       ...(opts.limit != null ? { limit: opts.limit } : {}),
+      // 租户断言（T3）：run 归属域上行，服务端按 token 域包含校验
+      ...(opts.tenantId != null ? { tenantId: opts.tenantId } : {}),
       ...(recall ? { recall } : {}),
     })) as import('./retriever.js').AutoGroundDecision;
   }

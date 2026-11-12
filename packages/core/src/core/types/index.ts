@@ -27,7 +27,7 @@ export { DEFAULT_CONTEXT_WINDOW } from './model-info.js';
 
 // ── Session ──
 export type { SessionStatus, SessionMeta, SessionAgentMatchPick, TenantId } from './session.js';
-export { sessionMatchesAgent, DEFAULT_TENANT_ID } from './session.js';
+export { sessionMatchesAgent, DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from './session.js';
 
 // ── Step ──
 export type { TokenUsage, Step } from './step.js';

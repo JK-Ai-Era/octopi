@@ -3,6 +3,7 @@
  */
 
 import { randomUUID, createHash } from 'node:crypto';
+import { PLATFORM_TENANT_ID, DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
 import { KnowledgeDatabase } from './db.js';
 import { deriveTopicsFromPaths } from './topics.js';
@@ -622,7 +623,7 @@ export class KnowledgeSourceStore {
   }
 
   /**
-   * 源是否对 (agent, session) 可见（gateway 漏斗 ⊕ base ⊕ session overlay）
+   * 源是否对 (agent, session) 可见（租户闸 ⊕ 网关漏斗 ⊕ base ⊕ session overlay）
    */
   isVisible(
     source: KnowledgeSource,
@@ -631,6 +632,7 @@ export class KnowledgeSourceStore {
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
     if (source.status === 'removed' || source.status === 'disabled') return false;
+    if (!this.isTenantVisible(source, identity)) return false;
     if (!this.isGatewayVisible(source, identity)) return false;
     return this.applySessionOverlay(
       source,
@@ -640,7 +642,26 @@ export class KnowledgeSourceStore {
     );
   }
 
-  /** 网关漏斗：registered_by=己方 ∪ public */
+  /**
+   * 租户闸（arch/multi-tenancy.md §4/§6）：有归属租户即生效（不依赖 gatewayId）。
+   * platform 域（PLATFORM_TENANT_ID）= broker/运维面，全量可见；其余只见本域 ∪ platform；
+   * 无归属 = DEFAULT 域（fail-closed，评审 MAJ-2：不做全量放行——存量语义即 default 域）。
+   */
+  isTenantVisible(
+    source: KnowledgeSource,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
+    const tenant = identity?.tenantId ?? DEFAULT_TENANT_ID;
+    if (tenant === PLATFORM_TENANT_ID) return true;
+    const row = this.db.raw
+      .prepare('SELECT tenant_id FROM knowledge_sources WHERE id = ?')
+      .get(source.id) as { tenant_id?: string } | undefined;
+    if (!row?.tenant_id) return true;
+    if (row.tenant_id === PLATFORM_TENANT_ID) return true;
+    return row.tenant_id === tenant;
+  }
+
+  /** 网关漏斗：registered_by=己方 ∪ public（租户闸已由 isTenantVisible 独立收口） */
   isGatewayVisible(
     source: KnowledgeSource,
     identity?: { tenantId?: string; gatewayId?: string },
@@ -653,8 +674,6 @@ export class KnowledgeSourceStore {
       | { registered_by?: string; visibility?: string; tenant_id?: string }
       | undefined;
     if (!row) return true;
-    const tenant = identity?.tenantId ?? 'default';
-    if (row.tenant_id && row.tenant_id !== tenant) return false;
     if (row.registered_by && row.registered_by !== gw && row.visibility !== 'public') {
       return false;
     }

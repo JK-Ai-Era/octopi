@@ -18,7 +18,7 @@
  */
 
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
-import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
+import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import { readTitleState } from '@octopi-agent/core/types/session.js';
 import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
@@ -4114,6 +4114,9 @@ export class Gateway {
         await rt.start(kn?.service, {
           dataDir: paths.root ?? paths.dbPath.replace(/[/\\][^/\\]+$/, ''),
           gatewayId: process.env.OCTOPI_GATEWAY_ID ?? 'gw-local',
+          // broker token 域（arch/multi-tenancy.md T3，评审 MAJ-1）：gateway = 受信 broker，
+          // 读口按 x-octopi-tenant 断言收窄；否则非 default 租户 run 全被 tenant_mismatch 拒
+          tenantId: PLATFORM_TENANT_ID,
           documentConfig: this.config.documents ?? null,
           embeddingModels,
           embed: tuning.embed,
