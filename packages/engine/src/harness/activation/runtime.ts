@@ -10,6 +10,7 @@
 import type { EventBus } from '@octopi-agent/core/index.js';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { CoalesceBuffer } from './coalesce.js';
+import { RUN_LEASE_HELD_MARKER } from './run-protocol.js';
 import { buildRunRequest, compileMessages, resolveSessionId } from './compiler.js';
 import { ExplicitRouter } from './router.js';
 import type {
@@ -55,6 +56,14 @@ export interface AgentRuntimeConfig {
     expectedMaxConcurrentRuns?: number;
     coalesceBufferLimit?: number;
   };
+  /**
+   * 唤醒类 trigger 的 lease_held 延迟重投（协调面「唤醒」原语）：
+   * maxAttempts 缺省 3、delayMs 缺省 2000；human 消息永不重投。
+   */
+  wakeupRetry?: {
+    maxAttempts?: number;
+    delayMs?: number;
+  };
 }
 
 interface ActiveRun {
@@ -74,12 +83,18 @@ export class AgentRuntime {
   private readonly activeRuns = new Map<string, ActiveRun>();
   private readonly listeners = new Set<RuntimeEventListener>();
   private readonly expectedMaxConcurrentRuns?: number;
+  private readonly wakeupRetryMax: number;
+  private readonly wakeupRetryDelayMs: number;
+  private readonly wakeupAttempts = new Map<string, number>();
+  private readonly wakeupScheduled = new Set<string>();
   private started = false;
 
   constructor(config: AgentRuntimeConfig = {}) {
     this.events = config.events;
     this.router = config.router ?? new ExplicitRouter();
     this.expectedMaxConcurrentRuns = config.admission?.expectedMaxConcurrentRuns;
+    this.wakeupRetryMax = config.wakeupRetry?.maxAttempts ?? 3;
+    this.wakeupRetryDelayMs = config.wakeupRetry?.delayMs ?? 2000;
     this.coalesce = new CoalesceBuffer({
       defaultWindowMs: config.defaultCoalesceMs,
       maxEntries:
@@ -328,41 +343,102 @@ export class AgentRuntime {
   }
 
   /**
+   * 唤醒/重试语义收口（协调面「唤醒」原语的跨进程补齐，B）：
+   * 唤醒类 trigger（非 human）被 run 层直拒（RUN_LEASE_HELD_MARKER——同会话并发
+   * run 闸；产生点在执行前，消息未入上下文）时，按原 Trigger 定向重投至少一次到达。
+   * 重投走 **dispatchToTarget（per-target）**：fan-out 场景只补失败目标，不给已送达
+   * 目标重复投递。human 消息不重投——拒必须原样回到用户可见面。
+   *
+   * @param trigger - 原 Trigger（唤醒凭证）
+   * @param target - 失败的路由目标（重投定向）
+   * @param result - dispatch 结果
+   * @returns 原结果透传（重投在后台进行，不改变本次返回语义）
+   */
+  private finalizeDelivery(trigger: Trigger, target: RuntimeAgent, result: DispatchResult): DispatchResult {
+    const key = `${trigger.id}:${target.agentId}`;
+    if (result.status === 'failed' && result.error.includes(RUN_LEASE_HELD_MARKER)) {
+      this.scheduleWakeupRetry(trigger, target);
+    }
+    if (result.status === 'ran' || result.status === 'accepted') {
+      this.wakeupAttempts.delete(key);
+    }
+    return result;
+  }
+
+  /** 延迟重投（per-target 定向；attempts 上限后 TRIGGER_DROPPED 落账；同键单飞防重复排程） */
+  private scheduleWakeupRetry(trigger: Trigger, target: RuntimeAgent): void {
+    const isHuman = trigger.type === 'message' && trigger.payload.kind === 'user_message';
+    if (isHuman) return;
+    const key = `${trigger.id}:${target.agentId}`;
+    if (this.wakeupScheduled.has(key)) return; // 已排程：不重复排（同键单飞）
+    const attempts = this.wakeupAttempts.get(key) ?? 0;
+    if (attempts >= this.wakeupRetryMax) {
+      this.wakeupAttempts.delete(key);
+      this.emitRuntime(RuntimeEvents.TRIGGER_DROPPED, {
+        triggerRef: toTriggerRef(trigger),
+        triggerId: trigger.id,
+        reason: RUN_LEASE_HELD_MARKER,
+      });
+      return;
+    }
+    this.wakeupAttempts.set(key, attempts + 1);
+    this.wakeupScheduled.add(key);
+    setTimeout(() => {
+      this.wakeupScheduled.delete(key);
+      void this.dispatchToTarget(trigger, target, undefined).catch(() => {
+        // 重投自身的调度失败由下一轮 finalize/DROPPED 落账；这里不吞错——
+        // 仅避免 unhandled rejection（dispatch 内部已 fail-loud 事件化）。
+      });
+    }, this.wakeupRetryDelayMs);
+  }
+
+  /**
    * 路由目标的活跃 inbox 接收（human 与 delegation signal 共用）。
    * 仅 message / agent_signal 可接续；其余类型与带附件/换模型输入走完整新 Run。
    */
-  private offerToTarget(
+  private async offerToTarget(
     trigger: Trigger,
     target: RuntimeAgent,
     sessionId: string,
     onEvent?: (event: AgentEvent) => void,
-  ): import('./inbox.js').InboxOfferResult {
+  ): Promise<import('./inbox.js').InboxOfferResult> {
     if (!target.dispatcher.inbox) return 'dispatched';
     if (trigger.type !== 'message' && trigger.type !== 'agent_signal') return 'dispatched';
     const [compiledMessage] = compileMessages([trigger]);
     const human = trigger.type === 'message' && trigger.payload.kind === 'user_message';
     const delegationId = trigger.metadata?.delegationId;
-    return target.dispatcher.inbox.offer({
-      agentId: target.agentId,
-      sessionId,
-      entryId: delegationId ?? trigger.id,
-      triggerType: trigger.type,
-      human,
-      modelOverride: trigger.metadata?.modelOverride,
-      modelProvider: trigger.metadata?.modelProvider,
-      trigger,
-      onEvent,
-      message: compiledMessage,
-      onAdmitted: (delivery) => {
-        this.emitRuntime(RuntimeEvents.INBOX_ADMITTED, {
-          triggerId: trigger.id,
-          agentId: target.agentId,
-          sessionId,
-          delegationId,
-          delivery,
-        });
-      },
-    });
+    try {
+      return await target.dispatcher.inbox.offer({
+        agentId: target.agentId,
+        sessionId,
+        entryId: delegationId ?? trigger.id,
+        triggerType: trigger.type,
+        human,
+        modelOverride: trigger.metadata?.modelOverride,
+        modelProvider: trigger.metadata?.modelProvider,
+        trigger,
+        onEvent,
+        message: compiledMessage,
+        onAdmitted: (delivery) => {
+          try {
+            this.emitRuntime(RuntimeEvents.INBOX_ADMITTED, {
+              triggerId: trigger.id,
+              agentId: target.agentId,
+              sessionId,
+              delegationId,
+              delivery,
+            });
+          } catch {
+            // 观测事件不得影响投递语义（admitted 后抛错会被外层 fail-open 翻成
+            // 'dispatched' = 双投）——通知是尽力而为面
+          }
+        },
+      });
+    } catch {
+      // 协调面「插话」fail-open（语义权威点）：offer 通道失败不吞消息，
+      // 一律回到 'dispatched' 由调用方照常 dispatch 新 Run 送达。
+      return 'dispatched';
+    }
   }
 
   private async dispatchToTarget(
@@ -381,13 +457,16 @@ export class AgentRuntime {
     });
     // 单一 offer 点：活跃 Run 接收 = 不再开新 Run（原 Trigger 不 dispatch，
     // Run 关闭未消费时由 inbox 按原 Trigger 重投）
-    const offerResult = this.offerToTarget(trigger, agent, sessionId, options?.onEvent);
+    const offerResult = await this.offerToTarget(trigger, agent, sessionId, options?.onEvent);
     if (offerResult === 'continued' || offerResult === 'duplicate') {
       options?.onDelivery?.('continued');
+      // 插话送达即本周期成功：清重投计数（否则残留计数会让下一轮冲突提前耗尽）
+      this.wakeupAttempts.delete(`${trigger.id}:${agent.agentId}`);
       return { status: 'accepted', agentId: agent.agentId, sessionId, delivery: 'continued' };
     }
     options?.onDelivery?.('run');
 
+    const finalize = (result: DispatchResult): DispatchResult => this.finalizeDelivery(trigger, agent, result);
     if (trigger.coalesceKey) {
       this.emitRuntime(RuntimeEvents.RUN_SCHEDULED, {
         triggerId: trigger.id,
@@ -405,13 +484,13 @@ export class AgentRuntime {
       });
 
       if (result.kind === 'no_key' || result.kind === 'buffer_full') {
-        return this.executeTriggers(agent, [trigger], sessionId, options?.onEvent);
+        return finalize(await this.executeTriggers(agent, [trigger], sessionId, options?.onEvent));
       }
 
-      return result.done;
+      return finalize(await result.done);
     }
 
-    return this.executeTriggers(agent, [trigger], sessionId, options?.onEvent);
+    return finalize(await this.executeTriggers(agent, [trigger], sessionId, options?.onEvent));
   }
 
   private async executeTriggers(

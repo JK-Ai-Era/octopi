@@ -119,7 +119,10 @@ export interface RunDispatcher {
   execute(req: RunRequest, signal?: AbortSignal): AsyncIterable<AgentEvent>;
   /** 可选：活跃 Run 接续；缺省保持原 Trigger 排队语义。 */
   inbox?: {
-    offer(signal: import('./inbox.js').SessionInboxSignal): import('./inbox.js').InboxOfferResult;
+    /** 本地 SessionInbox 同步返回；跨进程代理返回 Promise（远程 inboxOffer op）。 */
+    offer(
+      signal: import('./inbox.js').SessionInboxSignal,
+    ): import('./inbox.js').InboxOfferResult | Promise<import('./inbox.js').InboxOfferResult>;
   };
 }
 

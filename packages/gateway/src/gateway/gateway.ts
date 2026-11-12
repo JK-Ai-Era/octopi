@@ -5858,6 +5858,44 @@ export class Gateway {
       agentId: agent.id,
       dispatcher: {
         execute: (req, signal) => this.remoteExecute(req, signal),
+        // 协调面「插话」跨进程代理（A）：offer 经 fleet inboxOffer op 到 sticky
+        // 实例的 SessionInbox——活跃 Run 接收则插话（复原单体语义），未接收返回
+        // 'dispatched' 由 dispatch 照常开新 Run。offer 通道失败同样 fail-open 到
+        // 'dispatched'（插话失败不吞消息，宁可新 Run 也要送到）。
+        inbox: {
+          offer: async (signal) => {
+            // MAJ-1（2026-11-12 评审）：human 消息不走跨进程插话——continued 会跳过
+            // 主回复，而晚到回复只经 onEvent 闭包（跨进程即丢）= 用户消息零回复的
+            // 可见回归。human 一律 'dispatched' 保持「必有回复」语义；human 插话
+            // （含晚到回复跨进程路由）记 arch/service-topology-p2.md §2.1 待做。
+            if (signal.human) return 'dispatched';
+            // offer 抛错的 fail-open 兜底在 offerToTarget（语义权威点）；这里只管
+            // wire 结果翻译（ok:false / 缺 delivery → 'dispatched'）。
+            const res = await this.fleet.control({
+              type: 'inboxOffer',
+              agentId: signal.agentId,
+              sessionId: signal.sessionId,
+              entryId: signal.entryId,
+              human: signal.human,
+              triggerType: signal.triggerType,
+              modelOverride: signal.modelOverride,
+              modelProvider: signal.modelProvider,
+              message: signal.message,
+              trigger: signal.trigger,
+            });
+            if (!res.ok) return 'dispatched';
+            const delivery = (res.result as { delivery?: 'continued' | 'dispatched' | 'duplicate' } | undefined)
+              ?.delivery ?? 'dispatched';
+            if (delivery === 'continued') {
+              try {
+                signal.onAdmitted?.('continued');
+              } catch {
+                // 通知回执抛错不得影响投递语义（admitted 后再翻 'dispatched' = 双投）
+              }
+            }
+            return delivery;
+          },
+        },
       },
       resolveSession: (trigger) => trigger.sessionId ?? `${agent.id}:main`,
     });
@@ -6113,7 +6151,17 @@ export class Gateway {
         return;
       case 'redispatch':
         try {
-          await this.runtime.dispatch(n.trigger);
+          const res = await this.runtime.dispatch(n.trigger);
+          // 未送达必须可见（2026-11-12 委派唤醒链断链教训：lease_held 直拒曾静默吞掉
+          // 唤醒）。分级：failed 总是 error；skipped 仅 no_agent 是故障（aborted=
+          // 用户主动中止、runtime_stopped=停机窗口，均为正常语义不打 error）。
+          const r = (res ?? {}) as { status?: string; reason?: string };
+          if (r.status === 'failed' || (r.status === 'skipped' && r.reason === 'no_agent')) {
+            console.error(
+              `[Gateway] redispatch dispatch not delivered: status=${r.status}${r.reason ? ` reason=${r.reason}` : ''}` +
+                ` trigger=${n.trigger.id} type=${n.trigger.type} session=${n.trigger.sessionId ?? '-'}`,
+            );
+          }
         } catch (err) {
           console.error('[Gateway] run host redispatch failed:', err);
         }

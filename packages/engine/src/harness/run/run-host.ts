@@ -528,6 +528,29 @@ export class RunHost implements RunBackend {
           this.knowledgeState = op.state;
           return { ok: true };
         }
+        case 'inboxOffer': {
+          // 协调面「插话」跨进程入口：目标 agent 未挂载 = 本实例无活跃 Run 可接
+          //（get-or-mount 语义下未挂载即无会话活跃面）→ 'dispatched'，调用方照常
+          // dispatch 新 Run。挂载了则 offer 进其 SessionInbox（原 Trigger 随行，
+          // Run 关闭未消费时由 inbox 回调 redispatch 重投）。
+          const m = this.mounted.get(op.agentId);
+          const inbox = m?.handle.dispatcher.inbox;
+          if (!inbox) {
+            return { ok: true, result: { delivery: 'dispatched' } };
+          }
+          const delivery = inbox.offer({
+            agentId: op.agentId,
+            sessionId: op.sessionId,
+            entryId: op.entryId,
+            human: op.human,
+            triggerType: op.triggerType as never,
+            modelOverride: op.modelOverride,
+            modelProvider: op.modelProvider,
+            message: op.message,
+            trigger: op.trigger,
+          });
+          return { ok: true, result: { delivery: await delivery } };
+        }
         case 'contextHealth': {
           const m = op.agentId ? this.mounted.get(op.agentId) : undefined;
           if (op.agentId && !m) {

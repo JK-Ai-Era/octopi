@@ -115,7 +115,25 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.112.8 (2026-11-12)
+## v0.112.9 (2026-11-12)
+
+### fix(collaboration): cross-process interjection + wakeup retry (coordination plane)
+
+委派结果送达的第二层断链修复（第一层为 v0.112.7 唤醒桥）：四服务拆分后远程执行腿无 `inbox`（插话语义缺失），委派结果退化为开新 run，撞同会话 lease_held 直拒后静默丢。本次按 `arch/service-topology-p2.md` §2.1（协调面五原语×三问）补齐：
+
+- **插话（A）**：`RunControlOp` 新增 `inboxOffer`（纯数据，回调不过线）；run 侧执行进 SessionInbox；gateway 远程 dispatcher 注册 inbox 代理（fleet control → delivery 翻译）。`offerToTarget` 异步化，fail-open 收口到语义权威点（offer 抛错 → `dispatched` 开新 run，不吞消息）；`onAdmitted` 双处 harden（通知回执抛错不得翻转投递语义）。
+- **唤醒/重试（B）**：唤醒类 trigger 被 lease_held 直拒（产生点在执行前、消息未入上下文）→ **per-target** 延迟重投（`dispatchToTarget` 定向，fan-out 不给已送达目标重复投递；同键单飞护栏；`wakeupRetry` 配置覆盖，缺省 3 次×2s）；human 永不重投；耗尽落 `TRIGGER_DROPPED`。插话送达清重投计数（防残留计数提前耗尽）。`RUN_LEASE_HELD_MARKER` 常量同源（防跨包字符串漂移）。
+- **可见性（C）**：redispatch 未送达分级打日志（failed / skipped:no_agent 为 error；aborted/停机窗口正常语义不打）。
+
+**breaking note**：无（`inboxOffer` 为新增 op；`RunDispatcher.inbox.offer` 返回放宽为可 Promise，兼容既有实现）。
+
+**评审处置**（del-e615431b，1 MAJ/6 MIN）：MAJ-1 属实——human 跨进程插话会丢频道回复（`continued` 跳过主回复、晚到回复只经 onEvent 闭包），处置=human 一律 `dispatched` 保持「必有回复」（human 插话+回复跨进程路由记 §2.1 待做面）；MIN 中 admitted 后抛错双投、accepted 漏清计数、无排程护栏、lease_held 字符串耦合、redispatch 误报级 5 条属实已修；「wakeupRetry 未接线」1 条核实不实（ctor 94-95 行接线在位）。两个内存态窗口（重投计数/去重集）按评审建议在 §2.1 分开记（丢失面≠重复面）。顺带补 v0.112.6 漏交的 `octopi.schema.json` 生成产物（replicasPerVersion max(64)）。
+
+**验证**：协调面专项 10/10（插话三分支+重投三分支+桥接四例）；全量 4672+ 绿；lint 0。生产实测（del-e615431b 委派结果自动回到对话）已证空闲唤醒路径端到端通；活跃插话路径待重启后实测。
+
+### chore(config): sync octopi.schema.json generation artifact
+
+replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 
 ### chore(test): clear baseline lint debt — `npm run lint` 清零
 

@@ -61,6 +61,14 @@ export interface ClientToolVisibilitySnapshot {
 }
 
 /**
+ * run lease 冲突标记（`supervise: lease_held` 错误文案的判据锚）：产生点在
+ * FleetRunBackend.startRun（yield* 之前，消息未入上下文）；消费点在
+ * AgentRuntime.finalizeDelivery 的唤醒重投判定。两端同源此常量，防字符串
+ * 跨包漂移。
+ */
+export const RUN_LEASE_HELD_MARKER = 'lease_held';
+
+/**
  * 会话级控制 op（纯数据）。对应契约 `control(op)`：
  * 每个 op 都有对应的 run 侧执行语义（RunHost.handleControl）。
  */
@@ -108,6 +116,27 @@ export type RunControlOp =
     }
   /** 知识运行时状态同步（准入闸门输入；状态是 gateway 运行时已知值，非实时探测） */
   | { type: 'syncKnowledgeState'; state: KnowledgeStateWire }
+  /**
+   * inbox 插话 offer（跨进程形态，协调面「插话」原语）：把接续消息 offer 给目标
+   * agent 在 run 实例内的 SessionInbox。语义与本地 offer 一致——活跃 Run 接收
+   * （`continued`）则由它在下一个合法消息边界消费；未接收（`dispatched`）由
+   * 调用方照常 dispatch 新 Run；`duplicate` 为 entryId 去重命中。回调字段不
+   * 过线（onEvent/onAdmitted 归本地调用方），wire 只带纯数据。
+   */
+  | {
+      type: 'inboxOffer';
+      agentId: string;
+      sessionId: string;
+      /** trigger.id / delegationId 去重键 */
+      entryId?: string;
+      human?: boolean;
+      triggerType?: string;
+      modelOverride?: string;
+      modelProvider?: string;
+      message: Message;
+      /** 原 Trigger（Run 关闭未消费时 run 侧按它 redispatch） */
+      trigger?: Trigger;
+    }
   /** 七层上下文健康探针 */
   | { type: 'contextHealth'; agentId?: string }
   /**
