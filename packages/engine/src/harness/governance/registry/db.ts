@@ -126,6 +126,12 @@ export class RegistryDatabase {
         name       TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS auth_tokens (
+        token      TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
   }
 

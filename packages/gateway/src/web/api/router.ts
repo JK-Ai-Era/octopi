@@ -11,6 +11,7 @@ import type { ConfigApplyService } from '../../gateway/config-apply.js';
 import { ConfigConflictError } from '@octopi-agent/engine/config-admin/port.js';
 import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
+import type { AgentId } from '@octopi-agent/engine/harness/governance/registry/types.js';
 
 export interface WebApiRouterOptions {
   gateway: Gateway;
@@ -79,6 +80,11 @@ export class WebApiRouter {
             privileged: await this.gateway.getPrivilegedStatus(),
           },
         });
+      }
+
+      // ── 租户与定义面（arch/multi-tenancy.md T1b）：注册/登录 + registry CRUD ──
+      if (relativePath.startsWith('/registry')) {
+        return await this.handleRegistry(req, res, relativePath, method);
       }
 
       // ── fleet 运维面（MAJ-4）：ops 原语入口（arch/service-topology-p0c.md §5.2；鉴权随上游闸）──
@@ -1834,6 +1840,172 @@ export class WebApiRouter {
       return true;
     }
     return false;
+  }
+
+  /**
+   * registry 路由（arch/multi-tenancy.md §5/§9）。
+   *
+   * 鉴权两层：/api/v1 整体随上游 apiKey 闸（宿主面）；/registry/* 再叠租户身份层
+   * （Bearer token 会话，register/login 签发）。MVP 鉴权=token 会话+名称直登
+   * （演练级；口令/SSO 属 P3 替换）。跨租户边界由 RegistryService fail-loud。
+   */
+  private async handleRegistry(
+    req: IncomingMessage,
+    res: ServerResponse,
+    relativePath: string,
+    method: string,
+  ): Promise<boolean> {
+    const registry = this.gateway.getRegistry();
+    if (!registry) {
+      return this.json(res, 503, { ok: false, error: 'registry_not_ready: RegistryService is not started' });
+    }
+
+    const sendError = (err: unknown): boolean => {
+      const msg = err instanceof Error ? err.message : String(err);
+      const status = msg.includes('_not_found')
+        ? 404
+        : msg.startsWith('registry_forbidden')
+          ? 403
+          : msg.startsWith('registry_cross_tenant') ||
+              msg.startsWith('registry_invalid') ||
+              msg.includes('_required') ||
+              msg.startsWith('registry_empty')
+            ? 400
+            : msg.includes('UNIQUE constraint failed')
+              ? 409
+              : 500;
+      return this.json(res, status, { ok: false, error: msg });
+    };
+
+    // ── 公开端点：注册（一用户一租户）/ 登录 ──
+    if (relativePath === '/registry/register' && method === 'POST') {
+      const body = await this.readBody(req);
+      if (typeof body?.name !== 'string') {
+        return this.json(res, 400, { ok: false, error: 'name is a required string' });
+      }
+      try {
+        const { tenant, user } = registry.registerUser({ name: body.name });
+        const token = registry.issueToken(user.userId);
+        return this.json(res, 201, { ok: true, data: { tenant, user, token } });
+      } catch (err) {
+        return sendError(err);
+      }
+    }
+    if (relativePath === '/registry/login' && method === 'POST') {
+      const body = await this.readBody(req);
+      if (typeof body?.name !== 'string') {
+        return this.json(res, 400, { ok: false, error: 'name is a required string' });
+      }
+      const user = registry.getUserByName(body.name);
+      if (!user) return this.json(res, 404, { ok: false, error: `registry_user_not_found: ${body.name}` });
+      return this.json(res, 200, { ok: true, data: { user, token: registry.issueToken(user.userId) } });
+    }
+
+    // ── 租户身份层：以下端点要求 Bearer token ──
+    const auth = req.headers.authorization;
+    const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    const user = token ? registry.resolveToken(token) : null;
+    if (!user) {
+      return this.json(res, 401, {
+        ok: false,
+        error: 'unauthorized: bearer token required (POST /registry/register or /registry/login)',
+      });
+    }
+
+    if (relativePath === '/registry/me' && method === 'GET') {
+      return this.json(res, 200, { ok: true, data: { user } });
+    }
+    if (relativePath === '/registry/logout' && method === 'POST') {
+      registry.revokeToken(token);
+      return this.json(res, 200, { ok: true, data: { revoked: true } });
+    }
+
+    if (relativePath === '/registry/agents' && method === 'GET') {
+      return this.json(res, 200, {
+        ok: true,
+        data: registry.listAgents({ tenantId: user.tenantId, viewerUserId: user.userId }),
+      });
+    }
+    if (relativePath === '/registry/agents' && method === 'POST') {
+      const body = await this.readBody(req);
+      if (typeof body?.name !== 'string') {
+        return this.json(res, 400, { ok: false, error: 'name is a required string' });
+      }
+      try {
+        const agent = registry.createAgent({
+          tenantId: user.tenantId,
+          ownerUserId: user.userId,
+          name: body.name,
+          ...(typeof body.definition === 'string' ? { definition: body.definition } : {}),
+          ...(body.visibility === 'private' || body.visibility === 'tenant'
+            ? { visibility: body.visibility }
+            : {}),
+          ...(typeof body.homeRef === 'string' ? { homeRef: body.homeRef } : {}),
+        });
+        return this.json(res, 201, { ok: true, data: agent });
+      } catch (err) {
+        return sendError(err);
+      }
+    }
+    if (relativePath.startsWith('/registry/agents/')) {
+      const agentId = relativePath.slice('/registry/agents/'.length) as AgentId;
+      if (!agentId) return this.json(res, 400, { ok: false, error: 'agent id is required' });
+      try {
+        if (method === 'PATCH') {
+          const body = await this.readBody(req);
+          const patch: {
+            name?: string;
+            definition?: string;
+            visibility?: 'private' | 'tenant';
+            homeRef?: string | null;
+          } = {};
+          if (typeof body.name === 'string') patch.name = body.name;
+          if (typeof body.definition === 'string') patch.definition = body.definition;
+          if (body.visibility === 'private' || body.visibility === 'tenant') patch.visibility = body.visibility;
+          if (body.homeRef === null || typeof body.homeRef === 'string') patch.homeRef = body.homeRef;
+          return this.json(res, 200, {
+            ok: true,
+            data: registry.updateAgent({ agentId, viewerUserId: user.userId, patch }),
+          });
+        }
+        if (method === 'DELETE') {
+          const deleted = registry.deleteAgent({ agentId, viewerUserId: user.userId });
+          return this.json(res, 200, { ok: true, data: { deleted } });
+        }
+        return this.json(res, 405, { ok: false, error: `method ${method} not allowed` });
+      } catch (err) {
+        return sendError(err);
+      }
+    }
+
+    if (relativePath === '/registry/bindings' && method === 'GET') {
+      return this.json(res, 200, { ok: true, data: registry.listBindings({ tenantId: user.tenantId }) });
+    }
+    if (relativePath === '/registry/bindings' && method === 'POST') {
+      const body = await this.readBody(req);
+      if (typeof body?.platform !== 'string' || typeof body?.identity !== 'string' || typeof body?.agentId !== 'string') {
+        return this.json(res, 400, {
+          ok: false,
+          error: 'platform, identity and agentId are required strings',
+        });
+      }
+      try {
+        const binding = registry.createBinding({
+          tenantId: user.tenantId,
+          platform: body.platform,
+          identity: body.identity,
+          agentId: body.agentId as AgentId,
+          ...(body.sessionPolicy === 'per-user' || body.sessionPolicy === 'per-chat' || body.sessionPolicy === 'per-message'
+            ? { sessionPolicy: body.sessionPolicy }
+            : {}),
+        });
+        return this.json(res, 201, { ok: true, data: binding });
+      } catch (err) {
+        return sendError(err);
+      }
+    }
+
+    return this.json(res, 404, { ok: false, error: `registry route not found: ${relativePath}` });
   }
 
   private json(res: ServerResponse, status: number, payload: unknown): boolean {

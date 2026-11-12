@@ -13,6 +13,7 @@ export type AgentId = Branded<string, 'AgentId'>;
 export type BindingId = Branded<string, 'BindingId'>;
 export type MountId = Branded<string, 'MountId'>;
 export type KnowledgeSourceId = Branded<string, 'KnowledgeSourceId'>;
+export type AuthToken = Branded<string, 'AuthToken'>;
 
 /** agent 在租户内的可见性：private=仅 owner；tenant=租户共享 */
 export type AgentVisibility = 'private' | 'tenant';

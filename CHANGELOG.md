@@ -115,7 +115,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.113.4 (2026-11-13)
+## v0.113.5 (2026-11-13)
+
+### feat(tenancy): registry HTTP API + gateway 装配（MVP T1b）
+
+多租户 MVP 第二增量（`arch/multi-tenancy.md` §5）：租户与定义面接上 HTTP。
+
+- **路由**（`/api/v1/registry/*`）：`POST /register`（一用户一租户，201 返回 tenant/user/token）/ `POST /login`（MVP 演练级：名称直登；口令/SSO P3 替换）/ `POST /logout` / `GET /me` / agents CRUD / bindings GET+POST。
+- **鉴权两层**：/api/v1 整体随上游 apiKey 闸（宿主面）；/registry/* 叠租户身份层（Bearer token 会话，registry.db `auth_tokens`）。错误映射：not_found→404 / forbidden→403 / cross_tenant|invalid→400 / UNIQUE→409。
+- **Gateway 装配**：RegistryService 进程内单例（`OCTOPI_HOME/registry.db`，Q12），start 建、stop 收（双 stop 路径均回收，防双 writer）；`getRegistry()` 供路由与后续消费面。
+- registry 增补：`issueToken/resolveToken/revokeToken/getUserByName/listBindings`。
+
+**breaking note**：无（新增路由与新增服务；现有路由/行为不变）。
+
+**验证**：`tests/gateway-registry-api.test.ts` 9/9（注册/登录/401/403/409/503/越权/跨租户绑定）+ registry 专项 15/15；全量 4727 绿；lint 0。
 
 ### feat(tenancy): registry module — 租户与定义面第一增量
 

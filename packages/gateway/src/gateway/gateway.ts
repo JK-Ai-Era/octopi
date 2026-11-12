@@ -580,6 +580,8 @@ export class Gateway {
   private sessionAcl: SessionAclService;
   /** 会话日程（arch/session-schedules.md）；进程级单例 + schedules.db */
   private sessionSchedules?: import('@octopi-agent/engine/harness/session/schedules/service.js').SessionScheduleService;
+  /** 租户与定义面（arch/multi-tenancy.md，Q12）：registry.db 进程内单例 */
+  private registry?: import('@octopi-agent/engine/harness/governance/registry/service.js').RegistryService;
   /** 会话标题更新去重（同 session 并发只跑一次） */
   private titleUpdatePromises = new Map<string, Promise<void>>();
   /** 进行中又有新触发时的 trailing 标记 */
@@ -1023,6 +1025,8 @@ export class Gateway {
     this.clientTools.stopVisibilityRefresh();
     this.sessionSchedules?.dispose();
     this.sessionSchedules = undefined;
+    this.registry?.close();
+    this.registry = undefined;
     try {
       await this.runtime.stop();
     } catch {
@@ -1139,6 +1143,20 @@ export class Gateway {
           });
       });
       console.log('[Gateway] SessionScheduleService ready (schedules.db)');
+    }
+
+    // 租户与定义面（arch/multi-tenancy.md，Q12）：registry.db 进程内起步，
+    // API 按服务化契约设计（分布式时迁 C 机服务、调用面不变）
+    {
+      // start 重试同样先拆旧实例，避免双 writer
+      this.registry?.close();
+      const { RegistryService } = await import(
+        '@octopi-agent/engine/harness/governance/registry/service.js'
+      );
+      const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+      const { join } = await import('node:path');
+      this.registry = await RegistryService.create({ dbPath: join(getOctopiHome(), 'registry.db') });
+      console.log('[Gateway] RegistryService ready (registry.db)');
     }
 
     console.log('[Gateway] Starting...');
@@ -1366,6 +1384,13 @@ export class Gateway {
         `[Gateway] knowledge runtime start failed: ${kErr instanceof Error ? kErr.message : String(kErr)}`,
       );
     }
+  }
+
+  /**
+   * 租户与定义面服务（arch/multi-tenancy.md）。未启动时 undefined。
+   */
+  getRegistry(): import('@octopi-agent/engine/harness/governance/registry/service.js').RegistryService | undefined {
+    return this.registry;
   }
 
   /**
@@ -1830,6 +1855,8 @@ export class Gateway {
     this.clientTools.stopVisibilityRefresh();
     this.sessionSchedules?.dispose();
     this.sessionSchedules = undefined;
+    this.registry?.close();
+    this.registry = undefined;
     // 委派运行时持有送达回执订阅（常驻 gatewayBus）：停机回收 + 清缓存，
     // 允许下次 start/接线重建（否则重复创建会累积订阅闭包）
     this.delegationRuntime?.dispose();

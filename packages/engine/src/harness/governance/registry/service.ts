@@ -14,6 +14,7 @@ import { RegistryDatabase } from './db.js';
 import type { RegistryDatabaseOptions } from './db.js';
 import type {
   AgentId,
+  AuthToken,
   AgentRecord,
   AgentVisibility,
   Binding,
@@ -149,6 +150,27 @@ export class RegistryService {
     const row = this.db.raw
       .prepare('SELECT user_id, tenant_id, name, is_platform_admin, created_at FROM users WHERE user_id = ?')
       .get(userId) as
+      | { user_id: string; tenant_id: string; name: string; is_platform_admin: number; created_at: number }
+      | undefined;
+    if (!row) return null;
+    return {
+      userId: row.user_id as UserId,
+      tenantId: row.tenant_id as TenantId,
+      name: row.name,
+      isPlatformAdmin: row.is_platform_admin === 1,
+      createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * 按用户名查询（MVP 登录面：token 会话 + 名称直登，口令/SSO 属 P3）。
+   *
+   * @param name - 用户名（全局唯一）
+   */
+  getUserByName(name: string): User | null {
+    const row = this.db.raw
+      .prepare('SELECT user_id, tenant_id, name, is_platform_admin, created_at FROM users WHERE name = ?')
+      .get(name) as
       | { user_id: string; tenant_id: string; name: string; is_platform_admin: number; created_at: number }
       | undefined;
     if (!row) return null;
@@ -428,6 +450,57 @@ export class RegistryService {
       .prepare('INSERT INTO knowledge_sources (source_id, scope, tenant_id, name, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(source.sourceId, source.scope, source.tenantId, source.name, source.createdAt);
     return source;
+  }
+
+  /**
+   * 签发会话 token（MVP 鉴权：token 会话；企业 SSO 属 P3）。
+   *
+   * @param userId - 用户 id
+   * @returns 不透明 token（存储于 registry.db auth_tokens）
+   */
+  issueToken(userId: UserId): AuthToken {
+    if (!this.getUser(userId)) throw new Error(`registry_user_not_found: ${userId}`);
+    const token = randomUUID() as AuthToken;
+    this.db.raw
+      .prepare('INSERT INTO auth_tokens (token, user_id, created_at) VALUES (?, ?, ?)')
+      .run(token, userId, Date.now());
+    return token;
+  }
+
+  /**
+   * 解析会话 token → 用户。
+   *
+   * @param token - Bearer token
+   */
+  resolveToken(token: string): User | null {
+    if (!token.trim()) return null;
+    const row = this.db.raw.prepare('SELECT user_id FROM auth_tokens WHERE token = ?').get(token) as
+      | { user_id: string }
+      | undefined;
+    if (!row) return null;
+    return this.getUser(row.user_id as UserId);
+  }
+
+  /**
+   * 撤销会话 token。
+   *
+   * @param token - Bearer token
+   * @returns 是否撤销了记录
+   */
+  revokeToken(token: string): boolean {
+    return this.db.raw.prepare('DELETE FROM auth_tokens WHERE token = ?').run(token).changes > 0;
+  }
+
+  /**
+   * 列出租户内绑定（渠道路由真相源）。
+   *
+   * @param input - 租户
+   */
+  listBindings(input: { tenantId: TenantId }): Binding[] {
+    const rows = this.db.raw
+      .prepare('SELECT * FROM bindings WHERE tenant_id = ? ORDER BY created_at')
+      .all(input.tenantId) as Record<string, unknown>[];
+    return rows.map(rowToBinding);
   }
 
   /**
