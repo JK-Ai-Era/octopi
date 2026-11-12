@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { MarkdownMessage } from './MarkdownMessage';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
 import { RunObservatoryPanel } from './RunObservatoryPanel';
+import { RunServicesPanel } from './RunServicesPanel';
 import { SessionCorpusMenu } from './SessionCorpusMenu';
 import { SessionAttachmentsPanel } from './SessionAttachmentsPanel';
 import { SessionEffectRootsPanel } from './SessionEffectRootsPanel';
@@ -781,7 +782,7 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
   const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
-  const [rightTab, setRightTab] = useState<'context' | 'run' | 'tasks' | 'schedules' | 'attachments' | 'roots' | 'git' | 'file' | 'tools' | 'help'>('context');
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'services' | 'tasks' | 'schedules' | 'attachments' | 'roots' | 'git' | 'file' | 'tools' | 'help'>('context');
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -2408,6 +2409,13 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
               Run
             </button>
             <button
+              className={rightTab === 'services' ? 'btn-tab btn-tab-active' : 'btn-tab'}
+              onClick={() => setRightTab('services')}
+              title="运行中的 run serve 实例（PID/端口/负载/路由权重）"
+            >
+              服务
+            </button>
+            <button
               className={rightTab === 'tasks' ? 'btn-tab btn-tab-active' : 'btn-tab'}
               onClick={() => setRightTab('tasks')}
             >
@@ -2499,6 +2507,10 @@ export default function ChatWorkspace({ inspectorFocus, onAgentIdChange }: ChatW
                 }
               }}
             />
+          )}
+
+          {rightTab === 'services' && clientRef.current && (
+            <RunServicesPanel client={clientRef.current} />
           )}
 
           {rightTab === 'tasks' && (

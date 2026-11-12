@@ -115,6 +115,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.6 (2026-11-12)
+
+### feat(fleet): startup replica convergence + run serve visibility
+
+- **启动收敛**：`fleet.replicasPerVersion` 从记账转生效——gateway 启动自举 N 个同构建副本（run-0 为首副本，与版本化 spawn 同一条路 `spawnRunInstance`），多副本时新会话按最闲分配真正负载均衡。自举中途失败收摊已起副本再上抛（不留孤儿进程/幽灵登记）。schema `replicasPerVersion` 加上界 `max(64)`（run.ts，schema 已重生成）。
+- **serve start/restart 提示信息**：打印 run serve 启动摘要（实例数 + 各 instanceId/PID/端口），解析 gateway 启动日志 `run instance "X" ready: pid=P port=Q`（只认本次 startMarker 之后的行；marker 缺失返回空而非回退扫全文——防打印上一次启动的实例）。
+- **webui「服务」页签**（右栏 Run 旁）：run serve 实例表（实例/状态/版本/PID/端口/负载）+ 路由快照（versionPointer/weights/replicasPerVersion），数据源 `GET /api/v1/fleet`（SDK 新增 `getFleet()`，空响应 `?? null` 面板区分「加载中/空」）。
+- **已知边界**：实例状态来自登记簿（registry 非实时探活，崩溃窗口内可能显示旧 ready——实例退出会 evict）；运行期副本跌落**不自动补拉**（reconcile 循环归 P2-4 跨机配额，与 placement 一体）；面板为激活拉取 + 手动刷新（WS 实时推送后续接）。
+- 测试基建：`run-remote-backend` 的 /tmp boot 扫描容「读毕即删」竞态（并行测试文件的 boot 在 readdir 后消失是正常竞态，ENOENT 跳过；此前全量并行偶发炸在此处）。
+- 测试：`bootstrap-replicas`（replicas=2 真 fork 双实例 + 缺省不变 + 日志行解析）。
+
 ## v0.112.5 (2026-11-12)
 
 ### fix(compact): compact transport budget — UI 压缩超时误报修复

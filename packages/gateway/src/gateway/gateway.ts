@@ -1162,24 +1162,48 @@ export class Gateway {
 
     // ── run 实例进程（P0b：执行面唯一 remote 实现；§5.4 触发面/执行面分离）──
     // boot 纯数据交接（config + agentDefinitions + knowledge 端点）；执行腿随注册进触发面。
-    this.runBackend = await this.spawnRunInstance('run-0', 'self');
-    // P0c-2：实例入 fleet（事实登记 + 路由面）。
-    // 换代语义：start() 重试/重启时同槽位先注销旧登记（旧实例进程已随上次 stop 收摊）。
-    this.fleet.unregister('run-0');
-    this.fleetRegistry.remove('run-0');
-    const record: InstanceRecord = {
-      instanceId: 'run-0',
-      // 'self' 哨兵 = 与 gateway 同构建的自举实例
-      version: 'self',
-      buildRef: 'self',
-      port: this.runBackend.info.port,
-      pid: this.runBackend.info.pid,
-      state: 'ready',
-      startedAt: Date.now(),
-      load: { inFlightRuns: 0, queued: 0 },
-    };
-    this.fleetRegistry.add(record);
-    this.fleet.register({ record, backend: this.runBackend });
+    // 启动收敛（replicasPerVersion 声明式副本数）：自举 N 个同构建副本（run-0 为首副本，
+    // 与版本化 spawn 同一条路）；多副本时新会话按最闲分配（pickLeastLoaded）真正负载均衡。
+    // 运行期副本跌落不自动补拉（reconcile 循环归 P2-4 跨机配额，与 placement 一体）。
+    const replicas = Math.max(1, this.config.fleet?.replicasPerVersion ?? 1);
+    try {
+      for (let i = 0; i < replicas; i++) {
+        const instanceId = `run-${i}`;
+        const backend = await this.spawnRunInstance(instanceId, 'self');
+        // P0c-2：实例入 fleet（事实登记 + 路由面）。
+        // 换代语义：start() 重试/重启时同槽位先注销旧登记（旧实例进程已随上次 stop 收摊）。
+        this.fleet.unregister(instanceId);
+        this.fleetRegistry.remove(instanceId);
+        const record: InstanceRecord = {
+          instanceId,
+          // 'self' 哨兵 = 与 gateway 同构建的自举实例
+          version: 'self',
+          buildRef: 'self',
+          port: backend.info.port,
+          pid: backend.info.pid,
+          state: 'ready',
+          startedAt: Date.now(),
+          load: { inFlightRuns: 0, queued: 0 },
+        };
+        this.fleetRegistry.add(record);
+        this.fleet.register({ record, backend });
+        if (i === 0) this.runBackend = backend;
+        console.log(
+          `[Gateway] run instance "${instanceId}" ready: pid=${backend.info.pid} port=${backend.info.port}`,
+        );
+      }
+    } catch (err) {
+      // 自举中途失败：收摊已起副本再上抛（不留孤儿进程/幽灵登记——fail-loud 但干净）
+      for (const entry of this.fleet.list()) {
+        this.fleet.unregister(entry.record.instanceId);
+        this.fleetRegistry.remove(entry.record.instanceId);
+        await entry.backend.stop().catch(() => undefined);
+      }
+      throw err;
+    }
+    console.log(
+      `[Gateway] run instances: ${replicas} replica(s) up (fleet.replicasPerVersion=${replicas})`,
+    );
 
     // MAJ-4：ops 运维面（spawn/probe/scale/promote/rollback/drain）；自举实例同一 registry/fleet，
     // roll-forward 闭环成立（spawn 新版本 → promote → drain 自举）。

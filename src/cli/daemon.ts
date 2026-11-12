@@ -303,6 +303,37 @@ export function readKnowledgeLinesSince(logPath: string, startMarker: string): s
 /** Knowledge 启动终态：ready / disabled / failed / degraded / remote 均会落日志 */
 const KNOWLEDGE_TERMINAL_RE = /state=ready|disabled \(|failed|degraded|remote client/;
 
+/** 启动收敛自举的 run 实例行。行格式由 gateway.ts 自举段 console.log 固定（两处互指，改格式须同步） */
+const RUN_INSTANCE_RE = /\[Gateway\] run instance "([^"]+)" ready: pid=(\d+) port=(\d+)/;
+
+/**
+ * 读本次启动的 run serve 实例行（启动收敛：replicasPerVersion 个自举副本）。
+ *
+ * @param logPath Gateway 日志路径
+ * @param startMarker 本次启动写入的 `--- octopi serve start ... ---` 行
+ * @returns 实例摘要（instanceId / pid / port），按启动顺序
+ */
+export function readRunInstanceLines(
+  logPath: string,
+  startMarker: string,
+): Array<{ instanceId: string; pid: string; port: string }> {
+  try {
+    const text = readFileSync(logPath, 'utf-8');
+    const idx = text.lastIndexOf(startMarker);
+    // marker 缺失 = 本次启动日志不可辨识：返回空（回退扫全文会把上一次启动的实例打印出来）
+    if (idx < 0) return [];
+    const slice = text.slice(idx + startMarker.length);
+    const out: Array<{ instanceId: string; pid: string; port: string }> = [];
+    for (const line of slice.split(/\r?\n/)) {
+      const m = RUN_INSTANCE_RE.exec(line);
+      if (m) out.push({ instanceId: m[1]!, pid: m[2]!, port: m[3]! });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * 等待本次启动的 `[Knowledge]` 终态行。
  *
@@ -700,6 +731,17 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
     }
   } else {
     console.log('   Knowledge: (no [Knowledge] line yet — see gateway.log)');
+  }
+
+  // Run serve 实例（启动收敛：fleet.replicasPerVersion 个自举副本，gateway 就绪前已登记）
+  const runInstances = readRunInstanceLines(logPath, startMarker);
+  if (runInstances.length > 0) {
+    console.log(`   Run serve: ${runInstances.length} instance(s)`);
+    for (const r of runInstances) {
+      console.log(`     ${r.instanceId}  pid ${r.pid}  port ${r.port}`);
+    }
+  } else {
+    console.log('   Run serve: (no run instance line yet — see gateway.log)');
   }
 
   // Web UI 为可选：失败不拖垮 Gateway（跨平台/无 web 依赖时仍可 serve）

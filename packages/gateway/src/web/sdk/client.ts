@@ -1286,6 +1286,44 @@ export class OctopiClient {
   }
 
   /**
+   * run 服务实例拓扑（fleet 运维面）：实例表（pid/port/state/load）+ 路由权重快照。
+   */
+  async getFleet(): Promise<{
+    instances: Array<{
+      instanceId: string;
+      version: string;
+      buildRef: string;
+      port: number;
+      pid: number;
+      state: string;
+      startedAt: number;
+      load: { inFlightRuns: number; queued: number };
+    }>;
+    route: { versionPointer: string; replicasPerVersion: number; weights: Record<string, number> };
+  } | null> {
+    const data = await this.getJson('/fleet');
+    return (
+      (data?.data as {
+        instances: Array<{
+          instanceId: string;
+          version: string;
+          buildRef: string;
+          port: number;
+          pid: number;
+          state: string;
+          startedAt: number;
+          load: { inFlightRuns: number; queued: number };
+        }>;
+        route: {
+          versionPointer: string;
+          replicasPerVersion: number;
+          weights: Record<string, number>;
+        };
+      } | null | undefined) ?? null
+    );
+  }
+
+  /**
    * 会话最近一次 Run 观测投影（Observer 调试）/debug/run）。
    */
   async getSessionRunObservatory(

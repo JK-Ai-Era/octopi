@@ -454,10 +454,17 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
       agentDefinitions: [],
     });
     // m6：boot 在 ready 握手前已删（暴露窗口=启动一瞬）——本次 spawn 无残留。
-    // 并行测试文件也在 tmpdir 留 boot：按内容锚定本次 spawn 的 octopiHome，只查自己的文件
+    // 并行测试文件也在 tmpdir 留 boot：按内容锚定本次 spawn 的 octopiHome，只查自己的文件。
+    // 读毕即删设计下，并行 boot 可能在 readdir 后消失——ENOENT 是正常竞态，跳过不计泄漏。
     const leaked = readdirSync(tmpdir())
       .filter((f) => f.startsWith('run-serve-boot-') && !before.has(f))
-      .filter((f) => readFileSync(join(tmpdir(), f), 'utf8').includes(soloHome));
+      .filter((f) => {
+        try {
+          return readFileSync(join(tmpdir(), f), 'utf8').includes(soloHome);
+        } catch {
+          return false;
+        }
+      });
     expect(leaked).toEqual([]);
 
     // m8：gateway 侧消失（IPC 断连）→ 子进程自收摊退出，不孤儿、不硬等 stop 兜底
