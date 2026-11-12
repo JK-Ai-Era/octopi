@@ -471,11 +471,26 @@ async function main(): Promise<void> {
           '@octopi-agent/engine/harness/collaboration/delegation/wiring.js'
         );
         if (effectiveDelegationPolicy(delegation).canDelegate) {
-          delegationRuntime ??= createDelegationRuntime({
-            events,
-            notifyPush: false,
-            maxActiveDelegationsPerSession: config.delegation?.maxActiveDelegationsPerSession,
-          });
+          if (!delegationRuntime) {
+            // notify 桥（跨进程唤醒链，2026-11-12 断链修复）：本入口不构造
+            // AgentRuntime——委派终态 notify 只发本进程 bus 的话无人 dispatch，
+            // 父会话永不被唤醒（poll/hint fallback 只在父会话下一次 turn 才出现）。
+            // 挂 AgentSignalSource 把 Trigger 出口接 notify('redispatch') 透传回
+            // gateway（既有 case → runtime.dispatch → 父 session 队列），补全
+            // 「子 agent 完成 → 结果自动返回父对话」。
+            const { AgentSignalSource } = await import(
+              '@octopi-agent/engine/harness/activation/sources/agent-signal.js'
+            );
+            const signalBridge = new AgentSignalSource({ events });
+            await signalBridge.start((trigger) => {
+              notify({ type: 'redispatch', trigger });
+            });
+            delegationRuntime = createDelegationRuntime({
+              events,
+              notifyPush: true,
+              maxActiveDelegationsPerSession: config.delegation?.maxActiveDelegationsPerSession,
+            });
+          }
           delegationRuntime.attach({
             agentId: agent.id,
             agent: built.agent,
@@ -486,7 +501,7 @@ async function main(): Promise<void> {
             persona: typeof agent.persona === 'string' ? agent.persona : undefined,
             registerTools: built.registerTools,
           });
-          notify({ type: 'log', level: 'log', message: `[RunServe] Delegation wired for agent "${agent.id}" (notify push off: poll fallback)` });
+          notify({ type: 'log', level: 'log', message: `[RunServe] Delegation wired for agent "${agent.id}" (notify push on: signal bridge → gateway redispatch)` });
         }
       }
     },

@@ -115,6 +115,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.7 (2026-11-12)
+
+### fix(delegation): cross-process notify bridge — 子 agent 完成后自动返回父对话
+
+- **症状**（本 session 实测两次）：委派的子 agent 完成后，父会话收不到任何结果通知——只能等人工来问或父会话下一次 turn（此时才注入 `<delegation_status>` hint）。
+- **根因**：委派完成的唤醒链（notifier → `emitAgentSignal` → `AgentSignalSource` → `AgentRuntime.dispatch` → 父 session 队列）要求总线上有 dispatch 消费方。四服务拆分后委派执行搬进 run 子进程，而「run-serve-child 本入口不构造 AgentRuntime / TriggerSource」——notify 只能 `notifyPush: false` 退化为 poll/hint fallback，而 hint 只在父会话下一次 turn 出现 → 无人唤醒则永不出（旧单体路径 `[Gateway] … notify push on` 与此对比）。
+- **修复**（零协议变更）：run 子进程挂 `AgentSignalSource`，Trigger 出口接 `notify('redispatch')` 透传回 gateway（既有 case → `runtime.dispatch` → 父 session 队列）；`notifyPush` 改 on（接收端已存在，notifier 正常投递）。跨版本兼容：旧 gateway 已有 redispatch case（向后兼容），旧 child 不发即无影响。
+- 测试：`run-serve-delegation-bridge`（桥接收 Trigger 完整性含 delegationId / 无接收端 fail-loud 不误标已送达 / stop 后回收；gateway redispatch → dispatch 语义守卫）。
+
 ## v0.112.6 (2026-11-12)
 
 ### feat(fleet): startup replica convergence + run serve visibility
