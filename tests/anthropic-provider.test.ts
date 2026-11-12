@@ -95,7 +95,12 @@ describe('AnthropicProvider', () => {
     expect(blocks.map((b) => b.tool_use_id)).toEqual(['c1', 'c2']);
   });
 
-  test('非 tool 的相邻 user 消息不被合并', () => {
+  test('非 tool 的相邻 user 消息也合并为一条（2026-11-12 修订）', () => {
+    // 原断言（v0.9x，2026-10-27）为「不合并」——那是当时「只修 tool 聚合」的范围决定。
+    // 生产 wire dump 显示 765 条消息里有 17 处连续 user（tool_result→摘要占位、
+    // 摘要占位→turn_start、turn_end→turn_start），严格 anthropic-messages 端点
+    // 只回通用 InvalidParameter，故改为出口统一归一（详见
+    // anthropic-message-normalize.ts 与 tests/anthropic-role-alternation.test.ts）。
     const p = new AnthropicProvider({ apiKey: 'key' });
     const body = p['toAnthropicRequest']({
       model: 'claude-sonnet-4-6',
@@ -105,9 +110,11 @@ describe('AnthropicProvider', () => {
       ],
     }) as { messages: Array<{ role: string; content: unknown }> };
 
-    expect(body.messages).toHaveLength(2);
-    expect(body.messages[0].content).toBe('first');
-    expect(body.messages[1].content).toBe('second');
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0]!.content).toEqual([
+      { type: 'text', text: 'first' },
+      { type: 'text', text: 'second' },
+    ]);
   });
 
   test('模型级 temperature 在请求未指定时生效，请求级优先', () => {

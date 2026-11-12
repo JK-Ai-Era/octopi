@@ -26,6 +26,7 @@ import type {
 } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { ToolCall, ModelInfo } from '@octopi-agent/core/types.js';
 import { tokenUsageFromAnthropic } from './usage.js';
+import { mergeConsecutiveSameRole } from './anthropic-message-normalize.js';
 import {
   attachHttpStatus,
   attachStreamDiag,
@@ -507,7 +508,10 @@ export class AnthropicProvider implements ModelProvider {
       result.push({ role: 'user', content: blocks });
     }
 
-    return result;
+    // 角色交替归一（2026-11-12）：引擎历史天然产生连续 user（tool_result → 摘要占位、
+    // 摘要占位 → turn_start、turn_end → turn_start）；严格 anthropic-messages 端点
+    // 只回通用 InvalidParameter，故在适配器出口统一合并。
+    return mergeConsecutiveSameRole(result);
   }
 
   /**

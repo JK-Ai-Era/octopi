@@ -115,6 +115,24 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.1 (2026-11-13)
+
+### fix(providers): Anthropic 线上编码统一角色交替（连续 user 归一）
+
+**现场**：生产 wire dump（765 条消息的会话）里有 **17 处连续 user 段**，全部来自引擎的常规形态而非异常数据：`tool_result` 块后接摘要占位、摘要占位后接 `turn_start`、`turn_end` 后接 `turn_start`（连续 turn）。Anthropic 官方会自行合并连续同角色，但严格 `anthropic-messages` 端点（火山等代理）只回通用 `InvalidParameter`（`param` 为空），无法定位。
+
+**改动**：新增 `integration/providers/anthropic-message-normalize.ts` 的 `mergeConsecutiveSameRole`，在 `toAnthropicMessages` 出口统一归一——同角色相邻消息的 content 按原顺序拼接为块数组；**非合并位置保持原有形态**（纯文本仍是字符串），把字节变化收敛在真正需要合并的点。
+
+**与既有设计的关系**：2026-10-27 的修复（v0.9x）只聚合连续 `tool` 消息，并在测试里断言「非 tool 的相邻 user 不合并」——那是当时「只修 tool 聚合」的范围决定，不是「不能合并」。该断言已随本次行为变更更新，并注明原因。
+
+**验证**：用生产请求体（`1794485350143-233-a0820001.json`）回放真实 `wireBodyFor`——输入 765 条 / 17 处连续段 → 输出 745 条 / **0 处连续段**，角色序列 `user→assistant→user→…` 严格交替，首条非合并消息仍是字符串形态。全量 4703 passed / 7 skipped（465 files）；`lint` 0；`arch/check-sync.sh` 绿。
+
+**一次性的缓存代价**：合并点之后的消息条数变化，会使该点之后的线上前缀与旧版本不同，升级后每条会话有一次冷 prefill（随后稳定，因为合一是纯函数）。这与「修掉潜在 400」相比是可接受的交换——严格端点上的 400 是硬失败。
+
+**未覆盖**：`openai` 适配器不做合并（Chat Completions 允许连续 user）。若某个 OpenAI 兼容端点也拒绝，可按同一 helper 接入。
+
+---
+
 ## v0.113.0 (2026-11-12)
 
 ### refactor(context): 请求视图统一装配（会话与摘要共用一次工具面解析）
