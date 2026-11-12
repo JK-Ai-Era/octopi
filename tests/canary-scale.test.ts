@@ -11,7 +11,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent } from '../packages/core/src/primitives/event-bus.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import type { RunRequest } from '../packages/engine/src/harness/activation/index.js';
 import {
   FleetRunBackend,
@@ -38,8 +38,9 @@ function makeRecord(instanceId: string, version: string): InstanceRecord {
 }
 
 function makeBackend(): InstanceBackend {
+  const healthSnapshot = { mountedAgents: 1, inFlightRuns: 0, retiredRunners: 0 };
   return {
-    healthSnapshot: { mountedAgents: 1, inFlightRuns: 0, retiredRunners: 0 },
+    healthSnapshot,
     startRun(req: RunRequest): AsyncIterable<AgentEvent> {
       return (async function* () {
         yield { type: 'run.completed', sessionId: req.sessionId } as unknown as AgentEvent;
@@ -49,7 +50,7 @@ function makeBackend(): InstanceBackend {
       return { ok: true };
     },
     async health() {
-      return this.healthSnapshot;
+      return healthSnapshot;
     },
     disposeAll(): void {
       /* 假实例：无状态可回收 */

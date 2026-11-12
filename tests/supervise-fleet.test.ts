@@ -8,10 +8,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import type {
-  RunBackendHealth,
   RunControlOp,
   RunControlResponse,
 } from '@octopi-agent/engine/harness/activation/run-protocol.js';
+import type { RunBackendHealth } from '@octopi-agent/engine/harness/activation/run-backend.js';
 import type { RunRequest } from '@octopi-agent/engine/harness/activation/index.js';
 import { FleetRunBackend, type InstanceBackend } from '../packages/gateway/src/gateway/supervise/fleet-backend.js';
 import { InstanceRegistry, RouteConfig, type InstanceRecord } from '../packages/gateway/src/gateway/supervise/registry.js';
@@ -179,7 +179,7 @@ describe('FleetRunBackend routing', () => {
     expect(b.controls.at(-1)).toEqual({ type: 'pulse', key: 'k:owned' });
 
     // 未知形态 fail-loud（无 sessionId、非 fleet-wide、非 pulse、无回执路由）
-    const unrouteable = await fleet.control({ type: 'setSessionPreferences' } as RunControlOp);
+    const unrouteable = await fleet.control({ type: 'setSessionPreferences' } as unknown as RunControlOp);
     expect(unrouteable.ok).toBe(false);
   });
 
@@ -195,7 +195,7 @@ describe('FleetRunBackend routing', () => {
       type: 'clientToolResult',
       callId: 'c9',
       outcome: { ok: true, result: 1 },
-    } as RunControlOp);
+    } as unknown as RunControlOp);
     expect(orphan.ok).toBe(false);
 
     // 登记源实例 → 回执定向送达；成功即拆除（第二次回执 fail-loud）
@@ -204,7 +204,7 @@ describe('FleetRunBackend routing', () => {
       type: 'clientToolResult',
       callId: 'c1',
       outcome: { ok: true, result: 1 },
-    } as RunControlOp);
+    } as unknown as RunControlOp);
     expect(delivered.ok).toBe(true);
     expect(b.controls.at(-1)).toMatchObject({ type: 'clientToolResult', callId: 'c1' });
     expect(a.controls).toHaveLength(0);
@@ -213,12 +213,12 @@ describe('FleetRunBackend routing', () => {
       type: 'clientToolResult',
       callId: 'c1',
       outcome: { ok: true, result: 1 },
-    } as RunControlOp);
+    } as unknown as RunControlOp);
     expect(replay.ok).toBe(false);
 
     // approvalReply / askUserReply 同类
     fleet.setReplyRoute('approval:ap1', 'run-a');
-    await fleet.control({ type: 'approvalReply', approvalId: 'ap1', result: 'allow' } as RunControlOp);
+    await fleet.control({ type: 'approvalReply', approvalId: 'ap1', result: 'allow' } as unknown as RunControlOp);
     expect(a.controls.at(-1)).toMatchObject({ type: 'approvalReply', approvalId: 'ap1' });
   });
 
@@ -290,13 +290,13 @@ describe('FleetRunBackend routing', () => {
     fleet.list().find((e) => e.record.instanceId === 'run-a')!.record.load.inFlightRuns = 3;
 
     // contextHealth：诊断探针 → 最闲实例透传（曾 unrouteable 恒失败）
-    const probe = await fleet.control({ type: 'contextHealth', agentId: 'x' } as RunControlOp);
+    const probe = await fleet.control({ type: 'contextHealth', agentId: 'x' } as unknown as RunControlOp);
     expect(probe.ok).toBe(true);
     expect(b.controls.at(-1)).toEqual({ type: 'contextHealth', agentId: 'x' });
     expect(a.controls).toHaveLength(0);
 
     // syncKnowledgeState：每实例一份准入快照 → fan-out（曾直连 run-0 漏同步）
-    const sync = await fleet.control({ type: 'syncKnowledgeState', state: {} } as RunControlOp);
+    const sync = await fleet.control({ type: 'syncKnowledgeState', state: {} } as unknown as RunControlOp);
     expect(sync.ok).toBe(true);
     expect(a.controls.at(-1)).toEqual({ type: 'syncKnowledgeState', state: {} });
     expect(b.controls.at(-1)).toEqual({ type: 'syncKnowledgeState', state: {} });
@@ -311,9 +311,9 @@ describe('FleetRunBackend routing', () => {
     // 失败回执也是终态：表项必须删（否则永久泄漏）
     fleet.setReplyRoute('clientTool:ct-x', 'run-a');
     a.failControl = true;
-    const failed = await fleet.control({ type: 'clientToolResult', callId: 'ct-x', outcome: { ok: true, result: 1 } } as RunControlOp);
+    const failed = await fleet.control({ type: 'clientToolResult', callId: 'ct-x', outcome: { ok: true, result: 1 } } as unknown as RunControlOp);
     expect(failed.ok).toBe(false);
-    const retry = await fleet.control({ type: 'clientToolResult', callId: 'ct-x', outcome: { ok: true, result: 1 } } as RunControlOp);
+    const retry = await fleet.control({ type: 'clientToolResult', callId: 'ct-x', outcome: { ok: true, result: 1 } } as unknown as RunControlOp);
     expect(retry.ok).toBe(false);
     if (!retry.ok) expect(retry.error.message).toContain('no reply route');
 
@@ -321,7 +321,7 @@ describe('FleetRunBackend routing', () => {
     a.failControl = false;
     fleet.setReplyRoute('approval:ap-x', 'run-a');
     fleet.unregister('run-a');
-    const gone = await fleet.control({ type: 'approvalReply', approvalId: 'ap-x', result: { approved: true } } as RunControlOp);
+    const gone = await fleet.control({ type: 'approvalReply', approvalId: 'ap-x', result: { approved: true } } as unknown as RunControlOp);
     expect(gone.ok).toBe(false);
     if (!gone.ok) expect(gone.error.message).toContain('no reply route');
   });

@@ -6,11 +6,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import type {
-  RunBackendHealth,
   RunControlOp,
   RunControlResponse,
   RunSmokeReport,
 } from '@octopi-agent/engine/harness/activation/run-protocol.js';
+import type { RunBackendHealth } from '@octopi-agent/engine/harness/activation/run-backend.js';
 import type { RunRequest } from '@octopi-agent/engine/harness/activation/index.js';
 import { FleetRunBackend, type InstanceBackend } from '../packages/gateway/src/gateway/supervise/fleet-backend.js';
 import { InstanceRegistry, RouteConfig } from '../packages/gateway/src/gateway/supervise/registry.js';

@@ -55,8 +55,9 @@ describe('run 子进程委派 notify 桥', () => {
     expect(t.sessionId).toBe('sess-parent-1');
     expect(t.metadata?.delegationId).toBe('del-test-1');
     expect(t.payload.kind).toBe('system_note');
-    expect(String(t.payload.content)).toContain('<delegation_result');
-    expect(String(t.payload.content)).toContain('result body');
+    const content = t.payload.kind === 'structured' ? '' : t.payload.content;
+    expect(String(content)).toContain('<delegation_result');
+    expect(String(content)).toContain('result body');
 
     await bridge.stop();
   });

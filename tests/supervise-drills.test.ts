@@ -275,7 +275,19 @@ describe('演练 2：多活（2 副本两实例，两会话分实例，脉搏归
     await Promise.allSettled([p1, p2]);
 
     // 脉搏归属：同 key 双副本自述 → 全 fleet 唯一持有者；单发经归属实例
-    const scheduler = new PulseScheduler({ fleet });
+    const scheduler = new PulseScheduler({
+      // 与 gateway 真实接线同构：FleetRunBackend 的 pulse 语义经 control op 转发
+      fleet: {
+        pulseInventory: () => fleet.pulseInventory(),
+        pulse: async (key: string) => {
+          const r = await fleet.control({ type: 'pulse', key });
+          if (!r.ok) throw new Error(r.error.message);
+        },
+        setPulseOwner: (key: string, instanceId: string) => fleet.setPulseOwner(key, instanceId),
+        resolvePulseOwner: (key: string) => fleet.resolvePulseOwner(key),
+        clearPulseOwner: (key: string) => fleet.clearPulseOwner(key),
+      },
+    });
     await scheduler.resync();
     const inventory = await fleet.pulseInventory();
     expect(inventory.length).toBeGreaterThan(0);

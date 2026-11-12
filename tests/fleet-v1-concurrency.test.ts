@@ -9,8 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createServer,
   type Server,
-  type AddressInfo,
 } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';

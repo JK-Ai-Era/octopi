@@ -39,15 +39,16 @@ function makeBackend(
   instanceId: string,
   reattest: (op: RunControlOp) => Promise<RunControlResponse>,
 ): InstanceBackend {
+  const healthSnapshot = { mountedAgents: 1, inFlightRuns: 0, retiredRunners: 0 };
   return {
-    healthSnapshot: { mountedAgents: 1, inFlightRuns: 0, retiredRunners: 0 },
+    healthSnapshot,
     startRun: () =>
       (async function* () {
         /* 假实例：无 run */
       })(),
     control: reattest,
     async health() {
-      return this.healthSnapshot;
+      return healthSnapshot;
     },
     disposeAll(): void {
       /* 假实例：无状态可回收 */

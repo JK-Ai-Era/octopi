@@ -115,6 +115,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.8 (2026-11-12)
+
+### chore(test): clear baseline lint debt — `npm run lint` 清零
+
+- **清债范围**：22 个 TS 错（历史基线 14 + 当日新测试 8——vitest 不查类型，lint 门才暴露）全部清零，`npm run lint` 从此可当门用。
+- **机械修正**（零行为变化）：错位 import（`AgentDefinition`→`shared/types/agent-definition`、`RunBackendHealth`→`activation/run-backend`、`AddressInfo`→`node:net`、event-bus 相对路径→包名）；假实例 factory 的 `this.healthSnapshot`（上下文类型吞属性）改闭包常量；`RunControlOp` 非法样本 cast 双断言（测试意图即非法输入）；`TriggerPayload` 联合窄化；`RunMessagesSummary` 用真实字段（count/byRole/chars）。
+- **一个真问题被类型逮住**：`supervise-drills` 直传 `FleetRunBackend` 给 `PulseScheduler`（`PulseFleet` 契约要 `pulse(key)`，实现是 `control({type:'pulse'})` 转发适配器）——测试此前未触发单发路径故未炸。已按 gateway 真实接线补同构适配器（测试缝与生产组合根同路径，MAJ-1 教训同类）。
+- 全量 4672 绿（行为零回归）。
+
 ## v0.112.7 (2026-11-12)
 
 ### fix(delegation): cross-process notify bridge — 子 agent 完成后自动返回父对话

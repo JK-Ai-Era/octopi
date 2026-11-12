@@ -27,7 +27,7 @@ function readyEvent(runId: string, ts = Date.now()): AgentEvent {
         capturedAt: ts,
         toolRuntime: { cwd: '/tmp/ws' },
       },
-      messages: { userCount: 1, assistantCount: 0, toolCount: 0, estimatedTotalTokens: 10 },
+      messages: { count: 1, byRole: { user: 1 }, byKind: { user_speech: 1 }, systemPromptCount: 0, contextSummaryCount: 0, hiddenFromChatCount: 0, chars: 10, agentIds: ['assistant'] },
     },
   } as unknown as AgentEvent;
 }
@@ -68,12 +68,12 @@ describe('ObserverHub 跨进程生命周期', () => {
     const b = hub.getRunById('run-b');
     expect(b).not.toBeNull();
     // run-b 的 timeline 事件必须在 run-b 记录上（不在 run-a）
-    expect(b!.timeline.some((e) => e.toolCallId === 'call-run-b-2100')).toBe(true);
+    expect(b!.timeline?.some((e) => e.toolCallId === 'call-run-b-2100')).toBe(true);
 
     const a = hub.getRunById('run-a');
     expect(a).not.toBeNull();
-    expect(a!.timeline.some((e) => e.toolCallId === 'call-run-a-1100')).toBe(true);
-    expect(a!.timeline.some((e) => e.toolCallId === 'call-run-b-2100')).toBe(false);
+    expect(a!.timeline?.some((e) => e.toolCallId === 'call-run-a-1100')).toBe(true);
+    expect(a!.timeline?.some((e) => e.toolCallId === 'call-run-b-2100')).toBe(false);
 
     // Run 页签读口（latestRun）= 最新一轮
     const latest = hub.getRunObservatory('s-multi');
@@ -89,7 +89,7 @@ describe('ObserverHub 跨进程生命周期', () => {
     const x = hub.getRunById('run-x');
     expect(x).not.toBeNull();
     // 重复 ready 不清空已有 timeline
-    expect(x!.timeline.some((e) => e.toolCallId === 'call-run-x-1500')).toBe(true);
+    expect(x!.timeline?.some((e) => e.toolCallId === 'call-run-x-1500')).toBe(true);
   });
 
   it('run.scope.messages 消费进 record.messages（entry/final）', () => {
@@ -105,7 +105,7 @@ describe('ObserverHub 跨进程生命周期', () => {
         agentId: 'assistant',
         runId: 'run-m',
         phase: 'entry',
-        messages: { userCount: 2, assistantCount: 1, toolCount: 0, estimatedTotalTokens: 42 },
+        messages: { count: 3, byRole: { user: 2, assistant: 1 }, byKind: { user_speech: 2 }, systemPromptCount: 0, contextSummaryCount: 0, hiddenFromChatCount: 0, chars: 42, agentIds: ['assistant'] },
       },
     } as unknown as AgentEvent);
     hub.ingestEvent({
@@ -118,7 +118,7 @@ describe('ObserverHub 跨进程生命周期', () => {
         agentId: 'assistant',
         runId: 'run-m',
         phase: 'final',
-        messages: { userCount: 2, assistantCount: 2, toolCount: 3, estimatedTotalTokens: 99 },
+        messages: { count: 7, byRole: { user: 2, assistant: 2, tool: 3 }, byKind: { user_speech: 2 }, systemPromptCount: 0, contextSummaryCount: 0, hiddenFromChatCount: 0, chars: 99, agentIds: ['assistant'] },
       },
     } as unknown as AgentEvent);
 
@@ -126,8 +126,8 @@ describe('ObserverHub 跨进程生命周期', () => {
     expect(msgs).not.toBeNull();
     const entry = hub.getRunMessages('s-multi', { runId: 'run-m', phase: 'entry' });
     const final = hub.getRunMessages('s-multi', { runId: 'run-m', phase: 'final' });
-    expect(entry?.summary?.estimatedTotalTokens).toBe(42);
-    expect(final?.summary?.estimatedTotalTokens).toBe(99);
+    expect(entry?.summary?.chars).toBe(42);
+    expect(final?.summary?.chars).toBe(99);
   });
 
   it('engine.end 清 active 归属：end 后新事件不挂旧 active', () => {

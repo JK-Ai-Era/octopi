@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Gateway } from '../packages/gateway/src/gateway/gateway.js';
-import type { AgentDefinition } from '../packages/engine/src/harness/activation/index.js';
+import type { AgentDefinition } from '../packages/engine/src/harness/shared/types/agent-definition.js';
 import { createSqliteSessionIndex } from '../packages/engine/src/integration/storage/session-index.js';
 import type { SessionIndexBackend } from '../packages/engine/src/integration/storage/session-index.js';
 
