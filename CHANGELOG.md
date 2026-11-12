@@ -115,6 +115,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.4 (2026-11-12)
+
+### fix(observer): cross-process observer bridge — webui 上下文/Run 页签接通
+
+- **断点**：四服务拆分后观测数据留在 run 子进程——Runner 直采进节点本地 Hub，观测专属事件（`context.layers.assembled`/`tool.exec.update`/`run.timing` 等）只进本地 EventBus、不进 execute 流，跨进程不过线 → gateway 两个读口（`lastContextLayers`/`ObserverHub`）零喂入，webui「上下文」「Run」页签恒 `data: null`（实测确认）。
+- **修复三件**：① Runner `emitObserved` 加 `streamed` 标记 + `observedEventSink` 出口（唯一 yield 点标 streamed，专属事件走 sink，fail-open）；② run-serve-child 桥 sink → `notify('session_event')` 过网线（`run.scope.llm` 同批过线，LLM 视图不再空）；③ gateway 双路镜像喂 hub（execute 流消费点 + `session_event` case，跳过流式 delta 与直采口径一致）+ `rememberContextLayers` 重建。
+- **Hub `run.scope.ready` 按 runId 补建 run 记录**（跨进程镜像面无 `recordRunStart`）：单进程 recordRunStart 已建 → 幂等 no-op。评审 **MAJ-1**：补建判据必须按事件自带 runId（只判 `!record` 时同 session 第二轮起 `latestRun` 兜底命中上一轮旧记录，事件全挂错）——已修 + 双轮归属回归锚。
+- `run.scope.messages` 消费进 `record.messages`（entry/final 摘要，评审 MIN-1）；engine.end/error 清 active 归属（跨进程无 `recordRunEnd`）。
+- `session_event` WS 广播过 `stripLayerContentFromEvent`（评审 MIN-3：层正文不上 WS 契约，正文经 REST `/context/layers` 取）。
+- 已知边界：IPC（notify）与 NDJSON 流两路到达无序时，流首批 timeline 事件可能因 record 未建被丢（观测 fail-open，≤ 几条）；gateway hub 为镜像内存态（重启丢观测历史）。
+- 测试：`runner-observed-sink`（分流/fail-open）、`gateway-observer-bridge`（补建/timeline 归属/镜像）、`observer-hub-lifecycle`（双轮归属幂等/messages 消费，评审 MAJ-1/MIN-1 回归锚）。
+
 ## v0.112.3 (2026-11-12)
 
 ### fix(context): stop truncating shell commands in aged tool-call args (OP-TOOL-1 follow-up)

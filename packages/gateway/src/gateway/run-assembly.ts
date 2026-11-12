@@ -101,6 +101,11 @@ export interface RunAssemblyDeps extends RunAssemblyHooks {
   /** 全局工具面（活数组；客户端工具全局注册可见） */
   globalTools: RegisteredTool[];
   getObserverHub(): ObserverHub;
+  /**
+   * 观测专属事件出口（跨进程桥，run 实例侧注入：notify('session_event')）。
+   * 缺省不注入：in-process 宿主（gateway 直连 EventBus）不需要桥。
+   */
+  onObservedEvent?: (event: import('@octopi-agent/core/primitives/event-bus.js').AgentEvent) => void;
   getSessionLock(): SessionLease;
   getSessionAcl(): SessionAclService | undefined;
   getSessionSchedules(): SessionScheduleService | undefined;
@@ -508,6 +513,10 @@ export class RunAssembly {
     builder.observerHub(observerHub.isEnabled() ? observerHub : undefined);
     const built = await builder.build();
     built.runner.setObserverHub(observerHub.isEnabled() ? observerHub : undefined);
+    // 跨进程 Observer 桥（run 实例侧）：观测专属事件（不进 execute 流的）经 notify 过网线
+    if (this.deps.onObservedEvent) {
+      built.runner.setObservedEventSink(this.deps.onObservedEvent);
+    }
     const agentToolNames = built.agent.context.tools
       ?.map((t: any) => t?.definition?.name ?? t?.name)
       .filter(Boolean) ?? [];

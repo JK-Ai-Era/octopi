@@ -337,6 +337,69 @@ export class ObserverHub {
   }
 
   /**
+   * 跨进程镜像面补建 run 记录：run.scope.ready 事件自带 scope View（recordRunStart
+   * 的产物投影），gateway 侧 hub 只收到事件流时以此为据建 record，使后续
+   * timeline/guard 事件有归属。单进程 recordRunStart 已建记录时不会走到这里
+   * （ingestEvent 先命中既有 record）。
+   *
+   * @param event - run.scope.ready 事件（data: { runId, sessionId, agentId, scope, messages }）
+   * @returns 补建的记录；事件形状不符返回 undefined
+   */
+  private adoptRunScopeReady(event: AgentEvent): RunRecord | undefined {
+    try {
+      const d = event.data as
+        | {
+            runId?: string;
+            sessionId?: string;
+            agentId?: string;
+            scope?: RunScopeView;
+            messages?: RunMessagesSummary;
+          }
+        | undefined;
+      if (!d?.runId || !d.scope || !d.sessionId) return undefined;
+      const capturedAt = d.scope.capturedAt ?? event.timestamp;
+      const record: RunRecord = {
+        runId: d.runId,
+        sessionId: d.sessionId,
+        agentId: d.agentId ?? '',
+        scope: d.scope,
+        lifecycle: { startedAt: capturedAt },
+        timeline: [],
+        securityEvents: [],
+        memoryActivity: emptyMemoryActivity(),
+        toolEffect: {
+          sessionId: d.sessionId,
+          agentId: d.agentId ?? '',
+          runId: d.runId,
+          cwd: d.scope.toolRuntime?.cwd,
+          isolation: d.scope.toolRuntime?.isolation,
+          tools: [],
+        },
+        updatedAt: capturedAt,
+      };
+      if (d.messages) {
+        record.messages = {
+          entry: {
+            sessionId: d.sessionId,
+            agentId: d.agentId,
+            runId: d.runId,
+            runCapturedAt: capturedAt,
+            view: 'workspace',
+            phase: 'entry',
+            summary: d.messages,
+          },
+        };
+      }
+      this.appendRun(record);
+      this.activeRunBySession.set(record.sessionId, record.runId);
+      return record;
+    } catch (err) {
+      this.warn('adoptRunScopeReady', err);
+      return undefined;
+    }
+  }
+
+  /**
    * ContextEngine assemble 出口：LLM 实际输入
    */
   recordLlmMessages(input: {
@@ -480,7 +543,8 @@ export class ObserverHub {
       !this.config.channels.memory &&
       !this.config.channels['tool.effect'] &&
       event.type !== 'run.guard.metrics' &&
-      event.type !== 'run.scope.llm'
+      event.type !== 'run.scope.llm' &&
+      event.type !== 'run.scope.ready'
     ) {
       return;
     }
@@ -488,8 +552,47 @@ export class ObserverHub {
 
     try {
       const runId = this.activeRunBySession.get(event.sessionId);
-      const record = runId ? this.runById.get(runId) : this.latestRun(event.sessionId);
+      let record = runId ? this.runById.get(runId) : this.latestRun(event.sessionId);
+      // run.scope.ready 生命周期特判（跨进程镜像面）：run 记录由 recordRunStart 建立，
+      // 但 gateway 侧 hub 只收到事件流——按事件自带 runId 补建记录（scope View 全量），
+      // 使后续 timeline/guard 事件有归属。**按 runId 归属**（不是 !record）：同 session
+      // 第二轮 run 时 latestRun 兜底会命中上一轮旧记录，只判 !record 会让第二轮起全部
+      // 事件误挂旧记录（MAJ-1）。单进程 recordRunStart 已建记录 → runById 命中，幂等 no-op。
+      if (event.type === 'run.scope.ready') {
+        const d = event.data as { runId?: string } | undefined;
+        const byRunId = d?.runId ? this.runById.get(d.runId) : undefined;
+        record = byRunId ?? this.adoptRunScopeReady(event) ?? record;
+      }
       if (!record) return;
+
+      // run.scope.messages（跨进程镜像面）：entry/final messages 摘要落 record.messages——
+      // 单进程由 recordRunEnd/recordLlmMessages 写，镜像面靠此事件（emitObserved 已过线）。
+      if (event.type === 'run.scope.messages') {
+        const d = event.data as
+          | {
+              phase?: 'entry' | 'final';
+              messages?: RunMessagesSummary;
+              sessionId?: string;
+              agentId?: string;
+              runId?: string;
+            }
+          | undefined;
+        if (d?.messages && d.phase) {
+          record.messages = {
+            ...record.messages,
+            [d.phase]: {
+              sessionId: d.sessionId ?? record.sessionId,
+              agentId: d.agentId ?? record.agentId,
+              runId: d.runId ?? record.runId,
+              runCapturedAt: event.timestamp,
+              view: 'workspace',
+              phase: d.phase,
+              summary: d.messages,
+            },
+          };
+        }
+        return;
+      }
 
       if (event.type === 'run.guard.metrics' && this.config.channels['run.guard']) {
         const d = event.data as unknown as RunGuardMetricsView;
@@ -629,6 +732,14 @@ export class ObserverHub {
           life.endedAt = event.timestamp;
           if (life.startedAt != null) life.durationMs = event.timestamp - life.startedAt;
         }
+      }
+      // run 终态清 active 归属（跨进程镜像面无 recordRunEnd 调用；单进程 recordRunEnd
+      // 随后再清，幂等）。不清会让下一轮 run.scope.ready 前的事件归到旧 run。
+      if (
+        (event.type === 'engine.end' || event.type === 'engine.error') &&
+        this.activeRunBySession.get(record.sessionId) === record.runId
+      ) {
+        this.activeRunBySession.delete(record.sessionId);
       }
       this.mergeGuardFlags(record, event);
       record.updatedAt = Date.now();

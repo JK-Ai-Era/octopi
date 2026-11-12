@@ -253,10 +253,12 @@ async function main(): Promise<void> {
     compactTargetTokens: config.context?.contextAssembler?.compactTargetTokens,
     onCompactEvent: (e) => {
       // F22 缝（对照基线 gateway buildAgent）：compact 事件不经 Runner emitObserved，
-      // 须直采 Hub——但落 **run 节点自己的** ObserverHub（导出槽随 config.observer）；
-      // gateway 端内存 timeline 不覆盖 run 事件（跨进程 Observer 面缺口，随 P1 归属收口，
-      // 勿把 gateway 端 ingestEvent 加回来：同一导出槽会双计）。第二缝 = notify('session_event')
-      // → gateway WS/store（旧 gatewayBus.emit 的跨进程形态）✓。data 为剥壳余项（不含 type/sessionId）。
+      // 须直采 Hub——但落 **run 节点自己的** ObserverHub（导出槽随 config.observer）。
+      // 跨进程 Observer 面缺口已收口：gateway 端 ingestEvent 是**跨进程镜像**（不同
+      // 进程各自 buffer，服务各自读口，不双计）——execute 流消费点 + session_event
+      // notify 两路喂 gateway hub（同进程重复 ingestEvent 才是双计，勿在本进程加第二路）。
+      // 第二缝 = notify('session_event') → gateway WS/store（旧 gatewayBus.emit 的
+      // 跨进程形态）✓。data 为剥壳余项（不含 type/sessionId）。
       const { type, sessionId: sid, ...data } = e as {
         type: string;
         sessionId?: string;
@@ -384,6 +386,16 @@ async function main(): Promise<void> {
     getHookPort: () => pluginManager.getHookPort(),
     globalTools,
     getObserverHub: () => observerHub,
+    // 跨进程 Observer 桥：观测专属事件（context.layers.assembled / tool.exec.update 等，
+    // 不进 execute 流）→ notify('session_event') 过网线；gateway 侧喂 hub + 重建
+    // lastContextLayers（Runner 直采落本进程 hub，gateway hub 靠此桥镜像）
+    onObservedEvent: (event) => {
+      notify({
+        type: 'session_event',
+        sessionId: event.sessionId ?? '',
+        event,
+      });
+    },
     getSessionLock: () => sessionLock,
     getSessionAcl: () => sessionAcl,
     getSessionSchedules: () => sessionSchedules,
@@ -426,7 +438,9 @@ async function main(): Promise<void> {
       // Client Tool 会话可见性：无 live client 的 tool 不进该 session 的 LLM tool 面（快照求值）
       built.agent.setToolVisibilityFilter(host.buildVisibilityPredicate());
 
-      // 会话任务事件 → notify（gateway 转 WS；UI 只读实时面板）
+      // 会话任务事件 + LLM 观测摘要 → notify（gateway 转 WS/喂 hub；UI 只读实时面板）。
+      // run.scope.llm 由 builder 发在本地 bus（不经 Runner emitObserved/sink），
+      // 跨进程 LLM 视图（Run 页签 LLM 板）依赖这里转发（MIN-2）。
       const forwardTaskEvent = (event: { sessionId?: string; type: string; data?: unknown; agentId?: string }): void => {
         if (!event.sessionId) return;
         notify({
@@ -435,7 +449,12 @@ async function main(): Promise<void> {
           event: event as unknown as AgentEvent,
         });
       };
-      for (const type of ['session.task.created', 'session.task.updated', 'session.task.snapshot']) {
+      for (const type of [
+        'session.task.created',
+        'session.task.updated',
+        'session.task.snapshot',
+        'run.scope.llm',
+      ]) {
         built.events.on(type, forwardTaskEvent);
       }
 

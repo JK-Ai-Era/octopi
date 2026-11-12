@@ -5851,16 +5851,38 @@ export class Gateway {
   ): AsyncIterable<AgentEvent> {
     const backend = this.getRunBackend();
     const iter = backend.startRun(req);
-    if (!signal) return iter;
+    // 跨进程 Observer 镜像：Runner 直采进 run 实例自己的 hub，gateway hub（服务
+    // /debug/run 与 webui Run 面板）在此按流经事件镜像喂入。跳过流式 delta，
+    // 与 Runner emitObserved 口径一致。执行腿恒为远程（getRunBackend fail-loud），
+    // 不存在同进程双计；同进程内禁止再加第二路 ingestEvent。
+    const mirrorEvent = (event: AgentEvent): void => {
+      if (event.type === 'llm_stream_delta' || event.type === 'llm_thinking_delta') return;
+      try {
+        this.observerHub.ingestEvent(event);
+      } catch {
+        // 观测 fail-open：镜像失败不中断执行流
+      }
+    };
     const onAbort = (): void => {
       void backend
         .control({ type: 'abort', sessionId: req.sessionId, reason: 'caller_aborted' })
         .catch(() => undefined);
     };
+    if (!signal) {
+      return (async function* () {
+        for await (const event of iter) {
+          mirrorEvent(event);
+          yield event;
+        }
+      })();
+    }
     signal.addEventListener('abort', onAbort, { once: true });
     return (async function* () {
       try {
-        yield* iter;
+        for await (const event of iter) {
+          mirrorEvent(event);
+          yield event;
+        }
       } finally {
         signal.removeEventListener('abort', onAbort);
       }
@@ -6067,9 +6089,27 @@ export class Gateway {
         return;
       case 'session_event': {
         const ev = n.event;
+        // 跨进程 Observer 桥（run 专属事件：layers.assembled / tool.exec.update /
+        // compact 进度等，不进 execute 流）：镜像喂 gateway hub + 重建
+        // lastContextLayers（上下文页签 REST 数据源）。WS 广播走下方既有路径。
+        if (ev.type !== 'llm_stream_delta' && ev.type !== 'llm_thinking_delta') {
+          try {
+            this.observerHub.ingestEvent(ev);
+          } catch {
+            // 观测 fail-open：镜像失败不中断事件广播
+          }
+        }
+        if (ev.type === 'context.layers.assembled' && ev.sessionId) {
+          this.rememberContextLayers(ev.sessionId, ev);
+        }
         this.emitEvent(ev);
         for (const adapter of this.streamingAdapters) {
-          adapter.broadcastEvent(n.sessionId, ev, (ev as { agentId?: string }).agentId);
+          // 层正文不上 WS（与 runtime.run.event 扇出同契约）：正文经 REST /context/layers 取
+          adapter.broadcastEvent(
+            n.sessionId,
+            stripLayerContentFromEvent(ev),
+            (ev as { agentId?: string }).agentId,
+          );
         }
         return;
       }

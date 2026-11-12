@@ -569,6 +569,8 @@ export class SessionAwareRunner {
   private _events?: import('@octopi-agent/core/primitives/event-bus.js').EventBus;
   /** 产品 Observer Hub（Run 现场；可选） */
   private _observerHub?: import('../observability/observer/hub.js').ObserverHub;
+  /** 观测专属事件出口（跨进程桥；见 setObservedEventSink） */
+  private _observedEventSink?: (event: import('@octopi-agent/core/primitives/event-bus.js').AgentEvent) => void;
   /** 工具运行时上下文提供者 */
   private toolContextProvider?: ToolContextProvider;
   /** 文件式 persona 的 run 时解析器；每次 handle 前解析，实现热更新 */
@@ -763,13 +765,43 @@ export class SessionAwareRunner {
   }
 
   /**
-   * 发射事件：先采 Observer Hub，再进 EventBus（协调总线）
+   * 注入观测专属事件出口（跨进程桥：run 实例 → gateway）。
+   *
+   * emitObserved 事件分两类：loop adapted 事件（已进 execute 流 yield，`streamed` 标记）
+   * 与观测专属事件（context.layers.assembled / tool.exec.update / run.timing 等，
+   * 只进 Hub+EventBus、不进事件 yield 流）。进程内 EventBus 的可见性在 run/gateway
+   * 拆分后不再跨进程，专属事件经此 sink 转 notify('session_event') 过网线；
+   * streamed 事件已在 execute 流中，不得重复过线。
+   *
+   * @param sink - 专属事件回调（异常 fail-open，不中断 run）
    */
-  private emitObserved(event: import('@octopi-agent/core/primitives/event-bus.js').AgentEvent): void {
+  setObservedEventSink(sink: ((event: import('@octopi-agent/core/primitives/event-bus.js').AgentEvent) => void) | undefined): void {
+    this._observedEventSink = sink;
+  }
+
+  /**
+   * 发射事件：先采 Observer Hub，再进 EventBus（协调总线）。
+   *
+   * @param event - §7 事件词表
+   * @param opts.streamed - 事件已经 execute 流 yield（loop adapted）；此时不再走
+   *   observedEventSink，防跨进程桥重复过线
+   */
+  private emitObserved(
+    event: import('@octopi-agent/core/primitives/event-bus.js').AgentEvent,
+    opts?: { streamed?: boolean },
+  ): void {
     try {
       this._observerHub?.ingestEvent(event);
     } catch {
       // 观测 fail-open：不阻断事件广播
+    }
+    // sink 先于 bus：bus 监听抛错不该吞掉跨进程出口（NIT-1；fail-open 语义完整）
+    if (!opts?.streamed) {
+      try {
+        this._observedEventSink?.(event);
+      } catch {
+        // 观测 fail-open：桥转发失败不中断 run（与 Hub 同语义）
+      }
     }
     this._events?.emit(event);
   }
@@ -2277,8 +2309,9 @@ export class SessionAwareRunner {
           this.config.eventSink?.(adapted, meta);
           // 事件桥：循环事件同时广播到 EventBus
           // 跳过高频流式 delta（每 token 一次），避免 EventBus 拥塞
+          // streamed：adapted 已在上方 yield 进 execute 流，跨进程桥不过重复线
           if (adapted.type !== 'llm_stream_delta' && adapted.type !== 'llm_thinking_delta') {
-            this.emitObserved(adapted);
+            this.emitObserved(adapted, { streamed: true });
           }
         }
 
