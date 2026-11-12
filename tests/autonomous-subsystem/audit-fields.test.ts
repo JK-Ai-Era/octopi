@@ -52,10 +52,10 @@ describe('SubsystemRuntime audit field completeness', () => {
     events.emit({ type: 'run', timestamp: Date.now(), data: { hello: 'world' } });
     await new Promise((r) => setTimeout(r, 50));
 
-    const files = readdirSync(join(tmpDir, 'audit-sub')).filter((f) => f.endsWith('.jsonl'));
+    const files = readdirSync(join(tmpDir, 'default', 'audit-sub')).filter((f) => f.endsWith('.jsonl'));
     expect(files.length).toBeGreaterThan(0);
 
-    const run = JSON.parse(readFileSync(join(tmpDir, 'audit-sub', files[0]), 'utf-8').trim());
+    const run = JSON.parse(readFileSync(join(tmpDir, 'default', 'audit-sub', files[0]), 'utf-8').trim());
     expect(run.status).toBe('success');
     expect(run.input).toBeDefined();
     expect(run.output).toBeDefined();
@@ -86,8 +86,8 @@ describe('SubsystemRuntime audit field completeness', () => {
     events.emit({ type: 'run', timestamp: Date.now(), data: {} });
     await new Promise((r) => setTimeout(r, 50));
 
-    const files = readdirSync(join(tmpDir, 'audit-sub')).filter((f) => f.endsWith('.jsonl'));
-    const content = readFileSync(join(tmpDir, 'audit-sub', files[files.length - 1]), 'utf-8').trim();
+    const files = readdirSync(join(tmpDir, 'default', 'audit-sub')).filter((f) => f.endsWith('.jsonl'));
+    const content = readFileSync(join(tmpDir, 'default', 'audit-sub', files[files.length - 1]), 'utf-8').trim();
     const run = JSON.parse(content.split('\n').at(-1)!);
 
     expect(run.status).toBe('failed');

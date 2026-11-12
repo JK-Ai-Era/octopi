@@ -8,7 +8,8 @@
  */
 
 import type { SessionStore, SessionListFilter } from '@octopi-agent/core/interfaces/session-store.js';
-import type { SessionMeta, SessionAgentMatchPick } from '@octopi-agent/core/types.js';
+import type { SessionMeta, SessionAgentMatchPick, TenantId } from '@octopi-agent/core/types.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import { readTitleState, sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
 import type { SessionData } from './types.js';
 
@@ -88,8 +89,11 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
     const values = Array.from(this.sessions.values());
     return values
       .filter((s) => (filter?.agentId ? sessionMatchesAgent(toIndexPick(s), filter.agentId) : true))
+      // 历史缺省视作 DEFAULT_TENANT_ID（与 JsonlSessionStore.list 同规则，共享常量保证）
+      .filter((s) => (filter?.tenantId ? (s.tenantId ?? DEFAULT_TENANT_ID) === filter.tenantId : true))
       .map((s) => ({
         ...s.meta,
+        tenantId: s.tenantId,
         primaryAgentId: s.primaryAgentId ?? s.meta.primaryAgentId,
         preferredAgentId: s.preferredAgentId ?? s.meta.preferredAgentId,
         participantAgentIds: toIndexPick(s).participantAgentIds,

@@ -156,7 +156,7 @@ describe('SubsystemRuntime', () => {
 
       // Audit file should exist
       const { existsSync, readdirSync, rmSync } = await import('node:fs');
-      const auditSubDir = `${tmpDir}/test-sub`;
+      const auditSubDir = `${tmpDir}/default/test-sub`;
       expect(existsSync(auditSubDir)).toBe(true);
       const files = readdirSync(auditSubDir).filter((f) => f.endsWith('.jsonl'));
       expect(files.length).toBeGreaterThan(0);
@@ -187,7 +187,7 @@ describe('SubsystemRuntime', () => {
       await new Promise((r) => setTimeout(r, 50));
 
       const { existsSync, readFileSync, rmSync } = await import('node:fs');
-      const auditSubDir = `${tmpDir}/test-sub`;
+      const auditSubDir = `${tmpDir}/default/test-sub`;
       const { readdirSync } = await import('node:fs');
       const files = readdirSync(auditSubDir).filter((f) => f.endsWith('.jsonl'));
       expect(files.length).toBeGreaterThan(0);

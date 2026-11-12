@@ -115,7 +115,31 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.113.5 (2026-11-13)
+## v0.113.6 (2026-11-13)
+
+### feat(tenancy): session/audit 租户键控（MVP T1c）
+
+多租户 MVP 第三增量（`arch/multi-tenancy.md` §4）：session 与 audit 全链带 `tenantId`。
+
+- **契约**：`SessionData.tenantId`（创建写入，权威）+ `SessionMeta.tenantId`（投影：`data.tenantId ?? meta.tenantId` 单一取值点）+ `SessionListFilter.tenantId`（历史缺省视作 `DEFAULT_TENANT_ID`）；core 导出 `TenantId`（Branded）与 `DEFAULT_TENANT_ID`（MIN-1/8）。
+- **存储**：JsonlSessionStore state 字段集补 `tenantId`（save/updateMetadata 两处一致律）+ readSession 还原 + 索引投影/双 store 过滤；InMemorySessionStore 同规则。
+- **创建面**：`createSession`/`branchSession`（分叉随源）/`ChildRunInput`（委派继承位）；router `POST /sessions` 按 `X-Registry-Token` 身份定租户（不信 body 自报）、registry 托管 agent 做归属校验（跨租户 403，平台 admin 显式豁免）；`GET /sessions` 身份在场即收口（query 自报仅平台 admin；空串 400）。
+- **audit**：`SubsystemRun.tenantId` 恒打（run 自带 > 写入器 > DEFAULT）；分区=记录租户（取证完整性）；`SubsystemRuntimeConfig.tenantId` 透传槽就位；路径段安全断言。
+
+### fix(tenancy): 评审修复批（del-774c37a1，6 MAJ 全处置）+ 租户身份凭证撞头
+
+- **MAJ-1**（实证）：state 字段集漏 `tenantId` → `load→save` 一轮往返把租户会话擦进 default 桶（隔离失效）——save/updateMetadata/readSession 三处补齐（同 contextDetachIndex 血泪教训），往返回归锚落测。
+- **MAJ-2**：branchSession 分叉丢租户 → 随源继承。
+- **MAJ-3**：读侧信 query 自报 → 身份在场强制收口；无身份=宿主面（apiKey 闸信任边界，语义已注释+登记 arch §9.1）。
+- **MAJ-4**：只推导不校验 → agent 归属校验 + 坏凭证 401（不静默落 default）。
+- **MAJ-5**：audit 无生产租户源 → 恒打 DEFAULT + config 透传槽（agent→tenant 生产接线随 T2，arch §9.1 登记）。
+- **MAJ-6**：分区改三段式但 reader 读空 → reader 双布局兼容（三段式位置匹配 + legacy 两段回读，租户视作 DEFAULT）+ 回读测试。
+- **撞头实证（评审未覆盖，自审发现）**：protocols/http.ts apiKey 闸占用 `Authorization: Bearer`——租户身份改走 **`X-Registry-Token`** 独立头，两层凭证各走各道。
+- MIN-1/2/3/7/8 处置（DEFAULT_TENANT_ID 共享常量/投影规则单源/分区随记录/往返+回读锚/core Branded）；MIN-4/5/6 已知缺口登记 `arch/multi-tenancy.md` §9.1。
+
+**breaking note**：①v0.113.5 的 registry token 载体 `Authorization` → **`X-Registry-Token`**（引入当天即改，无外部消费方）；②audit 路径布局两段式 → 三段式 `{tenant}/{agent}/{subsystem}`（reader 兼容回读旧布局）。
+
+**验证**：`tests/session-tenant-keying.test.ts` 10/10（往返/双 store 过滤/分区随记录/DEFAULT 恒打/reader 回读/legacy 兼容）+ `tests/gateway-registry-api.test.ts` 12/12（含身份收口/归属 403/坏凭证 401）；autonomous-subsystem 29 文件随布局更新；全量 4739 绿；lint 0。
 
 ### feat(tenancy): registry HTTP API + gateway 装配（MVP T1b）
 

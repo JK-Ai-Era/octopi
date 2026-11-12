@@ -2,7 +2,7 @@
  * 审计端到端（回归：`octopi serve` 路径 AuditWriter 从未构造，audit 目录永远为空）
  *
  * 锁的是完整链条：SubsystemRuntime(auditDir, agentId) → register → trigger →
- * `<auditDir>/<agentId>/<subsystemId>/<date>.jsonl` 真实落盘（成功与失败路径都写）。
+ * `<auditDir>/<tenantId>/<agentId>/<subsystemId>/<date>.jsonl` 真实落盘（未接租户身份=DEFAULT_TENANT_ID）（成功与失败路径都写）。
  * wire 层的缺省/关闭口断言见 tests/harness/wire-agent-builder.test.ts。
  */
 
@@ -61,7 +61,7 @@ describe('audit end-to-end (trigger → JSONL)', () => {
     });
   }
 
-  it('writes <auditDir>/<agentId>/<subsystemId>/<date>.jsonl on success', async () => {
+  it('writes <auditDir>/<tenantId>/<agentId>/<subsystemId>/<date>.jsonl on success', async () => {
     runtime = makeRuntime();
     expect(runtime.register(makeSpec())).toHaveLength(0);
 
@@ -69,7 +69,7 @@ describe('audit end-to-end (trigger → JSONL)', () => {
     expect(result.triggered).toBe(true);
     expect(result.status).toBe('success');
 
-    const agentDir = join(auditDir, 'agent-a', 'audit-e2e-sub');
+    const agentDir = join(auditDir, 'default', 'agent-a', 'audit-e2e-sub');
     const files = readdirSync(agentDir);
     expect(files.length).toBeGreaterThan(0);
     const lines = readFileSync(join(agentDir, files[0]!), 'utf-8').trim().split('\n');
@@ -97,7 +97,7 @@ describe('audit end-to-end (trigger → JSONL)', () => {
     expect(result.triggered).toBe(true);
     expect(result.status).toBe('failed');
 
-    const agentDir = join(auditDir, 'agent-a', 'audit-e2e-sub');
+    const agentDir = join(auditDir, 'default', 'agent-a', 'audit-e2e-sub');
     const files = readdirSync(agentDir);
     expect(files.length).toBeGreaterThan(0);
     const lines = readFileSync(join(agentDir, files[0]!), 'utf-8').trim().split('\n');

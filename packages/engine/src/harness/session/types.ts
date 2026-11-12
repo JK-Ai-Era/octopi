@@ -5,6 +5,7 @@
  * Core 层的 SessionStore 接口是泛型的，不引用此文件。
  */
 
+import type { TenantId } from '@octopi-agent/core/types.js';
 import type { Message, Step, SessionMeta } from '@octopi-agent/core/types.js';
 import type { SessionTask } from './tasks/types.js';
 import type { ContextCompactSnapshot } from '../context/types.js';
@@ -74,6 +75,11 @@ export interface SessionData {
    * **存储主键是 sessionId**，本字段不再决定物理路径。
    */
   agentId: string;
+  /**
+   * 归属租户（arch/multi-tenancy.md §4）；创建时写入，不可变。
+   * 缺省 DEFAULT_TENANT_ID（存量数据与未接身份层的创建路径同）。
+   */
+  tenantId?: TenantId;
   /**
    * 主责 Agent（模型 2 · Accountability）。
    *

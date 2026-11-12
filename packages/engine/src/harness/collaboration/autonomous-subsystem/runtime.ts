@@ -90,6 +90,8 @@ interface RegisteredSubsystem {
 export interface SubsystemRuntimeConfig {
   deps: SharedDeps;
   auditDir?: string;
+  /** 归属租户（arch/multi-tenancy.md §4）；透传 AuditWriter 分区/打标（生产装配接线随 T2） */
+  tenantId?: string;
   agentId?: string;
   /** SEC-6 宿主能力声明（必填）：`sandboxed` 声明只有在 L4 可用时才放行 */
   securityEnforcement: SecurityEnforcementContext;
@@ -161,6 +163,7 @@ export class SubsystemRuntime {
       this.auditWriter = new AuditWriter({
         auditDir: config.auditDir,
         agentId: config.agentId,
+        tenantId: config.tenantId,
       });
     }
   }

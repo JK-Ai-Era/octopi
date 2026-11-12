@@ -22,7 +22,7 @@ async function call(
 ): Promise<CallResult> {
   const payload = opts.body === undefined ? '' : JSON.stringify(opts.body);
   const headers: Record<string, string> = { host: 'localhost' };
-  if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+  if (opts.token) headers['x-registry-token'] = opts.token;
   const req = {
     url: opts.url,
     method: opts.method,
@@ -218,5 +218,111 @@ describe('WebApiRouter /registry — agents 与 bindings（租户边界）', () 
     expect(
       (await call(router, { method: 'GET', url: '/api/v1/registry/nope', token: aliceToken })).status,
     ).toBe(404);
+  });
+});
+
+describe('WebApiRouter /sessions — 租户身份收口（MAJ-3/MAJ-4 锚）', () => {
+  let registry: RegistryService;
+  let seenFilters: Array<{ agentId?: string; tenantId?: string }> = [];
+  let router: WebApiRouter;
+  let aliceToken: string;
+  let bobToken: string;
+  let bobAgentId: string;
+
+  beforeEach(async () => {
+    registry = await RegistryService.create({ dbPath: ':memory:' });
+    seenFilters = [];
+    const stub = {
+      getRegistry: () => registry,
+      createSession: async (o: { agentId: string; tenantId?: string }) => ({
+        id: 's1',
+        agentId: o.agentId,
+        tenantId: o.tenantId ?? 'default',
+        running: false,
+      }),
+      listSessions: async (agentId?: string, tenantId?: string) => {
+        seenFilters.push({ agentId, tenantId });
+        return [];
+      },
+    };
+    router = new WebApiRouter({ gateway: stub as unknown as Gateway });
+    aliceToken = (
+      await call(router, { method: 'POST', url: '/api/v1/registry/register', body: { name: 'alice' } })
+    ).body?.data?.token as string;
+    bobToken = (
+      await call(router, { method: 'POST', url: '/api/v1/registry/register', body: { name: 'bob' } })
+    ).body?.data?.token as string;
+    const bobAgent = await call(router, {
+      method: 'POST',
+      url: '/api/v1/registry/agents',
+      token: bobToken,
+      body: { name: 'b1' },
+    });
+    bobAgentId = bobAgent.body?.data?.agentId as string;
+  });
+  afterEach(() => registry.close());
+
+  it('POST /sessions：跨租户 agent → 403；坏凭证 → 401；本租户 → 按身份定租户', async () => {
+    const cross = await call(router, {
+      method: 'POST',
+      url: '/api/v1/sessions',
+      token: aliceToken,
+      body: { agentId: bobAgentId },
+    });
+    // alice 是首个注册用户=平台 admin——admin 跨租户是显式豁免；改用 bob 验证普通用户
+    const crossByBob = await call(router, {
+      method: 'POST',
+      url: '/api/v1/sessions',
+      token: bobToken,
+      body: { agentId: (await call(router, {
+        method: 'POST',
+        url: '/api/v1/registry/agents',
+        token: aliceToken,
+        body: { name: 'a1' },
+      })).body?.data?.agentId as string },
+    });
+    expect(crossByBob.status).toBe(403);
+    expect(cross.status).toBe(201); // admin 显式豁免（创建成功）
+
+    const bad = await call(router, {
+      method: 'POST',
+      url: '/api/v1/sessions',
+      token: 'bogus',
+      body: { agentId: bobAgentId },
+    });
+    expect(bad.status).toBe(401);
+
+    const ok = await call(router, {
+      method: 'POST',
+      url: '/api/v1/sessions',
+      token: bobToken,
+      body: { agentId: bobAgentId },
+    });
+    expect(ok.status).toBe(201);
+    expect(ok.body?.data?.tenantId).not.toBe('default');
+  });
+
+  it('GET /sessions：身份在场按身份收口；query 自报仅平台 admin；空串 400', async () => {
+    const scoped = await call(router, { method: 'GET', url: '/api/v1/sessions', token: bobToken });
+    expect(scoped.status).toBe(200);
+    expect(seenFilters.at(-1)?.tenantId).not.toBe(undefined);
+    expect(seenFilters.at(-1)?.tenantId).not.toBe('default');
+
+    const spoof = await call(router, {
+      method: 'GET',
+      url: '/api/v1/sessions?tenantId=tenant-x',
+      token: bobToken,
+    });
+    expect(spoof.status).toBe(403);
+
+    const empty = await call(router, { method: 'GET', url: '/api/v1/sessions?tenantId=', token: bobToken });
+    expect(empty.status).toBe(400);
+
+    const bad = await call(router, { method: 'GET', url: '/api/v1/sessions', token: 'bogus' });
+    expect(bad.status).toBe(401);
+
+    // 无身份头 = 宿主面（apiKey 闸信任边界）：全量列表语义不变
+    const host = await call(router, { method: 'GET', url: '/api/v1/sessions' });
+    expect(host.status).toBe(200);
   });
 });

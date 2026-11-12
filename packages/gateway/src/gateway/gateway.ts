@@ -18,6 +18,7 @@
  */
 
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import { readTitleState } from '@octopi-agent/core/types/session.js';
 import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
@@ -3128,8 +3129,12 @@ export class Gateway {
   }
 
   /** 会话列表项：meta + 实时运行态投影（不落盘，供 UI 识别正在跑的会话） */
-  async listSessions(agentId?: string): Promise<Array<SessionMeta & { running: boolean }>> {
-    const sessions = await this.store.list(agentId ? { agentId } : undefined);
+  async listSessions(agentId?: string, tenantId?: string): Promise<Array<SessionMeta & { running: boolean }>> {
+    const filter = {
+      ...(agentId ? { agentId } : {}),
+      ...(tenantId ? { tenantId: tenantId as import('@octopi-agent/core/types.js').TenantId } : {}),
+    };
+    const sessions = await this.store.list(Object.keys(filter).length > 0 ? filter : undefined);
     return sessions.map((meta) => ({
       ...meta,
       running: this.runtime.hasActiveRunForSession(meta.id),
@@ -3358,7 +3363,13 @@ export class Gateway {
     });
   }
 
-  async createSession(options: { agentId: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<SessionMeta> {
+  async createSession(options: {
+    agentId: string;
+    sessionId?: string;
+    metadata?: Record<string, unknown>;
+    /** 归属租户（arch/multi-tenancy.md）；缺省 DEFAULT_TENANT_ID（未接身份层的创建路径） */
+    tenantId?: import('@octopi-agent/core/types.js').TenantId;
+  }): Promise<SessionMeta> {
     const agent = this.agents.get(options.agentId);
     if (!agent) {
       throw new Error(`Agent "${options.agentId}" not found`);
@@ -3369,10 +3380,12 @@ export class Gateway {
     const session: SessionData = {
       id: sessionId,
       agentId: options.agentId,
+      tenantId: options.tenantId ?? DEFAULT_TENANT_ID,
       primaryAgentId: options.agentId,
       meta: {
         id: sessionId,
         agentId: options.agentId,
+        tenantId: options.tenantId ?? DEFAULT_TENANT_ID,
         channelId: 'web',
         peerId: 'web-ui',
         status: 'idle',
@@ -3694,12 +3707,15 @@ export class Gateway {
 
     const session: SessionData = {
       id: newSessionId,
+      // 分叉=复制用户数据：租户随源会话（落到 default 等同把租户数据投公共桶）
+      tenantId: src.tenantId ?? src.meta.tenantId,
       agentId: src.agentId,
       primaryAgentId: src.primaryAgentId ?? src.agentId,
       preferredAgentId: src.preferredAgentId,
       meta: {
         id: newSessionId,
         agentId: src.agentId,
+        tenantId: src.tenantId ?? src.meta.tenantId,
         channelId: src.meta.channelId ?? 'web',
         peerId: src.meta.peerId ?? 'web-ui',
         status: 'idle',

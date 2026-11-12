@@ -16,6 +16,7 @@ import { access, mkdir, readFile, writeFile, unlink, rename, appendFile, stat } 
 import { join } from 'node:path';
 import type { SessionStore, SessionListFilter } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { SessionMeta } from '@octopi-agent/core/types.js';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
 import { readTitleState, sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
@@ -119,6 +120,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   }
 
   private async readStateData(sessionId: string): Promise<{
+    tenantId?: SessionData['tenantId'];
     agentId?: string;
     primaryAgentId?: string;
     preferredAgentId?: string;
@@ -181,6 +183,8 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     const lifecycle = data.lifecycle?.lifecycle ?? data.meta.lifecycle ?? 'active';
     return {
       ...data.meta,
+      // 投影取值单一来源：SessionData.tenantId ?? meta.tenantId（legacy）；显式放 spread 后
+      tenantId: data.tenantId ?? data.meta.tenantId,
       id: data.id,
       agentId: data.agentId || data.meta.agentId,
       primaryAgentId: data.primaryAgentId ?? data.meta.primaryAgentId,
@@ -214,6 +218,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     const meta = (await this.readMetaIndex())[sessionId] ?? null;
 
     let state: {
+      tenantId?: SessionData['tenantId'];
       agentId?: string;
       primaryAgentId?: string;
       preferredAgentId?: string;
@@ -246,6 +251,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       : undefined);
     return {
       id: sessionId,
+      tenantId: state.tenantId ?? meta?.tenantId,
       agentId,
       primaryAgentId: state.primaryAgentId ?? meta?.primaryAgentId ?? agentId,
       preferredAgentId: state.preferredAgentId ?? meta?.preferredAgentId,
@@ -351,6 +357,8 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       }
 
       await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
+        // 字段集必须与 updateMetadata() 的 state 重写保持一致：漏写即静默清字段
+        tenantId: data.tenantId ?? data.meta.tenantId,
         agentId: data.agentId,
         primaryAgentId: data.primaryAgentId ?? data.agentId,
         preferredAgentId: data.preferredAgentId,
@@ -408,9 +416,11 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
 
       await mkdir(this.sessionsDir, { recursive: true });
       await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
+        tenantId: prev?.tenantId,
         agentId: prev?.agentId,
         // 字段集必须与 save() 的 state 重写保持一致：漏写即静默清字段
-        //（contextDetachIndex 曾被漏掉——updateMetadata 后租约截断点归零，续跑全量灌窗）
+        //（contextDetachIndex 曾被漏掉——updateMetadata 后租约截断点归零，续跑全量灌窗；
+        //  tenantId 曾被漏掉——load→save 一轮往返把租户会话擦进 default 桶）
         primaryAgentId: prev?.primaryAgentId ?? prev?.agentId,
         preferredAgentId: prev?.preferredAgentId,
         switchAudit: prev?.switchAudit ?? [],
@@ -487,6 +497,11 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
 
   async list(filter?: SessionListFilter): Promise<SessionMeta[]> {
     let entries = Object.values(await this.readMetaIndex());
+    if (filter?.tenantId) {
+      const tenantId = filter.tenantId;
+      // 历史缺省视作 'default'（multi-tenancy §5 渐进迁移）
+      entries = entries.filter((e) => (e.tenantId ?? DEFAULT_TENANT_ID) === tenantId);
+    }
     if (filter?.agentId) {
       const agentId = filter.agentId;
       entries = entries.filter((e) => sessionMatchesAgent(e, agentId));

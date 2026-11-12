@@ -61,10 +61,10 @@ describe('SubsystemRuntime lifecycle enforcement', () => {
     await runtime.trigger('test-sub');
 
     const { readdirSync, readFileSync, rmSync } = await import('node:fs');
-    const files = readdirSync(`${tmpDir}/test-sub`).filter((f) => f.endsWith('.jsonl'));
+    const files = readdirSync(`${tmpDir}/default/test-sub`).filter((f) => f.endsWith('.jsonl'));
     expect(files.length).toBeGreaterThan(0);
 
-    const run = JSON.parse(readFileSync(`${tmpDir}/test-sub/${files[0]}`, 'utf-8').trim());
+    const run = JSON.parse(readFileSync(`${tmpDir}/default/test-sub/${files[0]}`, 'utf-8').trim());
     expect(run.status).toBe('timeout');
     expect(run.error).toContain('timed out');
 

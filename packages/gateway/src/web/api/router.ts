@@ -222,7 +222,30 @@ export class WebApiRouter {
 
       if (relativePath === '/sessions' && method === 'GET') {
         const agentId = url.searchParams.get('agentId') ?? undefined;
-        const sessions = await this.gateway.listSessions(agentId);
+        const rawTenant = url.searchParams.get('tenantId');
+        if (rawTenant !== null && rawTenant.trim() === '') {
+          return this.json(res, 400, { ok: false, error: 'tenantId must be non-empty when given' });
+        }
+        // 读侧隔离（MAJ-3）：身份在场即按身份收口——租户用户只看本租户，
+        // query 自报仅平台 admin 可用；无 X-Registry-Token = 宿主面（apiKey 闸
+        // 已验的信任边界，host 管理台全量列表是其正确语义）
+        const listAuth = req.headers['x-registry-token'];
+        const listToken = typeof listAuth === 'string' ? listAuth.trim() : '';
+        let listTenant: string | undefined = rawTenant ?? undefined;
+        if (listToken) {
+          const listUser = this.gateway.getRegistry()?.resolveToken(listToken);
+          if (!listUser) {
+            return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+          }
+          if (listTenant !== undefined && !listUser.isPlatformAdmin) {
+            return this.json(res, 403, {
+              ok: false,
+              error: 'registry_forbidden: only a platform admin may query another tenant',
+            });
+          }
+          listTenant = listUser.tenantId;
+        }
+        const sessions = await this.gateway.listSessions(agentId, listTenant);
         return this.json(res, 200, { ok: true, data: sessions });
       }
 
@@ -244,10 +267,32 @@ export class WebApiRouter {
           metadata.model = body.model;
         }
 
+        // 租户身份（arch/multi-tenancy.md §9）：X-Registry-Token 在场则按身份定租户
+        // （不信 body 自报，防冒领）；坏凭证 fail-loud 401（不静默落 default）；
+        // 无该头 = 宿主面调用（apiKey 闸已验），存量语义不变（DEFAULT_TENANT_ID）
+        const registrySvc = this.gateway.getRegistry();
+        const sessionAuth = req.headers['x-registry-token'];
+        const sessionToken = typeof sessionAuth === 'string' ? sessionAuth.trim() : '';
+        let sessionUser: Awaited<ReturnType<NonNullable<typeof registrySvc>['resolveToken']>> = null;
+        if (sessionToken) {
+          sessionUser = registrySvc?.resolveToken(sessionToken) ?? null;
+          if (!sessionUser) {
+            return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+          }
+          // agent 归属校验（§7 硬边界）：registry 托管的 agent 不得跨租户建会话
+          const target = registrySvc?.getAgent(body.agentId as import('@octopi-agent/engine/harness/governance/registry/types.js').AgentId);
+          if (target && target.tenantId !== sessionUser.tenantId && !sessionUser.isPlatformAdmin) {
+            return this.json(res, 403, {
+              ok: false,
+              error: 'registry_cross_tenant_agent: cannot create a session for another tenant\'s agent',
+            });
+          }
+        }
         const session = await this.gateway.createSession({
           agentId: body.agentId,
           sessionId: body.sessionId,
           metadata,
+          ...(sessionUser ? { tenantId: sessionUser.tenantId } : {}),
         });
 
         // 与 setSessionModel 同源校验/规范化 model 引用
@@ -1901,14 +1946,16 @@ export class WebApiRouter {
       return this.json(res, 200, { ok: true, data: { user, token: registry.issueToken(user.userId) } });
     }
 
-    // ── 租户身份层：以下端点要求 Bearer token ──
-    const auth = req.headers.authorization;
-    const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    // ── 租户身份层：以下端点要求 X-Registry-Token ──
+    // （不复用 Authorization——那是宿主 apiKey 闸的凭证通道，两层各走各的头；
+    //   protocols/http.ts checkAuth 用 Bearer <apiKey>，混用会撞车，2026-11-13 评审实证）
+    const auth = req.headers['x-registry-token'];
+    const token = typeof auth === 'string' ? auth.trim() : '';
     const user = token ? registry.resolveToken(token) : null;
     if (!user) {
       return this.json(res, 401, {
         ok: false,
-        error: 'unauthorized: bearer token required (POST /registry/register or /registry/login)',
+        error: 'unauthorized: X-Registry-Token required (POST /registry/register or /registry/login)',
       });
     }
 

@@ -40,7 +40,7 @@ describe('AuditWriter + AuditReader', () => {
       writer.write(run);
 
       const date = new Date(run.timestamp).toISOString().slice(0, 10);
-      const filePath = join(tmpDir, 'test-subsystem', `${date}.jsonl`);
+      const filePath = join(tmpDir, 'default', 'test-subsystem', `${date}.jsonl`);
       expect(existsSync(filePath)).toBe(true);
 
       const content = readFileSync(filePath, 'utf-8');
@@ -55,7 +55,7 @@ describe('AuditWriter + AuditReader', () => {
       writer.write(makeRun({ id: 'run-002' }));
 
       const date = new Date().toISOString().slice(0, 10);
-      const filePath = join(tmpDir, 'test-subsystem', `${date}.jsonl`);
+      const filePath = join(tmpDir, 'default', 'test-subsystem', `${date}.jsonl`);
       const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
       expect(lines).toHaveLength(2);
     });
@@ -65,7 +65,7 @@ describe('AuditWriter + AuditReader', () => {
       writer.write(makeRun());
 
       const date = new Date().toISOString().slice(0, 10);
-      const filePath = join(tmpDir, 'agent-a', 'test-subsystem', `${date}.jsonl`);
+      const filePath = join(tmpDir, 'default', 'agent-a', 'test-subsystem', `${date}.jsonl`);
       expect(existsSync(filePath)).toBe(true);
     });
 

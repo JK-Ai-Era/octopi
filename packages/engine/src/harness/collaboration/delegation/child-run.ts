@@ -25,11 +25,14 @@ import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import type { SessionData, SessionSpawnLink } from '../../session/types.js';
 import type { DelegationBudget, DelegationContextMode } from './types.js';
 import { emptyTokenUsage } from '@octopi-agent/core/types/step.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 
 // ── 端口形状 ──
 
 /** 子 Run 入参 */
 export interface ChildRunInput {
+  /** 归属租户（继承父会话，arch/multi-tenancy.md §8）；接线在 T4，缺省 DEFAULT_TENANT_ID */
+  tenantId?: import('@octopi-agent/core/types.js').TenantId;
   delegationId: string;
   /** 目标 agentId（已解析） */
   childAgentId: string;
@@ -251,9 +254,11 @@ export class RunnerChildRunPort implements ChildRunPort {
     return {
       id: sessionId,
       agentId: input.childAgentId,
+      tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
       primaryAgentId: input.childAgentId,
       spawnBy: { ...input.spawnBy },
       meta: {
+        tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
         title: `delegation: ${input.task}`.slice(0, 120),
         createdAt: timestamp,
         updatedAt: timestamp,

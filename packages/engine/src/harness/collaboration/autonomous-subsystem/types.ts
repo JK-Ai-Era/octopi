@@ -449,6 +449,8 @@ export interface SubsystemRun {
   id: string;
   /** 子系统标识 */
   subsystemId: string;
+  /** 归属租户（arch/multi-tenancy.md §4；缺省 'default'，AuditWriter.write 可代打） */
+  tenantId?: string;
   /** 触发原因 */
   trigger: {
     source: string;

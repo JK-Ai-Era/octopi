@@ -11,7 +11,7 @@
  * - Harness 层的 SessionAwareRunner 使用此接口
  */
 
-import type { SessionMeta } from '../types.js';
+import type { SessionMeta, TenantId } from '../types.js';
 
 /** list 过滤条件 */
 export interface SessionListFilter {
@@ -20,6 +20,10 @@ export interface SessionListFilter {
    * `meta.agentId` / `primaryAgentId` / `preferredAgentId` / `participantAgentIds` 任一命中。
    */
   agentId?: string;
+  /**
+   * 只返回该租户的 session；缺 `tenantId` 的历史数据视作 {@link DEFAULT_TENANT_ID}。
+   */
+  tenantId?: TenantId;
 }
 
 /**

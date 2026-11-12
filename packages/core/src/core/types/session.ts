@@ -8,6 +8,12 @@
 /** Session 运行状态 */
 export type SessionStatus = 'idle' | 'processing' | 'waiting_human' | 'error';
 
+/** 归属租户 ID（Branded，跨边界 ID 纪律；与 engine registry 的 TenantId 同构可赋值） */
+export type TenantId = string & { readonly __brand: 'TenantId' };
+
+/** 缺省租户：存量数据与未接身份层的创建路径（arch/multi-tenancy.md §5） */
+export const DEFAULT_TENANT_ID = 'default' as TenantId;
+
 /** Session 元数据 */
 export interface SessionMeta {
   id: string;
@@ -26,6 +32,12 @@ export interface SessionMeta {
   preferredAgentId?: string;
   /** 参与者 agentId（列表过滤；完整绑定在 SessionData.participants） */
   participantAgentIds?: string[];
+  /**
+   * 归属租户（arch/multi-tenancy.md §4 隔离矩阵）；历史缺省视作 {@link DEFAULT_TENANT_ID}。
+   * 投影：`SessionData.tenantId ?? meta.tenantId`（legacy）——存储层单一取值点，
+   * 不要在别处再拼规则。
+   */
+  tenantId?: TenantId;
   /**
    * 会话运行状态投影（I2：可从 SessionData 重建；供 list 过滤/归档扫描）。
    * 与 SessionData.lifecycle 同源，由 SessionStore save 时写入索引。
