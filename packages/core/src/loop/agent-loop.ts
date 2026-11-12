@@ -966,9 +966,16 @@ function normalizeMessagesForLlm(messages: import('../core/types.js').Message[])
 }
 
 /**
- * 构建工具定义（ModelProvider 格式）
+ * 构建工具定义（ModelProvider 格式）——**工具 wire 面的唯一映射**。
+ *
+ * 摘要请求必须与主会话请求带逐字节相同的 tools（提示缓存前缀：tools → system →
+ * messages），否则整段前缀 0 命中。任何需要「与会话请求同形」的调用方（压缩摘要、
+ * 请求口径计量）都必须调用本函数，禁止各自手抄字段表——手抄会漂移成两份工具面。
+ *
+ * @param tools - run 级工具清单（loop 实际发送的那个集合）
+ * @returns provider 格式的工具定义（顺序与入参一致）
  */
-function buildToolDefinitions(tools?: AgentTool[]): LLMToolDefinition[] {
+export function buildToolDefinitions(tools?: AgentTool[]): LLMToolDefinition[] {
   if (!tools) return [];
   return tools.map((tool) => ({
     type: 'function' as const,

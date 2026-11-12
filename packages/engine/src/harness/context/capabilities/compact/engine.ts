@@ -9,7 +9,7 @@
 import type { Message } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import { isCannedRefusalText } from '@octopi-agent/core/loop/canned-refusal.js';
-import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import { HeuristicTokenEstimator } from '../../token-estimator.js';
 import { toolResultBody } from '../../tool-result-body.js';
 import { buildPolicyRegistry } from '../summary/resolver.js';
@@ -258,15 +258,25 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
       // provider 多按 input+max_tokens ≤ window 校验，压缩恰在会话最满时触发，保险丝可能把
       // 请求顶出窗口——放不下就改走文本化中段旁路（cache-miss 如实降级），仍放不下则如实失败。
       const hardCap = (opts.maxSummaryTokens ?? maxTokens) * 4;
-      const windowCapOf = (msgs: LLMMessage[]): number =>
+      // 工具面也是请求体的一部分（前缀 tools → system → messages）：窗口钳制必须把它
+      // 算进输入成本，否则「放得下」的判定会漏掉整包 tool schema（几十 k tokens）。
+      // 只有 prefix 分支才发 tools——textify 分支 system 指令不同、缓存必 miss，
+      // 带工具面是纯成本，还会把旁路本身顶出窗口（2026-11-12 评审 MAJ-1）。
+      const toolsTokensFor = (withTools: boolean): number =>
+        withTools && opts.llmTools?.length
+          ? ((opts.estimator as { estimateTools?: (t: LLMToolDefinition[]) => number } | undefined)
+              ?.estimateTools?.(opts.llmTools)) ??
+            new HeuristicTokenEstimator().estimateTools(opts.llmTools)
+          : 0;
+      const windowCapOf = (msgs: LLMMessage[], withTools: boolean): number =>
         clampSummaryProviderCap({
           hardCap,
           // estimateLLMMessages 口径含 tool_calls/content block/消息开销（tool_calls 全量计入）
-          inputTokens: estimateLLMMessages(msgs),
+          inputTokens: estimateLLMMessages(msgs) + toolsTokensFor(withTools),
           contextWindow: opts.contextWindow,
           maxOutputTokens: opts.maxOutputTokens,
         });
-      let providerMaxTokens = windowCapOf(llmMessages);
+      let providerMaxTokens = windowCapOf(llmMessages, usePrefix);
       // F22 可观测：无前缀/被迫旁路 = cache-miss，如实上报，不静默换请求形状
       if (!usePrefix) {
         opts.emit?.({ type: 'compact.summarize_fallback', reason: 'no_prefix', cached: false });
@@ -275,7 +285,7 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
         usePrefix = false;
         llmMessages = buildTextify();
         echoSource = middleText;
-        providerMaxTokens = windowCapOf(llmMessages);
+        providerMaxTokens = windowCapOf(llmMessages, false);
         opts.emit?.({ type: 'compact.summarize_fallback', reason: 'window_guard', cached: false });
       }
       if (providerMaxTokens < 256) {
@@ -301,6 +311,14 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
           return summarizeFn(msgs, {
             previousSummary: opts.previousSummary,
             maxTokens: providerMaxTokens,
+            // 工具面同形（2026-11-12）：缓存前缀 = tools → system → messages，缺 tools 时
+            // 前缀从第一字节断开，整段历史退化为冷 prefill。带 tools 同时固定 toolChoice
+            // 'none'，禁止摘要轮产生 tool_call（不改变缓存前缀字节）。
+            // 只在 prefix 分支发：textify 分支 system 不同、缓存必 miss，带工具面是纯成本
+            // 且会挤占窗口（评审 MAJ-1）。
+            ...(usePrefix && opts.llmTools && opts.llmTools.length > 0
+              ? { tools: opts.llmTools, toolChoice: 'none' as const }
+              : {}),
             ...(opts.signal ? { signal: opts.signal } : {}),
             // outputTokens 真值收集（2026-11-08）：摘要产物体量以 provider 实测为准
             onUsage: (u) => {

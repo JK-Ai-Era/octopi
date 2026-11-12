@@ -2803,6 +2803,55 @@ export class SessionAwareRunner {
   }
 
   /**
+   * 某会话的 LLM 工具面（wire 面）——「无 run」调用方（manual 压缩）的单一来源。
+   *
+   * 与 run 内组装（`runContext.tools`）同式：`agent.toolsForSession` ∩ `agentToolPolicy`
+   * ∩ session ACL `toolRights`（SEC-2 同一漏斗，禁手抄）。摘要请求要吃到前缀缓存，
+   * 它的 tools 必须与下一主请求逐字节相同——多一个少一个，前缀就从第一字节断开。
+   *
+   * 差异如实声明（不假装等价）：run 内还能叠 per-run `rightsCeiling` 与 run 启动时的
+   * 工具集快照；这里取不到 run，只能取配置级天花板。ACL 拒绝时不抛——压缩是用户显式
+   * 操作，不应因参与者授权不可用而整体失效——但要打日志（fail loud，不静默）。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 归属 agent（ACL 授权主体）
+   * @returns provider 格式工具定义（顺序与会话面一致）
+   */
+  async resolveSessionLlmTools(
+    sessionId: string,
+    agentId: string,
+  ): Promise<import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[]> {
+    const { buildToolDefinitions } = await import('@octopi-agent/core/loop/agent-loop.js');
+    const session = await this.store.load(sessionId);
+    let rights: import('../governance/session-acl/types.js').ToolRights | undefined;
+    const acl = this.config.sessionAcl;
+    if (acl && session) {
+      const auth = acl.authorizeRun({
+        session,
+        agentId,
+        agentMax: this.config.agentMaxSessionRights,
+      });
+      if (auth.ok) {
+        rights = auth.rights?.toolRights;
+      } else {
+        // 吞掉拒绝原因并继续：压缩不是新 run，不能因 ACL 拒绝而整体不可用；但绝不静默——
+        // 工具面可能因此比主请求宽，摘要退化为 cache-miss（只慢不坏），留痕便于归因。
+        console.warn(
+          `[Runner] compact tool face: session ACL denied (${auth.reason ?? 'unknown'}) ` +
+            `session=${sessionId} agent=${agentId} — summary prefix may miss cache`,
+        );
+      }
+    }
+    return buildToolDefinitions(
+      this.filterToolsForSessionRights(
+        this.agent.toolsForSession(sessionId),
+        rights,
+        this.config.agentToolPolicy,
+      ),
+    );
+  }
+
+  /**
    * Session compact under the same session lock as handle (E1/E4).
    *
    * Authority is the runner session lock, not status==='processing'.

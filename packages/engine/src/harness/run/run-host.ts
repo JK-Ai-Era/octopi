@@ -909,18 +909,12 @@ export class RunHost implements RunBackend {
       });
     }
 
-    const { sanitizeToolJsonSchema } = await import('../agent/tool-purpose.js');
-    // 请求口径计量原料（评审 B1，2026-11-08）：manual 压缩的 before/after 须与会话
-    // 下一请求同源——tools 缺失会让 toast 少算整个 tool schema（tools「从来没有」）。
-    // 换算与 builder.convertToLlm 同式（sanitizeToolJsonSchema 同一实现，禁手抄）。
-    const manualTools: LLMToolDefinition[] = (m.handle.agent.context.tools ?? []).map((t) => ({
-      type: 'function' as const,
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: sanitizeToolJsonSchema(t.parameters ?? { type: 'object', properties: {} }) as never,
-      },
-    }));
+    // 请求口径计量原料（评审 B1，2026-11-08）与摘要请求工具面（2026-11-12）：manual 压缩的
+    // before/after 与摘要前缀都必须与会话下一请求同源。工具面解析收口到 Runner
+    // （`resolveSessionLlmTools`：toolsForSession ∩ agentToolPolicy ∩ session ACL），
+    // 与 run 内 `runContext.tools` 同一漏斗——禁在此手抄，手抄会漂移成两份工具面，
+    // 摘要请求 tools 与原请求不同字节 → 前缀缓存从第一字节断开（评审 MAJ-3）。
+    const manualTools: LLMToolDefinition[] = await m.runner.resolveSessionLlmTools(sessionId, agentId);
 
     // D1：与 handle 共用 Runner session 锁（E4 键）；持久化走 Runner
     return m.runner.compactSession(sessionId, agentId, {

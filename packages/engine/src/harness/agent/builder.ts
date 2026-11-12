@@ -34,12 +34,8 @@ import type {
 import type {
   AgentTool as LoopAgentTool,
 } from '@octopi-agent/core/loop/types.js';
-import {
-  buildToolLlmParameters,
-  prepareHandlerArgs,
-  resolveToolCallPurpose,
-  sanitizeToolJsonSchema,
-} from './tool-purpose.js';
+import { buildToolLlmParameters, prepareHandlerArgs, resolveToolCallPurpose } from './tool-purpose.js';
+import { buildToolDefinitions } from '@octopi-agent/core/loop/index.js';
 import { Agent } from '../run/agent/index.js';
 import type { AgentOptions } from '../run/agent/index.js';
 import { DEFAULT_RELIABILITY_CONFIG } from '../run/reliability/run-agent.js';
@@ -257,16 +253,12 @@ class RuntimeToolContextProvider implements ToolContextProvider {
 }
 
 /**
- * 发给 LLM 的 JSON Schema 净化 + purpose 统一装配见 tool-purpose.ts（arch/tool-call-purpose.md）。
- * 此处仅保留兼容别名。
- */
-const sanitizeLlmJsonSchema = sanitizeToolJsonSchema;
-
-/**
  * 将 RegisteredTool 转换为 AgentTool（新循环格式）
  *
  * purpose schema 必须经 buildToolLlmParameters 统一装配，
  * 与 gateway 热更新路径（registeredToolToAgentTool）同构。
+ * （发送给 LLM 的 wire 面映射见 core `buildToolDefinitions`；schema 净化的唯一入口
+ * 仍是 tool-purpose.ts，见 arch/tool-call-purpose.md。）
  */
 function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextProvider): LoopAgentTool {
   return {
@@ -1909,16 +1901,11 @@ export class AgentBuilder {
       // 必须是 0；回落实例工具面（agent.context.tools）会让估算多算整包 tools（毒样本）。
       // 实例面只在 run context 本身就是实例 context 时经 scope.tools 自然成立。
       const toolSource = scope?.tools ?? [];
-      const tools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[] = toolSource.map((t) => ({
-        type: 'function' as const,
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: sanitizeLlmJsonSchema(
-            t.parameters ?? { type: 'object', properties: {} },
-          ) as import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition['function']['parameters'],
-        },
-      }));
+      // 工具面单源（2026-11-12）：与 loop 发送的 toolDefs 用同一映射（core
+      // buildToolDefinitions），摘要请求据此带逐字节相同的 tools 才能吃到前缀缓存。
+      // parameters 在 RegisteredTool→AgentTool 阶段已过 buildToolLlmParameters 净化，
+      // 此处不再二次 sanitize（二次过滤是空转，且会让估算面与 wire 面各自漂移）。
+      const tools = buildToolDefinitions(toolSource);
       // 方案 B：只读 snapshot.contextWindow；未知则 undefined（跳过自动压缩）
       // 禁止再调 getModelInfo —— FallbackProvider 可能返回 chain[0] 的窗口
       const snapshot = getResolvedModel();

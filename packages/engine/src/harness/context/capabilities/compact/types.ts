@@ -5,7 +5,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
-import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
+import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { SummaryCoverage, SummaryPolicy } from '../summary/types.js';
 
 export type CompactMode =
@@ -21,7 +21,12 @@ export type CompactMode =
  * （"Previous summary: …" 段），实现方无需再读 opts 拼 prompt；**返回值即完整
  * 更新后的摘要**，调用方不得再与旧摘要拼接。
  *
- * @param messages - 摘要请求消息（system 指令 + 用户正文；非原始对话序列）
+ * `messages` 的两种形状：① llmPrefix 分支 = 会话同形前缀（system + 折叠视图）+ 尾部
+ * 一条指令 user——实现方不得改写/重排前缀字节（前缀缓存）；② textify 旁路 = 指令
+ * system + 文本化中段。工具面不在 `messages` 里，随 `options.tools` 一并透传给 provider
+ * （缓存前缀是 tools → system → messages，缺 tools 会整段 miss）。
+ *
+ * @param messages - 摘要请求消息（同形前缀或文本化中段；见上）
  * @param options - 摘要选项
  * @returns 完整更新后的摘要文本
  */
@@ -40,6 +45,14 @@ export type SummarizeFunction = (
      * 是压缩计量的口径缺陷（tokensBefore/After 核对，2026-11-08）。
      */
     onUsage?: (usage: { outputTokens?: number }) => void;
+    /**
+     * 工具面（与会话请求逐字节相同）：摘要请求必须同形才能吃到前缀缓存
+     *（缓存前缀 = tools → system → messages，2026-11-12 实测缺 tools 导致 0 命中）。
+     * 调用方提供的实现应原样透传给 provider，不要裁剪/重排。
+     */
+    tools?: LLMToolDefinition[];
+    /** 工具选择约束：带 tools 的摘要请求固定传 'none'，禁止摘要轮产生 tool_call */
+    toolChoice?: 'auto' | 'required' | 'none';
     /**
      * 中止信号（P3）：run 中止或摘要预算超时都必须能取消在飞请求，
      * 否则 UI 只能干等到 provider 侧超时（2026-11-07 事故：2.13MB 非流式请求挂 20+ 分钟）。
@@ -109,6 +122,15 @@ export interface CompactOptions {
    * summarizeFn 路径只许尾部追加指令；禁止改写前缀字节。
    */
   llmPrefix?: import('@octopi-agent/core/interfaces/model-provider.js').LLMMessage[];
+  /**
+   * 缓存前缀的工具面（与会话请求逐字节相同的 LLMToolDefinition 列表）。
+   *
+   * 提示缓存的前缀顺序是 tools → system → messages：只对齐 system+history 而不带 tools，
+   * 前缀从第一个字节就断开，整段历史退化为冷 prefill（2026-11-12 实测：384k 输入
+   * 0 命中、203s）。必须由调用方用与 loop 同一映射（core `buildToolDefinitions`）
+   * 从 run 级工具清单生成——禁止手抄字段表。
+   */
+  llmTools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
   /**
    * 回声比对源覆盖（P2）：前缀含既有摘要占位时，占位正文不得参与回声判定——
    * 模型复用/续写上一份交接书不是「复读原文」。缺省回落到前缀文本投影。

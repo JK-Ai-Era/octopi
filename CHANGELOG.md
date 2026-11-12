@@ -115,6 +115,31 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.112.10 (2026-11-12)
+
+### fix(compact): 摘要请求带会话同形工具面（前缀缓存 0 命中根治）
+
+**现场**：长会话手动压缩时右栏「摘要请求已发出 742KB，已等待 133s / 预算 300s」，最终 203s 返回；wire dump 显示同一会话主请求 384,259 input tokens（383,488 命中缓存），摘要请求 `inputCachedTokens: 0 / inputUncachedTokens: 375,771`——**整段前缀缓存失效**，每次压缩都是冷 prefill。
+
+**根因**：提示缓存的前缀顺序是 **tools → system → messages**。摘要请求此前只对齐了 `system + 折叠视图 messages`，`createProviderSummarize` 从不传 tools——前缀从第一字节就断开。逐字节核对：摘要请求前 765 条消息与主请求完全相同、system 47,730 字符完全相同，唯独 `tools`（60 个 / 48,061 字符）整字段缺失。
+
+**修法**（单一来源，禁手抄字段表）：
+
+- core 导出 `buildToolDefinitions`——**工具 wire 面的唯一映射**；loop、`builder.convertToLlm`（估算/摘要面）、`Runner.resolveSessionLlmTools` 共用同一实现（此前三处各自手抄，其中 builder 还多做了空转的二次 sanitize）。
+- `CompactOptions.llmTools` → `SummarizeFunction` opts `tools` / `toolChoice`：摘要请求带**同一实例**的工具面（不复制、不重排），并固定 `toolChoice:'none'`（清单照发保缓存，禁止摘要轮产生 tool_call；该字段不进缓存键）。**只在 prefix 分支发**——textify 旁路 system 指令不同、缓存必 miss，带工具面是纯成本且会挤占窗口把旁路顶成 `window_exhausted`。
+- manual 路工具面收口到 `Runner.resolveSessionLlmTools(sessionId, agentId)`：与 run 内 `runContext.tools` 同一漏斗（`toolsForSession` ∩ `agentToolPolicy` ∩ session ACL `toolRights`）。此前取 `agent.context.tools`（实例面），随后只补了会话可见性——两者都会让摘要面成为主请求面的超集。
+- 摘要窗口钳制把工具面 token 计入输入成本（否则「放得下」判定漏掉整包 tool schema），旁路分支不计入。
+- `context.compact.progress.requestChars` 计入工具面；WebUI 单位从「KB」更正为「字符」（`requestChars` 是 JSON 字符数，曾按 chars/1024 折成 KB，导致与顶栏 token 对数时误判为两把尺子）。
+- 摘要输出诚实性：provider `finishReason:'length'` 与意外 `toolCalls` 现在 **fail loud**（`summarize_output_truncated` / `summarize_tool_call_emitted`）交 `onSummarizeFail` 显式降级。带工具面后窗口钳制会进一步压缩输出上限，撞顶若当成功会产出静默半截交接书。
+
+**breaking note**：无。`LLMRequest.toolChoice`、`CompactOptions.llmTools`、`SummarizeFunction` opts 的 `tools/toolChoice` 均为新增可选字段；两个适配器（OpenAI Chat Completions `'none'`、Anthropic Messages `{"type":"none"}`）只在 `toolChoice` 显式给出且带 tools 时输出 `tool_choice`。
+
+**残留边界（如实声明）**：① manual 压缩无 run 上下文，`RunConfig.rightsCeiling` 与 run 启动时的工具集快照取不到——配置级 ACL/policy 已复现（`resolveSessionLlmTools`），只有 per-run 收窄的场景仍可能与主请求不同而 miss（ACL 拒绝时打 warn 不静默）。② 摘要请求的 wire dump 仍落 `_unscoped`（compact 控制面不在 RunScope 内）；修它需要合成 runId（伪造身份）或扩展 sink 契约，待拍板。③ 窗口护栏对工具面用 raw 估算器（JSON 密度偏高，偏乐观约 5–15%），provider 侧 400 仍有 `onSummarizeFail` 兜底。
+
+**评审处置**（del-e7d5670b，3 MAJ / 5 MIN / 3 NIT）：MAJ-1（旁路带工具面）、MAJ-2（截断静默）、MAJ-3（manual 工具面未过 run 漏斗）三条属实已修；MIN-1（v0.112.9 标题被 prepend 吃掉）、MIN-2（manual 路缺测试）、MIN-3（toolCall 未检测）已修；MIN-4（拒绝 `tool_choice` 的端点）与 MIN-5（raw/calibrated 两把尺）按「记录为已知边界」处理（前者需 provider 层 400 重试，后者需扩 `CompactTokenEstimator`，均已写入 §残留边界/后续项）；NIT-1/2/3 中 2 已改（barrel 导入），1/3 记注释。
+
+**验证**：全量 4686 passed / 7 skipped（462 files）；`npm run lint` 0（含 typecheck:tests 基线）；`arch/check-sync.sh` 全绿。新增行为钉 `tests/harness/summary-request-tools.test.ts`（引擎透传同一实例 + 固定 none、无工具面时不编造、proactive 接线锚、两适配器 wire body）与 `tests/harness/summary-request-tools-review.test.ts`（旁路不带工具面、Runner 工具面漏斗含 policy deny、截断/tool_call fail loud）。**待生产实测**：重启 gateway 后再做一次压缩，wire dump 的摘要请求应出现 `inputCachedTokens ≈ 前缀体量`（此前恒为 0）。
+
 ## v0.112.9 (2026-11-12)
 
 ### fix(collaboration): cross-process interjection + wakeup retry (coordination plane)

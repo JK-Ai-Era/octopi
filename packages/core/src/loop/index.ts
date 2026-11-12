@@ -10,6 +10,8 @@
 
 // ── 核心循环 ──
 export { agentLoop } from './agent-loop.js';
+/** 工具 wire 面唯一映射：摘要/计量等「与会话请求同形」的调用方共用（禁手抄字段表） */
+export { buildToolDefinitions } from './agent-loop.js';
 
 // ── 模型调用 ──
 export { callModel } from './call-model.js';

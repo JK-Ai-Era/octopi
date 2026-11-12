@@ -57,6 +57,14 @@ export interface LLMToolDefinition {
 export interface LLMRequest {
   messages: LLMMessage[];
   tools?: LLMToolDefinition[];
+  /**
+   * 工具选择约束（provider-neutral）。
+   *
+   * `none` = 清单照发但禁止调用：摘要请求带全会话工具面（前缀缓存要求逐字节同形）时，
+   * 用它把模型约束在文本输出上，避免摘要轮冒出 tool_call。不影响缓存前缀（缓存键是
+   * tools+system+messages 的字节，不是本字段）。
+   */
+  toolChoice?: 'auto' | 'required' | 'none';
   temperature?: number;
   maxTokens?: number;
   model?: string;

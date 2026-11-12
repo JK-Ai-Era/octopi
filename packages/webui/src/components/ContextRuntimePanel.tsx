@@ -43,10 +43,15 @@ const PLACEMENT_META: Record<'system' | 'snapshot', { label: string; cls: string
 
 type LayerRow = LayerRuntimeViewDto & { placement?: 'system' | 'snapshot' };
 
-/** 摘要请求体量：字符数按 UTF-8 粗略折 KB/MB（只用于 UI 量级感知） */
-function formatBytes(chars: number): string {
-  const kb = chars / 1024;
-  return kb < 1024 ? `${kb.toFixed(0)}KB` : `${(kb / 1024).toFixed(2)}MB`;
+/**
+ * 摘要请求体量：输入是 **JSON 字符数**（wire 序列化长度），不是字节也不是 token。
+ * 如实标注单位——曾把它显示成 KB（按 chars/1024 折），导致用户拿它和顶栏 token 对数
+ * （742KB vs 384k tokens 看似矛盾，实际同一量级，见 2026-11-12 核对）。
+ */
+function formatRequestChars(chars: number): string {
+  if (chars < 1024) return `${chars} 字符`;
+  const k = chars / 1024;
+  return k < 1024 ? `${k.toFixed(0)}K 字符` : `${(k / 1024).toFixed(2)}M 字符`;
 }
 
 function formatTokens(n: number | undefined | null): string {
@@ -152,7 +157,7 @@ export function ContextRuntimePanel({
   const compactText = compact?.active
     ? `进行中（${compact.reason === 'proactive' ? '主动摘要' : compact.reason === 'overflow' ? '溢出' : '摘要'}）` +
       (compact.phase === 'summarize'
-        ? `：摘要请求已发出${compact.requestChars ? ` ${formatBytes(compact.requestChars)}` : ''}` +
+        ? `：摘要请求已发出${compact.requestChars ? ` ${formatRequestChars(compact.requestChars)}` : ''}` +
           (compactElapsedS !== undefined ? `，已等待 ${compactElapsedS}s` : '') +
           (compact.timeoutMs ? ` / 预算 ${Math.round(compact.timeoutMs / 1000)}s` : '')
         : '')

@@ -33,6 +33,11 @@ export function createProviderSummarize(
     const response = await provider.chat({
       messages,
       model: options?.model,
+      // 摘要请求带会话同形工具面时固定禁用调用：模型只许产出摘要正文。
+      // tools 原样透传（不裁剪/不重排）——前缀缓存按字节比对。
+      ...(opts?.tools && opts.tools.length > 0
+        ? { tools: opts.tools, toolChoice: opts.toolChoice ?? ('none' as const) }
+        : {}),
       // 未显式配置即不发送：由模型配置（ModelInfo.temperature）或服务端默认决定
       temperature: options?.temperature,
       // P3：run 中止 / 摘要超时都靠这个 signal 取消在飞请求（provider 侧 fetch 已接 signal）
@@ -48,6 +53,18 @@ export function createProviderSummarize(
     // 供压缩计量以真值替代估算（契约见 SummarizeFunction.onUsage）
     if (response.usage && response.usage.outputTokens > 0) {
       opts?.onUsage?.({ outputTokens: response.usage.outputTokens });
+    }
+    // 撞 max_tokens 的摘要 = 半截交接书（2026-11-12 评审 MAJ-2）。压缩常在会话最满时
+    // 触发，窗口钳制会把 max_tokens 压到刚好放得下，撞顶概率不低；把它当成功会让
+    // "## Open items" 段凭空消失且无人知晓——本次带工具面后输出上限进一步被挤压，必须
+    // fail loud 交 onSummarizeFail 显式降级，禁止静默半截（capabilities/compact 的既有红线）。
+    if (response.finishReason === 'length') {
+      throw new Error('summarize_output_truncated: provider stopped at max_tokens');
+    }
+    // 工具面为重放缓存前缀而完整发送（toolChoice:'none' 是给模型的约束，不是保证）。
+    // 若 provider/自定义实现忽略该约束产生 tool_call，正文就不是摘要——宁可失败。
+    if (response.toolCalls && response.toolCalls.length > 0) {
+      throw new Error('summarize_tool_call_emitted: summary turn produced a tool call');
     }
     return response.content;
   };

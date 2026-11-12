@@ -1359,13 +1359,14 @@ export class DefaultContextEngine implements ContextEngine {
       const llmPrefix = this.buildLlmMessages(folded.view, systemPrompt, tools, agingPlan);
       // 回声源排除既有摘要占位：模型续写上一份交接书不是「复读原文」
       const echoSource = this.buildEchoSource(folded.view, systemPrompt, agingPlan);
-      // P3 可观测：摘要请求即将发出——如实上报请求体量与预算，UI 不再只显示「进行中」
+      // P3 可观测：摘要请求即将发出——如实上报请求体量与预算，UI 不再只显示「进行中」。
+      // 体量含工具面：tools 与 messages 一起构成真实 wire 请求（前缀 tools → system → messages）。
       emit?.({
         type: 'context.compact.progress',
         sessionId,
         reason: 'proactive',
         phase: 'summarize',
-        requestChars: JSON.stringify(llmPrefix).length,
+        requestChars: JSON.stringify(llmPrefix).length + (tools.length > 0 ? JSON.stringify(tools).length : 0),
         requestMessages: llmPrefix.length,
         timeoutMs: this.config.summarizeTimeoutMs || undefined,
       });
@@ -1400,6 +1401,9 @@ export class DefaultContextEngine implements ContextEngine {
         maxOutputTokens: params.maxOutputTokens,
         onSummarizeFail: 'truncate',
         llmPrefix,
+        // 工具面同形（2026-11-12）：缓存前缀 = tools → system → messages。
+        // 只对齐 system+history 会让前缀从第一字节断开（实测 384k 输入 0 命中、203s）。
+        llmTools: tools,
         echoSource,
         signal: summarizeBudget.signal,
         // F22：cache-miss 旁路透传可观测事件
@@ -1644,7 +1648,9 @@ export class DefaultContextEngine implements ContextEngine {
         // proactive/overflow 的标签
         reason: 'manual',
         phase: 'summarize',
-        requestChars: JSON.stringify(llmPrefix).length,
+        requestChars:
+          JSON.stringify(llmPrefix).length +
+          (params.tools && params.tools.length > 0 ? JSON.stringify(params.tools).length : 0),
         requestMessages: llmPrefix.length,
         timeoutMs: this.config.summarizeTimeoutMs || undefined,
       });
@@ -1678,6 +1684,8 @@ export class DefaultContextEngine implements ContextEngine {
         maxOutputTokens: params.maxOutputTokens,
         onSummarizeFail: 'truncate',
         llmPrefix,
+        // 工具面同形（2026-11-12）：manual 与 proactive 同一契约，缺 tools = 0 缓存命中
+        llmTools: params.tools,
         echoSource,
         signal: manualBudget.signal,
         // F8R-06：manual 路 cache-miss 旁路同样可观测（no_prefix/window_guard/window_exhausted）
