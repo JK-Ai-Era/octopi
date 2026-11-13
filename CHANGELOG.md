@@ -123,6 +123,48 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.31 (2026-11-14)
+
+### fix(context): 活跃插话跨进程注入——human 插话不再被 lease 闸静默丢弃（§2.1-1 清偿）
+
+**症状**（2026-11-14 生产实测）：run 进行中用户发消息被 `supervise: lease_held` 直拒并静默丢——
+gateway 收到消息、错误只进日志，WS/WebUI 与渠道全无回音。**根因链**：远程 inbox 代理对 human
+短路 `signal.human → 'dispatched'`（MAJ-1 防「零回复回归」的权宜）→ 新 run 撞同会话 run
+lease 闸 → human 不重投（旧决策）→ `[Gateway Error]` 又因 ws 无渠道 adapter 且错误路径无
+run 事件而不可见。委派子结果的「同 run 多 turn」注入路径实测正常（非缺陷）。
+
+**修复三路**：
+1. **human 同走 `inboxOffer` 注入活跃 Run**（下一次 LLM 调用位）。回复捕获 = gateway 侧
+   pending/armed 两态扇出（无新增线上协议）：准入锚 = `session.inbox.appended`（注入实证）
+   / 本 trigger 成为新 run 输入；**回答判据 = arm 后首个 `step.start` 之后的首个终态
+   step.end**。生成器拉驱动保证旧答 step.end 先于下一 turn 的 `step.start`——终答生成期
+   插话曾把上一 turn 旧答错发给插话且真答进不了渠道（评审 MAJ-1，实测复现后定此判据）；
+   消息回复正文另锁本 turn 首终态（多 turn 不顶掉）。
+2. **lease_held 后 human 同走唤醒延迟重投**（onEvent/onDelivery 随行 + `retryScheduled`
+   标记）：本次拒可见（`[Gateway Error]`（已自动重试）），补答走晚到通道恰好一次（评审
+   MAJ-2：重投的渠道回复路由原缺失——事件到了闭包但闭包不会发）。
+3. **失败可见**：dispatch 失败/跳过合成 `step.end` 终态广播进流式面（WS/WebUI），且移至
+   plugin `message_sending` vote 之后（评审 MIN-5：裁决面不被绕过）。
+
+**评审处置**（del-9256359c fresh-eyes，2 MAJ/6 MIN/8 NIT，fix-then-ship）：MAJ 全修；
+MIN-1 `duplicate` 判定为设计语义拒绝修改（at-least-once 重投的去重出口——改 `dispatched`
+会重复执行，注释留档）；MIN-2 listener/TTL/`stop()` 清扫；MIN-3 反转注释清理；MIN-4 记账
+收口（v0.113.30 锚数勘误已并入该版本提交）；MIN-6 补 ①' ②' 两条回归锚；NIT-1/2/5/7 修，
+NIT-3 并发插话语义留档（同 turn 各自拿回答，有意），NIT-4/6 登记债务。
+
+**残余**（`arch/service-topology-p2.md` §2.1-1 留档）：消费后 run 卒于回答前 → armed 弃捕获
+并 warn（已受理按已送达不重投，delegation 语义）；15min TTL 兜底。
+
+**测试**：`tests/interjection-inbox.test.ts` 4 锚（真实 Gateway + 真实 run 子进程 + 假 LLM
+可暂停脚本；①' 终答期错捕回归锚、②' 重投补答回归锚）；`coordination-plane` 人话重投测试
+随行为反转更新。全量 **4951 绿**、lint 0。
+
+**BREAKING**：`DispatchResult` accepted.delivery 增 `'duplicate'`（human 不可达，wake 去重
+语义显式化）；failed 增 `retryScheduled?`；「human 消息被拒不重投」旧行为废除（此前实际是
+静默丢弃）。插话语义变化：human 消息现可注入进行中的 run（此前一律开新 run）。
+
+---
+
 ## v0.113.30 (2026-11-14)
 
 ### feat(tenancy): T4b 参与/委派租户内边界——委派闸、端点闸、WS 闸、会话归属

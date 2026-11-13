@@ -1914,6 +1914,8 @@ export class Gateway {
     this.started = false;
     // 先停脉搏调度（不再向 run 实例发脉搏），再停执行面
     this.pulseScheduler?.stop();
+    // 插话回复捕获清扫（MIN-2）：pending/armed timer 收掉，防残留活 timer
+    this.clearAllContinuationListeners();
     try {
       await this.stopLifecycle();
     } finally {
@@ -5922,6 +5924,12 @@ export class Gateway {
     // continued（插话进活跃 Run）：回复晚于 dispatch 返回，由事件转发触发晚到发送（评审 F3）
     let continuedDelivery = false;
     let continuedReplySent = false;
+    // lease_held 重投已排程（插话修复②）：本次拒可见，回答稍后补达——打开晚到发送闸
+    let lateReplyExpected = false;
+    // 本消息回复正文锁定：首个非 pre_tools 终态 = 本消息所属 turn 的回答（write-once）
+    let finalLocked = false;
+    // 失败/跳过的合成终态（插话修复③）：vote 后广播，不绕过插件裁决面（MIN-5）
+    let synthesizedNotice = '';
     // 会话附件指针（OP-15）：metadata.attachmentIds → Trigger.attachments
     let attachMetadata: Record<string, unknown> = {};
     const rawAttachIds = (msg.metadata as { attachmentIds?: unknown } | undefined)?.attachmentIds;
@@ -5959,12 +5967,17 @@ export class Gateway {
           const isError = (event.data as { error?: boolean } | undefined)?.error === true;
           // 失败尝试的 partial 不是回答：不得当最终回复外发（10-27 事故形态）
           if (!isError) {
-            finalContent = event.data.content as string;
-            // continued 消息的回答晚于 dispatch 返回：首个终态 step 恰好发一次（评审 F3）
             const phase = (event.data as { phase?: string } | undefined)?.phase;
-            if (continuedDelivery && !continuedReplySent && phase !== 'pre_tools' && finalContent) {
-              continuedReplySent = true;
-              void this.sendLateChannelReply(msg, sessionKey, agent.id, finalContent);
+            // 首个非 pre_tools 终态 = 本消息所属 turn 的回答（write-once）：run 因插话
+            // 多 turn 时，后续 turn 的回答不得顶掉本消息的回复正文（MAJ-1 观测面之一）
+            if (phase !== 'pre_tools' && !finalLocked) {
+              finalLocked = true;
+              finalContent = event.data.content as string;
+              // continued/retryScheduled 的回答晚于 dispatch 返回：恰好发一次（评审 F3/MAJ-2）
+              if ((continuedDelivery || lateReplyExpected) && !continuedReplySent && finalContent) {
+                continuedReplySent = true;
+                void this.sendLateChannelReply(msg, sessionKey, agent.id, finalContent);
+              }
             }
           }
         }
@@ -5983,9 +5996,22 @@ export class Gateway {
       console.error(`[Gateway] Error processing message:`, err);
       // 失败提示无条件覆盖正文：pre_tools 中间话术 / 部分成功正文都不得冒充最终回答
       //（engine.error 路径经 P1 已返回 status='failed'，抛异常路径同样落此分支）
-      finalContent = `[Gateway Error] ${err}`;
+      // lease_held 延迟重投已排程（human 重投，插话修复②）：本次拒原样可见，回答稍后
+      // 经晚到通道补达（lateReplyExpected 打开闭包的晚到发送闸）。
+      const retryScheduled =
+        'retryScheduled' in dispatchResult && dispatchResult.retryScheduled === true;
+      if (retryScheduled) lateReplyExpected = true;
+      finalContent = `[Gateway Error] ${err}${retryScheduled ? '（已自动重试，稍后补达）' : ''}`;
+      // 失败可见（插话修复③）：错误路径无 run 事件、ws 渠道无 adapter——合成终态
+      // 事件让 Web/TUI 看见拒因（IM 渠道由下方 adapter.send 送达同一正文）。
+      synthesizedNotice = finalContent;
     } else if (dispatchResult.status === 'skipped') {
       console.warn(`[Gateway] Dispatch skipped: ${dispatchResult.reason}`);
+      // 跳过同样要可见（aborted 除外——用户主动中止无需再告知）：保「消息必有回音」。
+      if (dispatchResult.reason !== 'aborted') {
+        synthesizedNotice = `[Gateway] 消息未处理：${dispatchResult.reason}`;
+        finalContent = synthesizedNotice;
+      }
     } else {
       // 会话标题：snippet 兜底 / 信号足够时小模型摘要（异步，不阻塞回复）
       this.scheduleSessionTitleUpdate(sessionKey);
@@ -6009,6 +6035,14 @@ export class Gateway {
     if (sendVote.decision !== 'allow') {
       console.log(`[Gateway] Reply cancelled by plugin: ${sendVote.reason ?? 'denied'}`);
       return;
+    }
+
+    // 失败/跳过的合成终态（插话修复③，MIN-5 归位）：vote 后广播——ws/WebUI 渲染 run
+    // 事件流，错误路径无 run 事件时合成 step.end 保「消息必有回音」（不绕过插件裁决面）。
+    // 复用 broadcastCommandTurnEnd 的事件形状（fromCommand 仅被 store 消费为「清 streaming
+    // 置 idle」）；合成终态不落转录属已登记债务（重载会话后该拒因仅存于渠道回执）。
+    if (synthesizedNotice) {
+      this.broadcastCommandTurnEnd(sessionKey, synthesizedNotice, 'text', agent.id);
     }
 
     // 7. 发送回复（continued 的回复由晚到通道恰好发一次，这里不重复）
@@ -6049,11 +6083,10 @@ export class Gateway {
         // 'dispatched'（插话失败不吞消息，宁可新 Run 也要送到）。
         inbox: {
           offer: async (signal) => {
-            // MAJ-1（2026-11-12 评审）：human 消息不走跨进程插话——continued 会跳过
-            // 主回复，而晚到回复只经 onEvent 闭包（跨进程即丢）= 用户消息零回复的
-            // 可见回归。human 一律 'dispatched' 保持「必有回复」语义；human 插话
-            // （含晚到回复跨进程路由）记 arch/service-topology-p2.md §2.1 待做。
-            if (signal.human) return 'dispatched';
+            // 协调面「插话」human 路径（service-topology-p2 §2.1-1 清偿）：human 与
+            // 唤醒信号同走 inboxOffer——活跃 Run 接收即注入下一次 LLM 调用位（同 run
+            // 多 turn）。MAJ-1 顾虑的「零回复回归」由回复捕获扇出补掉：continued 时把
+            // 事件闭包挂上活跃 Run 的流式扇出，晚到回复由调用方既有逻辑恰好发一次。
             // offer 抛错的 fail-open 兜底在 offerToTarget（语义权威点）；这里只管
             // wire 结果翻译（ok:false / 缺 delivery → 'dispatched'）。
             const res = await this.fleet.control({
@@ -6072,6 +6105,18 @@ export class Gateway {
             const delivery = (res.result as { delivery?: 'continued' | 'dispatched' | 'duplicate' } | undefined)
               ?.delivery ?? 'dispatched';
             if (delivery === 'continued') {
+              if (signal.onEvent) {
+                // 回复捕获挂 pending（MAJ-1 修复）：此刻只证明「已受理」，未证明
+                // 「已入上下文」——终答生成期的插话会被 inbox 排队到 run 关闭重投。
+                // 以 session.inbox.appended（注入锚）或本 trigger 成为新 run 输入为
+                // 准入信号（armContinuationListeners），此后首个终态 step.end 才是
+                // 本条的回答（错捕/漏捕见 attachContinuationListener 判据注释）。
+                this.registerPendingContinuation(
+                  signal.sessionId,
+                  signal.trigger?.id ?? signal.entryId ?? '',
+                  signal.onEvent,
+                );
+              }
               try {
                 signal.onAdmitted?.('continued');
               } catch {
@@ -6084,6 +6129,172 @@ export class Gateway {
       },
       resolveSession: (trigger) => trigger.sessionId ?? `${agent.id}:main`,
     });
+  }
+
+  // ── continued 插话的回复捕获（service-topology-p2 §2.1-1；MAJ-1 修复后形态）──
+  // pending：已受理（offer 'continued'）**未证实入上下文**——终答生成期的插话会由
+  // inbox 排队到 run 关闭重投，此阶段不得转发生答（否则把上一条回答错发给插话）。
+  // armed：**已证实入上下文**（session.inbox.appended 注入锚 / 本 trigger 成为新 run
+  // 输入）——此后首个终态 step.end 即本条回答，喂晚到回复闭包恰好发一次。
+  private readonly pendingContinuations = new Map<
+    string,
+    { sessionId: string; onEvent: (event: AgentEvent) => void; timer: ReturnType<typeof setTimeout> }
+  >();
+  private readonly runContinuationListeners = new Map<
+    string,
+    Set<{ fn: (event: AgentEvent) => void; timer: ReturnType<typeof setTimeout> }>
+  >();
+
+  /**
+   * 登记 pending 回复捕获（key = triggerId；human 消息 entryId === triggerId）。
+   *
+   * 判据（MAJ-1 修正版，2026-11-14 实测定案）：offer 'continued' 只证明「已受理」——
+   * followUp 续命缝（agent.ts getFollowUpMessages 同喂 consumeMessages）会在纯文本
+   * 收尾分支消费条目后**再** yield 上一 turn 的收尾 step.end（旧答），故：
+   * ①准入锚 = session.inbox.appended（注入）/ 本 trigger 成为新 run 输入；
+   * ②arm 后首个 `step.start` 之前到达的 step.end 一律不转发不触发（= 旧答收尾）；
+   * ③回答 = 其后首个终态 step.end（content 非空、非 error、非 pre_tools）。
+   * 顺序正确性由生成器拉驱动保证：旧答 assistant_message 先于 appended 扇出，
+   * 旧答 step.end 先于下一 turn 的 step.start。
+   *
+   * @param sessionId - 目标会话
+   * @param triggerId - 插话 trigger id（与注入消息 metadata.triggerId / run 输入 id 对齐）
+   * @param onEvent - 原派发的事件闭包
+   * @returns void
+   */
+  private registerPendingContinuation(
+    sessionId: string,
+    triggerId: string,
+    onEvent: (event: AgentEvent) => void,
+  ): void {
+    if (!triggerId) return;
+    const timer = setTimeout(() => {
+      this.pendingContinuations.delete(triggerId);
+      console.warn(
+        `[Gateway] pending continuation expired without consumption (session=${sessionId}, trigger=${triggerId})`,
+      );
+    }, 15 * 60 * 1000);
+    timer.unref?.();
+    this.pendingContinuations.set(triggerId, { sessionId, onEvent, timer });
+  }
+
+  /**
+   * 准入信号：条目已入上下文（session.inbox.appended 注入锚 / 触发新 run 的初始输入）。
+   * pending 转 armed——此后的事件流才喂回复捕获闭包（错捕判据见 registerPendingContinuation）。
+   *
+   * @param sessionId - 会话
+   * @param triggerIds - 已入上下文的 trigger id 集
+   * @returns void
+   */
+  private armContinuationListeners(sessionId: string, triggerIds: string[]): void {
+    for (const triggerId of triggerIds) {
+      const pending = this.pendingContinuations.get(triggerId);
+      if (!pending) continue;
+      this.pendingContinuations.delete(triggerId);
+      clearTimeout(pending.timer);
+      const ownerSession = pending.sessionId || sessionId;
+      let done = false;
+      const record: {
+        fn: (event: AgentEvent) => void;
+        timer: ReturnType<typeof setTimeout>;
+        sawStepStart: boolean;
+      } = {
+        fn: () => undefined,
+        timer: setTimeout(() => undefined, 0),
+        sawStepStart: false,
+      };
+      clearTimeout(record.timer);
+      record.fn = (event: AgentEvent): void => {
+        if (done) return;
+        if (event.type === 'step.start') {
+          // 回答 turn 的 LLM 调用边界（见 registerPendingContinuation 判据②）
+          record.sawStepStart = true;
+        }
+        // 判据②：arm 后 step.start 之前的 step.end = 上一 turn 的旧答收尾——
+        // 不转发不触发（转发会经调用方闭包的晚到闸把旧答错发给插话，MAJ-1 实测形态）
+        if (event.type === 'step.end' && !record.sawStepStart) return;
+        try {
+          pending.onEvent(event);
+        } catch {
+          // 插话闭包抛错不得影响活跃 Run 事件流（闭包内晚到回复失败仅 warn，见 sendLateChannelReply）
+        }
+        if (event.type === 'step.end') {
+          const data = (event.data ?? {}) as { content?: unknown; error?: boolean; phase?: string };
+          if (data.content && data.error !== true && data.phase !== 'pre_tools') {
+            done = true;
+            clearTimeout(record.timer);
+            this.dropContinuationRecord(ownerSession, record);
+          }
+        } else if (event.type === 'engine.end' && !record.sawStepStart) {
+          // 消费后 run 未及作答即结束（已受理按已送达处理不重投，delegation 语义）：
+          // 弃捕获留痕，不静默
+          done = true;
+          clearTimeout(record.timer);
+          this.dropContinuationRecord(ownerSession, record);
+          console.warn(
+            `[Gateway] continuation consumed but run ended unanswered (session=${ownerSession}, trigger=${triggerId})`,
+          );
+        }
+      };
+      record.timer = setTimeout(() => {
+        // 武装后 15min 仍无终态 step.end（run 死于消费之后）：到期 warn 不静默。
+        // 已知残余：消费后 run 卒于回答之前时，陈旧 armed 会错捕同会话下一 run 的回答
+        // （窗窄，at-least-once 语义下消费即视为送达；见 service-topology-p2 §2.1-1）。
+        done = true;
+        this.dropContinuationRecord(ownerSession, record);
+        console.warn(
+          `[Gateway] continuation listener expired without terminal step.end (session=${ownerSession}, trigger=${triggerId})`,
+        );
+      }, 15 * 60 * 1000);
+      record.timer.unref?.();
+      let set = this.runContinuationListeners.get(ownerSession);
+      if (!set) {
+        set = new Set();
+        this.runContinuationListeners.set(ownerSession, set);
+      }
+      set.add(record);
+    }
+  }
+
+  /** 摘除 armed 记录并清空空槽（防按会话无界驻留，MIN-2） */
+  private dropContinuationRecord(
+    sessionId: string,
+    record: { fn: (event: AgentEvent) => void; timer: ReturnType<typeof setTimeout> },
+  ): void {
+    const set = this.runContinuationListeners.get(sessionId);
+    if (!set) return;
+    set.delete(record);
+    if (set.size === 0) this.runContinuationListeners.delete(sessionId);
+  }
+
+  /**
+   * 活跃 Run 的流式扇出（remoteExecute 流经事件喂 armed 插话闭包）。
+   *
+   * @param sessionId - run 所属会话
+   * @param event - 流经事件
+   * @returns void
+   */
+  private fanoutContinuationEvents(sessionId: string, event: AgentEvent): void {
+    if (event.type === 'llm_stream_delta' || event.type === 'llm_thinking_delta') return;
+    const set = this.runContinuationListeners.get(sessionId);
+    if (!set || set.size === 0) return;
+    for (const record of [...set]) {
+      try {
+        record.fn(event);
+      } catch {
+        // 单个闭包异常不断流（listener 内部已兜；此处兜 listener 自身抛错）
+      }
+    }
+  }
+
+  /** 停机清扫（MIN-2）：pending/armed 全清 + timer 收掉，防重启/测试残留活 timer */
+  private clearAllContinuationListeners(): void {
+    for (const pending of this.pendingContinuations.values()) clearTimeout(pending.timer);
+    this.pendingContinuations.clear();
+    for (const set of this.runContinuationListeners.values()) {
+      for (const record of set) clearTimeout(record.timer);
+    }
+    this.runContinuationListeners.clear();
   }
 
   /** 消息路径注册（幂等）；构建/挂载由 run 实例懒建（get-or-mount 单飞在 RunHost） */
@@ -6103,6 +6314,12 @@ export class Gateway {
     req: import('@octopi-agent/engine/harness/activation/index.js').RunRequest,
     signal?: AbortSignal,
   ): AsyncIterable<AgentEvent> {
+    // 准入信号（MAJ-1）：本 run 的初始输入含待捕获的插话 trigger（inbox 重投/重试
+    // 形态）——条目已入上下文，回复捕获自此转 armed（注入形态的准入在 session_event）。
+    this.armContinuationListeners(
+      req.sessionId,
+      req.triggers.map((t) => t.id),
+    );
     const backend = this.getRunBackend();
     const iter = backend.startRun(req);
     // 跨进程 Observer 镜像：Runner 直采进 run 实例自己的 hub，gateway hub（服务
@@ -6117,6 +6334,7 @@ export class Gateway {
         // 观测 fail-open：镜像失败不中断执行流
       }
     };
+    const fanout = (event: AgentEvent): void => this.fanoutContinuationEvents(req.sessionId, event);
     const onAbort = (): void => {
       void backend
         .control({ type: 'abort', sessionId: req.sessionId, reason: 'caller_aborted' })
@@ -6126,6 +6344,7 @@ export class Gateway {
       return (async function* () {
         for await (const event of iter) {
           mirrorEvent(event);
+          fanout(event);
           yield event;
         }
       })();
@@ -6135,6 +6354,7 @@ export class Gateway {
       try {
         for await (const event of iter) {
           mirrorEvent(event);
+          fanout(event);
           yield event;
         }
       } finally {
@@ -6353,6 +6573,18 @@ export class Gateway {
         return;
       case 'session_event': {
         const ev = n.event;
+        // 准入信号（MAJ-1）：session.inbox.appended = 条目注入活跃 run 上下文的锚点
+        // （runner 在 drain 消费时刻发射，messages[].metadata.triggerId = 插话 trigger
+        // id）——此刻才证实「已入上下文」，回复捕获 pending 转 armed。
+        if (ev.type === 'session.inbox.appended') {
+          const messages =
+            (ev.data as { messages?: Array<{ metadata?: { triggerId?: unknown } }> } | undefined)
+              ?.messages ?? [];
+          const ids = messages
+            .map((m) => (typeof m.metadata?.triggerId === 'string' ? m.metadata.triggerId : undefined))
+            .filter((v): v is string => v !== undefined);
+          if (ids.length > 0) this.armContinuationListeners(n.sessionId, ids);
+        }
         // 跨进程 Observer 桥（run 专属事件：layers.assembled / tool.exec.update /
         // compact 进度等，不进 execute 流）：镜像喂 gateway hub + 重建
         // lastContextLayers（上下文页签 REST 数据源）。WS 广播走下方既有路径。

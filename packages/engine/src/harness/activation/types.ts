@@ -184,13 +184,22 @@ export type DispatchResult =
       status: 'accepted';
       agentId: string;
       sessionId: string;
-      delivery: 'continued';
+      /**
+       * continued = 活跃 Run 接收续接；duplicate = 同 id 已受理/已入上下文
+       * （at-least-once 重投的去重出口），不重复执行、不重复回答。
+       */
+      delivery: 'continued' | 'duplicate';
     }
   | {
       status: 'skipped';
       reason: 'no_agent' | 'filtered' | 'runtime_stopped' | 'aborted';
     }
-  | { status: 'failed'; error: string };
+  | {
+      status: 'failed';
+      error: string;
+      /** lease_held 延迟重投已排程：本次拒可见，回答稍后经随行 onEvent 补达 */
+      retryScheduled?: boolean;
+    };
 
 /** fan-out 聚合结果（toAgents 长度 > 1 时由 dispatch 返回） */
 export type FanoutDispatchResult =

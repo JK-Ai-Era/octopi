@@ -348,8 +348,13 @@ export class FleetRunBackend {
     if ('sessionId' in op && typeof op.sessionId === 'string') {
       // MIN-9：该会话从未跑过 run（无 sticky）时落到最闲实例——单机多实例下可能是
       // 跨进程写同一会话文件（进程内 sessionLock 不跨进程）。P1 run lease 正式化；
-      // 这里显式留痕，不静默。
-      if (!this.sticky.has(op.sessionId)) {
+      // 这里显式留痕，不静默。inboxOffer 例外收紧（NIT-5）：它是「有无活跃 Run」的
+      // 探测，无 sticky 且无 lease = 无活跃 Run（'dispatched' 常态答案）不告警；
+      // 无 sticky 却有 lease（网关重启后残留）才是真写风险，照告。
+      if (
+        !this.sticky.has(op.sessionId) &&
+        (op.type !== 'inboxOffer' || this.runLeases.has(op.sessionId))
+      ) {
         console.warn(
           `[supervise] session-scoped "${op.type}" for "${op.sessionId}" has no sticky instance (no prior run); routing to least-loaded — cross-process session writes are lease-unprotected until P1`,
         );

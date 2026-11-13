@@ -3,8 +3,8 @@
  *
  * A. 插话语义：dispatcher.inbox 接收（continued）→ 不开新 Run；未接收（dispatched）
  *    → 照常开新 Run；offer 通道失败 fail-open 到 dispatched（不吞消息）。
- * B. 唤醒/重试：唤醒类 trigger 被 lease_held 直拒 → 延迟重投（at-least-once）；
- *    human 消息不重投；attempts 耗尽落 TRIGGER_DROPPED。
+ * B. 唤醒/重试：trigger 被 lease_held 直拒 → 延迟重投（at-least-once，human 同；
+ *    拒可见 + 重投补达）；attempts 耗尽落 TRIGGER_DROPPED。
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -148,7 +148,7 @@ describe('B. 唤醒/重试（lease_held 延迟重投）', () => {
     }
   });
 
-  it('human 消息被拒不重投（拒必须回到用户可见面）', async () => {
+  it('human 消息被 lease_held 拒 → 同样延迟重投（宁可重投不可静默丢），onEvent 随行续上回复路由', async () => {
     vi.useFakeTimers();
     try {
       const runtime = new AgentRuntime({
@@ -159,19 +159,29 @@ describe('B. 唤醒/重试（lease_held 延迟重投）', () => {
       runtime.registerAgent({
         agentId: 'a1',
         dispatcher: {
-          execute: async function* () {
+          execute: async function* (req: RunRequest) {
             calls += 1;
-            throw new Error('supervise: lease_held — session "s1" run lease held');
+            if (calls === 1) throw new Error('supervise: lease_held — session "s1" run lease held');
+            yield { type: 'step.end', sessionId: req.sessionId, data: { content: 'REPLY' } } as unknown as AgentEvent;
           },
         },
         resolveSession: (t) => t.sessionId ?? 'a1:main',
       });
       await runtime.start();
 
-      const first = await runtime.dispatch(humanTrigger('t5'));
+      const seen: string[] = [];
+      const first = await runtime.dispatch(humanTrigger('t5'), {
+        onEvent: (event) => {
+          if (event.type === 'step.end') {
+            seen.push(String((event.data as { content?: string } | undefined)?.content ?? ''));
+          }
+        },
+      });
+      // 本次拒原样回到用户可见面（结果透传，不经重投吞掉）
       expect(first.status).toBe('failed');
       await vi.advanceTimersByTimeAsync(5000);
-      expect(calls).toBe(1); // 无重投
+      expect(calls).toBe(2); // human 同样重投补达（2026-11-14 插话修复②：不重投曾致静默丢）
+      expect(seen).toContain('REPLY'); // 原派发事件闭包随重投行——渠道回复路由不断
       await runtime.stop();
     } finally {
       vi.useRealTimers();
