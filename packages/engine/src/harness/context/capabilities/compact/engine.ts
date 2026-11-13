@@ -53,63 +53,131 @@ const STRICT_RETRY_SUFFIX =
 const TRANSCRIPT_SHAPE =
   /<function[=_]|<\/?tool_call|<invoke[ \t]|<\/?tool_use|<parameter[ >]|antml:|Tool Calls:|\[(ASSISTANT|USER|TOOL|SYSTEM)\]|^\s*(Assistant|Human|User|System):/im;
 
-/** 输出闸门：摘要落盘前的污染检测（回声/对话体续写）。
+/** 回声判据参数（2026-11-13 修正，见 {@link detectSummaryContamination} 的规则三说明） */
+export interface EchoVerdict {
+  hits: number;
+  hitChars: number;
+  textChars: number;
+  contaminated: boolean;
+}
+
+/** 单行最短长度：短于此的片段（标题、表头、空行）重复出现不构成复读证据 */
+const ECHO_MIN_LINE_CHARS = 40;
+
+/** 回声占比阈值：命中的输入字符占输出 ≥ 该比例才判复读。
+ *
+ * 修正前是「命中 ≥3 行」的计数分支，与四段式模板的「④ Evidence pointers」要求
+ * 直接冲突——模板要求写文件路径/commit id/测试名，而这些行几乎必然 ≥40 字符且
+ * 逐字出现在输入里。三条合法证据就触发整包重发（2026-11-13 实测：348k token、
+ * +59s）。判据改为纯比例：复读的本质是「输出基本就是输入的回声」，与命中几条
+ * 无关；引用三条短路径（占比极低）不应与复读整段正文等价。 */
+const ECHO_RATIO_THRESHOLD = 0.6;
+
+/**
+ * 判定 `text` 是否构成对 `sourceText` 的逐字复读。
+ *
+ * 判据是**长度占比**而非行数：复读的失效模式是「输出基本等于输入片段」，而不是
+ * 「引用了若干条证据」。四条以上互不相同的证据行如果只占输出很小比例，仍是合法
+ * 交接书（模板明确允许引用证据行）。
+ *
+ * @param text - 模型输出
+ * @param sourceText - 回声比对源
+ * @returns 命中量与判定
+ */
+export function evaluateEcho(text: string, sourceText: string): EchoVerdict {
+  let hits = 0;
+  let hitChars = 0;
+  // 逐行比对：只统计 ≥ ECHO_MIN_LINE_CHARS 的行，且同一行只计一次（split 会产出重复行）
+  for (const line of new Set(sourceText.split('\n').map((l) => l.trim()))) {
+    if (line.length < ECHO_MIN_LINE_CHARS) continue;
+    if (!text.includes(line)) continue;
+    hits += 1;
+    hitChars += line.length;
+  }
+  const textChars = text.length;
+  const contaminated = hitChars >= ECHO_MIN_LINE_CHARS && hitChars >= textChars * ECHO_RATIO_THRESHOLD;
+  return { hits, hitChars, textChars, contaminated };
+}
+
+/** 污染判定结果（含可观测明细）。`reason` 为 null = 干净通过。 */
+export interface ContaminationResult {
+  reason: 'canned_refusal' | 'transcript_shape' | 'verbatim_echo' | null;
+  /** 回声明细（已做回声比对时填充，无论是否判污染） */
+  echo?: EchoVerdict;
+}
+
+/**
+ * 输出闸门：判定摘要输出是否污染（回声/对话体续写）。
  *
  * 失效模式（2026-10-28 实测）：模型把对话样本当语料续写，产出「assistant 半句 + 逐字
- * tool-call」的原文复读，使折叠掉的中段信息全丢。本闸门兜底校验：命中即判污染，交由
- * 调用方重试或按 onSummarizeFail 降级（不得静默存坏摘要）。
+ * tool-call」的原文复读，使折叠掉的中段信息全丢。
  *
- * 回声判据是结构性的（评审 F2/F3/F4）：单条证据引用合法，成段复读非法——
- * 命中输入行 ≥3 条，或命中字符占输出 ≥60%（输出基本就是复读），才判污染。
+ * 三条规则，任一命中即污染：
+ * 1. `canned_refusal` —— 正文恰为内容过滤罐头拒答（整段精确匹配，长输出不可能命中）。
+ * 2. `transcript_shape` —— 出现对话体/工具调用语法字面量（指令已不含这些，出现即续写）。
+ * 3. `verbatim_echo` —— **按长度占比**判复读（见 {@link evaluateEcho}）。
+ *
+ * 规则三的判据在 2026-11-13 由「命中 ≥3 行」改为「命中字符占比 ≥60%」：旧计数分支
+ * 与四段式模板的证据行要求结构性冲突——模板要求写文件路径/commit id/测试名，这些行
+ * 几乎必然 ≥40 字符且逐字出现在输入里，三条合法证据即触发整包重发。
  *
  * @param text - 模型输出
  * @param sourceText - 「模型实际看到的会话文本」投影（回声比对源；不得含指令本身——
  *   指令的四段式标题会合法出现在输出里）
- * @returns 命中原因；干净返回 null
+ * @returns 判定结果（含回声明细，供可观测上报）
  */
-export function detectSummaryContamination(text: string, sourceText?: string): string | null {
+export function inspectSummaryOutput(text: string, sourceText?: string): ContaminationResult {
   // 内容过滤罐头拒答：网关 200 内联拒答（正文被替换成固定英文罐头）不是摘要，
   // 一律判污染——交由既有的「一次加严重试 → 二次抛错降级」链路处理
   if (isCannedRefusalText(text)) {
-    return 'canned_refusal';
+    return { reason: 'canned_refusal' };
   }
   if (TRANSCRIPT_SHAPE.test(text)) {
-    return 'transcript_shape';
+    return { reason: 'transcript_shape' };
   }
-  if (sourceText) {
-    let hits = 0;
-    let hitChars = 0;
-    for (const line of sourceText.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed.length >= 40 && text.includes(trimmed)) {
-        hits += 1;
-        hitChars += trimmed.length;
-      }
-    }
-    if (hits >= 3 || (hitChars >= 40 && hitChars >= text.length * 0.6)) {
-      return 'verbatim_echo';
-    }
+  if (!sourceText) {
+    return { reason: null };
   }
-  return null;
+  const echo = evaluateEcho(text, sourceText);
+  return echo.contaminated ? { reason: 'verbatim_echo', echo } : { reason: null, echo };
+}
+
+/**
+ * 输出闸门（字串版）：保留旧签名供既有调用方与测试使用。
+ *
+ * @param text - 模型输出
+ * @param sourceText - 回声比对源
+ * @returns 命中原因；干净返回 null
+ */
+export function detectSummaryContamination(text: string, sourceText?: string): string | null {
+  return inspectSummaryOutput(text, sourceText).reason;
 }
 
 /** 带输出闸门的摘要执行：首次污染给一次加严重试，二次污染抛错交 onSummarizeFail 降级。
  *
+ * 可观测（2026-11-13）：每次闸门判定都通过 `onVerdict` 上报——事故里重发整包
+ * 348k token 请求却零事件，UI 只能显示「已等待 Ns」，无法区分「在跑」与「被判污染重试」。
+ *
  * @param invoke - 摘要调用（strict=true 时需附加加严指令）
  * @param sourceText - 回声比对源（喂给模型的输入文本）
+ * @param onVerdict - 判定回调（尝试序号 + 结论 + 明细）
  * @returns 干净摘要文本
  * @throws provider 错误，或 `contaminated_output:*`（二次污染）
  */
 async function invokeGuardedSummarize(
   invoke: (strict: boolean) => Promise<string>,
   sourceText: string,
+  onVerdict?: (attempt: number, verdict: ContaminationResult) => void,
 ): Promise<string> {
   let text = await invoke(false);
-  if (detectSummaryContamination(text, sourceText)) {
+  const first = inspectSummaryOutput(text, sourceText);
+  onVerdict?.(1, first);
+  if (first.reason) {
     text = await invoke(true);
-    const again = detectSummaryContamination(text, sourceText);
-    if (again) {
-      throw new Error(`contaminated_output:${again}`);
+    const again = inspectSummaryOutput(text, sourceText);
+    onVerdict?.(2, again);
+    if (again.reason) {
+      throw new Error(`contaminated_output:${again.reason}`);
     }
   }
   return text;
@@ -330,7 +398,22 @@ export function createCompactEngine(options?: CreateCompactEngineOptions): Compa
             },
           });
         };
-        const text = await invokeGuardedSummarize(invoke, echoSource);
+        const text = await invokeGuardedSummarize(invoke, echoSource, (attempt, verdict) => {
+          // 闸门判定如实上报（fail-loud）：ui 与日志都该看见「被判污染 + 重试」，
+          // 而不是只显示「已等待 Ns」
+          opts.emit?.({
+            type: 'compact.contamination',
+            verdict: verdict.reason ?? 'clean',
+            attempt,
+            ...(verdict.echo
+              ? {
+                  echoHits: verdict.echo.hits,
+                  echoHitChars: verdict.echo.hitChars,
+                  textChars: verdict.echo.textChars,
+                }
+              : {}),
+          });
+        });
         // 空白摘要（空串/纯空白）按失败降级（旧 LLMSummaryCompressor 的 trim 守卫在此收口）：
         // 空白冒充 fresh 摘要会把 previousSummary 写成空白并推进覆盖点——静默失忆红线
         if (!text.trim()) {

@@ -220,10 +220,33 @@ export interface AgentEventMap {
     phase: 'summarize';
     /** 摘要请求体量（JSON 字符数）——事故里就是它从 ~150KB 涨到 2.13MB */
     requestChars?: number;
+    /** 摘要请求体量的 token 估算（与会话侧同口径）——面板据此显示，避免「字符 vs token」量纲混排 */
+    requestTokens?: number;
     /** 摘要请求消息条数 */
     requestMessages?: number;
     /** 本次调用的单次预算（ms）；缺失 = 不设预算 */
     timeoutMs?: number;
+  };
+  /**
+   * 摘要输出闸门判定结果（可观测）：每次闸门检查都上报，无论通过与否。
+   *
+   * 事故背景（2026-11-13）：一次摘要被判污染触发 strict 重试，重发整份 348k token
+   * 请求（+59s），但全程零事件——UI 只显示「已等待 Ns」，日志无迹可查。闸门必须
+   * fail-loud：判定理由、命中量、被丢弃的输出体量都要如实上报。
+   */
+  'context.compact.contamination': {
+    reason?: 'proactive' | 'overflow' | 'manual';
+    /** 判定结论；null = 干净通过 */
+    verdict: 'clean' | 'canned_refusal' | 'transcript_shape' | 'verbatim_echo';
+    /** 第几次尝试（1=首次，2=strict 重试） */
+    attempt: number;
+    /** 回声命中行数 / 命中字符数（仅 verbatim_echo 有意义） */
+    echoHits?: number;
+    echoHitChars?: number;
+    /** 被判定输出的字符数 */
+    textChars?: number;
+    /** 是否因此触发重试（true = 本次输出被丢弃） */
+    retryTriggered: boolean;
   };
   /** 摘要请求 cache-miss 旁路/穷尽可观测（F22）：no_prefix=无同形前缀，window_guard=前缀放不下改文本化旁路，window_exhausted=最终失败 */
   'context.compact.summarize_fallback': {

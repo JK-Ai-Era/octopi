@@ -17,6 +17,7 @@ function inspectorWithCompact(startedAt: number): InspectorState {
       reason: 'proactive',
       phase: 'summarize',
       requestChars: 2_130_000,
+      requestTokens: 750_000,
       timeoutMs: 300_000,
       startedAt,
     },
@@ -67,6 +68,31 @@ describe('ContextRuntimePanel 压缩 elapsed tick', () => {
       vi.advanceTimersByTime(1000);
     });
     expect(elapsedOnScreen()).toBe(t1! + 1);
+  });
+
+  it('摘要请求体量显示 token 口径（不再把 JSON 字符数与顶栏 token 并排）', () => {
+    vi.useFakeTimers();
+    renderPanel(inspectorWithCompact(Date.now()));
+    // 事故形态：面板曾显示「966K 字符」，与顶栏「341.2k tokens」量纲不同却视觉相当
+    const text = screen.getAllByText(/摘要请求已发出/)[0]?.textContent ?? '';
+    expect(text).toContain('750.0k tokens');
+    expect(text).not.toMatch(/字符/);
+  });
+
+  it('缺 token 估算时降级显示字符并如实标注单位（不冒充 token）', () => {
+    vi.useFakeTimers();
+    const inspector = {
+      compact: {
+        active: true,
+        reason: 'manual',
+        phase: 'summarize',
+        requestChars: 988_962,
+        startedAt: Date.now(),
+      },
+    } as unknown as InspectorState;
+    renderPanel(inspector);
+    const text = screen.getAllByText(/摘要请求已发出/)[0]?.textContent ?? '';
+    expect(text).toContain('966K 字符');
   });
 
   it('compact 不活跃时无 tick 文本（不泄漏「进行中」）', () => {

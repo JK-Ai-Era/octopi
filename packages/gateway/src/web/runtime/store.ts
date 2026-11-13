@@ -160,6 +160,8 @@ export interface CompactStatus {
   startedAt?: number;
   /** 摘要请求体量（P3）：JSON 字符数 */
   requestChars?: number;
+  /** 摘要请求 token 估算（与会话顶栏同口径）；UI 显示此值 */
+  requestTokens?: number;
   /** 本次摘要调用的单次预算（ms） */
   timeoutMs?: number;
 }
@@ -1959,6 +1961,7 @@ export class OctopiRuntimeStore extends EventTarget {
         const d = event.data as {
           phase?: 'summarize';
           requestChars?: number;
+          requestTokens?: number;
           requestMessages?: number;
           timeoutMs?: number;
           reason?: 'proactive' | 'overflow' | 'manual';
@@ -1973,6 +1976,7 @@ export class OctopiRuntimeStore extends EventTarget {
             ...(d?.reason ? { reason: d.reason } : {}),
             phase: d?.phase ?? 'summarize',
             requestChars: typeof d?.requestChars === 'number' ? d.requestChars : undefined,
+            requestTokens: typeof d?.requestTokens === 'number' ? d.requestTokens : undefined,
             timeoutMs: typeof d?.timeoutMs === 'number' ? d.timeoutMs : undefined,
             startedAt: this.chat.inspector.compact?.startedAt ?? Date.now(),
           },

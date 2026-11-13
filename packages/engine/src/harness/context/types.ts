@@ -69,7 +69,8 @@ export interface ContextCompactEvent {
     | 'context.compact.progress'
     | 'context.compact.end'
     | 'context.compact.error'
-    | 'context.compact.summarize_fallback';
+    | 'context.compact.summarize_fallback'
+    | 'context.compact.contamination';
   sessionId: string;
   reason?: ContextCompactReason;
   /** 压缩前估算 token */
@@ -91,12 +92,26 @@ export interface ContextCompactEvent {
   kind?: 'denied' | 'failed';
   /** progress：当前阶段（summarize = 摘要请求已发出、等 provider 返回） */
   phase?: 'summarize';
-  /** progress：摘要请求体量（JSON 字符数） */
+  /** progress：摘要请求体量（JSON 字符数，内部诊断用） */
   requestChars?: number;
+  /** progress：摘要请求 token 估算（与会话请求同口径，UI 显示此值） */
+  requestTokens?: number;
   /** progress：摘要请求消息条数 */
   requestMessages?: number;
   /** progress：本次摘要调用预算（ms）；缺失 = 不设预算 */
   timeoutMs?: number;
+  /** contamination：闸门判定结论（clean = 通过） */
+  verdict?: 'clean' | 'canned_refusal' | 'transcript_shape' | 'verbatim_echo';
+  /** contamination：第几次尝试（1=首次，2=strict 重试） */
+  attempt?: number;
+  /** contamination：是否因此丢弃本输出并重试 */
+  retryTriggered?: boolean;
+  /** contamination：回声命中行数 */
+  echoHits?: number;
+  /** contamination：回声命中字符数 */
+  echoHitChars?: number;
+  /** contamination：被判定的输出字符数 */
+  textChars?: number;
 }
 
 /** 事件回调（Builder 注入 → EventBus） */

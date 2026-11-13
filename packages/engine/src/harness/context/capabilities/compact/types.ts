@@ -64,6 +64,27 @@ export interface CompactTokenEstimator {
   estimateText(text: string): number;
 }
 
+/** CompactEngine 上报事件（唯一出口：调用方把它映射为 agent 事件）。
+ *
+ * `contamination` 于 2026-11-13 新增：闸门判定必须可观测——事故里一次误判触发
+ * 整包 348k token 重发、+59s，但全程零事件，UI 只有「已等待 Ns」，日志无迹可查。 */
+export type CompactEngineEvent =
+  | { type: 'compact.start'; reason?: string; cached?: boolean }
+  | { type: 'compact.end'; reason?: string; cached?: boolean }
+  | { type: 'compact.error'; reason?: string; cached?: boolean }
+  | { type: 'compact.summarize_fallback'; reason?: string; cached?: boolean }
+  | {
+      type: 'compact.contamination';
+      reason?: string;
+      /** 判定结论；clean = 通过 */
+      verdict: 'clean' | 'canned_refusal' | 'transcript_shape' | 'verbatim_echo';
+      /** 第几次尝试（1=首次，2=strict 重试） */
+      attempt: number;
+      echoHits?: number;
+      echoHitChars?: number;
+      textChars?: number;
+    };
+
 export interface CompactOptions {
   protectHead?: number;
   protectTail?: number;
@@ -136,11 +157,7 @@ export interface CompactOptions {
    * 取消产生的错误按 onSummarizeFail 降级（调用方另按 signal.aborted 决定是否写记录）。
    */
   signal?: AbortSignal;
-  emit?: (e: {
-    type: 'compact.start' | 'compact.end' | 'compact.error' | 'compact.summarize_fallback';
-    reason?: string;
-    cached?: boolean;
-  }) => void;
+  emit?: (e: CompactEngineEvent) => void;
 }
 
 export interface CompactOutcome {

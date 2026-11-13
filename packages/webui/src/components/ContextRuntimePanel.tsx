@@ -44,14 +44,23 @@ const PLACEMENT_META: Record<'system' | 'snapshot', { label: string; cls: string
 type LayerRow = LayerRuntimeViewDto & { placement?: 'system' | 'snapshot' };
 
 /**
- * 摘要请求体量：输入是 **JSON 字符数**（wire 序列化长度），不是字节也不是 token。
- * 如实标注单位——曾把它显示成 KB（按 chars/1024 折），导致用户拿它和顶栏 token 对数
- * （742KB vs 384k tokens 看似矛盾，实际同一量级，见 2026-11-12 核对）。
+ * 摘要请求体量：优先显示 **token 估算**（与会话顶栏同一把尺子）。
+ *
+ * 2026-11-13 修正：此前显示 JSON 字符数（"966K 字符"），与顶栏 token（341.2k）并排
+ * 出现时量纲不同却视觉相当，用户据此以为「摘要请求比上下文大 3 倍」。实测 966K 字符
+ * = 348k token（2.84 字符/token），本就是一回事。字符数仅在缺 token 估算时作降级显示。
  */
-function formatRequestChars(chars: number): string {
-  if (chars < 1024) return `${chars} 字符`;
-  const k = chars / 1024;
-  return k < 1024 ? `${k.toFixed(0)}K 字符` : `${(k / 1024).toFixed(2)}M 字符`;
+function formatRequestSize(requestTokens?: number, requestChars?: number): string | undefined {
+  if (typeof requestTokens === 'number' && Number.isFinite(requestTokens) && requestTokens > 0) {
+    return `${formatTokens(requestTokens)} tokens`;
+  }
+  if (typeof requestChars === 'number' && Number.isFinite(requestChars) && requestChars > 0) {
+    // 降级：后端未上报 token 估算（旧事件形态），仍如实标注字符单位
+    return requestChars < 1024
+      ? `${requestChars} 字符`
+      : `${(requestChars / 1024).toFixed(0)}K 字符`;
+  }
+  return undefined;
 }
 
 function formatTokens(n: number | undefined | null): string {
@@ -157,7 +166,7 @@ export function ContextRuntimePanel({
   const compactText = compact?.active
     ? `进行中（${compact.reason === 'proactive' ? '主动摘要' : compact.reason === 'overflow' ? '溢出' : '摘要'}）` +
       (compact.phase === 'summarize'
-        ? `：摘要请求已发出${compact.requestChars ? ` ${formatRequestChars(compact.requestChars)}` : ''}` +
+        ? `：摘要请求已发出${(() => { const size = formatRequestSize(compact.requestTokens, compact.requestChars); return size ? ` ${size}` : ''; })()}` +
           (compactElapsedS !== undefined ? `，已等待 ${compactElapsedS}s` : '') +
           (compact.timeoutMs ? ` / 预算 ${Math.round(compact.timeoutMs / 1000)}s` : '')
         : '')

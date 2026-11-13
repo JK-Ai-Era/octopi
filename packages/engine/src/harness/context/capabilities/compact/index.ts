@@ -4,7 +4,14 @@
  * @module harness/context/capabilities/compact
  */
 
-export { createCompactEngine, summarySoftTargetTokens, detectSummaryContamination } from './engine.js';
+export {
+  createCompactEngine,
+  summarySoftTargetTokens,
+  detectSummaryContamination,
+  inspectSummaryOutput,
+  evaluateEcho,
+} from './engine.js';
+export type { ContaminationResult, EchoVerdict } from './engine.js';
 export {
   asSummaryMessage,
   wrapSummaryText,

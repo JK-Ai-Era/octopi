@@ -185,6 +185,29 @@ interface CompactState {
 
 // ── 引擎实现 ──
 
+/** LLM message content → 纯文本投影（回声比对源用）。
+ *
+ * string 原样返回；content block 数组取各 text block 拼接（缺 text 的块按占位跳过，
+ * 绝不退化成 "[object Object]"）；其他形态走 String 兜底。
+ *
+ * @param content - LLM 消息 content（string | block[] | null）
+ * @returns 正文文本
+ */
+function llmContentToText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (block === null || typeof block !== 'object') continue;
+      const text = (block as { text?: unknown }).text;
+      if (typeof text === 'string' && text) parts.push(text);
+    }
+    return parts.join('\n');
+  }
+  if (content === null || content === undefined) return '';
+  return String(content);
+}
+
 export class DefaultContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
     id: 'default',
@@ -877,7 +900,11 @@ export class DefaultContextEngine implements ContextEngine {
       (m) => m.metadata?.source !== 'contextSummary' && m.metadata?.source !== 'contextLedger',
     );
     return this.buildLlmMessages(conversation, systemPrompt, agingPlan)
-      .map((m) => String(m.content ?? ''))
+      // 正文投影必须覆盖 block 形态（2026-11-13 实测）：
+      // LLM message 的 content 多为 content block 数组（本次真实摘要请求 1059 条中
+      // 1037 条是 list），`String(content)` 对数组返回 "[object Object]"——这些消息
+      // 对回声比对贡献为零，闸门对 97.9% 的正文完全失明（假阴性）。
+      .map((m) => llmContentToText(m.content))
       .join('\n');
   }
 
@@ -1434,6 +1461,10 @@ export class DefaultContextEngine implements ContextEngine {
         reason: 'proactive',
         phase: 'summarize',
         requestChars: JSON.stringify(llmPrefix).length + (tools.length > 0 ? JSON.stringify(tools).length : 0),
+        // token 口径（2026-11-13）：字符数与顶栏 token 并排显示会误导（实测 966K 字符
+        // ≈ 348k token，看起来像"请求比上下文大 3 倍"）。同一视图用与会话同源的估算器
+        // 给出 token，面板显示 token，字符数仅保留作内部诊断。
+        requestTokens: estimateLLMMessages(llmPrefix) + estimator.estimateTools(tools),
         requestMessages: llmPrefix.length,
         timeoutMs: this.config.summarizeTimeoutMs || undefined,
       });
@@ -1482,6 +1513,19 @@ export class DefaultContextEngine implements ContextEngine {
                   reason: 'proactive',
                   fallback: e.reason,
                   cached: e.cached,
+                });
+              } else if (e.type === 'compact.contamination') {
+                // 闸门判定必须可见：被判污染→丢弃输出→重发整包前缀（348k token 级别）
+                emit({
+                  type: 'context.compact.contamination',
+                  sessionId,
+                  reason: 'proactive',
+                  verdict: e.verdict,
+                  attempt: e.attempt,
+                  retryTriggered: e.verdict !== 'clean',
+                  ...(e.echoHits !== undefined ? { echoHits: e.echoHits } : {}),
+                  ...(e.echoHitChars !== undefined ? { echoHitChars: e.echoHitChars } : {}),
+                  ...(e.textChars !== undefined ? { textChars: e.textChars } : {}),
                 });
               }
             }
@@ -1737,6 +1781,9 @@ export class DefaultContextEngine implements ContextEngine {
         requestChars:
           JSON.stringify(llmPrefix).length +
           (params.tools && params.tools.length > 0 ? JSON.stringify(params.tools).length : 0),
+        // token 口径同上：与顶栏同一把尺子，避免字符/token 量纲混排
+        requestTokens:
+          estimateLLMMessages(llmPrefix) + estimator.estimateTools(params.tools ?? []),
         requestMessages: llmPrefix.length,
         timeoutMs: this.config.summarizeTimeoutMs || undefined,
       });
@@ -1774,13 +1821,29 @@ export class DefaultContextEngine implements ContextEngine {
         signal: manualBudget.signal,
         // F8R-06：manual 路 cache-miss 旁路同样可观测（no_prefix/window_guard/window_exhausted）
         emit: params.emit
-          ? (e) =>
-              params.emit!({
-                type: 'context.compact.summarize_fallback',
-                sessionId: params.sessionId,
-                fallback: e.reason,
-                cached: e.cached,
-              })
+          ? (e) => {
+              if (e.type === 'compact.summarize_fallback') {
+                params.emit!({
+                  type: 'context.compact.summarize_fallback',
+                  sessionId: params.sessionId,
+                  reason: 'manual',
+                  fallback: e.reason,
+                  cached: e.cached,
+                });
+              } else if (e.type === 'compact.contamination') {
+                params.emit!({
+                  type: 'context.compact.contamination',
+                  sessionId: params.sessionId,
+                  reason: 'manual',
+                  verdict: e.verdict,
+                  attempt: e.attempt,
+                  retryTriggered: e.verdict !== 'clean',
+                  ...(e.echoHits !== undefined ? { echoHits: e.echoHits } : {}),
+                  ...(e.echoHitChars !== undefined ? { echoHitChars: e.echoHitChars } : {}),
+                  ...(e.textChars !== undefined ? { textChars: e.textChars } : {}),
+                });
+              }
+            }
           : undefined,
       },
     );

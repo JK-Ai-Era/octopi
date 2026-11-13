@@ -123,6 +123,48 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.27 (2026-11-13)
+
+### fix(context): 摘要闸门改为可观测 + 回声判据从「行数」改「占比」 + 修 block 正文失明
+
+**事故（2026-11-13 手动压缩）**：一次摘要被判污染 → strict 重试 → 整包 348k token
+重发（65.9s + 58.8s = 124.7s），但全程**零事件**：UI 只显示「已等待 Ns」，日志无迹可查，
+事后无法判断是模型偶发还是判据过严。
+
+排查中发现三个缺陷，同属「判据与真实数据形状不符」：
+
+**① 闸门静默（fail-loud 违反）**
+`invokeGuardedSummarize` 重试时不 emit 任何事件。修复：新增 `context.compact.contamination`
+事件，每次判定都上报 `verdict` / `attempt` / `echoHits` / `echoHitChars` / `textChars` /
+`retryTriggered`；proactive 与 manual 两条路径都映射（manual 侧同时补上此前缺失的 `reason`）。
+
+**② 回声判据与四段式模板结构性冲突（规则三）**
+旧判据 `hits >= 3 || hitChars >= text*0.6`。模板第④段明确要求写 file path / commit id /
+test name，而这些行几乎必然 ≥40 字符且逐字出现在输入里——**三条合法证据即触发整包重发**。
+修复：删掉计数分支，只留长度占比（命中字符 ≥ 输出 60% 才判复读），即复读的本质
+「输出基本等于输入」。另外同一输入行重复出现只计一次（旧实现按 split 累计会放大命中量）。
+
+**③ 回声比对源对 block 正文完全失明（假阴性，比误判更危险）**
+`buildEchoSource` 用 `String(m.content)` 做投影，而真实请求的 content 多为 content block
+数组 —— `String([{type:'text',...}])` 返回 `"[object Object]"`。实测该次摘要请求 **1059
+条消息中 1037 条（97.9%）** 正文对闸门不可见，逐字复读可完全逃过检测。
+修复：新增 `llmContentToText`，text block 逐个拼接；`SourceText` 从 900,070 涨到
+1,842,267 字符（此前大量是 `[object Object]` 占位）。
+
+**④ 面板量纲混排**
+顶栏 `341.2k tokens` 与面板 `966K 字符` 并排显示，量纲不同却视觉相当，看起来像「摘要请求
+比上下文大 3 倍」。实测同一内容 988,962 字符 = 348,317 token（2.84 字符/token）。
+修复：`compact.progress` 新增 `requestTokens`（与会话请求同源估算器），面板优先显示
+token，字符数仅在缺 token 时降级显示并保留「字符」单位标注。
+
+**验证**：用事故真实数据回放——修复后比对源覆盖 block 正文，采纳摘要判 `clean`
+（hits=0）；旧判据下三条合法证据判污染（已固化为测试）。全套 4898 passed。
+
+**breaking**：无。`requestChars` 保留（内部诊断/兼容），新增字段全部可选；
+`detectSummaryContamination` 签名不变，新增 `inspectSummaryOutput` / `evaluateEcho` 供明细。
+
+---
+
 ## v0.113.26 (2026-11-13)
 
 ### refactor(context): 装配出口收口——三份基线记录合一、16 处重复表达式归一
