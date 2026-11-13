@@ -180,6 +180,9 @@ describe('Gateway Plugin Command Host authorization', () => {
     expect((result?.data as { newSessionId: string }).newSessionId).not.toBe('tester:main');
     const afterAllowed = await store.load('tester:main');
     expect(afterAllowed?.lifecycle?.lifecycle).toBe('recent');
+    // 复位：delete+create（MAJ-6 后 createSession 拒绝覆盖既有会话——旧「重置式覆盖」
+    // 正是清空正文/过户归属的风险面，测试不再依赖它）
+    await gateway.deleteSession('tester:main');
     await gateway.createSession({ agentId: 'tester', sessionId: 'tester:main' });
     await send(gateway, '/none');
     expect(applied).toEqual([['new_session']]);

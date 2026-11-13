@@ -20,6 +20,7 @@ import { loadConfig, toGatewayConfig, resolveConfigFilePath } from '../config.js
 import { resolveListenConfig } from './listen-config.js';
 import { assembleGlobalTools } from '@octopi-agent/engine/integration/tools/assemble.js';
 import { createProviderFromConfig, createWireDumpSinkFromConfig } from '@octopi-agent/engine/config.js';
+import { createWsIdentityHooks, agentTenantReader } from '../ws-identity-hooks.js';
 import type {
   WireDumpConfig,
   WireDumpSink,
@@ -1225,6 +1226,14 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       healthExtras: () => ({
         knowledge: gateway.getKnowledgeState(),
         effectPolicy: gateway.getEffectPolicyStatus(),
+      }),
+      // WS 租户身份面（§9.1-3）：auth.registryToken → 租户身份连接；订阅按租户收口。
+      // 无 registryToken 的连接 = 宿主面（apiKey 闸已验），全量可见是其正确语义。
+      // 钩子实现单源在 src/ws-identity-hooks.ts（daemon 接线与测试共用，防接线漂移）
+      ...createWsIdentityHooks({
+        resolveToken: (token) => gateway.getRegistry()?.resolveToken(token) ?? null,
+        getSessionTenant: async (sessionId) => (await gateway.getSession(sessionId))?.tenantId,
+        getAgentTenant: agentTenantReader(() => gateway.getRegistry()),
       }),
     }), httpConfig?.tenantId ? { tenantId: httpConfig.tenantId } : undefined);
     // builtin 适配器出两种消息 label（http/ws）——bot 归属锚逐 label 补齐

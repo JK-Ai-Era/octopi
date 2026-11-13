@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import { sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
 
 export interface ArchiveManagerOptions {
@@ -163,8 +164,11 @@ export class SessionArchiveManager {
 
   /**
    * 查询归档中的 session
+   *
+   * @param sessionId - 会话 id
+   * @param opts - 租户收口（§9.1-2，T4b）：带 tenantId 时越域视为不存在（不泄漏存在性）
    */
-  async queryArchive(sessionId: string): Promise<SessionData | null> {
+  async queryArchive(sessionId: string, opts?: { tenantId?: string }): Promise<SessionData | null> {
     const files = await this.listArchiveFiles();
 
     for (const file of files) {
@@ -176,6 +180,9 @@ export class SessionArchiveManager {
         for (const line of lines) {
           const entry = JSON.parse(line) as ArchiveEntry;
           if (entry.sessionId === sessionId) {
+            if (opts?.tenantId !== undefined && (entry.data.meta?.tenantId ?? DEFAULT_TENANT_ID) !== opts.tenantId) {
+              return null;
+            }
             return entry.data;
           }
         }
@@ -189,10 +196,17 @@ export class SessionArchiveManager {
 
   /**
    * 列出归档中的 session 元数据
+   *
+   * @param filter - agentId / tenantId（§9.1-2，T4b）：带 tenantId 时只列本域；
+   *   兼容旧签名（string = agentId）——绝不静默放宽语义（评审 MIN-3）
    */
-  async listArchived(agentId?: string): Promise<Array<{ sessionId: string; agentId: string; archivedAt: number }>> {
+  async listArchived(
+    filter?: string | { agentId?: string; tenantId?: string },
+  ): Promise<Array<{ sessionId: string; agentId: string; tenantId?: string; archivedAt: number }>> {
+    const normalized: { agentId?: string; tenantId?: string } =
+      typeof filter === 'string' ? { agentId: filter } : (filter ?? {});
     const files = await this.listArchiveFiles();
-    const results: Array<{ sessionId: string; agentId: string; archivedAt: number }> = [];
+    const results: Array<{ sessionId: string; agentId: string; tenantId?: string; archivedAt: number }> = [];
 
     for (const file of files) {
       try {
@@ -203,10 +217,13 @@ export class SessionArchiveManager {
         for (const line of lines) {
           const entry = JSON.parse(line) as ArchiveEntry;
           const pick = toIndexPick(entry.data);
-          if (!agentId || sessionMatchesAgent(pick, agentId)) {
+          const entryTenant = entry.data.meta?.tenantId ?? DEFAULT_TENANT_ID;
+          if (normalized.tenantId !== undefined && entryTenant !== normalized.tenantId) continue;
+          if (!normalized.agentId || sessionMatchesAgent(pick, normalized.agentId)) {
             results.push({
               sessionId: entry.sessionId,
               agentId: entry.data.agentId,
+              tenantId: entryTenant,
               archivedAt: entry.archivedAt,
             });
           }

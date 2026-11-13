@@ -181,6 +181,9 @@ export class RunnerChildRunPort implements ChildRunPort {
       sessionId: childSessionId,
       // D3：委派权利天花板，Runner 会与模板天花板取交集
       rightsCeiling: input.rightsCeiling,
+      // §9.1-6：子 run principal 归属 = 父会话租户（mergePrincipal 与子 agent
+      // 归属冲突时 fail-loud——同租户闸已在 dispatch，这里是纵深防线）
+      ...(input.tenantId === undefined ? {} : { principal: { actorType: 'agent' as const, tenantId: input.tenantId } }),
     };
 
     const usage = emptyTokenUsage();
@@ -357,6 +360,10 @@ export function createChildRunExecutor(
       {
         delegationId: request.delegationId,
         childAgentId,
+        // §8 委派继承位：子 run 归属 = 父 run 归属（租户内委派闸在 dispatch）
+        ...(request.from.tenantId === undefined
+          ? {}
+          : { tenantId: request.from.tenantId as import('@octopi-agent/core/types.js').TenantId }),
         // D7：id 由服务方在起 Run 前生成并落库，此处透传
         childSessionId: request.childSessionId,
         childRunId: request.childRunId,

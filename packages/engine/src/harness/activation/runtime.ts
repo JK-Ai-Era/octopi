@@ -513,10 +513,13 @@ export class AgentRuntime {
       : triggers
           .map((t) => ('source' in t.payload ? t.payload.source?.senderId : undefined))
           .find((id): id is string => typeof id === 'string' && id.length > 0);
+    // §9.1-6：触发源租户（渠道锚等）随 Trigger 传播 → run principal 归属
+    const tenantId = triggers.map((t) => t.tenantId).find((id): id is string => typeof id === 'string' && id.length > 0);
     const request = buildRunRequest(agent, triggers, sessionId, {
       actorType: isScheduleWake ? 'timer' : senderId ? 'user' : undefined,
       actorId: isScheduleWake ? (triggers[0]?.metadata?.reason ?? triggers[0]?.id) : senderId,
       intent: isScheduleWake ? 'schedule_wake' : undefined,
+      ...(tenantId === undefined ? {} : { tenantId }),
     });
     const controller = new AbortController();
     const run: ActiveRun = {

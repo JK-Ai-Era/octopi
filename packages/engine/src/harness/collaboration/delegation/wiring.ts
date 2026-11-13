@@ -52,6 +52,8 @@ export interface DelegatableAgent {
   agentId: string;
   agent: Agent;
   runner: SessionAwareRunner;
+  /** 该 agent 归属租户（§8 委派限本租户）；缺省 = DEFAULT 存量域 */
+  tenantId?: string;
   /**
    * 该 agent 的 SessionStore。
    *
@@ -201,6 +203,7 @@ export function createDelegationRuntime(
         id: agent.agentId,
         name: agent.agentId,
         traits: agent.traits ?? [],
+        ...(agent.tenantId === undefined ? {} : { tenantId: agent.tenantId }),
         delegation: effectiveDelegationPolicy(agent.delegation),
         status: 'idle',
       });

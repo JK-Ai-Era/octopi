@@ -13,6 +13,7 @@
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
 import type { DelegateService } from '../../../collaboration/delegation/service.js';
 import { DelegateResolutionError } from '../../../collaboration/delegation/service.js';
+import { getRunScope } from '../../../run/run-scope.js';
 import type {
   Delegation,
   DelegationContextMode,
@@ -180,6 +181,10 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
             agentId: context.agentId,
             sessionId: context.sessionId,
             runId: context.runId ?? '',
+            // §8 委派限本租户：父 run 归属随调用传播（无归属 = DEFAULT 存量域）
+            ...(getRunScope()?.principal?.tenantId === undefined
+              ? {}
+              : { tenantId: getRunScope()!.principal!.tenantId }),
           },
           // D3 权限随调用传播：父的有效权限作为子的天花板，不得借委派提权
           parentRights: await readRunSessionRights(),

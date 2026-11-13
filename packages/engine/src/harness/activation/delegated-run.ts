@@ -61,6 +61,8 @@ export function buildDelegatedRunRequest(
     sessionId,
     messages: [input],
     actorType: 'agent',
+    // §9.1-6：子 run principal 归属继承父租户（dispatcher 合入 principal）
+    ...(runConfig.principal?.tenantId === undefined ? {} : { tenantId: runConfig.principal.tenantId }),
     ...(runConfig.model === undefined ? {} : { modelOverride: runConfig.model }),
     ...(runConfig.modelProvider === undefined ? {} : { modelProvider: runConfig.modelProvider }),
     ...(runConfig.systemPrompt === undefined ? {} : { systemPrompt: runConfig.systemPrompt }),

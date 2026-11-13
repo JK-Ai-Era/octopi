@@ -18,6 +18,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { TokenUsage } from '@octopi-agent/core/types/step.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import type { AgentRegistry } from './registry-types.js';
 import type {
@@ -122,7 +123,7 @@ export interface ResolutionAvailability {
 export class DelegateResolutionError extends Error {
   constructor(
     message: string,
-    readonly reason: 'not_found' | 'not_callable' | 'forbidden' | 'depth_exceeded' | 'too_many_active',
+    readonly reason: 'not_found' | 'not_callable' | 'forbidden' | 'depth_exceeded' | 'too_many_active' | 'cross_tenant',
     /** 解析失败时的可用目标（可选；让调用方不必瞎猜） */
     readonly available?: ResolutionAvailability,
   ) {
@@ -197,8 +198,19 @@ export class DelegateService {
    * @throws 目标不可达 / 不可被委派 / 深度超限 / 未闭合委派过多
    */
   async dispatch(input: DispatchDelegationInput): Promise<DispatchResult> {
-    // 1. 解析目标（D2）
-    const handle = this.resolveTarget(input.target, input.parent.agentId);
+    // 1. 解析目标（D2）；trait 选人按父域过滤（MAJ-8）
+    const handle = this.resolveTarget(input.target, input.parent.agentId, input.parent.tenantId);
+
+    // 1b. 租户闸（arch/multi-tenancy.md §8，T4b）：委派限本租户——跨租户 = 数据外泄 +
+    // 目标执行环境不受本租户控制。缺省（config agent / 存量）= DEFAULT 存量域，彼此可派。
+    const parentTenant = input.parent.tenantId ?? DEFAULT_TENANT_ID;
+    const targetTenant = handle.tenantId ?? DEFAULT_TENANT_ID;
+    if (parentTenant !== targetTenant) {
+      throw new DelegateResolutionError(
+        `delegate cross-tenant: ${input.parent.agentId} (${parentTenant}) -> ${handle.agentId} (${targetTenant})`,
+        'cross_tenant',
+      );
+    }
 
     // 2. 递归深度闸（§10.4）
     const parentDepth =
@@ -392,17 +404,20 @@ export class DelegateService {
    *
    * @param target - 目标寻址
    * @param callerAgentId - 调用方 agentId（校验 callableBy）
+   * @param callerTenantId - 调用方归属租户（§8 委派限本租户；trait 选人先按域过滤——
+   *   否则他租户候选会抢走选择或硬拒本可成立的委派，T4b 评审 MAJ-8）
    * @returns 解析出的 AgentHandle
    * @throws 目标不可达 / 不可被委派 / 策略拒绝
    */
-  private resolveTarget(target: DelegationTarget, callerAgentId: string): AgentHandle {
+  private resolveTarget(target: DelegationTarget, callerAgentId: string, callerTenantId?: string): AgentHandle {
+    const callerTenant = callerTenantId ?? DEFAULT_TENANT_ID;
     if (target.agentId) {
       const info = this.registry.get(target.agentId);
       if (!info) {
         throw new DelegateResolutionError(
           `delegate target not found: ${target.agentId}`,
           'not_found',
-          this.describeTargets(),
+          this.describeTargets(callerTenant),
         );
       }
       return this.toHandle(info, callerAgentId);
@@ -413,15 +428,17 @@ export class DelegateService {
       //（否则第一个不可委派的命中会让整次委派失败，而不是落到下一个可用候选）
       const candidates = this.registry
         .findByTrait(target.trait)
+        .filter((info) => (info.tenantId ?? DEFAULT_TENANT_ID) === callerTenant)
         .filter((info) => effectiveDelegationPolicy(info.delegation).callable)
         .filter((info) => this.isCallableBy(info, callerAgentId));
       const picked = candidates[0];
       if (!picked) {
-        // 失败时回传**可用目标**，让调用方（LLM）一次就能改对，而不是瞎猜
+        // 失败时回传**本域可用目标**，让调用方（LLM）一次就能改对，而不是瞎猜
+        //（跨租户 agent id/traits 不经 available_targets 泄漏，T4b 评审 MIN-1）
         throw new DelegateResolutionError(
           `no callable agent for trait: ${target.trait}`,
           'not_found',
-          this.describeTargets(),
+          this.describeTargets(callerTenant),
         );
       }
       return this.toHandle(picked, callerAgentId);
@@ -430,19 +447,23 @@ export class DelegateService {
     throw new DelegateResolutionError(
       'delegate target must set agentId or trait',
       'not_found',
-      this.describeTargets(),
+      this.describeTargets(callerTenant),
     );
   }
 
   /**
-   * 列出**可用委派目标**（失败时回传，供调用方自愈）
+   * 列出**可用委派目标**（失败时回传，供调用方自愈）——按调用方租户域收口
    *
-   * @returns 可用 traits 与 agent 概要
+   * @param callerTenant - 调用方归属租户（缺省 = DEFAULT 存量域）
+   * @returns 本域可用 traits 与 agent 概要
    */
-  private describeTargets(): ResolutionAvailability {
+  private describeTargets(callerTenant: string = DEFAULT_TENANT_ID): ResolutionAvailability {
+    const visible = this.registry
+      .list()
+      .filter((a) => (a.tenantId ?? DEFAULT_TENANT_ID) === callerTenant);
     return {
-      traits: [...new Set(this.registry.list().flatMap((a) => a.traits))].sort(),
-      agents: this.registry.list().map((a) => ({
+      traits: [...new Set(visible.flatMap((a) => a.traits))].sort(),
+      agents: visible.map((a) => ({
         id: a.id,
         traits: [...a.traits],
         callable: effectiveDelegationPolicy(a.delegation).callable,
@@ -470,6 +491,7 @@ export class DelegateService {
     }
     return {
       agentId: info.id,
+      tenantId: info.tenantId,
       traits: info.traits,
       rightsCeiling: policy.rightsCeiling,
       budget: policy.budget,

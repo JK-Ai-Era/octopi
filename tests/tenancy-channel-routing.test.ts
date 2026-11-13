@@ -215,6 +215,9 @@ describe('T4a 判据：两租户各自 bot 各路由到自己的 agent', () => {
     // 会话键 = agentId:channel:sender（per-user 常驻；agentId=registry UUID）
     expect(await h.store.load(`${h.agentA.agentId}:chan-a:u1`)).not.toBeNull();
     expect(await h.store.load(`${h.agentB.agentId}:chan-b:u1`)).not.toBeNull();
+    // §9.1-6：渠道消息新建会话的归属 = bot 归属锚（run principal 同源）
+    expect((await h.store.load(`${h.agentA.agentId}:chan-a:u1`))?.meta.tenantId).toBe(h.tA);
+    expect((await h.store.load(`${h.agentB.agentId}:chan-b:u1`))?.meta.tenantId).toBe(h.tB);
   });
 
   it('bot 归属锚定租户：同一发送者在不同 bot 上解析到各自租户的绑定（不串域）', async () => {
@@ -272,6 +275,42 @@ describe('T4a 判据：两租户各自 bot 各路由到自己的 agent', () => {
     expect(await h.store.list()).toEqual([]);
   });
 
+  it('DEFAULT 租户 registry agent 不作兜底候选（MAJ-7-A：会话锚定后归属会打架）', async () => {
+    const h = await makeHarness({ noHostAgent: true });
+    const registry = h.gateway.getRegistry()!;
+    // default 存量域行不在 registry 里（registerUser 生成新域）——raw 补行使场景可达
+    (
+      registry as unknown as {
+        db: { raw: { prepare(sql: string): { run(...args: unknown[]): unknown } } };
+      }
+    ).db.raw
+      .prepare('INSERT OR IGNORE INTO tenants (tenant_id, name, created_at) VALUES (?, ?, ?)')
+      .run('default', 'default', Date.now());
+    const raw = (
+      registry as unknown as {
+        db: { raw: { prepare(sql: string): { run(...args: unknown[]): unknown } } };
+      }
+    ).db.raw;
+    raw
+      .prepare(
+        'INSERT OR IGNORE INTO users (user_id, tenant_id, name, is_platform_admin, created_at) VALUES (?, ?, ?, 0, ?)',
+      )
+      .run('user-default', 'default', 'default-owner', Date.now());
+    // DEFAULT 域的 registry agent（tenantId=default 存量域）——不是 config 宿主资产，
+    // 不得兜未绑定流量（会话归属=锚 tA 与 agent 归属=default 会 fail-loud）
+    const defAgent = registry.createAgent({
+      tenantId: 'default' as never,
+      ownerUserId: 'user-default' as never,
+      name: 'agent-default',
+      definition: definitionEntry('HOST_SYS'),
+    });
+    await h.gateway.attachRegistryAgent(defAgent);
+
+    await h.gateway.send(msg('chan-a', 'stranger', 'hi', 'm1'));
+    expect(h.chanA.sent).toEqual([]);
+    expect(await h.store.list()).toEqual([]);
+  });
+
   it('未绑定流量 reject（可配）：拒收不进任何 agent、不建会话', async () => {
     const h = await makeHarness({ unboundPolicy: 'reject' });
     const registry = h.gateway.getRegistry()!;
@@ -316,6 +355,58 @@ describe('T4a 判据：两租户各自 bot 各路由到自己的 agent', () => {
     });
     expect(h.chanA.sent.map((r) => r.content)).toEqual(['AGENT_A_SYS']);
     expect(await h.store.load(`${h.agentA.agentId}:chan-a:u1`)).not.toBeNull();
+  });
+
+  it('per-chat 绑定缺可信 conversationId（哨兵 default）：内置适配器拒收、插件渠道放行', async () => {
+    const h = await makeHarness();
+    const registry = h.gateway.getRegistry()!;
+    registry.createBinding({
+      tenantId: h.tA,
+      platform: 'chan-a',
+      identity: 'chatter',
+      agentId: h.agentA.agentId,
+      sessionPolicy: 'per-chat',
+    });
+
+    // 内置适配器（ws label）哨兵 'default'（客户端没点名会话）→ 拒收；真实 conversationId → 放行
+    const chanWs = new TestChannel('ws');
+    h.gateway.registerChannel(chanWs);
+    h.gateway.setChannelTenant('ws', h.tA);
+    registry.createBinding({
+      tenantId: h.tA,
+      platform: 'ws',
+      identity: 'chatter',
+      agentId: h.agentA.agentId,
+      sessionPolicy: 'per-chat',
+    });
+    await h.gateway.send({ ...msg('ws', 'chatter', 'a', 'm1'), conversationId: 'default' });
+    expect(chanWs.sent).toEqual([]);
+    expect(await h.store.list()).toEqual([]);
+
+    await h.gateway.send(msg('ws', 'chatter', 'b', 'm2', 'room-1'));
+    expect(chanWs.sent.map((r) => r.content)).toEqual(['AGENT_A_SYS']);
+    expect(await h.store.load(`${h.agentA.agentId}:ws:room-1`)).not.toBeNull();
+
+    // 插件渠道的房间 id 恰叫 'default' 也放行（哨兵判定只限内置适配器，MIN-6）
+    await h.gateway.send({ ...msg('chan-a', 'chatter', 'c', 'm3'), conversationId: 'default' });
+    expect(h.chanA.sent.map((r) => r.content)).toEqual(['AGENT_A_SYS']);
+    expect(await h.store.load(`${h.agentA.agentId}:chan-a:default`)).not.toBeNull();
+  });
+
+  it('builtin 双 label（ws）按适配器 label 归一查绑定（MIN-2）', async () => {
+    const h = await makeHarness();
+    const registry = h.gateway.getRegistry()!;
+    // 同一个 bot（HttpChannelAdapter）出 http/ws 两种消息 label——绑定只写一行（platform='http'）
+    const chanHttp = new TestChannel('http');
+    const chanWs = new TestChannel('ws');
+    h.gateway.registerChannel(chanHttp);
+    h.gateway.registerChannel(chanWs);
+    h.gateway.setChannelTenant('http', h.tA);
+    h.gateway.setChannelTenant('ws', h.tA);
+    registry.createBinding({ tenantId: h.tA, platform: 'http', identity: 'u1', agentId: h.agentA.agentId });
+
+    await h.gateway.send(msg('ws', 'u1', 'hi', 'm1'));
+    expect(chanWs.sent.map((r) => r.content)).toEqual(['AGENT_A_SYS']);
   });
 
   it('绑定指向未挂载 agent：配置漂移即弃收，不落兜底（MIN-1，与 unboundPolicy 无关）', async () => {

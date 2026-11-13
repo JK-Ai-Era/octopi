@@ -107,6 +107,8 @@ export interface DelegationParentRef {
   agentId: string;
   sessionId: string;
   runId: string;
+  /** 父 run 归属租户（§8 委派限本租户）；缺省 = DEFAULT 存量域 */
+  tenantId?: string;
 }
 
 /** 结果送达父的状态机（§7.1 送达语义） */
@@ -289,6 +291,8 @@ export interface DelegateResult {
 export interface AgentHandle {
   /** 解析出的 agentId */
   agentId: string;
+  /** 目标 agent 归属租户（§8 委派限本租户的执行点）；缺省 = DEFAULT 存量域 */
+  tenantId?: string;
   /** 特质标签（供调用方核对是否命中意图） */
   traits: string[];
   /** 被委派时的权利天花板（D3：只能收紧） */

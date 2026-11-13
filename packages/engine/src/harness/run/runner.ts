@@ -1140,7 +1140,7 @@ export class SessionAwareRunner {
       // 3. 加载或创建 session
       let session = await this.store.load(sessionId);
       if (!session) {
-        session = this.createSession(sessionId, _agentId);
+        session = this.createSession(sessionId, _agentId, runConfig.principal?.tenantId);
         await this.store.save(sessionId, session);
         await this.config.extensionHooks?.observe('session_start', {
           sessionId,
@@ -1868,12 +1868,22 @@ export class SessionAwareRunner {
       const undoRoots = this.config.sessionsDir
         ? [resolveSessionUndoPaths(this.config.sessionsDir, sessionId).root]
         : undefined;
+      // §9.1-6：session 租户 → principal 归属。会话是数据的家——已有会话归属为准；
+      // 派发面 claim（Trigger.tenantId / 委派继承位）只负责给**新**会话育归属。
+      // 渠道锚可比会话粗（ws/宿主面锚=DEFAULT 而会话是租户 REST 所建），
+      // claim≠会话不是错误；真正的跨租户防线在 withTenantPrincipal（vs agent 归属）。
       const runScope: RunScope = {
         ...runIdentity,
         runId,
         // principal 归属补全：调用方 claim 优先；tenantId 缺省锚 agent 归属（host truth，非 claim）。
         // 凭证域解析（credentials §4）从本字段取归属——无归属 = 宿主面（信任边界，MAJ-3 语义）。
-        principal: withTenantPrincipal(effectiveRunConfig.principal, this.config.tenantId),
+        principal: withTenantPrincipal(
+          {
+            ...(effectiveRunConfig.principal ?? {}),
+            ...(session.meta.tenantId === undefined ? {} : { tenantId: session.meta.tenantId }),
+          },
+          this.config.tenantId,
+        ),
         prompt: getTextContent(input.content),
         resolvedModel: resolvedModel ?? undefined,
         extensionSnapshotBudgetTokens: this.config.extensionSnapshotBudgetTokens,
@@ -3054,7 +3064,7 @@ export class SessionAwareRunner {
    * 模型 2：`primaryAgentId` = 创建时的 agentId（Accountability）。
    * 存储主键 = sessionId；agentId 只作归属/参与投影。
    */
-  private createSession(sessionId: string, agentId: string): SessionData {
+  private createSession(sessionId: string, agentId: string, tenantId?: string): SessionData {
     return {
       id: sessionId,
       agentId,
@@ -3069,6 +3079,9 @@ export class SessionAwareRunner {
         sessionStartedAt: Date.now(),
         lastInteractionAt: Date.now(),
         updatedAt: Date.now(),
+        // §9.1-6：新会话归属 = 派发面 claim（渠道锚/租户会话创建方）；
+        // 缺省不落 DEFAULT——存量语义（宿主面）由消费侧归一
+        ...(tenantId === undefined ? {} : { tenantId: tenantId as NonNullable<SessionData['meta']['tenantId']> }),
       },
       messages: [],
       steps: [],

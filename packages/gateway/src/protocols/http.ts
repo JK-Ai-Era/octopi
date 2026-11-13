@@ -52,6 +52,17 @@ export interface HttpAdapterOptions {
    */
   apiKey?: string;
   /**
+   * 租户身份解析（§9.1-3，T4b）：auth 消息可附带 `registryToken`（registry token
+   * 会话）转为租户身份连接——此后订阅受租户收口。无 registryToken = 宿主面
+   * （全量可见是其正确语义）；坏凭证回 null，fail-loud 拒连。
+   */
+  resolveWsIdentity?: (registryToken: string) => Promise<WsTenantIdentity | null> | WsTenantIdentity | null;
+  /** 订阅授权（租户身份连接的 session/agent 订阅校验；平台 admin 由实现方豁免） */
+  canSubscribe?: (
+    target: { sessionId?: string; agentId?: string },
+    identity: WsTenantIdentity,
+  ) => Promise<boolean> | boolean;
+  /**
    * 允许的 CORS 源（默认 '*'）
    *
    * 生产环境应设置为具体的域名列表。
@@ -66,10 +77,18 @@ export interface HttpAdapterOptions {
 
 export type HttpCustomRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean> | boolean;
 
+/** WS 租户身份（auth.registryToken 解析结果） */
+export interface WsTenantIdentity {
+  tenantId: string;
+  isPlatformAdmin: boolean;
+}
+
 interface WsSession {
   ws: WS;
   /** 是否已通过消息认证 */
   authenticated: boolean;
+  /** 租户身份（auth 消息携带 registryToken 时解析；无 = 宿主面） */
+  identity?: WsTenantIdentity;
   sessionId?: string;
   agentId?: string;
   /** 精确订阅的 session 列表 */
@@ -123,6 +142,10 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   onAbort?: (sessionId: string) => void;
   /** 欢迎消息扩展（由 Gateway 注册，返回额外数据合并到欢迎消息） */
   onWelcome?: () => Record<string, unknown>;
+  /** 租户身份解析（auth.registryToken → 身份，§9.1-3） */
+  private readonly resolveWsIdentity?: HttpAdapterOptions['resolveWsIdentity'];
+  /** 订阅授权（租户身份连接的 session/agent 订阅校验） */
+  private readonly canSubscribe?: HttpAdapterOptions['canSubscribe'];
 
   constructor(options: HttpAdapterOptions) {
     this.port = options.port;
@@ -131,6 +154,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     this.enableWebSocket = options.enableWebSocket ?? true;
     this.healthExtras = options.healthExtras;
     this.apiKey = options.apiKey;
+    this.resolveWsIdentity = options.resolveWsIdentity;
+    this.canSubscribe = options.canSubscribe;
     this.corsOrigins = options.corsOrigins?.join(', ') ?? '*';
     this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
     this.onRequest = options.onRequest;
@@ -433,9 +458,21 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private async handleWsMessage(session: WsSession, msg: any): Promise<void> {
     // Auth message: authenticate the session
     if (msg.type === 'auth') {
+      // 租户身份（§9.1-3）：registryToken 在场就必须解析出身份，否则 fail-loud——
+      // 「请求租户收口却静默落宿主全量」是提权方向，不允许（与 apiKey 闸解耦：
+      // 无 apiKey 的本地部署也要守这条）
+      if (typeof msg.registryToken === 'string' && msg.registryToken.trim()) {
+        const identity = await this.resolveWsIdentity?.(msg.registryToken.trim()) ?? null;
+        if (!identity) {
+          session.ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid registryToken' }));
+          session.ws.close(4001, 'Unauthorized');
+          return;
+        }
+        session.identity = identity;
+      }
       if (this.apiKey && typeof msg.token === 'string' && safeEqual(msg.token, this.apiKey)) {
         session.authenticated = true;
-        session.ws.send(JSON.stringify({ type: 'auth_ok' }));
+        session.ws.send(JSON.stringify({ type: 'auth_ok', ...(session.identity ? { tenantScoped: true } : {}) }));
       } else if (this.apiKey) {
         session.ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid token' }));
         session.ws.close(4001, 'Unauthorized');
@@ -450,6 +487,22 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     }
 
     if (msg.type === 'chat') {
+      // MAJ-4 修复：连接身份（agentId/sessionId）就是事件匹配面（matchesAgent 取
+      // agentId ?? sessionId 前缀）——身份连接改写身份前必须过订阅授权，越域 chat
+      // 拒收明示且不投递（防「一帧 chat 订阅他租户全部实时事件」）。
+      // 无身份的宿主面连接不受此闸（apiKey 信任边界，存量语义）。
+      if (session.identity) {
+        const agentOk =
+          msg.agentId === undefined ||
+          (await this.canSubscribe?.({ agentId: String(msg.agentId) }, session.identity)) === true;
+        const sessionOk =
+          msg.sessionId === undefined ||
+          (await this.canSubscribe?.({ sessionId: String(msg.sessionId) }, session.identity)) === true;
+        if (!agentOk || !sessionOk) {
+          session.ws.send(JSON.stringify({ type: 'error', message: 'Forbidden: chat target is outside your tenant' }));
+          return;
+        }
+      }
       // 绑定 agentId（sessionId 在 Gateway 处理后更新）
       session.agentId = msg.agentId;
 
@@ -469,9 +522,15 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         // 所以先用 TUI 的 sessionId 作为 fallback
         session.sessionId = msg.sessionId;
         session.agentId = msg.agentId;
+        // chat 自动订阅同过租户闸（§9.1-3）：自动加订阅=事件流入口，不能当旁路
         if (msg.sessionId) {
-          session.subscribedSessions ??= new Set<string>();
-          session.subscribedSessions.add(String(msg.sessionId));
+          const allowed =
+            !session.identity ||
+            (await this.canSubscribe?.({ sessionId: String(msg.sessionId) }, session.identity)) === true;
+          if (allowed) {
+            session.subscribedSessions ??= new Set<string>();
+            session.subscribedSessions.add(String(msg.sessionId));
+          }
         }
         channelMsg.onDelivery = (delivery) => {
           session.ws.send(JSON.stringify({
@@ -489,9 +548,20 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         }));
       }
     } else if (msg.type === 'abort') {
+      // MIN-2：中止是控制面——身份连接的 abort 同过会话归属闸（跨租户不得中止他人 run）
+      if (session.identity && !(await this.canSubscribe?.({ sessionId: String(msg.sessionId) }, session.identity))) {
+        session.ws.send(JSON.stringify({ type: 'error', message: `Forbidden: session ${String(msg.sessionId)} is outside your tenant` }));
+        return;
+      }
       console.log(`[WS] Abort requested for session ${msg.sessionId}`);
       this.onAbort?.(msg.sessionId);
     } else if (msg.type === 'subscribe' && msg.agentId && !msg.sessionId) {
+      // 租户身份连接的订阅授权（§9.1-3）：agent 级订阅 = 该 agent 全部会话事件——
+      // 跨租户订阅就是跨租户读流，拒收明示
+      if (session.identity && !(await this.canSubscribe?.({ agentId: String(msg.agentId) }, session.identity))) {
+        session.ws.send(JSON.stringify({ type: 'error', message: `Forbidden: agent ${String(msg.agentId)} is outside your tenant` }));
+        return;
+      }
       // agent 维度订阅：该 agent 全部会话事件。不触碰连接身份（session.agentId），
       // 从根上消除「批量订阅随列表末条漂移连接身份」的问题（OP-WEB-1）
       session.subscribedAgents ??= new Set<string>();
@@ -500,6 +570,11 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     } else if (msg.type === 'unsubscribe' && msg.agentId && !msg.sessionId) {
       session.subscribedAgents?.delete(String(msg.agentId));
     } else if (msg.type === 'subscribe' && msg.sessionId) {
+      // 租户身份连接的订阅授权（§9.1-3）：会话级订阅同闸
+      if (session.identity && !(await this.canSubscribe?.({ sessionId: String(msg.sessionId) }, session.identity))) {
+        session.ws.send(JSON.stringify({ type: 'error', message: `Forbidden: session ${String(msg.sessionId)} is outside your tenant` }));
+        return;
+      }
       session.subscribedSessions ??= new Set<string>();
       session.subscribedSessions.add(String(msg.sessionId));
       session.sessionId = String(msg.sessionId);

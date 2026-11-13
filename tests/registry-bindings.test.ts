@@ -275,6 +275,42 @@ describe('WebApiRouter /registry/bindings（HTTP 面）', () => {
     expect(rowsA[0]!.agentId).toBe(agentA);
   });
 
+  it('bindings 单条操作：平台 admin 可跨租户管（MIN-7 对齐知识面口径）', async () => {
+    // alice 是首注册用户 = 平台 admin；bob 的 binding 由 alice 跨租户管
+    const agentB = await createAgent(bobToken, 'agent-b');
+    const created = await call(router, {
+      method: 'POST',
+      url: '/api/v1/registry/bindings',
+      token: bobToken,
+      body: { platform: 'weixin', identity: 'admin-managed', agentId: agentB },
+    });
+    expect(created.status).toBe(201);
+    const bindingId = (created.body?.data as { bindingId: string }).bindingId;
+
+    const patched = await call(router, {
+      method: 'PATCH',
+      url: `/api/v1/registry/bindings/${bindingId}`,
+      token: aliceToken,
+      body: { sessionPolicy: 'per-chat' },
+    });
+    expect(patched.status).toBe(200);
+    expect((patched.body?.data as { sessionPolicy: string }).sessionPolicy).toBe('per-chat');
+
+    const got = await call(router, {
+      method: 'GET',
+      url: `/api/v1/registry/bindings/${bindingId}`,
+      token: aliceToken,
+    });
+    expect(got.status).toBe(200);
+
+    const deleted = await call(router, {
+      method: 'DELETE',
+      url: `/api/v1/registry/bindings/${bindingId}`,
+      token: aliceToken,
+    });
+    expect(deleted.status).toBe(200);
+  });
+
   it('PATCH bindings：换目标/策略生效；非法策略 400；空 patch 400', async () => {
     const agentA = await createAgent(aliceToken, 'agent-a');
     const agentA2 = await createAgent(aliceToken, 'agent-a2');

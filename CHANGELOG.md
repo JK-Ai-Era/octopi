@@ -123,6 +123,57 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.30 (2026-11-14)
+
+### feat(tenancy): T4b 参与/委派租户内边界——委派闸、端点闸、WS 闸、会话归属
+
+多租户 MVP T4 后半（arch/multi-tenancy.md §7/§8/§9.1/§10.0b）：
+
+**委派租户闸（§8）**：`DelegateService.dispatch` 校验 parent.tenantId vs
+handle.tenantId，跨租户 throw `delegate_cross_tenant`（fail-loud，缺省归一
+DEFAULT 存量域）；**trait 选人按父域过滤**——他租户同 trait 候选不参与选择
+（不再抢选或硬拒），`describeTargets` 可用目标回传同域收口（不泄他租户
+agent/traits）。委派继承位全通：DelegationParentRef.tenantId → ChildRunInput
+→ 子会话 meta + 子 run principal。
+
+**单会话端点闸（§9.1-3）**：`/sessions/:id*` 全分支前置闸（含 `/events`
+回放与 `/debug/run/*` 调试面）；X-Registry-Token 在场 → 身份须过会话归属
+（平台 admin 豁免），越域 404 不泄漏存在性；无头 = 宿主面存量语义。
+
+**WS 订阅闸（§9.1-3）**：auth 可附带 `registryToken` 转租户身份连接（钩子
+单源 `src/ws-identity-hooks.ts`，daemon 与测试同款）；坏凭证 fail-loud 拒连
+且独立于 apiKey 闸（无 apiKey 部署不静默落宿主全量）；身份连接的订阅、
+chat 自动订阅、chat 连接身份改写（agentId/sessionId 是事件匹配面，一帧
+chat 即可订阅他租户事件流）、abort 全部过 canSubscribe。
+
+**会话归属（§9.1-6）**：Trigger.tenantId（渠道锚）→ 新会话归属种子 →
+run principal 会话归属优先；宿主替 registry agent 建会话归属盖章锚 agent
+租户。
+
+**评审修复（del-42ee407e，fresh-eyes，8 MAJ/8 MIN/7 NIT，fix-then-ship）**：
+MAJ-1/2 单会话闸与 WS 闸建在**恒返 undefined 的历史 stub（Gateway.getSession）**
+上整体失效，且测试自造 stubGateway 抹绿——回真源（store）并删 stub，测试
+全面改打真实 Gateway + 共享钩子工厂；MAJ-3 events 回放在闸前漏放；MAJ-4 WS
+chat 身份改写无授权；MAJ-5 /debug/run 在闸外；MAJ-6 **会话劫持**——
+createSession 无存在性检查可清空并过户既有会话（jsonl 整文件重写）→ 同
+agent 同归属幂等、不一致 `session_exists` 409 绝不覆盖；MAJ-7 兜底归属
+冲突 → 兜底候选收紧为仅 config 宿主 agent；MAJ-8 trait 选人在闸前。MIN：
+abort 闸、归档 API 兼容演进（`listArchived(string | filter)` 不静默放宽）、
+ws→http 绑定双查（存量 `platform='ws'` 行不失效）、per-chat 哨兵拒收限内置
+适配器、bindings 单条操作 admin 豁免、POST session 错误映射（409/404/400）。
+
+**BREAKING**：`Gateway.getSession` 改 async 且返回真数据（原恒返 undefined
+的 stub）；`createSession` 拒绝覆盖既有会话（旧行为可清空正文+过户归属——
+依赖重置式覆盖的调用方改用 delete+create）；委派 trait 解析跨域候选由
+cross_tenant 改为 not_found（选人域内化）；未绑定兜底不再可能落到任何
+registry agent（仅 config 宿主 agent）。存量单机无注册面部署行为不变。
+
+**测试**：5 文件 48 锚（tenancy-session-gate 6 锚全走**真实 Gateway 链路**；
+tenancy-ws-subscription 5；tenancy-delegation-gate 8；tenancy-channel-routing
+14；registry-bindings 15）。全量 4947 绿、lint 0。
+
+---
+
 ## v0.113.29 (2026-11-14)
 
 ### feat(tenancy): T4a 渠道锚定——bot 凭证归属 + bindings 路由 + 会话策略 + binding CRUD

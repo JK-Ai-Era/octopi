@@ -33,6 +33,8 @@ export interface Trigger {
   agentId?: string;
   toAgents?: string[];
   sessionId?: string;
+  /** 触发源归属租户（§9.1-6：渠道锚/租户会话创建方）；合入 run principal，缺省锚 agent 归属 */
+  tenantId?: string;
   /** 来源端时间戳；缺省用 dispatch 时刻 */
   timestamp?: number;
   payload: TriggerPayload;

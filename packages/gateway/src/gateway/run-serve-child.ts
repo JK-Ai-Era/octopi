@@ -499,6 +499,8 @@ async function main(): Promise<void> {
             runner: legRunner(built.runner),
             store,
             traits,
+            // §8 委派限本租户：目标归属随注册入委派注册表（缺省 = DEFAULT 存量域）
+            ...(agent.tenantId === undefined ? {} : { tenantId: agent.tenantId }),
             delegation,
             persona: typeof agent.persona === 'string' ? agent.persona : undefined,
             registerTools: built.registerTools,

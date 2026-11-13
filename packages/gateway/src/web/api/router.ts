@@ -11,7 +11,8 @@ import type { ConfigApplyService } from '../../gateway/config-apply.js';
 import { ConfigConflictError } from '@octopi-agent/engine/config-admin/port.js';
 import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
-import type { AgentId, BindingId, SessionPolicy } from '@octopi-agent/engine/harness/governance/registry/types.js';
+import type { AgentId, BindingId, SessionPolicy, User } from '@octopi-agent/engine/harness/governance/registry/types.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 
 export interface WebApiRouterOptions {
   gateway: Gateway;
@@ -229,24 +230,41 @@ export class WebApiRouter {
         // 读侧隔离（MAJ-3）：身份在场即按身份收口——租户用户只看本租户，
         // query 自报仅平台 admin 可用；无 X-Registry-Token = 宿主面（apiKey 闸
         // 已验的信任边界，host 管理台全量列表是其正确语义）
-        const listAuth = req.headers['x-registry-token'];
-        const listToken = typeof listAuth === 'string' ? listAuth.trim() : '';
+        const listIdentity = this.resolveRequestUser(req);
+        if (listIdentity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
         let listTenant: string | undefined = rawTenant ?? undefined;
-        if (listToken) {
-          const listUser = this.gateway.getRegistry()?.resolveToken(listToken);
-          if (!listUser) {
-            return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
-          }
-          if (listTenant !== undefined && !listUser.isPlatformAdmin) {
+        if (listIdentity !== 'host') {
+          if (listTenant !== undefined && !listIdentity.isPlatformAdmin) {
             return this.json(res, 403, {
               ok: false,
               error: 'registry_forbidden: only a platform admin may query another tenant',
             });
           }
-          listTenant = listUser.tenantId;
+          listTenant = listIdentity.tenantId;
         }
         const sessions = await this.gateway.listSessions(agentId, listTenant);
         return this.json(res, 200, { ok: true, data: sessions });
+      }
+
+      // 单会话端点租户闸（§9.1-3，T4b）：X-Registry-Token 在场时，目标会话必须属于
+      // 身份租户（平台 admin 豁免）；越域按「不存在」回（不泄漏存在性）。
+      // 无该头 = 宿主面（apiKey 闸已验），存量语义不变。**前置**于一切
+      // /sessions/:id* 分支（含 events 回放——曾因注册在闸前漏放，评审 MAJ-3）。
+      const singleSessionMatch = relativePath.match(/^\/sessions\/([^/]+)/);
+      if (singleSessionMatch) {
+        const singleIdentity = this.resolveRequestUser(req);
+        if (singleIdentity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        if (singleIdentity !== 'host' && !singleIdentity.isPlatformAdmin) {
+          const target = await this.gateway.getSession(singleSessionMatch[1]);
+          const targetTenant = target?.tenantId ?? DEFAULT_TENANT_ID;
+          if (!target || targetTenant !== singleIdentity.tenantId) {
+            return this.json(res, 404, { ok: false, error: 'Session not found' });
+          }
+        }
       }
 
       const sessionEventsMatch = /^\/sessions\/([^/]+)\/events$/.exec(relativePath);
@@ -271,14 +289,12 @@ export class WebApiRouter {
         // （不信 body 自报，防冒领）；坏凭证 fail-loud 401（不静默落 default）；
         // 无该头 = 宿主面调用（apiKey 闸已验），存量语义不变（DEFAULT_TENANT_ID）
         const registrySvc = this.gateway.getRegistry();
-        const sessionAuth = req.headers['x-registry-token'];
-        const sessionToken = typeof sessionAuth === 'string' ? sessionAuth.trim() : '';
-        let sessionUser: Awaited<ReturnType<NonNullable<typeof registrySvc>['resolveToken']>> = null;
-        if (sessionToken) {
-          sessionUser = registrySvc?.resolveToken(sessionToken) ?? null;
-          if (!sessionUser) {
-            return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
-          }
+        const sessionIdentity = this.resolveRequestUser(req);
+        if (sessionIdentity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        const sessionUser = sessionIdentity === 'host' ? null : sessionIdentity;
+        if (sessionUser) {
           // agent 归属校验（§7 硬边界）：registry 托管的 agent 不得跨租户建会话
           const target = registrySvc?.getAgent(body.agentId as import('@octopi-agent/engine/harness/governance/registry/types.js').AgentId);
           if (target && target.tenantId !== sessionUser.tenantId && !sessionUser.isPlatformAdmin) {
@@ -288,12 +304,27 @@ export class WebApiRouter {
             });
           }
         }
-        const session = await this.gateway.createSession({
-          agentId: body.agentId,
-          sessionId: body.sessionId,
-          metadata,
-          ...(sessionUser ? { tenantId: sessionUser.tenantId } : {}),
-        });
+        let session;
+        try {
+          session = await this.gateway.createSession({
+            agentId: body.agentId,
+            sessionId: body.sessionId,
+            metadata,
+            ...(sessionUser ? { tenantId: sessionUser.tenantId } : {}),
+          });
+        } catch (err) {
+          // session_exists（覆盖拒收）等 → 409/400 明示（MAJ-6 fail-loud，不 500）。
+          // sendError 定义在本方法后段（TDZ），此处内联同一映射口径
+          const message = err instanceof Error ? err.message : String(err);
+          const status = message.includes('_exists')
+            ? 409
+            : message.includes('_not_found')
+              ? 404
+              : message.startsWith('registry_forbidden')
+                ? 403
+                : 400;
+          return this.json(res, status, { ok: false, error: message });
+        }
 
         // 与 setSessionModel 同源校验/规范化 model 引用
         if (typeof body.model === 'string' && body.model) {
@@ -309,6 +340,8 @@ export class WebApiRouter {
 
         return this.json(res, 201, { ok: true, data: session });
       }
+
+      // 单会话闸已前移至 /sessions/:id* 全分支之前（含 events 回放）
 
       const sessionMatch = relativePath.match(/^\/sessions\/([^/]+)$/);
       if (sessionMatch && method === 'GET') {
@@ -1598,6 +1631,19 @@ export class WebApiRouter {
     }
     const sessionId = decodeURIComponent(match[1]!);
     const kind = match[2];
+    // MAJ-5 修复：debug 面按会话读 run 快照/LLM 正文——与单会话端点同闸：
+    // X-Registry-Token 在场则身份须过会话归属（admin 豁免），越域按「不存在」回
+    const debugIdentity = this.resolveRequestUser(_req);
+    if (debugIdentity === 'invalid') {
+      return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+    }
+    if (debugIdentity !== 'host' && !debugIdentity.isPlatformAdmin) {
+      const target = await this.gateway.getSession(sessionId);
+      const targetTenant = target?.tenantId ?? DEFAULT_TENANT_ID;
+      if (!target || targetTenant !== debugIdentity.tenantId) {
+        return this.json(res, 404, { ok: false, error: 'Session not found' });
+      }
+    }
     try {
       const hub = this.gateway.getObserverHub();
       if (kind === 'scope') {
@@ -1831,6 +1877,19 @@ export class WebApiRouter {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * 解析 X-Registry-Token 身份（§9.1 信任边界，单源；T4b 评审 NIT-2 收编样板）。
+   *
+   * @param req - 请求（读 x-registry-token 头）
+   * @returns 'host' = 无该头（宿主面，全量可见是其正确语义）；'invalid' = 坏凭证；其余 = registry 用户
+   */
+  private resolveRequestUser(req: IncomingMessage): 'host' | 'invalid' | User {
+    const header = req.headers['x-registry-token'];
+    const token = typeof header === 'string' ? header.trim() : '';
+    if (!token) return 'host';
+    return this.gateway.getRegistry()?.resolveToken(token) ?? 'invalid';
   }
 
   private async readBody(req: IncomingMessage, maxBytesOverride?: number): Promise<any> {
@@ -2311,6 +2370,13 @@ export class WebApiRouter {
     if (bindingMatch) {
       const bindingId = bindingMatch[1] as BindingId;
       try {
+        if (method === 'GET') {
+          const binding = registry.getBinding(bindingId);
+          if (!binding || (binding.tenantId !== user.tenantId && !user.isPlatformAdmin)) {
+            return this.json(res, 404, { ok: false, error: 'registry_binding_not_found' });
+          }
+          return this.json(res, 200, { ok: true, data: binding });
+        }
         if (method === 'PATCH') {
           const body = await this.readBody(req);
           const patch: { agentId?: AgentId; sessionPolicy?: SessionPolicy } = {};
@@ -2334,15 +2400,20 @@ export class WebApiRouter {
               error: 'nothing to patch: provide agentId and/or sessionPolicy',
             });
           }
-          const updated = registry.updateBinding({ bindingId, tenantId: user.tenantId, patch });
+          // MIN-7：平台 admin 可跨租户管（对齐知识面口径）；binding 归属域用行内域
+          const existing = registry.getBinding(bindingId);
+          if (!existing || (existing.tenantId !== user.tenantId && !user.isPlatformAdmin)) {
+            return this.json(res, 404, { ok: false, error: 'registry_binding_not_found' });
+          }
+          const updated = registry.updateBinding({ bindingId, tenantId: existing.tenantId, patch });
           return this.json(res, 200, { ok: true, data: updated });
         }
         if (method === 'DELETE') {
           const existing = registry.getBinding(bindingId);
-          if (!existing || existing.tenantId !== user.tenantId) {
+          if (!existing || (existing.tenantId !== user.tenantId && !user.isPlatformAdmin)) {
             return this.json(res, 404, { ok: false, error: 'registry_binding_not_found' });
           }
-          const deleted = registry.deleteBinding({ bindingId, tenantId: user.tenantId });
+          const deleted = registry.deleteBinding({ bindingId, tenantId: existing.tenantId });
           return this.json(res, 200, { ok: true, data: { deleted } });
         }
       } catch (err) {

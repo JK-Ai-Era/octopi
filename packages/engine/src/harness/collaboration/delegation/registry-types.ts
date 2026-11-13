@@ -56,6 +56,8 @@ export interface AgentDelegationPolicy {
 export interface AgentInfo {
   /** Agent 唯一 ID */
   id: string;
+  /** Agent 归属租户（arch/multi-tenancy.md §8 委派限本租户）；缺省 = DEFAULT 存量域 */
+  tenantId?: string;
   /** Agent 名称（人类可读） */
   name: string;
   /** Agent 描述 */

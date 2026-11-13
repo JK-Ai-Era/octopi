@@ -663,6 +663,8 @@ export class Gateway {
           runner: built.runner,
           store: this.store,
           traits: agent.traits,
+          // §8 委派限本租户：目标归属随注册入委派注册表（缺省 = DEFAULT 存量域）
+          ...(agent.tenantId === undefined ? {} : { tenantId: agent.tenantId }),
           delegation: agent.delegation,
           persona: typeof agent.persona === 'string' ? agent.persona : undefined,
           registerTools: built.registerTools,
@@ -3464,15 +3466,30 @@ export class Gateway {
 
     // sessionId 缺省则生成；未对传入值做 Windows 非法字符清洗（缺清洗为既有风险，另行处理）
     const sessionId = options.sessionId ?? `${options.agentId}-web-${Date.now()}`;
+    // MIN-5 归属盖章：显式 tenantId 优先（身份层），否则锚 agent 归属（registry agent
+    // = 租户资产；config agent = DEFAULT 存量域）——「跑在 A、归属 default」的错位从源头堵
+    const agentTenant = this.registry?.getAgent(options.agentId as import('@octopi-agent/engine/harness/governance/registry/types.js').AgentId)?.tenantId;
+    const tenantId = (options.tenantId ?? agentTenant ?? DEFAULT_TENANT_ID) as import('@octopi-agent/core/types.js').TenantId;
+    // MAJ-6 存在性闸：已存在的会话绝不覆盖重写（jsonl 整文件重写=清空正文+过户归属）。
+    // 同 agent 同归属 = 幂等创建（重试友好，返回既有）；不一致 = fail-loud（防会话劫持）
+    const existing = await this.store.load(sessionId);
+    if (existing) {
+      const sameAgent = existing.meta.agentId === options.agentId;
+      const sameTenant = (existing.meta.tenantId ?? DEFAULT_TENANT_ID) === tenantId;
+      if (!sameAgent || !sameTenant) {
+        throw new Error(`session_exists: "${sessionId}" is owned by another agent/tenant (refusing to overwrite)`);
+      }
+      return existing.meta;
+    }
     const session: SessionData = {
       id: sessionId,
       agentId: options.agentId,
-      tenantId: options.tenantId ?? DEFAULT_TENANT_ID,
+      tenantId,
       primaryAgentId: options.agentId,
       meta: {
         id: sessionId,
         agentId: options.agentId,
-        tenantId: options.tenantId ?? DEFAULT_TENANT_ID,
+        tenantId,
         channelId: 'web',
         peerId: 'web-ui',
         status: 'idle',
@@ -5730,9 +5747,11 @@ export class Gateway {
     await this.handleInboundMessage(message);
   }
 
-  getSession(sessionId: string): SessionMeta | undefined {
-    // 历史 stub：实现已随 store 迁移移除，恒返 undefined（真源在 Knowledge Service / sessions 面）
-    return undefined;
+  async getSession(sessionId: string): Promise<SessionMeta | undefined> {
+    // 真源即会话存储（原「历史 stub 恒返 undefined」已删——在 stub 上建消费者曾造成
+    // 单会话租户闸与 WS 订阅闸整体失效（T4b 评审 MAJ-1/2），此方法必须回真源）
+    const session = await this.store.load(sessionId);
+    return session?.meta;
   }
 
   // ================================================================
@@ -5774,6 +5793,20 @@ export class Gateway {
         );
         return;
       }
+    }
+
+    // MIN-3/MIN-6：per-chat 键控依赖可信 conversationId——**内置适配器**（http/ws）
+    // 的缺省哨兵（'default'）意味着「客户端没点名会话」，全渠道合流成一个会话是错的
+    // 语义；拒收明示不猜。插件渠道的房间 id 不受此限（真实房间恰叫 default 也放行）
+    if (
+      resolution.binding?.sessionPolicy === 'per-chat' &&
+      (msg.channel === 'http' || msg.channel === 'ws') &&
+      (msg.conversationId === undefined || msg.conversationId === '' || msg.conversationId === 'default')
+    ) {
+      console.warn(
+        `[Gateway] Inbound rejected: per-chat binding ${resolution.binding.bindingId} requires a real conversationId (got "${msg.conversationId}")`,
+      );
+      return;
     }
 
     // 2. Plugin: message_received
@@ -5916,6 +5949,10 @@ export class Gateway {
       },
       resolveAgentId: () => agent.id,
       resolveSessionId: () => sessionKey,
+      // §9.1-6：触发源租户 = bot 归属锚（新会话归属种子；已有会话以会话归属为准）
+      ...(this.channelTenants.get(msg.channel) === undefined
+        ? {}
+        : { tenantId: this.channelTenants.get(msg.channel) }),
       onEvent: (event) => {
         // WS 已由 runtime.run.event 统一广播；这里只采集频道最终回复。
         if (event.type === 'step.end' && event.data?.content) {
@@ -6587,11 +6624,14 @@ export class Gateway {
     }
     // ② 绑定解析：租户锚（bot 归属）→ (tenantId, platform, identity) → agentId
     const tenantId = this.channelTenants.get(msg.channel) ?? DEFAULT_TENANT_ID;
-    const binding = this.registry?.resolveBinding({
-      tenantId,
-      platform: msg.channel,
-      identity: msg.senderId,
-    });
+    // MIN-4 口径：builtin 适配器双 label（http/ws）同属一个 bot——优先按消息 label 查
+    // （存量 platform='ws' 行继续命中），miss 再按适配器 label 归一查（'http'，推荐写法）。
+    // 插件渠道 label 即 platform，无别名
+    let binding =
+      this.registry?.resolveBinding({ tenantId, platform: msg.channel, identity: msg.senderId }) ?? null;
+    if (!binding && msg.channel === 'ws') {
+      binding = this.registry?.resolveBinding({ tenantId, platform: 'http', identity: msg.senderId }) ?? null;
+    }
     if (binding) {
       const bound = this.agents.get(binding.agentId);
       if (bound) return { outcome: 'routed', agent: bound, binding };
@@ -6617,18 +6657,17 @@ export class Gateway {
         }
       }
     }
-    // 未绑定流量（§9「落 default 租户兜底策略」）：兜底候选限 DEFAULT 域 agent
-    // （config 宿主资产 + DEFAULT 租户 agent）——兜底是宿主显式提供的服务面，
-    // 但**绝不落到其他租户的 agent**（评审 MAJ-3）；可配 reject 明示拒收
+    // 未绑定流量（§9「落 default 租户兜底策略」）：兜底候选**仅 config 宿主 agent**
+    // （tenantId 未声明的宿主资产，宿主显式提供的服务面）——绝不落其他租户的 agent；
+    // DEFAULT 租户 registry agent 也不作兜底（它是租户资产，会话归属锚定后会与
+    // principal 归属打架——T4b 评审 MAJ-7 场景 A）。可配 reject 明示拒收
     if ((this.config.tenancy?.unboundChannelPolicy ?? 'fallback') === 'reject') {
       return {
         outcome: 'rejected',
         reason: `no binding for ${tenantId}:${msg.channel}:${msg.senderId} (tenancy.unboundChannelPolicy=reject)`,
       };
     }
-    const fallback = [...this.agents.values()].find(
-      (a) => (a.tenantId ?? DEFAULT_TENANT_ID) === DEFAULT_TENANT_ID,
-    );
+    const fallback = [...this.agents.values()].find((a) => a.tenantId === undefined);
     if (!fallback) {
       return {
         outcome: 'rejected',

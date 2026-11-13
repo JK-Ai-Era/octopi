@@ -16,12 +16,15 @@ export interface ChannelMessageSourceOptions {
   resolveAgentId: (msg: ChannelMessage) => string | undefined;
   /** ChannelMessage → sessionId */
   resolveSessionId: (msg: ChannelMessage) => string;
+  /** 触发源归属租户（§9.1-6：渠道 bot 归属锚）；随 Trigger 传播进 run principal */
+  tenantId?: string;
 }
 
 export function channelMessageToTrigger(
   msg: ChannelMessage,
   agentId: string,
   sessionId: string,
+  tenantId?: string,
 ): Trigger {
   const modelOverride = msg.metadata?.model;
   const attachRefs = msg.metadata?.attachments;
@@ -30,6 +33,7 @@ export function channelMessageToTrigger(
     type: 'message',
     agentId,
     sessionId,
+    ...(tenantId === undefined ? {} : { tenantId }),
     timestamp: msg.timestamp,
     payload: {
       kind: 'user_message',
@@ -74,7 +78,7 @@ export async function dispatchChannelMessage(
       : never;
   },
 ): Promise<ReturnType<AgentRuntime['dispatch']>> {
-  const { runtime, msg, resolveAgentId, resolveSessionId, onEvent } = options;
+  const { runtime, msg, resolveAgentId, resolveSessionId, onEvent, tenantId } = options;
   const agentId = resolveAgentId(msg);
   if (!agentId) {
     // 回执契约 = 恒发一次（liveness）；no_agent 的实际结果由上层 error/静默路径处理
@@ -83,7 +87,7 @@ export async function dispatchChannelMessage(
     return { status: 'skipped', reason: 'no_agent' as const };
   }
   const sessionId = resolveSessionId(msg);
-  const trigger = channelMessageToTrigger(msg, agentId, sessionId);
+  const trigger = channelMessageToTrigger(msg, agentId, sessionId, tenantId);
   // 单一入口：dispatch 内部 offer；活跃 Run 接收即回执（早于 Run 结束）。
   // 拒绝/早退路径（runtime_stopped 等）也要回执一次（liveness），错误走 error 通道。
   let delivered = false;

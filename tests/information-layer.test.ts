@@ -186,7 +186,7 @@ describe('SessionArchiveManager', () => {
     const all = await archiveManager.listArchived();
     expect(all.length).toBe(2);
 
-    const agent1 = await archiveManager.listArchived('agent-1');
+    const agent1 = await archiveManager.listArchived({ agentId: 'agent-1' });
     expect(agent1.length).toBe(1);
     expect(agent1[0].sessionId).toBe('s1');
   });
