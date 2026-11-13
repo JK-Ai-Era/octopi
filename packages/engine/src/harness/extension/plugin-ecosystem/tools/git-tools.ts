@@ -264,6 +264,18 @@ function ageGitResult(args: Readonly<Record<string, unknown>>, result: unknown, 
     return undefined;
   }
 
+  // git_commit 的结果记录「某次提交确实发生」——sha 是不可变锚点，必须保留。
+  // stdout 首行形如 `[main 4c5eaf11] subject`，其后是文件统计与 create mode。
+  if (toolName === 'git_commit') {
+    const first = stdout.split('\n')[0]?.trim() ?? '';
+    const stats = stdout
+      .split('\n')
+      .filter((l) => /\d+ files? changed/.test(l) || l.startsWith(' create mode '))
+      .join(' ')
+      .trim();
+    return `[aged git_commit] ${first.slice(0, 160)}${stats ? ` — ${stats.slice(0, 120)}` : ''}`;
+  }
+
   // 其余（unstaged/staged diff、HEAD 类浮动 revision）：正文会过时，只留规模
   const files = (stdout.match(/^diff --git /gm) ?? []).length;
   // `+++ b/x` 是文件头，不是新增行：负向前瞻须吃掉两个 `+`
@@ -456,6 +468,8 @@ export function createGitCommitTool(): RegisteredTool {
         },
       },
     },
+    // 历史视图保留「sha + subject + 统计」：message 与入参逐字相同（25/26 实测），可整体丢弃
+    ageResult: ({ args, result }) => ageGitResult(args, result, 'git_commit'),
     handler: async (args, context) => {
       const cwd = resolveCwd(context, args.cwd as string | undefined);
       const message = String(args.message ?? '').trim();

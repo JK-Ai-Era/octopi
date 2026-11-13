@@ -142,6 +142,53 @@ const DEFAULT_MAX_RETURN_CHARS = 8000;
  * @param options - 可选 summary support（L1 预算 binding；file_search 恒不跑 L2）
  * @returns RegisteredTool
  */
+/**
+ * 结果老化：把搜索结果压成「按文件聚合的行号清单」
+ *
+ * 依据（default-web-1794346953041 实测，277 次 681,273 字符）：
+ * - `before`/`after` 上下文行占 `matches` 的 58.6%（243,857 字符）——搜索时刻的文件摘录，
+ *   行号就是回到原文的路径；
+ * - `content` 是已截断的匹配行（工具自己的 L1 已声明「file+line 清单全保，body 是预览」）；
+ * - `matchedFiles` 277 条中 230 条可由 `matches` 聚合推出，其余 47 条只差排序、计数完全一致；
+ * - `diagnostics` 里 45% 是入参回显（root/patterns/compiledPatterns/glob/patternMode），
+ *   且 `patterns` 与 `compiledPatterns` 在 240/277 条完全相同。
+ *
+ * 保留「回到现场」的最小充分集：**哪个文件、哪几行、原始命中总数、是否被截断**。
+ * 逐条列 `file` 会重复 N 次（实测 58,444 字符），按文件聚合后均值降到 101 字符
+ * （默认机械指针 282/条）——这是「per-tool ager 优于默认规则」的前提。
+ *
+ * 不暗示「重跑可得同一结果」：文件此后可能被编辑、行号会漂移，
+ * 指针只陈述「当时在此处命中」（与 git_diff 固定 sha 才保留原文的判据同源）。
+ *
+ * @param result - file_search 的原始结果
+ * @returns 聚合指针；结构不符时返回 undefined（保留原文）
+ */
+function ageFileSearchResult(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const r = result as Partial<SearchResult>;
+  const matches = r.matches;
+  if (!Array.isArray(matches)) return undefined;
+
+  // 按首次出现顺序聚合，避免排序引入不确定性（纯函数要求逐字节稳定）
+  const byFile = new Map<string, number[]>();
+  for (const m of matches) {
+    const file = m?.file;
+    const line = m?.line;
+    if (typeof file !== 'string' || typeof line !== 'number') continue;
+    const lines = byFile.get(file);
+    if (lines) lines.push(line);
+    else byFile.set(file, [line]);
+  }
+
+  const shown = matches.length;
+  // totalMatches 是「已返回条数」，max_results 截断时真实命中更多——如实标注下界
+  const count = r.truncated === true ? `>=${shown} (truncated)` : `${shown}`;
+  const head = `[aged] file_search ${count} hits in ${byFile.size} file(s)`;
+  if (byFile.size === 0) return `${head} — no locators retained`;
+  const body = Array.from(byFile, ([file, lines]) => `  ${file}: ${lines.join(', ')}`).join('\n');
+  return `${head}\n${body}`;
+}
+
 export function createFileSearchTool(options?: { summary?: ToolSummarySupport }): RegisteredTool {
   return {
     definition: {
@@ -215,6 +262,8 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
       },
       timeoutMs: 30_000,
     },
+    // 历史视图收敛为定位符清单（file+line 全保，body 与入参回显可弃）
+    ageResult: ({ result }) => ageFileSearchResult(result),
     handler: async (args, context) => {
       const { open, readdir, stat } = await import('node:fs/promises');
       const { basename, extname, join, relative } = await import('node:path');

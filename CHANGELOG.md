@@ -123,6 +123,62 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.22 (2026-11-13)
+
+### feat(context): file_search / project_run / git_commit 结果老化
+
+三个工具此前没有 per-tool 策略，一律按默认机械指针（282 字符/条）处理。实测后各给一支，
+合计在该会话上下文里 **981,535 → 84,107 字符（省 91.4%）**。
+
+| 工具 | 现状 | 老化后 | 降幅 | 指针均值 |
+|---|---|---|---|---|
+| `file_search`（277 次） | 650,546 | 39,286 | **94.0%** | 2,349 → 142 |
+| `project_run`（43 次） | 276,472 | 39,643 | 85.7% | 6,430 → 922 |
+| `git_commit`（26 次） | 54,517 | 5,178 | 90.5% | 2,097 → 199 |
+
+**`file_search`——按文件聚合的定位符**。字段证据：`before`/`after` 上下文行占 matches 的
+58.6%（243,857 字符，是搜索时刻的文件摘录，行号即回到原文的路径）；`content` 是已截断的
+匹配行，而工具自身的 L1 早就声明「file+line 清单全保，body 是预览」；`matchedFiles` 277 条中
+230 条可由 matches 聚合推出、另 47 条只差排序；`diagnostics` 中 45% 是入参回显，
+`patterns` 与 `compiledPatterns` 在 240/277 重复。产出：
+
+```
+[aged] file_search 12 hits in 4 file(s)      ← 截断时写 >=12 (truncated)
+  arch/open-problems.md: 735
+  packages/engine/src/harness/agent/builder.ts: 1945, 1950
+```
+
+**关键判据**：逐条列 `file`+`line` 的均值为 373 字符，**比默认指针 282 还差**——`file` 每匹配
+重复一次（58,444 字符）。必须按文件聚合才真正优于默认方案（均值降到 142）。这是设计此 ager
+时最容易踩的坑。
+
+指针不暗示「重跑可得同一结果」：文件此后可能被编辑、行号会漂移，只陈述「当时在此处命中」
+（与 `git_diff` 固定 sha 才保留原文的判据同源）。
+
+**`project_run`——成败 + 尾部结论**。`stdout` 64%（其中 ANSI 转义码 13,980 字符纯噪声）、
+`stderr` 29%、`isolation` 5%（43/43 完全相同，与 shell ager 已删的同一字段）。
+失败时保留 `stderr` 尾部（诊断主体）；成功时不保留——实测 34 条 exit=0 的 `stderr` 共 37,002
+字符，内容全是 `[AgentBuilder]`/`[overflow]` 这类**用例自身日志**（92% 非错误行）。
+`truncated`/`terminated` 如实标注，避免把半截输出读成完整结果。
+
+**`git_commit`——保留 sha，丢弃 message**。`message` 占 69%（35,431 字符）且 **25/26 与入参
+逐字相同**（body 部分 32,621 字符是纯重复）；`isolation` 26/26 相同。stdout 首行已含
+sha + subject + 文件统计，指针直接取用。
+
+**顺带修掉一个缺陷**：`git_commit` 此前落在 `ageGitResult` 的「其余」分支，被当成 patch
+输出「只留文件数与增删行数」——**丢了 sha**。而 sha 是「这次提交确实发生」的唯一不可变锚点。
+
+新增测试：`aging-file-search.test.ts`（8 例）、`aging-project-run-git-commit.test.ts`（8 例）。
+
+**如实记录两处未验证**：`project_run` 的 85.7% 是在**历史已截断数据**上测得的（尾部内容早被
+旧 head-only 的 L1 砍掉），指针实际取到的是截断说明。真实收益要等 `v0.113.21` 的
+`l1Keep: tail` 生效、产生新数据后才能复验——两者是配套的，本次未做生产验证。
+
+另：第一版把 `ageResult` 误插进了 `git_diff` 函数（`file_edit` 的 `occurrence` 定位到相邻工具），
+typecheck 报「object literal 重复属性」才发现；已改为用含函数体的唯一锚点插入。
+
+---
+
 ## v0.113.21 (2026-11-13)
 
 ### fix(context): L1 截断可选保留尾部——修「测试汇总被整个丢掉」

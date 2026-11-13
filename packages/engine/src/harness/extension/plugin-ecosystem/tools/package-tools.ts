@@ -222,6 +222,62 @@ export function createPackageEditTool(): RegisteredTool {
   };
 }
 
+/**
+ * 结果老化：回到「这次脚本跑成没跑成、结论是什么」
+ *
+ * 依据（default-web-1794346953041 实测，43 次 278,106 字符）：
+ * - `stdout` 64%：ANSI 转义码 13,980 字符是纯噪声；结论（测试汇总/构建结果）在**末尾**；
+ * - `stderr` 29%：34 条 exit=0 的 stderr 共 37,002 字符，内容全是 `[AgentBuilder]`、
+ *   `[overflow]`、`[Knowledge]` 这类**用例自身日志**，92% 不是错误行 → 成功时无诊断价值；
+ * - `isolation` 5%：43/43 完全相同（与 shell ager 已删的同一字段）；
+ * - `scriptBody`/`cwd` 是入参或 package.json 可重读。
+ *
+ * 保留：退出码、脚本名、是否截断/终止、（失败时的）stderr 尾部、（成功与失败都保留的）
+ * stdout 尾部——尾部才是结论所在。
+ *
+ * @param result - project_run 的原始结果
+ * @returns 老化指针；结构不符时返回 undefined
+ */
+function ageProjectRunResult(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const r = result as Record<string, unknown>;
+  const exitCode = typeof r.exitCode === 'number' ? r.exitCode : undefined;
+  if (exitCode === undefined) return undefined;
+
+  // 剥 ANSI（0x1b[...m），它是纯渲染控制码，历史回看无意义
+  const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, '');
+  const stdout = stripAnsi(typeof r.stdout === 'string' ? r.stdout : '');
+  const stderr = stripAnsi(typeof r.stderr === 'string' ? r.stderr : '');
+  const outLen = typeof r.rawStdoutLength === 'number' ? r.rawStdoutLength : stdout.length;
+
+  const flags: string[] = [`exit ${exitCode}`];
+  if (r.truncated === true) flags.push(`stdout capped, ${outLen} chars total`);
+  if (r.terminated === true) {
+    const why = typeof r.terminateReason === 'string' ? r.terminateReason : 'unknown';
+    flags.push(`terminated (${why})`);
+  }
+  const head = `[aged] project_run ${flags.join(', ')}`;
+
+  const TAIL = 900;
+  const tailLines = (s: string) => {
+    const trimmed = s.replace(/^\n+|\n+$/g, '');
+    if (!trimmed) return '';
+    const lines = trimmed.split('\n');
+    if (trimmed.length <= TAIL) return trimmed;
+    return lines.slice(-12).join('\n').slice(-TAIL);
+  };
+
+  const parts = [head];
+  // 失败时 stderr 是诊断主体；成功时（日志噪音）不保留
+  if (exitCode !== 0) {
+    const se = tailLines(stderr);
+    if (se) parts.push(`stderr tail: ${se}`);
+  }
+  const out = tailLines(stdout);
+  if (out) parts.push(`stdout tail: ${out}`);
+  return parts.join('\n');
+}
+
 /** project_run — run a named package.json script (runner; stripped on reduced) */
 export function createProjectRunTool(): RegisteredTool {
   return {
@@ -255,6 +311,8 @@ export function createProjectRunTool(): RegisteredTool {
         },
       },
     },
+    // 历史视图收敛为「成败 + 尾部结论」（stdout 结论在末尾；成功时 stderr 是日志噪音）
+    ageResult: ({ result }) => ageProjectRunResult(result),
     handler: async (args, context) => {
       const cwd = resolveCwd(context, args.cwd as string | undefined);
       const script = String(args.script ?? '').trim();
