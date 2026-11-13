@@ -115,6 +115,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.14 (2026-11-13)
+
+### fix(context): purpose 完全豁免老化长度限制
+
+上一版给 `purpose` 设了 160 字符保留上限，属判断失误：`purpose` 是**后续读方重建整个任务逻辑的关键信息**，不是内容载荷。老化只做「信息取舍」，不做「长度治理」——在视图侧截断既管不住入口，又会永久毁掉已发生调用的可读性。长度约束属于调用入口的职责。
+
+- **移除 160 上限**：任意长度的 `purpose` 都逐字保留，且不占内容预算。
+- **补上兜底分支**：键名过多导致整体轮廓截断（`_aged`）时，`purpose` 无条件回附。此前该路径会连 `purpose` 一起丢掉——而整体截断只保留头部，`purpose` 很可能不在其中。
+
+**当前事实（需拍板项）**：工具总线（`tool-bus.ts:277`）确实有 `maxLength` 参数校验，但 `TOOL_PURPOSE_PARAM` 只声明了 `type: 'string'`，**没有 `maxLength`**——所以 `≤120 chars` 目前只是 description 与 system note 里的软约定，运行期无强制上限。是否把它变成硬约束，需单独决定（会改变模型收到的 schema）。
+
+**影响面**：已老化调用恢复完整 `purpose`（一次性视图变化 → 一次前缀重填）。
+
+---
+
 ## v0.113.13 (2026-11-13)
 
 ### fix(context): purpose 不再被参数老化降级

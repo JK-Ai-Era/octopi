@@ -408,9 +408,17 @@ export function agedToolArgDigest(name: string, args: unknown, opts: ToolResultA
     out[e.k] = elidedMarker(e.size);
   }
 
+  // 兜底（键名过多装不下）也必须带上 purpose：它是任务逻辑的可读记录，
+  // 整体轮廓截断只保留头部，purpose 很可能不在其中。purpose 不是内容载荷，
+  // 不参与预算，因此这里无条件回附。
+  const rawPurpose = (args as Record<string, unknown>)[PURPOSE_FIELD];
   const value: unknown =
     contentChars() > opts.maxAgedArgChars
-      ? { _aged: `${name} arguments elided`, outline: truncateOutline(safeJson(args), opts.maxAgedArgChars) }
+      ? {
+          _aged: `${name} arguments elided`,
+          outline: truncateOutline(safeJson(args), opts.maxAgedArgChars),
+          ...(typeof rawPurpose === 'string' ? { [PURPOSE_FIELD]: rawPurpose } : {}),
+        }
       : out;
 
   argDigestCache.set(args as object, { fingerprint, value });
@@ -437,19 +445,19 @@ function elidedMarker(chars: number): unknown {
 const LOCATOR_FIELDS = new Set(['path', 'file', 'glob', 'pattern', 'cwd']);
 
 /**
- * purpose 字段：**永不因内容预算被降级**（2026-11-13）
+ * purpose 字段：**永不因内容预算或长度被降级**（2026-11-13 拍板）
  *
- * purpose 是「这次调用做了什么、为什么」的唯一人类可读记录，也是用户理解
- * 任务过程的主要手段（arch/tool-call-purpose.md）。实测生产会话 424 条
- * purpose 里 14 条（3.3%）因超过 {@link ARG_VALUE_KEEP_CHARS}=64 被替换成
- * `{"$octopi_elided":{"chars":N}}`——恰好落在「说清一件事」的常见长度区间
- * （66–77），被砍掉的正是信息本身。
+ * purpose 是「这次调用做了什么、为什么」的唯一人类可读记录，是后续读方重建
+ * 整个任务逻辑的关键信息（arch/tool-call-purpose.md）。它作为普通参数进入
+ * `tool_call.arguments`，若按常规阈值处理会被直接替换成
+ * `{"$octopi:elided":{"chars":N}}`——实测生产会话 424 条 purpose 里有 14 条
+ * （3.3%）如此，长度 66–77，正是「说清一件事」的常见区间。
  *
- * 上限 160：schema 约定 ≤120 字符，余量覆盖 JSON 引号与转义；超长仍降级，
- * 避免把 purpose 当第二个内容通道写入无界文本。
+ * 因此这里**不设长度上限**：老化只做「信息取舍」，不做「长度治理」。长度约束
+ * 属于调用入口的职责（schema 声明 + 工具总线校验），在视图侧截断既管不住入口、
+ * 又会永久毁掉已发生调用的可读性。
  */
 const PURPOSE_FIELD = 'purpose';
-const PURPOSE_KEEP_CHARS = 160;
 
 /**
  * 锚点字段：不占用内容预算（否则定位信息会被内容载荷挤出）
@@ -478,8 +486,8 @@ function isLocatorField(key: string): boolean {
  * @returns 保留原值、头部摘录或长度标记
  */
 function digestArgValue(key: string, value: unknown, size: number): unknown {
-  // purpose 先于通用阈值判定：它是锚点类语义（动作说明），不是可牺牲的内容载荷
-  if (key === PURPOSE_FIELD && size <= PURPOSE_KEEP_CHARS) return value;
+  // purpose 无条件全保：它是任务逻辑的可读记录，不是可牺牲的内容载荷
+  if (key === PURPOSE_FIELD) return value;
   if (size <= ARG_VALUE_KEEP_CHARS) return value;
   if (isLocatorField(key) && size <= LOCATOR_KEEP_CHARS) return value;
   if (COMMAND_FIELDS.has(key) && typeof value === 'string') {

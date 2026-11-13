@@ -50,11 +50,15 @@ describe('purpose 不被内容预算挤掉', () => {
     expect(JSON.stringify(out.old_text)).toContain('$octopi_elided');
   });
 
-  it('超长 purpose（>160）仍降级——不把它变成第二个内容通道', () => {
-    const purpose = 'p'.repeat(400);
-    const args = { path: '/a/b.ts', purpose };
-    const out = agedToolArgDigest('file_read', args, OPTS()) as Record<string, unknown>;
-    expect(JSON.stringify(out.purpose)).toContain('$octopi_elided');
+  it('无长度上限：任意长的 purpose 都逐字保留（长度治理属于调用入口）', () => {
+    // 老化只做信息取舍，不做长度治理：在视图侧截断既管不住入口，
+    // 又会永久毁掉已发生调用的可读性。
+    for (const n of [160, 400, 2000]) {
+      const purpose = 'p'.repeat(n);
+      const args = { path: '/a/b.ts', purpose };
+      const out = agedToolArgDigest('file_read', args, OPTS()) as Record<string, unknown>;
+      expect(out.purpose).toBe(purpose);
+    }
   });
 
   it('键名与定位字段行为不变（回归）', () => {
@@ -64,6 +68,18 @@ describe('purpose 不被内容预算挤掉', () => {
     expect(out.purpose).toBe('p');
     // 超长定位字段才降级（LOCATOR_KEEP_CHARS=200）
     expect(JSON.stringify(out.path)).toContain('$octopi_elided');
+  });
+
+  it('兜底分支（键名过多整体截断）仍保留 purpose', () => {
+    // 键名极长且数量多 → 即使所有内容值都降级，键名开销仍超预算 → 走 _aged 兜底
+    const purpose = '整理这批键名很长的调用，确认 purpose 在兜底路径也不丢';
+    const args: Record<string, unknown> = { purpose, path: '/a/b.ts' };
+    for (let i = 0; i < 12; i++) {
+      args[`very_long_parameter_name_padding_${i}_`.repeat(2)] = 'v';
+    }
+    const out = agedToolArgDigest('file_edit', args, OPTS()) as Record<string, unknown>;
+    expect(out._aged).toBeDefined(); // 确实走到兜底
+    expect(out.purpose).toBe(purpose); // purpose 仍在
   });
 
   it('ageToolArgs=false 时原样返回', () => {
