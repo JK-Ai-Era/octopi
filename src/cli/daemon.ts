@@ -1226,7 +1226,11 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         knowledge: gateway.getKnowledgeState(),
         effectPolicy: gateway.getEffectPolicyStatus(),
       }),
-    }));
+    }), httpConfig?.tenantId ? { tenantId: httpConfig.tenantId } : undefined);
+    // builtin 适配器出两种消息 label（http/ws）——bot 归属锚逐 label 补齐
+    if (httpConfig?.tenantId) {
+      gateway.setChannelTenant('ws', httpConfig.tenantId);
+    }
   }
 
   // 插件 Channel 装配（channels[].plugin → 命名贡献工厂）：与 HttpChannelAdapter
@@ -1255,7 +1259,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       const adapter = await createChannelAdapterFromConfig(entry, (ref) =>
         gateway.resolvePluginChannelFactory(ref),
       );
-      gateway.registerChannel(adapter);
+      gateway.registerChannel(adapter, entry.tenantId ? { tenantId: entry.tenantId } : undefined);
       console.log(`[CLI] Registered channel: ${adapter.name} (plugin:${entry.plugin})`);
     }
   }

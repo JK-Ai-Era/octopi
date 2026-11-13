@@ -47,6 +47,15 @@ export const SessionConfigSchema = z.object({
 });
 
 /**
+ * 多租户渠道锚定策略（arch/multi-tenancy.md §9）。
+ * 未绑定流量（无 bindings 行且无 legacy channelBindings 命中）的兜底。
+ */
+export const TenancyConfigSchema = z.object({
+  /** `fallback`（默认，存量首 agent 兜底）| `reject`（拒收，日志明示不静默） */
+  unboundChannelPolicy: z.enum(['fallback', 'reject']).optional(),
+});
+
+/**
  * `toolIsolation` — 工具效应面策略
  *
  * - `none`（默认）：多 Session 共享 agent.workspace

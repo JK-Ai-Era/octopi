@@ -34,6 +34,7 @@ import {
   SecurityConfigSchema,
   SessionAclConfigSchema,
   SessionConfigSchema,
+  TenancyConfigSchema,
   ToolIsolationConfigSchema,
   EffectPolicyConfigSchema,
 } from './governance.js';
@@ -79,6 +80,8 @@ export const engineConfigSchema = z.object({
   credentials: CredentialsConfigSchema.optional(),
   channels: z.array(ChannelConfigSchema).optional(),
   session: SessionConfigSchema.optional(),
+  /** 多租户渠道锚定策略（arch/multi-tenancy.md §9）；缺省 fallback */
+  tenancy: TenancyConfigSchema.optional(),
   /** 工具效应隔离策略（宪法 I5）；默认 none */
   toolIsolation: ToolIsolationConfigSchema.optional(),
   effectPolicy: EffectPolicyConfigSchema.optional(),

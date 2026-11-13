@@ -94,7 +94,6 @@ describe('client 分支租户断言（createKnowledgeClientTools）', () => {
         calls.push({ method: 'read', opts: (opts ?? {}) as Record<string, unknown> });
         return { found: false };
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
     function scriptedProvider(): ModelProvider {

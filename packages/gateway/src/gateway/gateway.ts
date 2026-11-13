@@ -19,6 +19,7 @@
 
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
 import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
+import type { AgentId, Binding, TenantId } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { readTitleState } from '@octopi-agent/core/types/session.js';
 import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
@@ -472,6 +473,8 @@ export class Gateway {
   private gitStatusGate = createConcurrencyGate(GIT_STATUS_MAX_CONCURRENCY);
   /** 已注册的 Channel Adapter */
   private channels = new Map<string, ChannelAdapter>();
+  /** bot 凭证归属锚（§9 Q11=a）：渠道 label → 租户 id */
+  private channelTenants = new Map<string, TenantId>();
   /** Plugin Manager */
   private pluginManager: PluginManager;
   private readonly commandAudit!: CommandAuditJournal;
@@ -1164,6 +1167,14 @@ export class Gateway {
       const { join } = await import('node:path');
       this.registry = await RegistryService.create({ dbPath: join(getOctopiHome(), 'registry.db') });
       console.log('[Gateway] RegistryService ready (registry.db)');
+      // 渠道锚校验（评审 MIN-9）：拼错的 tenantId 不静默降级 DEFAULT——启动期点名
+      for (const [label, anchor] of this.channelTenants) {
+        if (anchor !== DEFAULT_TENANT_ID && !this.registry.hasTenant(anchor)) {
+          console.warn(
+            `[Gateway] Channel "${label}" is anchored to unknown tenant "${anchor}" — bindings will never match; check channels[].tenantId`,
+          );
+        }
+      }
       // T2 桥接线：registry 托管 agent 装载为可跑定义（物化 + 注册）；单个失败不阻启动
       if (this.registryAgentBridge) {
         for (const record of this.registry.listAllAgents()) {
@@ -2276,13 +2287,16 @@ export class Gateway {
   }
 
 
-  registerChannel(adapter: ChannelAdapter): void {
+  registerChannel(adapter: ChannelAdapter, options?: { tenantId?: string }): void {
     if (this.channels.has(adapter.name)) {
       throw new Error(
         `Channel "${adapter.name}" is already registered — v1 allows one instance per channel label; remove the duplicate channels[] entry`,
       );
     }
     this.channels.set(adapter.name, adapter);
+    // bot 凭证归属锚（arch/multi-tenancy.md §9 Q11=a）：渠道 label → 租户；
+    // 消息进入先按此定租户，再查 bindings 表路由。缺省 DEFAULT_TENANT_ID（存量域）。
+    this.channelTenants.set(adapter.name, (options?.tenantId ?? DEFAULT_TENANT_ID) as TenantId);
     // 检测是否支持流式广播
     if ('broadcastEvent' in adapter && typeof adapter.broadcastEvent === 'function') {
       this.streamingAdapters.push(adapter as StreamingChannelAdapter);
@@ -2306,6 +2320,17 @@ export class Gateway {
       };
     }
     console.log(`[Gateway] Registered channel: ${adapter.name}`);
+  }
+
+  /**
+   * 设置渠道 label 的 bot 归属锚（builtin 双 label 场景：HttpChannelAdapter 同时出
+   * `http`/`ws` 两种消息 label，锚须逐 label 补齐）。
+   *
+   * @param label - 消息 label（ChannelMessage.channel）
+   * @param tenantId - 归属租户 id
+   */
+  setChannelTenant(label: string, tenantId: string): void {
+    this.channelTenants.set(label, tenantId as TenantId);
   }
 
   registerTool(tool: RegisteredTool, agentId?: string): void {
@@ -5729,15 +5754,30 @@ export class Gateway {
     }
     console.log(`[Gateway] Inbound message from ${msg.channel}:${msg.senderId} ?"${msg.content.substring(0, 50)}..."`);
 
-    // 1. 找到 agent
-    const agent = this.resolveAgent(msg);
-    if (!agent) {
-      console.warn(`[Gateway] No agent resolved for message from ${msg.channel}:${msg.senderId}`);
+    // 1. 路由解析（①租户锚 ②绑定表；见 resolveInbound）
+    const resolution = this.resolveInbound(msg);
+    if (resolution.outcome === 'rejected') {
+      console.warn(`[Gateway] Inbound rejected: ${resolution.reason}`);
       return;
+    }
+    const agent = resolution.agent;
+
+    // 客户端自报 sessionId 的归属闸（评审 MAJ-2-B）：会话键取自客户端时，目标会话
+    // 必须属于解析出的 agent（agent 单租户归属 ⇒ 同时挡住跨租户会话读写）；
+    // 不一致 fail-loud 拒收，不静默换键。binding 策略在键控上已优先，客户端 id 被忽略。
+    const clientSessionId = msg.metadata?.sessionId as string | undefined;
+    if (clientSessionId && resolution.binding?.sessionPolicy === undefined) {
+      const existing = await this.store.load(clientSessionId);
+      if (existing && existing.agentId !== agent.id) {
+        console.warn(
+          `[Gateway] Inbound rejected: session "${clientSessionId}" belongs to agent "${existing.agentId}", resolved "${agent.id}"`,
+        );
+        return;
+      }
     }
 
     // 2. Plugin: message_received
-    const sessionKey = this.buildSessionKey(agent, msg);
+    const sessionKey = this.buildSessionKey(agent, msg, resolution.binding);
     await this.pluginManager.getHookPort().observe('message_received', {
       sessionId: sessionKey,
       agentId: agent.id,
@@ -5804,7 +5844,7 @@ export class Gateway {
           issueId: result.issueId,
           newSessionId: result.newSessionId,
           enterLoop: result.enterLoop === true,
-        }, (msg.metadata?.agentId as string | undefined) ?? agent.id);
+        }, agent.id);
 
         // prompt 展开：继续进 Loop
         if (result.enterLoop && result.messages?.length) {
@@ -5817,7 +5857,7 @@ export class Gateway {
             sessionKey,
             result.display.text,
             result.display.type,
-            (msg.metadata?.agentId as string | undefined) ?? agent.id,
+            agent.id,
           );
 
           // IM 短回复（Telegram 等无 WS 事件流的渠道）
@@ -6515,36 +6555,109 @@ export class Gateway {
     return this.assembly.buildAgent(agent);
   }
 
-  private resolveAgent(msg: ChannelMessage): AgentDefinition | undefined {
+  /**
+   * ①接入解析 + ②绑定解析（arch/service-topology-p2.md §2.3 四级管道前两级）：
+   * bot 凭证归属锚定租户（Q11=a）→ bindings 表路由（路由真相源）→
+   * legacy channelBindings（存量单租户面）→ 未绑定兜底策略（§9：可配 reject）。
+   */
+  private resolveInbound(
+    msg: ChannelMessage,
+  ):
+    | { outcome: 'routed'; agent: AgentDefinition; binding?: Binding }
+    | { outcome: 'rejected'; reason: string } {
     // 显式寻址优先（WebUI 侧栏选中的 agent / 触发器指定 agent）：metadata.agentId
     // 命中注册表即用——否则向导新建的 agent 永远被 channelBindings/fallback 遮蔽（#14）。
     const explicitId = msg.metadata?.agentId as string | undefined;
     if (explicitId) {
       const explicit = this.agents.get(explicitId);
-      if (explicit) return explicit;
+      if (explicit) {
+        // 显式寻址不得跨租户参与（§7 硬边界）：租户锚定 bot 上指向他租户 registry agent
+        // 一律拒（config agent=宿主资产不受此闸）。宿主面渠道（锚=DEFAULT）的显式寻址
+        // 属 §9.1-3 端点身份面，随 T4b 收口。
+        const anchor = this.channelTenants.get(msg.channel) ?? DEFAULT_TENANT_ID;
+        const record = this.registry?.getAgent(explicit.id as AgentId);
+        if (record && anchor !== DEFAULT_TENANT_ID && record.tenantId !== anchor) {
+          return {
+            outcome: 'rejected',
+            reason: `explicit agent "${explicit.id}" belongs to another tenant than channel anchor ${anchor}`,
+          };
+        }
+        return { outcome: 'routed', agent: explicit };
+      }
     }
+    // ② 绑定解析：租户锚（bot 归属）→ (tenantId, platform, identity) → agentId
+    const tenantId = this.channelTenants.get(msg.channel) ?? DEFAULT_TENANT_ID;
+    const binding = this.registry?.resolveBinding({
+      tenantId,
+      platform: msg.channel,
+      identity: msg.senderId,
+    });
+    if (binding) {
+      const bound = this.agents.get(binding.agentId);
+      if (bound) return { outcome: 'routed', agent: bound, binding };
+      // 绑定指向已消失的 agent：绑定行是「该身份曾被映射到某 agent」的证据，
+      // 配置漂移不等于未绑定——一律弃收（不落兜底/legacy，不把流量送去错 agent，
+      // 也不靠 unboundPolicy 兜错误配置），warn 明示（评审 MIN-1）
+      return {
+        outcome: 'rejected',
+        reason: `binding ${binding.bindingId} targets missing agent "${binding.agentId}" — dropped (configuration drift)`,
+      };
+    }
+    // legacy channelBindings（存量单租户面）：只扫 DEFAULT 域 agent——registry agent
+    // 的定义白名单不含 channelBindings（src/registry-bridge.ts），但不再依赖这个隐式
+    // 不变量，域过滤写进代码（评审 MIN-10）
     for (const agent of this.agents.values()) {
+      if ((agent.tenantId ?? DEFAULT_TENANT_ID) !== DEFAULT_TENANT_ID) continue;
       if (agent.channelBindings) {
         const binding = agent.channelBindings[msg.channel];
         if (binding) {
           if (binding === '*' || binding === `user:${msg.senderId}`) {
-            return agent;
+            return { outcome: 'routed', agent };
           }
         }
       }
     }
-    // Fallback: use first registered agent
-    const fallback = this.agents.values().next().value;
-    if (fallback) console.warn(`[Gateway] No channel binding match for ${msg.channel}:${msg.senderId}, falling back to agent "${fallback.id}"`);
-    return fallback;
+    // 未绑定流量（§9「落 default 租户兜底策略」）：兜底候选限 DEFAULT 域 agent
+    // （config 宿主资产 + DEFAULT 租户 agent）——兜底是宿主显式提供的服务面，
+    // 但**绝不落到其他租户的 agent**（评审 MAJ-3）；可配 reject 明示拒收
+    if ((this.config.tenancy?.unboundChannelPolicy ?? 'fallback') === 'reject') {
+      return {
+        outcome: 'rejected',
+        reason: `no binding for ${tenantId}:${msg.channel}:${msg.senderId} (tenancy.unboundChannelPolicy=reject)`,
+      };
+    }
+    const fallback = [...this.agents.values()].find(
+      (a) => (a.tenantId ?? DEFAULT_TENANT_ID) === DEFAULT_TENANT_ID,
+    );
+    if (!fallback) {
+      return {
+        outcome: 'rejected',
+        reason: `no binding for ${tenantId}:${msg.channel}:${msg.senderId} and no default-domain fallback agent`,
+      };
+    }
+    console.warn(`[Gateway] No channel binding match for ${msg.channel}:${msg.senderId}, falling back to default-domain agent "${fallback.id}"`);
+    return { outcome: 'routed', agent: fallback };
   }
 
-  private buildSessionKey(agent: AgentDefinition, msg: ChannelMessage): string {
-    // 使用消息中的原始 agentId（而非 Gateway 解析后的 agent.id）
-    // 这样 sessionKey 和 WS session 的 agentId 一致，broadcastEvent 能正确匹配
-    const agentId = (msg.metadata?.agentId as string) ?? agent.id;
+  private buildSessionKey(agent: AgentDefinition, msg: ChannelMessage, binding?: Binding): string {
+    // 会话键以路由解析结果为准（agents 恒以 agent.id 为键，显式命中时与 metadata 一致；
+    // fall-through（显式未命中、落绑定/兜底）时不得把陈旧 metadata.agentId 嵌进键——
+    // 那会造出「键是死 id、跑的是别的 agent」的错位会话）
+    const agentId = agent.id;
 
-    // 优先使用客户端传来的 sessionId（WebUI 通过 REST API 创建的 session）
+    // binding 行挂会话策略（§2.3 ③）：命中绑定时键由策略定义，且**优先于**客户端
+    // sessionId——绑定策略是运营面的键控契约，客户端自报 id 不能架空它（评审 MAJ-2-A）
+    switch (binding?.sessionPolicy) {
+      case 'per-user':
+        return `${agentId}:${msg.channel}:${msg.senderId}`;
+      case 'per-chat':
+        return `${agentId}:${msg.channel}:${msg.conversationId}`;
+      case 'per-message':
+        return `${agentId}:${msg.channel}:${msg.senderId}:${msg.id}`;
+    }
+
+    // 客户端自报 sessionId（WebUI REST/WS 会话续接）：可用，但归属校验在
+    // handleInboundMessage 统一做（跨 agent/跨租户会话键 fail-loud 拒收）
     const clientSessionId = msg.metadata?.sessionId as string | undefined;
     if (clientSessionId) {
       return clientSessionId;

@@ -2416,6 +2416,10 @@
           "apiKey": {
             "type": "string"
           },
+          "tenantId": {
+            "type": "string",
+            "minLength": 1
+          },
           "corsOrigins": {
             "type": "array",
             "items": {
@@ -2448,6 +2452,18 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
+        }
+      }
+    },
+    "tenancy": {
+      "type": "object",
+      "properties": {
+        "unboundChannelPolicy": {
+          "type": "string",
+          "enum": [
+            "fallback",
+            "reject"
+          ]
         }
       }
     },

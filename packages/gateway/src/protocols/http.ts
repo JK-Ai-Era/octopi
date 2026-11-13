@@ -190,7 +190,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         try {
           const body = await this.readBody(req);
           const message: ChannelMessage = {
-            id: `http-${Date.now()}`,
+            id: `http-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             channel: 'http',
             senderId: body.senderId ?? 'cli',
             senderName: body.senderName,
@@ -454,7 +454,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       session.agentId = msg.agentId;
 
       const channelMsg: ChannelMessage = {
-        id: `ws-${Date.now()}`,
+        id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         channel: 'ws',
         senderId: msg.senderId ?? 'tui',
         content: msg.content ?? '',

@@ -252,6 +252,14 @@ export interface SessionConfig {
   idleExpiryMs?: number;
 }
 
+/**
+ * Tenancy 配置 — 多租户渠道锚定策略（arch/multi-tenancy.md §9）
+ */
+export interface TenancyConfig {
+  /** 未绑定流量兜底：`fallback`（默认，存量首 agent）| `reject`（拒收，日志明示） */
+  unboundChannelPolicy?: 'fallback' | 'reject';
+}
+
 // ── Plugin 配置 ──
 
 /**
@@ -345,6 +353,11 @@ export interface ChannelConfig {
   path?: string;
   /** API Key（HTTP channel 认证；插件通道的凭证通道，推荐 `${ENV_VAR}` 引用） */
   apiKey?: string;
+  /**
+   * bot 凭证归属租户（arch/multi-tenancy.md §9 Q11=a 渠道锚定）：
+   * 消息进入先按此定租户，再查 bindings 表路由。缺省 = DEFAULT_TENANT_ID（存量域）。
+   */
+  tenantId?: string;
   /** 允许的 CORS 源 */
   corsOrigins?: string[];
   /** 插件自定义旋钮（非密钥；原样透传） */
@@ -1037,6 +1050,8 @@ export interface HarnessConfig {
   channels?: ChannelConfig[];
   /** Session 配置 */
   session?: SessionConfig;
+  /** 多租户渠道锚定策略（arch/multi-tenancy.md §9） */
+  tenancy?: TenancyConfig;
   /**
    * 工具效应隔离策略（宪法 I5）
    *

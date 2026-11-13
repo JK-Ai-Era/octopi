@@ -268,11 +268,16 @@
     "type": "http",
     "port": 18180,
     "host": "local",
-    "path": "/messages"
+    "path": "/messages",
+    "tenantId": "default"
   }],
 
   "session": {
     "dmScope": "per-peer"
+  },
+
+  "tenancy": {
+    "unboundChannelPolicy": "fallback"
   },
 
   "toolIsolation": "session-subdir",

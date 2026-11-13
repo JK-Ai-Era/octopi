@@ -265,6 +265,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     session: config.session
       ? { dmScope: config.session.dmScope, idleExpiryMs: config.session.idleExpiryMs }
       : undefined,
+    tenancy: config.tenancy,
     toolIsolation: config.toolIsolation,
     effectPolicy: config.effectPolicy,
     sessionAcl: config.sessionAcl,

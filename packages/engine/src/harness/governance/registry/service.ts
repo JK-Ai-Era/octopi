@@ -338,6 +338,15 @@ export class RegistryService {
   }
 
   /**
+   * 租户是否存在（渠道锚启动校验用）。
+   *
+   * @param tenantId - 租户 id
+   */
+  hasTenant(tenantId: TenantId): boolean {
+    return this.db.raw.prepare('SELECT 1 FROM tenants WHERE tenant_id = ?').get(tenantId) !== undefined;
+  }
+
+  /**
    * 更新 agent（写权限：owner 或平台 admin）。
    *
    * @param input - agentId + viewerUserId + 变更补丁
@@ -382,6 +391,9 @@ export class RegistryService {
   deleteAgent(input: { agentId: AgentId; viewerUserId: UserId }): boolean {
     const record = this.requireAgent(input.agentId);
     this.requireManageAuth(record, input.viewerUserId);
+    // 幽灵绑定防线（评审 MIN-12）：agent 消失后 bindings 行若留存，命中者会永久走
+    // 「绑定指向不可跑 agent」的弃收路径——删除时一并清掉，不留配置漂移
+    this.db.raw.prepare('DELETE FROM bindings WHERE agent_id = ?').run(record.agentId);
     const res = this.db.raw.prepare('DELETE FROM agents WHERE agent_id = ?').run(record.agentId);
     return res.changes > 0;
   }
@@ -398,6 +410,12 @@ export class RegistryService {
     if (!SESSION_POLICIES.includes(sessionPolicy)) {
       throw new Error(`registry_invalid_session_policy: ${sessionPolicy}`);
     }
+    // UNIQUE(tenant_id, platform, identity) 撞约束前先出干净错误（裸 SQLite 错不可读；
+    // 换目标走 updateBinding，不走删了重建）
+    const existing = this.resolveBinding({ tenantId: input.tenantId, platform, identity });
+    if (existing) {
+      throw new Error(`registry_binding_exists: ${platform}:${identity} already bound to ${existing.agentId}`);
+    }
     const agent = this.requireAgent(input.agentId);
     if (agent.tenantId !== input.tenantId) {
       throw new Error('registry_cross_tenant_binding: binding must stay within one tenant');
@@ -411,19 +429,28 @@ export class RegistryService {
       sessionPolicy,
       createdAt: Date.now(),
     };
-    this.db.raw
-      .prepare(
-        'INSERT INTO bindings (binding_id, tenant_id, platform, identity, agent_id, session_policy, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      )
-      .run(
-        binding.bindingId,
-        binding.tenantId,
-        binding.platform,
-        binding.identity,
-        binding.agentId,
-        binding.sessionPolicy,
-        binding.createdAt,
-      );
+    try {
+      this.db.raw
+        .prepare(
+          'INSERT INTO bindings (binding_id, tenant_id, platform, identity, agent_id, session_policy, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(
+          binding.bindingId,
+          binding.tenantId,
+          binding.platform,
+          binding.identity,
+          binding.agentId,
+          binding.sessionPolicy,
+          binding.createdAt,
+        );
+    } catch (err) {
+      // 预检（registry_binding_exists）是 TOCTOU：并发下仍会撞 UNIQUE(tenant_id,platform,identity)——
+      // 在此转成同一分类的干净错误，HTTP 面状态码不依赖 SQLite 文本（评审 MIN-7）
+      if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
+        throw new Error(`registry_binding_exists: ${binding.platform}:${binding.identity} is already bound (concurrent create)`);
+      }
+      throw err;
+    }
     return binding;
   }
 
@@ -660,6 +687,69 @@ export class RegistryService {
       .prepare('SELECT * FROM bindings WHERE tenant_id = ? ORDER BY created_at')
       .all(input.tenantId) as Record<string, unknown>[];
     return rows.map(rowToBinding);
+  }
+
+  /**
+   * 查询单条绑定（管理面）。
+   *
+   * @param bindingId - 绑定 id
+   */
+  getBinding(bindingId: BindingId): Binding | null {
+    const row = this.db.raw.prepare('SELECT * FROM bindings WHERE binding_id = ?').get(bindingId) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? rowToBinding(row) : null;
+  }
+
+  /**
+   * 更新绑定（换目标 agent / 会话策略）。绑定是租户资产：tenantId 域内可管；
+   * 换目标 agent 时重验租户内约束（与 createBinding 同闸）。
+   *
+   * @param input - bindingId + 租户域 + 变更补丁
+   */
+  updateBinding(input: {
+    bindingId: BindingId;
+    tenantId: TenantId;
+    patch: { agentId?: AgentId; sessionPolicy?: SessionPolicy };
+  }): Binding {
+    const binding = this.requireBinding(input.bindingId, input.tenantId);
+    const patch = input.patch;
+    if (patch.sessionPolicy !== undefined && !SESSION_POLICIES.includes(patch.sessionPolicy)) {
+      throw new Error(`registry_invalid_session_policy: ${patch.sessionPolicy}`);
+    }
+    if (patch.agentId !== undefined) {
+      const agent = this.requireAgent(patch.agentId);
+      if (agent.tenantId !== binding.tenantId) {
+        throw new Error('registry_cross_tenant_binding: binding must stay within one tenant');
+      }
+    }
+    const nextAgent = patch.agentId ?? binding.agentId;
+    const nextPolicy = patch.sessionPolicy ?? binding.sessionPolicy;
+    this.db.raw
+      .prepare('UPDATE bindings SET agent_id = ?, session_policy = ? WHERE binding_id = ?')
+      .run(nextAgent, nextPolicy, binding.bindingId);
+    return { ...binding, agentId: nextAgent, sessionPolicy: nextPolicy };
+  }
+
+  /**
+   * 删除绑定（租户域内）。行不存在或不属本租户 = false（幂等重试不炸）。
+   *
+   * @param input - bindingId + 租户域
+   * @returns 是否删除了记录
+   */
+  deleteBinding(input: { bindingId: BindingId; tenantId: TenantId }): boolean {
+    const binding = this.getBinding(input.bindingId);
+    if (!binding || binding.tenantId !== input.tenantId) return false;
+    this.db.raw.prepare('DELETE FROM bindings WHERE binding_id = ?').run(input.bindingId);
+    return true;
+  }
+
+  private requireBinding(bindingId: BindingId, tenantId: TenantId): Binding {
+    const binding = this.getBinding(bindingId);
+    if (!binding || binding.tenantId !== tenantId) {
+      throw new Error(`registry_binding_not_found: ${bindingId}`);
+    }
+    return binding;
   }
 
   /**

@@ -34,6 +34,14 @@ export interface GatewayConfig {
     /** 上下文租约（毫秒）；显式配置才生效 */
     idleExpiryMs?: number;
   };
+  /**
+   * 多租户渠道锚定（arch/multi-tenancy.md §9）：
+   * 未绑定流量（无 bindings 行且无 legacy channelBindings 命中）的兜底策略——
+   * `fallback`（默认，存量首 agent 兜底）| `reject`（拒收，日志明示不静默）。
+   */
+  tenancy?: {
+    unboundChannelPolicy?: 'fallback' | 'reject';
+  };
   /** 工具效应隔离策略（宪法 I5）；默认 none */
   toolIsolation?: 'none' | 'session-subdir' | 'session-lock';
   /** ToolEffectPolicy（P3/P4）；onClose 用于会话关闭时残留 undo */

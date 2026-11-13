@@ -11,7 +11,7 @@ import type { ConfigApplyService } from '../../gateway/config-apply.js';
 import { ConfigConflictError } from '@octopi-agent/engine/config-admin/port.js';
 import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
-import type { AgentId } from '@octopi-agent/engine/harness/governance/registry/types.js';
+import type { AgentId, BindingId, SessionPolicy } from '@octopi-agent/engine/harness/governance/registry/types.js';
 
 export interface WebApiRouterOptions {
   gateway: Gateway;
@@ -1916,7 +1916,7 @@ export class WebApiRouter {
               msg.includes('_required') ||
               msg.startsWith('registry_empty')
             ? 400
-            : msg.includes('UNIQUE constraint failed')
+            : msg.includes('UNIQUE constraint failed') || msg.includes('_exists')
               ? 409
               : 500;
       return this.json(res, status, { ok: false, error: msg });
@@ -2056,6 +2056,18 @@ export class WebApiRouter {
         return this.json(res, 400, {
           ok: false,
           error: 'platform, identity and agentId are required strings',
+        });
+      }
+      // sessionPolicy 与 PATCH 同校验：非法值 400 明示，不静默落 per-user
+      if (
+        body.sessionPolicy !== undefined &&
+        body.sessionPolicy !== 'per-user' &&
+        body.sessionPolicy !== 'per-chat' &&
+        body.sessionPolicy !== 'per-message'
+      ) {
+        return this.json(res, 400, {
+          ok: false,
+          error: `registry_invalid_session_policy: ${String(body.sessionPolicy)}`,
         });
       }
       try {
@@ -2288,6 +2300,51 @@ export class WebApiRouter {
         }
         const deleted = registry.deleteMount({ mountId, tenantId: user.tenantId });
         return this.json(res, 200, { ok: true, data: { deleted } });
+      } catch (err) {
+        return sendError(err);
+      }
+    }
+
+    // ── 渠道绑定面（arch/multi-tenancy.md §9 + service-topology-p2 §2.3 ②）：
+    // bindings 表 = 渠道路由真相源；(tenantId, platform, identity) → agentId + 会话策略 ──
+    const bindingMatch = /^\/registry\/bindings\/([^/]+)$/.exec(relativePath);
+    if (bindingMatch) {
+      const bindingId = bindingMatch[1] as BindingId;
+      try {
+        if (method === 'PATCH') {
+          const body = await this.readBody(req);
+          const patch: { agentId?: AgentId; sessionPolicy?: SessionPolicy } = {};
+          if (typeof body?.agentId === 'string') patch.agentId = body.agentId as AgentId;
+          if (body?.sessionPolicy !== undefined) {
+            if (
+              body.sessionPolicy !== 'per-user' &&
+              body.sessionPolicy !== 'per-chat' &&
+              body.sessionPolicy !== 'per-message'
+            ) {
+              return this.json(res, 400, {
+                ok: false,
+                error: `registry_invalid_session_policy: ${String(body.sessionPolicy)}`,
+              });
+            }
+            patch.sessionPolicy = body.sessionPolicy;
+          }
+          if (patch.agentId === undefined && patch.sessionPolicy === undefined) {
+            return this.json(res, 400, {
+              ok: false,
+              error: 'nothing to patch: provide agentId and/or sessionPolicy',
+            });
+          }
+          const updated = registry.updateBinding({ bindingId, tenantId: user.tenantId, patch });
+          return this.json(res, 200, { ok: true, data: updated });
+        }
+        if (method === 'DELETE') {
+          const existing = registry.getBinding(bindingId);
+          if (!existing || existing.tenantId !== user.tenantId) {
+            return this.json(res, 404, { ok: false, error: 'registry_binding_not_found' });
+          }
+          const deleted = registry.deleteBinding({ bindingId, tenantId: user.tenantId });
+          return this.json(res, 200, { ok: true, data: { deleted } });
+        }
       } catch (err) {
         return sendError(err);
       }

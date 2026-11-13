@@ -123,6 +123,51 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.29 (2026-11-14)
+
+### feat(tenancy): T4a 渠道锚定——bot 凭证归属 + bindings 路由 + 会话策略 + binding CRUD
+
+多租户 MVP T4 前半（arch/multi-tenancy.md §9/§10.0）：渠道路由四级管道的前两级落地——
+**①接入解析** = bot 凭证归属（`channels[].tenantId` 声明租户锚，缺省 default 存量域；
+builtin http/ws 双 label 逐 label 补锚；启动期租户存在性校验，拼错锚点名告警不静默）；
+**②绑定解析** = bindings 表为路由真相源（(tenantId, platform, identity) → agentId）。
+优先序：显式寻址（新增跨租户闸：锚定渠道上指向他租户 registry agent 一律拒）→ bindings →
+legacy channelBindings（只扫 DEFAULT 域 agent，不再依赖 registry 白名单的隐式不变量）→ 兜底。
+
+**兜底语义（歧义裁定，记录备查）**：「未绑定流量落 default 租户兜底策略」实现为 DEFAULT 域
+agent 兜底（宿主显式提供的服务面），**绝不落其他租户的 agent**；无 DEFAULT 域候选 = 明示
+弃收。要收紧为「锚定渠道仅同租户兜底」改一处过滤即可（arch/multi-tenancy.md §10.0）。
+
+**③会话解析**：binding 行挂 sessionPolicy（per-user/per-chat/per-message），命中绑定时优先于
+客户端自报 sessionId（绑定策略 = 运营面键控契约，客户端 id 不得架空）；客户端 sessionId 在
+非绑定路径生效但过归属闸（目标会话必须属于解析出的 agent，跨 agent = 跨租户 fail-loud 拒收）。
+会话键以路由解析结果 agent.id 为准，不再嵌陈旧 metadata.agentId（键是死 id、跑别的 agent 的
+错位会话）。
+
+**binding CRUD**：service 增 get/update/delete（租户域内可管、换目标重验同租户、delete 幂等、
+重复 triple 409 干净错误含并发 UNIQUE 撞车路径）；`deleteAgent` 级联清 bindings（幽灵绑定）；
+HTTP `/api/v1/registry/bindings` 补 PATCH/DELETE（GET/POST 为 T1 既有）；POST/PATCH 的
+sessionPolicy 校验同口径（非法值 400 明示，不再静默落 per-user）。
+
+**独立评审（del-5986edd9，fresh-eyes，3 MAJ/12 MIN/5 NIT，fix-then-ship）**：
+MAJ-1 `/registry/bindings` GET/POST 重复注册——T1 既有块遮蔽新块（死码），测试打在旧 handler
+上对新增路径零证据 → 删重复块归位生效路径；MAJ-2/3 如上。MIN 已修：绑定指向不可跑 agent =
+配置漂移即弃收（与 unboundPolicy 无关，不落兜底）；命令回执广播统一 agent.id 口径；消息 id
+加随机段（同毫秒碰撞）。MIN-2/3/5/11 + NIT 登记 arch/multi-tenancy.md §9.1-8~12（双 label 与
+binding platform 归一、per-chat 依赖可信 conversationId、binding 租户内可见性口径、声明式锚
+随 P2）。
+
+**测试**：`tests/tenancy-channel-routing.test.ts`（12 锚，真实 run 子进程 + 假 LLM 回显 agent
+marker 反查「谁跑了」：判据主锚/锚定不串域/三态会话键/fallback 域过滤/reject/跨租户显式拒/
+陈旧 id 键/orphan 弃收/策略优先/归属闸）+ `tests/registry-bindings.test.ts`（14 锚：CRUD +
+HTTP 面）。全量 4924 绿、lint 0。
+
+**BREAKING**：`registerChannel` 增可选第二参 `{ tenantId }`；`buildSessionKey` 键控在绑定命中
+时不再尊重客户端 sessionId；未绑定 fallback 不再可能落到非 DEFAULT 域 agent（此前嵌入形态下
+会落任意首个 agent）。存量单机部署（无 bindings、无渠道锚）行为不变。
+
+---
+
 ## v0.113.28 (2026-11-14)
 
 ### fix(context): 摘要进度读数的 messages 与 tools 改回同一把尺

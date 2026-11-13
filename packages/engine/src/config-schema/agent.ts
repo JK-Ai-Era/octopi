@@ -156,6 +156,8 @@ export const ChannelConfigSchema = z
     path: z.string().optional(),
     /** 密钥通道（如飞书 App Secret，推荐 `${ENV_VAR}` 引用）；options 禁放密钥 */
     apiKey: z.string().optional(),
+    /** bot 凭证归属租户（Q11=a 渠道锚定）；缺省 = default 存量域 */
+    tenantId: z.string().min(1).optional(),
     corsOrigins: z.array(z.string()).optional(),
     /** 插件自定义旋钮（非密钥；原样透传） */
     options: z.record(z.string(), z.unknown()).optional(),
