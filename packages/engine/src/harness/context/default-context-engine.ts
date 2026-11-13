@@ -361,13 +361,13 @@ export class DefaultContextEngine implements ContextEngine {
           cached: true,
         });
       }
-      const llmMessages = this.buildLlmMessages(folded.view, systemPrompt, agingPlan);
-      // 会话请求基线（同出 1：摘要路径以它为比对对象）
-      this.lastRequestPrefix.set(stateKey, {
-        fingerprint: fingerprintRequestView({ messages: llmMessages, tools }),
-        toolCount: tools.length,
-        messageCount: llmMessages.length,
-      });
+      const view: RequestView = {
+        messages: this.buildLlmMessages(folded.view, systemPrompt, agingPlan),
+        tools,
+      };
+      // 会话请求基线（摘要路径以它为比对对象；messages 半区含老化形态）
+      this.recordSessionRequest(stateKey, view);
+      const llmMessages = view.messages;
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       const decision = this.sizeLedger.decisionTokensWithSource(
         this.calKey(stateKey, modelKey),
@@ -484,17 +484,42 @@ export class DefaultContextEngine implements ContextEngine {
       toolArgAgers,
       ignoreTurnBoundary: true,
     });
+    // overflow 阶梯的统一出口读数：每条分支都只算一次 view + 一次估算 + 一次决策。
+    // 此前同一表达式在 4 个分支内被手抄 4 次（每分支 3–4 遍），是「改一边忘另一边」的形状。
+    const overflowExit = (ms: Message[]): {
+      messages: LLMMessage[];
+      estimatedTokens: number;
+      readingSource: 'calibrated' | 'anchored' | 'raw';
+      requestView: RequestView;
+    } => {
+      const requestView: RequestView = {
+        messages: this.buildLlmMessages(ms, systemPrompt, overflowAgingPlan),
+        tools,
+      };
+      const rawTokens = estimateLLMMessages(requestView.messages) + rawEstimator.estimateTools(tools);
+      const decision = this.sizeLedger.decisionTokensWithSource(
+        this.calKey(stateKey, modelKey),
+        rawTokens,
+        this.states.get(stateKey)?.lastUsageAnchor,
+      );
+      return {
+        messages: requestView.messages,
+        estimatedTokens: decision.tokens,
+        readingSource: decision.source,
+        requestView,
+      };
+    };
     const fits = (ms: Message[]): boolean =>
       estimator.estimateMessages(applyAgingToMessages(ms, overflowAgingPlan, overflowAgingOpts)) <=
       effectiveMessagesLimit;
     if (selection.overflow.length === 0 && fits(view)) {
-      const llmMessages = this.buildLlmMessages(view, systemPrompt, agingPlan);
+      const sessionView: RequestView = {
+        messages: this.buildLlmMessages(view, systemPrompt, agingPlan),
+        tools,
+      };
       // 会话请求基线：摘要路径以它为比对对象（messages 半区含老化形态）
-      this.lastRequestPrefix.set(stateKey, {
-        fingerprint: fingerprintRequestView({ messages: llmMessages, tools }),
-        toolCount: tools.length,
-        messageCount: llmMessages.length,
-      });
+      this.recordSessionRequest(stateKey, sessionView);
+      const llmMessages = sessionView.messages;
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       const decision = this.sizeLedger.decisionTokensWithSource(
         this.calKey(stateKey, modelKey),
@@ -561,16 +586,12 @@ export class DefaultContextEngine implements ContextEngine {
         durationMs: Date.now() - overflowStart,
         cancelled: true,
       });
-      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
+      const exit = overflowExit(view);
+      this.freezeUsagePair(stateKey, estimateLLMMessages(exit.messages) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
       return {
-        messages: this.buildLlmMessages(view, systemPrompt, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
-        estimatedTokens: this.sizeLedger.decisionTokensWithSource(
-          this.calKey(stateKey, modelKey),
-          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) +
-            rawEstimator.estimateTools(tools),
-          this.states.get(stateKey)?.lastUsageAnchor,
-        ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
-        readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+        messages: exit.messages, // MJ1：与 fits 同源（overflow 豁免 aging）
+        estimatedTokens: exit.estimatedTokens,
+        readingSource: exit.readingSource,
         systemPrompt,
         droppedSummary: proactiveDroppedSummary,
         tools,
@@ -619,16 +640,12 @@ export class DefaultContextEngine implements ContextEngine {
           durationMs: Date.now() - overflowStart,
           cancelled: true,
         });
-      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
+        const exit = overflowExit(view);
+        this.freezeUsagePair(stateKey, estimateLLMMessages(exit.messages) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
         return {
-          messages: this.buildLlmMessages(view, systemPrompt, overflowAgingPlan), // MJ1：与 fits 同源（overflow 豁免 aging）
-          estimatedTokens: this.sizeLedger.decisionTokensWithSource(
-          this.calKey(stateKey, modelKey),
-          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) +
-            rawEstimator.estimateTools(tools),
-          this.states.get(stateKey)?.lastUsageAnchor,
-        ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
-          readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+          messages: exit.messages,
+          estimatedTokens: exit.estimatedTokens,
+          readingSource: exit.readingSource,
           systemPrompt,
           droppedSummary: proactiveDroppedSummary,
           tools,
@@ -651,16 +668,12 @@ export class DefaultContextEngine implements ContextEngine {
             'This session is no longer suitable for continued work, or the current model does not fit the task scale — start a new session or switch to a model with a larger context window.',
           durationMs: Date.now() - overflowStart,
         });
-      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
+        const exit = overflowExit(view);
+        this.freezeUsagePair(stateKey, estimateLLMMessages(exit.messages) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
         return {
-          messages: this.buildLlmMessages(view, systemPrompt, overflowAgingPlan),
-          estimatedTokens: this.sizeLedger.decisionTokensWithSource(
-          this.calKey(stateKey, modelKey),
-          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) +
-            rawEstimator.estimateTools(tools),
-          this.states.get(stateKey)?.lastUsageAnchor,
-        ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
-          readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+          messages: exit.messages,
+          estimatedTokens: exit.estimatedTokens,
+          readingSource: exit.readingSource,
           systemPrompt,
           droppedSummary: proactiveDroppedSummary,
           tools,
@@ -715,16 +728,12 @@ export class DefaultContextEngine implements ContextEngine {
         error: `overflow_convergence_failed: ${err instanceof Error ? err.message : String(err)}`,
         durationMs: Date.now() - overflowStart,
       });
-      this.freezeUsagePair(stateKey, estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
+      const exit = overflowExit(view);
+      this.freezeUsagePair(stateKey, estimateLLMMessages(exit.messages) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
       return {
-        messages: this.buildLlmMessages(view, systemPrompt, overflowAgingPlan),
-        estimatedTokens: this.sizeLedger.decisionTokensWithSource(
-          this.calKey(stateKey, modelKey),
-          estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) +
-            rawEstimator.estimateTools(tools),
-          this.states.get(stateKey)?.lastUsageAnchor,
-        ).tokens, // 口径统一（M2 残留）：与主路径同源=校准后全请求估算
-        readingSource: this.sizeLedger.decisionTokensWithSource(this.calKey(stateKey, modelKey), estimateLLMMessages(this.buildLlmMessages(view, systemPrompt, overflowAgingPlan)) + rawEstimator.estimateTools(tools), this.states.get(stateKey)?.lastUsageAnchor).source, // source 与 tokens 同源（M2 残留 label 修正）
+        messages: exit.messages,
+        estimatedTokens: exit.estimatedTokens,
+        readingSource: exit.readingSource,
         systemPrompt,
         droppedSummary: proactiveDroppedSummary,
         tools,
@@ -2133,6 +2142,26 @@ export class DefaultContextEngine implements ContextEngine {
    * @param tools - 摘要请求即将使用的工具面
    * @returns 无（异常情况打印告警）
    */
+  /**
+   * 记录「最近一次会话请求」的前缀基线（唯一实现）
+   *
+   * 三处调用点（两个 assemble 出口 + buildRequestView 的默认分支）都经此，
+   * 禁止各自手写 set 体：2026-11-13 一轮里同一段 set 体曾出现三份，
+   * 正是「改一边忘另一边」的形状（CON E8）。
+   *
+   * 摘要路径**不得**调用：它会把自己的指纹写成基线，护栏随即永远一致。
+   *
+   * @param stateKey - 引擎状态键（与 compactStateKey 同源）
+   * @param view - 会话请求前缀（messages 必须已是老化后的 LLM 形态）
+   */
+  private recordSessionRequest(stateKey: string, view: RequestView): void {
+    this.lastRequestPrefix.set(stateKey, {
+      fingerprint: fingerprintRequestView(view),
+      toolCount: view.tools.length,
+      messageCount: view.messages.length,
+    });
+  }
+
   private checkSummaryToolFace(stateKey: string, tools: LLMToolDefinition[]): void {
     const last = this.lastRequestPrefix.get(stateKey);
     if (!last) return;
@@ -2199,11 +2228,7 @@ export class DefaultContextEngine implements ContextEngine {
       tools: input.tools,
     };
     if (input.recordBaseline !== false && input.stateKey) {
-      this.lastRequestPrefix.set(input.stateKey, {
-        fingerprint: fingerprintRequestView(view),
-        toolCount: view.tools.length,
-        messageCount: view.messages.length,
-      });
+      this.recordSessionRequest(input.stateKey, view);
     }
     return view;
   }

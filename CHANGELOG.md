@@ -123,6 +123,52 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.26 (2026-11-13)
+
+### refactor(context): 装配出口收口——三份基线记录合一、16 处重复表达式归一
+
+**动机**：`v0.113.25` 修护栏时我留下一个问题——基线记录逻辑出现了三份，因为主出口
+走 `buildLlmMessages` 而只有摘要路径走 `buildRequestView`。这是「同一逻辑多处实现」的
+第三例（前两例见 v0.113.24 / v0.113.25），必须从结构上消除。
+
+**顺带核实并纠正一个判断**：我曾称「`AssembleResult` 还允许拆分形态」——**不成立**。
+它 `extends RequestView`，`tools` 是必填字段，`builder.ts` 还有空工具面护栏。
+契约早已收口，真正的问题是 `buildLlmMessages` 的调用点太多（16 处）。
+
+**改动**：
+
+| 项 | 前 | 后 |
+|---|---|---|
+| 基线记录 | 3 处各写一遍 set 体 | 1 个 `recordSessionRequest(stateKey, view)` |
+| overflow 阶梯出口 | 4 个分支，每分支 `buildLlmMessages` 调 3–4 次 | 1 个 `overflowExit(ms)` 局部函数，每分支只算一次 |
+
+`overflowExit` 同时消除了「构建 → 估算 → 决策」三步在四处各抄一遍的形态：
+
+```ts
+const overflowExit = (ms: Message[]) => {
+  const requestView = { messages: buildLlmMessages(ms, sys, plan), tools };
+  const rawTokens = estimateLLMMessages(requestView.messages) + rawEstimator.estimateTools(tools);
+  const decision = sizeLedger.decisionTokensWithSource(calKey, rawTokens, anchor);
+  return { messages, estimatedTokens, readingSource, requestView };
+};
+```
+
+重复表达式计数：`buildLlmMessages(view, sys, overflowAgingPlan)` 从 **16 次 → 1 次**。
+
+**行为等价验证**：重构前后全量测试同为 **4876 passed**（改动零功能差异）。
+
+**新增防漂移测试**：`tests/harness/assemble-exit-parity.test.ts`（4 例）。
+
+**如实记录一次测试设计失误**：第一版 3 例只调用 `buildLlmMessages`，而漂移注入点在其
+**上游** `buildRequestView`——注入后测试仍全绿，说明覆盖不到真实出口。已补一例真正走
+`buildRequestView` 的断言，并验证注入漂移时会失败
+（`expected '916972c6…' to be '45b43109…'`）。
+
+**未做**：`buildLlmMessages` 仍保留 4 处直接调用（估算/早退等非出口用途）。要彻底只剩
+一个入口，需把这些也让位给 `overflowExit`，属于后续可选的进一步收敛。
+
+---
+
 ## v0.113.25 (2026-11-13)
 
 ### feat(context): 前缀指纹护栏覆盖 messages 半区，并消除工具面解析的第二份实现
