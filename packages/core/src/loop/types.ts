@@ -8,7 +8,7 @@
  * 4. 工具系统支持并行/串行、参数预处理、流式更新
  */
 
-import type { Message, ThinkingLevel, ToolCall, ToolResult, TokenUsage, ToolSource } from '../core/types.js';
+import type { Message, ThinkingLevel, ToolCall, ToolResult, TokenUsage, ToolSource, ToolResultAger } from '../core/types.js';
 import type {
   ModelProvider,
   LLMMessage,
@@ -73,6 +73,15 @@ export interface AgentTool {
   // ── 执行模式 ──
   /** 单工具粒度的执行模式覆盖。默认使用 AgentLoopConfig.toolExecution */
   executionMode?: 'parallel' | 'sequential';
+
+  /**
+   * 结果老化策略（透传自 `RegisteredTool.ageResult`，唯一声明源在 RegisteredTool）。
+   *
+   * Loop 自身不消费它：老化层（Harness context）按工具名取用，决定历史结果的视图形态。
+   * 与 `prepareArguments` / `validate` 同类——本类型承载执行期函数，不是纯数据投影；
+   * 发给 LLM 的 schema 仍由 `buildToolDefinitions` 单独投影（只取 name/description/parameters）。
+   */
+  ageResult?: ToolResultAger;
 }
 
 /**

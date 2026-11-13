@@ -145,6 +145,13 @@ export interface AssembleParams {
   /** 可用工具定义 */
   tools: LLMToolDefinition[];
   /**
+   * 工具名 → 结果老化函数（来自 `AgentTool.ageResult`，经 `collectToolAgers` 收集）。
+   *
+   * 与 `tools` 分开传：`tools` 是发给 LLM 的 wire 投影（用于 toolsHash 与摘要前缀比对），
+   * 而老化函数只在装配视图里用，不能混进 wire 面。未提供 = 全部走默认规则。
+   */
+  toolAgers?: ReadonlyMap<string, import('@octopi-agent/core/types.js').ToolResultAger>;
+  /**
    * Token 预算（可用空间）。
    * 未配置 contextWindow 时应省略：跳过基于窗口的自动压缩与预算截断。
    */

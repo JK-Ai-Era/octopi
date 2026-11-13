@@ -306,6 +306,28 @@ export type ToolHandler = (
   context: ToolExecutionContext,
 ) => Promise<unknown>;
 
+/** 结果老化函数的输入（原始调用参数 + 原始结果） */
+export interface ToolResultAgingInput {
+  /** 原始调用参数（未经 ageToolArgs 降级） */
+  args: Readonly<Record<string, unknown>>;
+  /** 原始工具结果（未序列化；工具返回什么就是什么） */
+  result: unknown;
+  /** 结果正文的序列化字符数（默认规则的判据） */
+  chars: number;
+}
+
+/**
+ * 工具结果老化函数：把「已过期的结果」重新表达为短标记/摘要。
+ *
+ * 约束（违反会破坏前缀缓存与 write-once）：
+ * - **必须是纯函数**：同 (args, result) 恒返回同字节。不得读时钟、随机数、外部状态。
+ *   （老化计划每次装配都从完整历史重算，视图逐请求变化会让整段前缀失效。）
+ * - 返回 `undefined` = 不老化（保留原文），不是错误。
+ *
+ * @returns 替换文本；undefined 表示保留原文
+ */
+export type ToolResultAger = (input: ToolResultAgingInput) => string | undefined;
+
 /** 已注册的工具 */
 export interface RegisteredTool {
   definition: ToolDefinition;
@@ -318,4 +340,14 @@ export interface RegisteredTool {
    * fs 写工具必须声明：否则同一批次对同一文件的并发读改写互相覆盖（丢失编辑）。
    */
   executionMode?: 'parallel' | 'sequential';
+  /**
+   * 结果老化策略（唯一声明源，透传 AgentTool.ageResult 供老化层读取）。
+   *
+   * 写在这里 = 与 handler 同处：这个工具的结果「该留什么、怎么留」由它自己决定，
+   * 读代码的人不必去别处查表。未声明 = 走引擎默认规则（`maxPointerChars` 长度判据）。
+   *
+   * 老化层按**工具名**取函数（`RunScope.tools` → `AgentTool.ageResult`），
+   * 不经 toolBus 旁路，也不依赖 AgentTool 携带 `ToolDefinition`。
+   */
+  ageResult?: ToolResultAger;
 }

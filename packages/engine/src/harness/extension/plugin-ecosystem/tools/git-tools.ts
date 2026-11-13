@@ -222,6 +222,56 @@ function toText(
   };
 }
 
+/**
+ * git 输出结果的老化策略（`git_status` / `git_diff` 共用骨架）
+ *
+ * 判据是「这个结果描述的世界还会不会变」，不是结果大小：
+ * - `git_status`：工作树状态**按设计就会变** → 全丢 + 一句提示
+ * - `git_diff` unstaged/staged：补丁正文会过时 → 只留 stat 规模，正文丢弃
+ * - `git_diff --commit <sha>` / `git_show <sha>`：不可变事实 → 保留（超长也不丢）
+ *
+ * `isolation` / `durationMs` / `terminated` 等执行元数据对已老化结果无意义，
+ * 且 `isolation` 实测在同一会话内**只有一种取值**（52 条完全相同）——纯噪音，一并略去。
+ *
+ * @param args - 原始调用参数（判定 revision 是否固定 sha）
+ * @param result - 原始工具结果（`{ stdout, stderr, ... }`）
+ * @returns 替换文本；undefined = 保留原文
+ */
+function ageGitResult(args: Readonly<Record<string, unknown>>, result: unknown, toolName: string): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const r = result as { stdout?: unknown; exitCode?: unknown };
+  if (typeof r.stdout !== 'string') return undefined;
+  const stdout = r.stdout;
+  if (stdout.trim() === '') return `[aged ${toolName}] (no output)`;
+
+  // 固定 sha 的调用描述的是不可变事实：保留原文（超长也给头部 + 行数标记）
+  const rev = typeof args.revision === 'string' ? args.revision.trim() : '';
+  const fixedRev = /^[0-9a-f]{7,40}$/i.test(rev);
+  const mode = typeof args.mode === 'string' ? args.mode : '';
+
+  if (toolName === 'git_status') {
+    const lines = stdout.split('\n').filter((l) => l.trim() !== '');
+    const branch = lines.find((l) => l.startsWith('##')) ?? '';
+    const changed = lines.filter((l) => !l.startsWith('##')).length;
+    const head = branch.replace(/^##\s*/, '').slice(0, 80);
+    return `[stale git_status] ${changed} changed entries${head ? `, branch ${head}` : ''} — call git_status again for current state`;
+  }
+
+  if (toolName === 'git_diff' && mode === 'commit' && fixedRev) {
+    return undefined; // 某 commit 的 diff 永久有效 → 走默认规则
+  }
+  if (toolName === 'git_show' && fixedRev) {
+    return undefined;
+  }
+
+  // 其余（unstaged/staged diff、HEAD 类浮动 revision）：正文会过时，只留规模
+  const files = (stdout.match(/^diff --git /gm) ?? []).length;
+  // `+++ b/x` 是文件头，不是新增行：负向前瞻须吃掉两个 `+`
+  const added = (stdout.match(/^\+(?!\+\+)/gm) ?? []).length;
+  const removed = (stdout.match(/^-(?!--)/gm) ?? []).length;
+  return `[stale ${toolName}] patch dropped: ${files} file(s), +${added} −${removed} lines${fixedRev ? ` @ ${rev.slice(0, 12)}` : ''} — call again for current patch`;
+}
+
 /** git_status — porcelain working tree status */
 export function createGitStatusTool(): RegisteredTool {
   return {
@@ -239,6 +289,7 @@ export function createGitStatusTool(): RegisteredTool {
         },
       },
     },
+    ageResult: ({ args, result }) => ageGitResult(args, result, 'git_status'),
     handler: async (args, context) => {
       const cwd = resolveCwd(context, args.cwd as string | undefined);
       const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
@@ -283,6 +334,7 @@ export function createGitDiffTool(): RegisteredTool {
         },
       },
     },
+    ageResult: ({ args, result }) => ageGitResult(args, result, 'git_diff'),
     handler: async (args, context) => {
       const cwd = resolveCwd(context, args.cwd as string | undefined);
       const modeRaw = (args.mode as string) ?? 'unstaged';

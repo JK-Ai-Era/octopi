@@ -67,6 +67,18 @@ export function createTaskListTool(service: SessionTaskService): RegisteredTool 
         },
       },
     },
+    /**
+     * 结果老化：**整体丢弃**，只留「调用发生过」的最小标记。
+     *
+     * 依据：任务状态在本请求里已有**活读**副本——`renderSessionTasksInjection(session.tasks)`
+     * 每次 run 起点注入 `<session_tasks>`（未完成 goal 的 id / status / description /
+     * 步骤进度 / 进展备注）。所以旧的 task_list 结果不是信息补充，而是**同一信息的
+     * 过期副本**；而 task_list 是本地查询、零网络成本，重查比读副本更准。
+     *
+     * 不给「计数摘要」：计数器没有时态标记，40 条消息后会被读成当前事实；
+     * 活注入写的是「当前会话未完成任务」，时态明确。
+     */
+    ageResult: () => '[stale task_list] call task_list again for current tasks',
     handler: async (args, context) => {
       const status = args.status as SessionTaskStatus | undefined;
       const parentId = args.parent_id as string | undefined;

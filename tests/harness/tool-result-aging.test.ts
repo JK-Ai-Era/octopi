@@ -166,13 +166,15 @@ describe('tool-result-aging plan', () => {
   });
 
   it('should only degrade when the pointer is strictly smaller than the body', () => {
-    // 不膨胀守卫：maxPointerChars=200 时指针（骨架+截断轮廓）比 ~250 字符正文更长 → 不降级
-    const opts = OPTS({ rawWindow: 0, freezeBatch: 1, maxPointerChars: 200 });
+    // 不膨胀守卫：maxPointerChars=100 时指针（骨架 ~103 + 轮廓 48）比 120 字符正文更长 → 不降级。
+    // 指针去噪（2026-11-13）后 args 轮廓移除，默认 400 下指针恒短于预筛阈值，
+    // 守卫只在**小旋钮**（<176）时才有真实触发路径——故此处用小值构造。
+    const opts = OPTS({ rawWindow: 0, freezeBatch: 1, maxPointerChars: 100 });
     const hugeArgs = { blob: 'a'.repeat(600) };
-    const body = 'x'.repeat(248);
+    const body = 'x'.repeat(120);
     const tr: FixtureToolResult = { toolCallId: 'c-big', name: 'file_read', result: body };
     const pointer = agedToolResultPointer(tr, hugeArgs, opts);
-    expect(pointer.length).toBeGreaterThan(250); // 指针比原文长（285 > 250）
+    expect(pointer.length).toBeGreaterThan(body.length); // 指针比原文长
     // 计划层同样拒绝（构造同形消息）
     const messages = [
       { role: 'user', content: 'q', timestamp: 1 } as Message,
@@ -202,11 +204,13 @@ describe('tool-result-aging plan', () => {
     const p3 = agedToolResultPointer(mk(), { path: 'src/a.ts' }, opts);
     expect(p2).toBe(p1); // 不同对象、同输入 → 恒同字节（纯函数定形）
     expect(p3).toBe(p1);
-    // 结构：工具名 + 参数要点 + 结果轮廓 + re-run 提示
-    expect(p1).toContain('tool: file_read');
-    expect(p1).toContain('src/a.ts');
+    // 结构：工具名 + 结果长度 + 结果轮廓 + 短提示（不含参数轮廓，见模块注）
+    expect(p1).toContain('file_read');
     expect(p1).toContain('result 800 chars: ');
-    expect(p1).toContain('do NOT re-run');
+    expect(p1).toContain('re-run');
+    // 参数轮廓已移除：tool_use 就在前一条消息里，重复无收益（2026-11-13 实测 98 字符/条）
+    expect(p1).not.toContain('args: ');
+    expect(p1).not.toContain('src/a.ts');
   });
 
   it('命令头部不被内容预算挤出（多命令累加也不整体省略）', () => {
@@ -352,7 +356,7 @@ describe('DefaultContextEngine — aged LLM view', () => {
     const raw = toolTexts.filter((t) => !t.includes('[aged tool result'));
     expect(aged).toHaveLength(2); // A1/A2 过冻结线 → 指针（B/C 不在视图）
     expect(raw).toHaveLength(2); // D1/D2 当前 run → 原文
-    expect(aged.every((t) => t.includes('tool: file_read'))).toBe(true);
+    expect(aged.every((t) => t.includes('file_read'))).toBe(true);
   });
 
   it('should keep the aged view byte-stable across rebuilds (cache-stable)', async () => {

@@ -19,7 +19,7 @@
  * - 实际 token 数回写
  */
 
-import type { Message } from '@octopi-agent/core/types.js';
+import type { Message, ToolResultAger } from '@octopi-agent/core/types.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { RequestView } from '@octopi-agent/core/loop/types.js';
@@ -279,6 +279,7 @@ export class DefaultContextEngine implements ContextEngine {
       messages,
       systemPrompt,
       tools,
+      toolAgers,
       contextWindow,
       maxOutputTokens,
       compactTargetTokens,
@@ -302,7 +303,7 @@ export class DefaultContextEngine implements ContextEngine {
 
     // F1-B2：老化计划基于**完整历史**（append-only）一次算好、随视图复用。
     // 估算（estimateLLMMessages）作用于老化后的 LLM 视图，尺子与实际请求一致。
-    const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging);
+    const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging, { toolAgers });
 
     // 窗口未知且无显式 compactTargetTokens：跳过基于预算的自动压缩/截断
     const budgetCap = params.tokenBudget ?? contextWindow ?? compactTargetTokens;
@@ -470,6 +471,7 @@ export class DefaultContextEngine implements ContextEngine {
     // 发送视图（fold+overflow aging）估算 ≤ 决策预算即无需压缩。
     const overflowAgingOpts = resolveToolResultAgingOptions(this.config.historyAging);
     const overflowAgingPlan = computeToolResultAgingPlan(messages, overflowAgingOpts, {
+      toolAgers,
       ignoreTurnBoundary: true,
     });
     const fits = (ms: Message[]): boolean =>
@@ -1578,6 +1580,8 @@ export class DefaultContextEngine implements ContextEngine {
     /** 同形前缀原料：systemPrompt 齐备时引擎内建前缀（与 assemble 同一 buildRequestView 出口） */
     systemPrompt?: string;
     tools?: LLMToolDefinition[];
+    /** 工具老化函数表（报告尺与真实请求同式；缺省 = 全部走默认规则） */
+    toolAgers?: ReadonlyMap<string, ToolResultAger>;
     /** task 快照：交接式摘要指令尾部注入（B0 易变块走 content 尾部，不进 system） */
     taskSnapshot?: string;
     /** 会话模型窗口/输出上限（评审 F5）：摘要请求硬顶按窗口钳制，防最满时压缩被 400 */
@@ -1603,7 +1607,9 @@ export class DefaultContextEngine implements ContextEngine {
     );
     const systemText =
       (managedSystem ? getTextContent(managedSystem.content) : '') || params.systemPrompt;
-    const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging);
+    const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging, {
+      toolAgers: params.toolAgers,
+    });
     // 计量口径（2026-11-08 三数字核对拍板）：before/after 用「报告尺」= fold 视图 + 老化 +
     // system + tools 的未校准估算（rawRequestViewTokens，与 assemble 的 rawEstimatedTokens
     // /配对槽分母同式）。注意与「决策尺」分工：proactive/overflow 触发走

@@ -115,6 +115,67 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.11 (2026-11-13)
+
+### feat(context): per-tool 结果老化契约 + 指针去噪
+
+**问题**：老化的唯一判据是「结果 > `maxPointerChars`(400)」，对所有工具一视同仁。但这个判据与「结果是不是还该留在上下文里」无关——`task_list` 返回的 15,408 字符任务树是**当前状态的过期副本**（live 副本每个 run 都由 `renderSessionTasksInjection` 注入），而 200 字符的 `git_diff` 可能还是下一步要对照的依据。
+
+**实测（两个生产会话）**：
+
+| 工具 | 保留原文 | 老化指针 |
+|---|---|---|
+| file_search | 43,813 | 45,837 |
+| shell | 43,108 | 10,740 |
+| file_edit | 16,359 | **56,861** |
+| task_list | 15,408（单项） | 0 |
+
+指针本身 53% 是噪音：`args` 轮廓 98 字符（130 条**全部**恰好 98 = 预算 80 + 截断标记，机械截断从不承载信息；对应 `tool_use` 就在前一条消息里，`ageToolArgs` 还全保 path/command/id）+ 旧尾句 81 字符（「do NOT re-run」重复 130 遍）。
+
+**改动**：
+
+1. **`RegisteredTool.ageResult`**（core）：工具声明自己的老化策略，与 `handler` 同处。返回 `undefined` = 不老化。**必须纯函数**——老化计划每次装配都从完整历史重算，掺入时钟/随机数会让视图逐请求变化、打穿前缀缓存（契约注释已写明）。
+2. **透传链**照 `executionMode` 同款：`RegisteredTool.ageResult` → 三处同构映射 → `AgentTool.ageResult` → `collectToolAgers()` → `AssembleParams.toolAgers` → `computeToolResultAgingPlan`。审计到 `AgentTool` 已承载 `prepareArguments`/`validate` 等执行期函数，且从不跨线，故不再另设旁路（旁路漏接只能静默回落）。
+3. **跳过长度预筛**：有 ager 的工具不看 `maxPointerChars`（作者决定什么是该丢的，与结果大小无关）；保留不膨胀守卫与 error 红线。
+4. **指针去噪**：去掉 args 轮廓与重复尾句，`449 → 282` 字符（**−37.2%**；本会话 225 条指针省 37,575 字符）。附带效果：默认规则下指针恒短于预筛阈值，不膨胀守卫只在 `maxPointerChars < 176` 时才有真实触发路径（测试已按此重写）。
+
+**批 1 落地三个工具**：
+
+- **`task_list`** → 整体丢弃为最小标记。不给计数摘要：计数器**没有时态标记**，40 条消息后会被读成当前事实；live 注入写的是「当前会话未完成任务」，时态明确。
+- **`git_status`** → 全丢 + 计数/分支摘要。工作树状态按设计就会变。
+- **`git_diff`** → 按 revision 可变性分流：`mode=commit` + 固定 sha → 保留原文（不可变事实）；unstaged/staged/浮动 revision（HEAD、分支名）→ 正文丢弃，只留文件数与增删行数。
+
+**未改动 / 已知缺口**：
+
+- **`git_log` / `git_show` 不写 ager**：实测 `git_log` 仅占 1,043 字符、`git_show` 两个会话零调用，投机改动无收益，走默认规则。
+- **`git_show` 默认 `revision='HEAD'`**（此前判断为「不可变事实」，已证伪）：HEAD 会移动，因此 `git_show` 的「保留」只在显式固定 sha 时成立。该分支本批不实现，等真有调用量再落地。
+- **manual 压缩的报告尺**仍用默认规则（`structuralCompact` 的 `toolAgers` 参数暂未从 runner 侧透传）：偏保守——测得的老化后视图略大于真实视图，不会低估。
+
+**影响面**：`ToolResultAgingPlan` 新增 `agersByCallId`（`applyAgingToMessages` 签名不变，5 个调用点零改动）；`AssembleParams` 新增可选 `toolAgers`；`AgentTool`/`RegisteredTool` 各新增可选 `ageResult`（旧代码不受影响）。指针格式变化会让**所有存活会话**各自的已老化视图重算一次（一次性前缀重填），此后恢复 write-once 稳定。
+
+---
+
+---
+
+## v0.113.10 (2026-11-13)
+
+### fix(tenancy): knowledge 写归属护栏——broker token 无 claim 不写 platform 共享面
+
+T3a 收尾修复（`arch/multi-tenancy.md` §6）。上一批把 gateway 的 Knowledge Service token 域提到 `platform`（受信 broker，读口需要全量视图），但 `upsertPrincipal` / `createProject` 等写路径直接用 `identity.tenantId`——broker token 没有显式 claim 时，**用户资产会被写进 `platform` 共享面**，与存量 `default` 域数据分叉（重启后 principal 会分成两套）。
+
+- **单点收口在鉴权边界**：`http-app#authenticate` 增 `writeTenantId`——token 域为 `platform` 且无显式 `x-octopi-tenant` 断言时，写域降级 `DEFAULT_TENANT_ID`；`identityOf()` 写路径取 `writeTenantId ?? tenantId`。读口不受影响（platform 仍是 broker 全量视图）。
+- **显式 claim 仍可建公共库**：broker token + 断言 `platform` 时写域就是 `platform`（platform 公共库必须显式声明，绝不隐式产生）。
+- **一次实现覆盖全部写方法**：principal / project / source / visibility / membership 都走同一 `identityOf`，不逐方法撒护栏（避免又一次漏路径）。
+
+### fix(plugin/weixin): vault 降级日志收敛为每进程一次
+
+`OCTOPI_CREDENTIALS_KEY` 未配置时 vault 永远写不进去，旧的 `saveState()` 在**每次状态变化**（包括 cursor-only 保存）都打一条 error，把日志刷满且掩盖真实信息。
+
+- 新增 `reportVaultDegraded()`：读/写失败各报一次（每进程），文案给出可操作指引（设置 `OCTOPI_CREDENTIALS_KEY` / `_FILE`），并说明降级形态（token 留在 0600 状态文件）。
+- 降级行为本身不变（token 仍内联保存、通道继续可用），失败依旧大声——只是不再重复刷屏。
+
+---
+
 ## v0.113.9 (2026-11-13)
 
 ### fix(client-tools): 工具面粘滞 + 快照 TTL 续期——消除客户端工具上下线烧毁前缀缓存
@@ -145,22 +206,7 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.113.10 (2026-11-13)
-
-### fix(tenancy): knowledge 写归属护栏——broker token 无 claim 不写 platform 共享面
-
-T3a 收尾修复（`arch/multi-tenancy.md` §6）。上一批把 gateway 的 Knowledge Service token 域提到 `platform`（受信 broker，读口需要全量视图），但 `upsertPrincipal` / `createProject` 等写路径直接用 `identity.tenantId`——broker token 没有显式 claim 时，**用户资产会被写进 `platform` 共享面**，与存量 `default` 域数据分叉（重启后 principal 会分成两套）。
-
-- **单点收口在鉴权边界**：`http-app#authenticate` 增 `writeTenantId`——token 域为 `platform` 且无显式 `x-octopi-tenant` 断言时，写域降级 `DEFAULT_TENANT_ID`；`identityOf()` 写路径取 `writeTenantId ?? tenantId`。读口不受影响（platform 仍是 broker 全量视图）。
-- **显式 claim 仍可建公共库**：broker token + 断言 `platform` 时写域就是 `platform`（platform 公共库必须显式声明，绝不隐式产生）。
-- **一次实现覆盖全部写方法**：principal / project / source / visibility / membership 都走同一 `identityOf`，不逐方法撒护栏（避免又一次漏路径）。
-
-### fix(plugin/weixin): vault 降级日志收敛为每进程一次
-
-`OCTOPI_CREDENTIALS_KEY` 未配置时 vault 永远写不进去，旧的 `saveState()` 在**每次状态变化**（包括 cursor-only 保存）都打一条 error，把日志刷满且掩盖真实信息。
-
-- 新增 `reportVaultDegraded()`：读/写失败各报一次（每进程），文案给出可操作指引（设置 `OCTOPI_CREDENTIALS_KEY` / `_FILE`），并说明降级形态（token 留在 0600 状态文件）。
-- 降级行为本身不变（token 仍内联保存、通道继续可用），失败依旧大声——只是不再重复刷屏。
+---
 
 ## v0.113.8 (2026-11-13)
 
@@ -177,6 +223,8 @@ T3a 收尾修复（`arch/multi-tenancy.md` §6）。上一批把 gateway 的 Kno
 **评审（del-37149829）**：5 MAJ 中 MAJ-1/2/3/5 已修（详见 `arch/multi-tenancy.md` §10.2），MAJ-4 控制面读口租户闸随 T3b；MIN 结构性项（client 实例级 tenant provider、2N 查询、platform 保留字、client 分支测试锚）登记 T3b 边界。
 
 **边界（T3b）**：registry sources/mounts HTTP 面与受管注册入口（归属 claim 的权威来源）、控制面读口租户闸、§9.1-1 检索投影租户列。
+
+---
 
 ## v0.113.7 (2026-11-13)
 
@@ -201,6 +249,8 @@ T3a 收尾修复（`arch/multi-tenancy.md` §6）。上一批把 gateway 的 Kno
 BREAKING: ① credentials.db 唯一键 `(name)` → `(name, scope_level, scope_key)`，同名凭证可分域共存（打开时自动迁移）；② 新物化 workspace 布局 = `workspace/<tenantId>/<agentId>/`（显式 config 不变）；③ registry agent definition 收紧为白名单 + 禁 env 引用（此前透传任意键的 definition 会被拒）；④ 无归属凭证解析不再触达租户私有行（管理面元数据不受影响）。
 
 已知边界（arch/multi-tenancy.md §9.1）：session 租户 → 派发 principal 接线随 T4（config agent 上的租户会话暂为平台域解析）；registry agent 删除不回收家当；legacy 平面布局与 `default` 租户段前缀同形的共存边角。
+
+---
 
 ---
 
@@ -255,6 +305,8 @@ BREAKING: ① credentials.db 唯一键 `(name)` → `(name, scope_level, scope_k
 
 **验证**：`tests/registry.test.ts` 15/15（注册/归属/可见性/授权/绑定/挂载/同租户断言）；全量 4718 绿；lint 0；arch/check-sync 绿。
 
+---
+
 ## v0.113.3 (2026-11-13)
 
 ### docs(compact): 摘要请求前缀缓存修复的生产复验结论
@@ -266,6 +318,8 @@ BREAKING: ① credentials.db 唯一键 `(name)` → `(name, scope_level, scope_k
 **读法提醒**：压缩后第一个 step 必然冷 prefill（实测 `cached 25,984 / 41,396` = 62.8%，中段原文已被摘要替换），这是压缩的固有代价，不是缺陷。
 
 **无代码改动**：本条只落文档（`arch/compaction-architecture.md` 同步补入数字），版本号规则按内容提交统一递增。
+
+---
 
 ---
 
@@ -285,6 +339,8 @@ BREAKING: ① credentials.db 唯一键 `(name)` → `(name, scope_level, scope_k
 
 ---
 
+---
+
 ## v0.113.1 (2026-11-13)
 
 ### fix(providers): Anthropic 线上编码统一角色交替（连续 user 归一）
@@ -300,6 +356,8 @@ BREAKING: ① credentials.db 唯一键 `(name)` → `(name, scope_level, scope_k
 **一次性的缓存代价**：合并点之后的消息条数变化，会使该点之后的线上前缀与旧版本不同，升级后每条会话有一次冷 prefill（随后稳定，因为合一是纯函数）。这与「修掉潜在 400」相比是可接受的交换——严格端点上的 400 是硬失败。
 
 **未覆盖**：`openai` 适配器不做合并（Chat Completions 允许连续 user）。若某个 OpenAI 兼容端点也拒绝，可按同一 helper 接入。
+
+---
 
 ---
 
@@ -326,6 +384,8 @@ BREAKING: ① credentials.db 唯一键 `(name)` → `(name, scope_level, scope_k
 
 **残留边界（如实记录，不假装修好）**：`transformLlmMessages` 在 `convertToLlm` **之后**运行（`agent.ts`），插件迭代快照等 hook 会改写 wire 消息——此时摘要前缀与主请求的 messages 半区可能不同，指纹只直接比对了 tools。彻底收口需把最终 wire 视图纳入 step 快照，留待 P2。manual 压缩的 aging 计划仍由 `compactStructural` 从会话存储消息独立推导（纯函数，内容相同则结果相同），无 run 可复用。
 
+---
+
 ## v0.112.10 (2026-11-12)
 
 ### fix(compact): 摘要请求带会话同形工具面（前缀缓存 0 命中根治）
@@ -350,6 +410,8 @@ BREAKING: ① credentials.db 唯一键 `(name)` → `(name, scope_level, scope_k
 **评审处置**（del-e7d5670b，3 MAJ / 5 MIN / 3 NIT）：MAJ-1（旁路带工具面）、MAJ-2（截断静默）、MAJ-3（manual 工具面未过 run 漏斗）三条属实已修；MIN-1（v0.112.9 标题被 prepend 吃掉）、MIN-2（manual 路缺测试）、MIN-3（toolCall 未检测）已修；MIN-4（拒绝 `tool_choice` 的端点）与 MIN-5（raw/calibrated 两把尺）按「记录为已知边界」处理（前者需 provider 层 400 重试，后者需扩 `CompactTokenEstimator`，均已写入 §残留边界/后续项）；NIT-1/2/3 中 2 已改（barrel 导入），1/3 记注释。
 
 **验证**：全量 4686 passed / 7 skipped（462 files）；`npm run lint` 0（含 typecheck:tests 基线）；`arch/check-sync.sh` 全绿。新增行为钉 `tests/harness/summary-request-tools.test.ts`（引擎透传同一实例 + 固定 none、无工具面时不编造、proactive 接线锚、两适配器 wire body）与 `tests/harness/summary-request-tools-review.test.ts`（旁路不带工具面、Runner 工具面漏斗含 policy deny、截断/tool_call fail loud）。**待生产实测**：重启 gateway 后再做一次压缩，wire dump 的摘要请求应出现 `inputCachedTokens ≈ 前缀体量`（此前恒为 0）。
+
+---
 
 ## v0.112.9 (2026-11-12)
 
@@ -378,6 +440,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - **一个真问题被类型逮住**：`supervise-drills` 直传 `FleetRunBackend` 给 `PulseScheduler`（`PulseFleet` 契约要 `pulse(key)`，实现是 `control({type:'pulse'})` 转发适配器）——测试此前未触发单发路径故未炸。已按 gateway 真实接线补同构适配器（测试缝与生产组合根同路径，MAJ-1 教训同类）。
 - 全量 4672 绿（行为零回归）。
 
+---
+
 ## v0.112.7 (2026-11-12)
 
 ### fix(delegation): cross-process notify bridge — 子 agent 完成后自动返回父对话
@@ -386,6 +450,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - **根因**：委派完成的唤醒链（notifier → `emitAgentSignal` → `AgentSignalSource` → `AgentRuntime.dispatch` → 父 session 队列）要求总线上有 dispatch 消费方。四服务拆分后委派执行搬进 run 子进程，而「run-serve-child 本入口不构造 AgentRuntime / TriggerSource」——notify 只能 `notifyPush: false` 退化为 poll/hint fallback，而 hint 只在父会话下一次 turn 出现 → 无人唤醒则永不出（旧单体路径 `[Gateway] … notify push on` 与此对比）。
 - **修复**（零协议变更）：run 子进程挂 `AgentSignalSource`，Trigger 出口接 `notify('redispatch')` 透传回 gateway（既有 case → `runtime.dispatch` → 父 session 队列）；`notifyPush` 改 on（接收端已存在，notifier 正常投递）。跨版本兼容：旧 gateway 已有 redispatch case（向后兼容），旧 child 不发即无影响。
 - 测试：`run-serve-delegation-bridge`（桥接收 Trigger 完整性含 delegationId / 无接收端 fail-loud 不误标已送达 / stop 后回收；gateway redispatch → dispatch 语义守卫）。
+
+---
 
 ## v0.112.6 (2026-11-12)
 
@@ -398,6 +464,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - 测试基建：`run-remote-backend` 的 /tmp boot 扫描容「读毕即删」竞态（并行测试文件的 boot 在 readdir 后消失是正常竞态，ENOENT 跳过；此前全量并行偶发炸在此处）。
 - 测试：`bootstrap-replicas`（replicas=2 真 fork 双实例 + 缺省不变 + 日志行解析）。
 
+---
+
 ## v0.112.5 (2026-11-12)
 
 ### fix(compact): compact transport budget — UI 压缩超时误报修复
@@ -407,6 +475,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - **修复**：compact 的传输预算**恒不设限**（显式 `null`）——锁等待无上界，设任何固定界都会把「还在排队/跑」误报成失败；任务层 `summarizeTimeoutMs` 超时降级兜底不变，UI「压缩中…」+ 计时即反馈通道（非零反馈假死）。`control` 三态语义：options 缺省 = 30s（轻量 op 不变）、显式 `null` = 不设限、`number` = 该预算。
 - **评审 MAJ-2**：三态必须用显式 `null` 表达「不设限」——`options?.timeoutMs ?? 30_000` 会把显式不设限兜回 30s，退回误报症状；回归锚含 transport 层 signal 三态断言（缺省有 signal / null 无 signal / number 有 signal）。
 - 测试：`compact-timeout-budget`（恒 null ×3 预算档 + transport 三态）。
+
+---
 
 ## v0.112.4 (2026-11-12)
 
@@ -420,6 +490,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - 已知边界：IPC（notify）与 NDJSON 流两路到达无序时，流首批 timeline 事件可能因 record 未建被丢（观测 fail-open，≤ 几条）；gateway hub 为镜像内存态（重启丢观测历史）。
 - 测试：`runner-observed-sink`（分流/fail-open）、`gateway-observer-bridge`（补建/timeline 归属/镜像）、`observer-hub-lifecycle`（双轮归属幂等/messages 消费，评审 MAJ-1/MIN-1 回归锚）。
 
+---
+
 ## v0.112.3 (2026-11-12)
 
 ### fix(context): stop truncating shell commands in aged tool-call args (OP-TOOL-1 follow-up)
@@ -428,6 +500,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - **代价记录**：shell 密集会话请求体较「头部 100 + 尾标记」方案增大（v0.86 实测口径：命令均长 414，全保 ≈ +8.6% 请求体）——经拍板接受。
 - `elidedCommandTail` 文本尾标记在 aging 侧退役（词汇表保留该形态，用于冻结历史存量的检测拒收）；`COMMAND_HEAD_CHARS` 常量删除；预算机制不动（命令本就锚点豁免）。
 - 验证：4647 测试绿（新增「超长命令全保」用例；命令断言改为全保相等）。
+
+---
 
 ## v0.112.2 (2026-11-12)
 
@@ -448,6 +522,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 
 ---
 
+---
+
 ## v0.112.1 (2026-11-12)
 
 ### test(gateway): P1-5 验收演练 — V1 并发零冲突 + V6 撞锁取证
@@ -455,6 +531,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - **V1（真进程验收）**：两个真 run 实例 + 两会话并发 run（假 LLM 即时回包）→ 会话文件各自完整独立（无交叉污染）、lease 各自持有、双双终态（`tests/fleet-v1-concurrency.test.ts`）。
 - **V6（OP-KNOW-LOCK 取证）**：`tests/knowledge-lock-forensics.test.ts` 钉实测行为——取证点 A：IPC 断连后 child 按设计继续服务（独立部署契约 ✓）；取证点 B：占锁存活下再拉起同库必拒 "already locked by PID"——**撞锁缺口实锤**（此前为推断）。完整接管随 knowledge 服务化设计（大哥拍板：P1 只取证）；当前报错已是指导型。
 - §11 演练矩阵至此：V1 ✓（本批）/ V2 ✓（v0.111.0 锚）/ V3 ✓（v0.112.0 锚）/ V4 ✓（v0.112.0 锚）/ V5 ✓（v0.111.1 编排锚）/ V6 ✓（本批）。
+
+---
 
 ---
 
@@ -471,6 +549,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 
 ---
 
+---
+
 ## v0.111.2 (2026-11-12)
 
 ### feat(gateway): P1-3b run 事件归档 — Observer 归属收口（OP-P0B-1 ④，Q3=(a)）
@@ -484,6 +564,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 
 ---
 
+---
+
 ## v0.111.1 (2026-11-12)
 
 ### feat(gateway): P1-3a 漂移处置编排 — reattest 优先，失败滚动替换（service-topology §5，Q2=(a)）
@@ -494,6 +576,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - §7.3 漂移语义逐字不变（ops P2 拍板不重开）：每实例各自锚定、run 起点复核、漂移拒新 run 全 fleet 一致——本批只做处置（恢复），不改检测。
 - 测试锚 `tests/drift-remediate.test.ts` 三例（成功留任/失败滚换/替换失败留痕/结构化明细）；全量 4633 passed。
 - H7 mojibake 守卫抓到 fanOut 注释行内 `error?` 截断残留样式——改注释文案（不改守卫）。
+
+---
 
 ---
 
@@ -511,6 +595,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 
 ---
 
+---
+
 ## v0.110.1 (2026-11-12)
 
 ### refactor(engine): P1-1b RunBackend 契约拆分 — 脚手架面归 RunHost 域（OP-P0B-1 ③）
@@ -518,6 +604,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - **契约边界**：`RunBackend` 接口瘦身为 gateway 消费面（`execute`/`sessionLock`/`compactSession`/`health`/`disposeAll`）；P0a 脚手架面 `mount`/`get`/`handles`/`mountedAgentIds`/`retire` 从契约删除。
 - **类型归属**：`RunBackendMountSpec`/`InProcessAgentHandle` 迁 `harness/run/run-host.ts`（执行体装配是 run 服务自身面，不是 gateway 消费面）；`RunHost.mount` 活机制保留不变。激活域（activation）不再 re-export（依赖方向不变：run → activation）。
 - 行为冻结：全量 4625 passed（与拆分前一致）；纯类型面手术，零运行时行为变化。
+
+---
 
 ---
 
@@ -535,6 +623,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 
 ---
 
+---
+
 ## v0.109.3 (2026-11-12)
 
 ### fix(context): aged tool-call args switch to object-form elision markers + marker teaching notes (OP-TOOL-1)
@@ -544,6 +634,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 - **教学面**：平台宪法 §E 新增「Degradation markers are metadata, never arguments」禁令小节；`ELISION_MARKER_SYSTEM_NOTE` 注入 system 固定块（TOOL_PURPOSE_SYSTEM_NOTE 之后）——生成 tool call 时的就近提醒。文案与词汇表同源。
 - **Breaking note**：对老化视图做字符串匹配的下游消费者需同步识别 `{"$octopi_elided": …}` 形态；老化视图中 schema 期望 string 的值位置可能出现对象（设计使然，session 持久层不受影响）。
 - 验证：全量 4621 测试绿（新增 11 用例：对象形/字符串化检测、派发拒收、注记恒在、不误伤）。
+
+---
 
 ## v0.109.2 (2026-11-12)
 
@@ -635,6 +727,8 @@ replicasPerVersion max(64) 的生成产物随 v0.112.6 源改动补提交。
 
 ---
 
+---
+
 ## v0.107.2 (2026-11-11)
 
 ### fix(core/engine): OP-TOOL-1 — elision vocabulary namespaced + degraded tool args rejected at dispatch
@@ -695,6 +789,8 @@ regression, missing trace `id`, head-only truncation and the vocabulary gaps
 are fixed in this batch; remaining debt: guard telemetry + retry circuit
 breaker, `trimSession` full-index re-parse cost, `TOOL_CALL_ARGS_CAPTURE_CAP`
 config exposure.
+
+---
 
 ---
 
@@ -773,6 +869,8 @@ cure lies in this batch's shutdown/disposal fixes (F2/m8 family; individual
 member not isolated). Attribution correction: **not** test-exit hygiene — the
 ghosts were Node-bookkeeping shadows of undisposed shutdown work (the
 lsof zero-OS-leak finding still holds). No vitest upstream defect to track.
+
+---
 
 ---
 
@@ -888,6 +986,8 @@ consumers); `resolveSummaryToolBindings` now lives in engine (daemon re-export k
 
 ---
 
+---
+
 ## v0.106.1 (2026-11-10)
 
 ### refactor(gateway): extract RunBackend contract seam (P0a, behavior-frozen)
@@ -914,6 +1014,8 @@ consumers); `resolveSummaryToolBindings` now lives in engine (daemon re-export k
   anchors: mount fail-loud, retirement criteria under fake timers, in-flight accounting,
   concurrent first-mount regression); tsc green for core/engine/gateway; lint green.
 - No breaking changes (behavior-frozen refactor apart from the leak fix).
+
+---
 
 ---
 
@@ -962,6 +1064,8 @@ release's closure-first design.
   the npm fetch/verify/loadability-deploy pipeline and rejection of
   non-plugin or unloadable packages.
 
+---
+
 ## v0.105.6 (2026-11-10)
 
 ### fix(plugin): plugin doctor finds deployed copies by manifest id (P6-5 follow-up)
@@ -987,6 +1091,8 @@ of a tautological ok. Note: `plugin sync` still deploys to `plugins/<id>`
 - Verified: build/lint/full suite (431 files, 4492 tests)/arch-check-sync
   green; 2 new cases cover odd-directory-name discovery and the
   self-comparison info semantics.
+
+---
 
 ## v0.105.5 (2026-11-10)
 
@@ -1033,6 +1139,8 @@ as the loader would refuse it).
   sweeping, symlink content-copy and refusal, loader-rule entry checks,
   swapIn rollback preservation (injected rename failures) and stale-file
   removal/dev-file exclusion.
+
+---
 
 ## v0.105.4 (2026-11-10)
 
@@ -1093,6 +1201,8 @@ adopted, its inline token moved into the vault on first save). Manifest
 
 ---
 
+---
+
 ## v0.105.3 (2026-11-10)
 
 ### feat(plugin): contribution instance registry + api.getContributionInstance (P6-3)
@@ -1149,6 +1259,8 @@ window.
 
 ---
 
+---
+
 ## v0.105.2 (2026-11-10)
 
 ### feat(plugin): optional ChannelAdapter.status() + gateway health (P6-2)
@@ -1167,6 +1279,8 @@ when paired and polling). Public docs updated in both languages.
 - Verified: build/lint/428 files 4418 tests/arch-check-sync green; new tests
   cover the gateway default/verbatim/throwing paths and weixin
   dormant/running/degraded transitions.
+
+---
 
 ---
 
@@ -1205,6 +1319,8 @@ field) instead of four copied pipeline blocks.
 
 ---
 
+---
+
 ## v0.105.0 (2026-11-09)
 
 ### feat(plugin): weixin channel (WeChat ClawBot) + live-traffic fixes
@@ -1215,3 +1331,6 @@ field) instead of four copied pipeline blocks.
 - **实测踩坑修复**：iLink 成功响应省略 `ret` 字段即成功、`errcode` 显式非 0 即失败（对齐社区参考实现并双向锁定）；响应缺新游标时 fail-loud 防同批无限重投；`errcode=-14` 死 token 重配对耗尽后通道休眠（`weixin_pair` 为唯一恢复入口，杜绝无人值守的 QR 风暴）；配对竞态修复（`pair()` 同步占锁，双调不再产生双轮询双投递）。
 - **评审处置**：独立评审 del-3b60a9ef（1 blocker/10 major/15 minor/7 测试保真）逐条核实全部修复（含探针实证的双跑竞态与无限重投）；处置记录 `v0105-review-disposition.md`。
 - **决策**：cordis 不作为插件系统运行时垫底（评估记录 `arch/plugin-system-v1.md`）。
+
+---
+

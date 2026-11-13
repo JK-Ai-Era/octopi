@@ -23,7 +23,7 @@
  * @module harness/context/tool-result-aging
  */
 
-import type { Message } from '@octopi-agent/core/types.js';
+import type { Message, ToolResultAger } from '@octopi-agent/core/types.js';
 import { AGED_POINTER_PREFIX, TRUNCATED_MARK, elidedValueMarker, isElisionToken } from '@octopi-agent/core/elision.js';
 import { isTurnAnchor } from './layer-types.js';
 import { toolResultBody } from './tool-result-body.js';
@@ -69,20 +69,48 @@ export interface ToolResultAgingOptions {
   maxAgedArgChars: number;
 }
 
+/**
+ * 从工具面收集「工具名 → 老化函数」表
+ *
+ * 供装配层把 `AgentTool.ageResult` 传给老化计划。只收有声明的工具——
+ * 未声明者不进表 = 走默认规则（长度判据 + 机械指针）。
+ *
+ * @param tools - 本 run 实际发送的工具面（`RunScope.tools` / `AgentContext.tools`）
+ * @returns 名字→函数表；无任何声明时返回 undefined（省去空表分配）
+ */
+export function collectToolAgers(
+  tools: ReadonlyArray<{ name: string; ageResult?: ToolResultAger }> | undefined,
+): ReadonlyMap<string, ToolResultAger> | undefined {
+  if (!tools?.length) return undefined;
+  let out: Map<string, ToolResultAger> | undefined;
+  for (const t of tools) {
+    if (!t.ageResult) continue;
+    out ??= new Map();
+    out.set(t.name, t.ageResult);
+  }
+  return out;
+}
+
 /** 老化计划：一次装配内的降级判定（基于完整历史的纯函数结果，跨轮稳定） */
 export interface ToolResultAgingPlan {
   /** 要降级为指针的 toolCallId 集合 */
   agedIds: ReadonlySet<string>;
   /** toolCallId → 工具调用参数（指针的「参数要点」来源；取自完整历史，裁剪视图中的孤儿也有参数） */
   argsById: ReadonlyMap<string, unknown>;
+  /**
+   * toolCallId → 工具自带老化函数（`AgentTool.ageResult`；未声明者不在表内 → 走默认规则）。
+   *
+   * 随计划传给 `applyAgingToMessages`，使该函数签名保持不变（5 个调用点零改动）。
+   */
+  agersByCallId: ReadonlyMap<string, ToolResultAger>;
 }
 
-/** args / result 轮廓占 maxPointerChars 的比例（合计 ~0.65，加固定骨架 ≈ 目标） */
-const ARGS_OUTLINE_RATIO = 0.2;
+/** 结果轮廓占 maxPointerChars 的比例（0.45；固定骨架 ≈ 70 字符） */
 const RESULT_OUTLINE_RATIO = 0.45;
 /** 轮廓下限（小旋钮下仍可读） */
-const MIN_ARGS_OUTLINE_CHARS = 24;
 const MIN_RESULT_OUTLINE_CHARS = 48;
+/** 指针在结果正文之后的短提示（旧文案 81 字符 × 每条指针，纯重复噪音） */
+const AGED_POINTER_HINT = ' (re-run to see full output)';
 /**
  * 参数摘要中「原样保留」的单个值上限
  *
@@ -146,7 +174,11 @@ interface CandidateEntry {
 export function computeToolResultAgingPlan(
   messages: Message[],
   opts: ToolResultAgingOptions,
-  override?: { ignoreTurnBoundary?: boolean },
+  override?: {
+    ignoreTurnBoundary?: boolean;
+    /** 工具名字 → 自带老化函数（`AgentTool.ageResult`）；未声明的工具走默认规则 */
+    toolAgers?: ReadonlyMap<string, ToolResultAger>;
+  },
 ): ToolResultAgingPlan {
   const argsById = new Map<string, unknown>();
   const ordered: CandidateEntry[] = [];
@@ -171,8 +203,9 @@ export function computeToolResultAgingPlan(
     }
   }
 
+  const agesByCallId = new Map<string, ToolResultAger>();
   const agedIds = new Set<string>();
-  if (!opts.enabled) return { agedIds, argsById };
+  if (!opts.enabled) return { agedIds, argsById, agersByCallId: agesByCallId };
 
   // 边界 = 完整历史最后一个真实 user（两遍判定：旧轮结果在遇到后续 user 前不可下结论）。
   // overflow 第 0 轮豁免（ignoreTurnBoundary）：全历史候选、rawWindow 归 0——
@@ -186,16 +219,34 @@ export function computeToolResultAgingPlan(
   const freezeBatch = ignoreTurnBoundary ? 1 : opts.freezeBatch;
   const candidates = crossTurn.slice(0, Math.max(0, crossTurn.length - rawWindow));
   const covered = candidates.length - (candidates.length % freezeBatch);
+  const toolAgers = override?.toolAgers;
   for (let i = 0; i < covered; i++) {
     const cand = candidates[i];
     if (cand.isError) continue; // 红线：error 结果永不降级（错误可追溯性优先）
+
+    const ager = cand.tr.name ? toolAgers?.get(cand.tr.name) : undefined;
+    if (ager) {
+      // 工具自定策略：跳过长度的预筛（作者决定什么是「该丢的」，与结果大小无关——
+      // task_list 470 字符也该丢）。仍保留不膨胀守卫：替换文本必须真的更短。
+      const replacement = ager({
+        args: (argsById.get(cand.toolCallId) as Record<string, unknown>) ?? {},
+        result: cand.tr.result,
+        chars: cand.bodyLength,
+      });
+      if (replacement !== undefined && replacement.length < cand.bodyLength) {
+        agedIds.add(cand.toolCallId);
+        agesByCallId.set(cand.toolCallId, ager);
+      }
+      continue;
+    }
+
     if (cand.bodyLength <= opts.maxPointerChars) continue; // 预筛：小于指针目标不值得
     const pointer = agedToolResultPointer(cand.tr, argsById.get(cand.toolCallId), opts);
     if (pointer.length < cand.bodyLength) {
       agedIds.add(cand.toolCallId);
     }
   }
-  return { agedIds, argsById };
+  return { agedIds, argsById, agersByCallId: agesByCallId };
 }
 
 // 指针 write-once 缓存：同 `tr` 对象 + 同配置指纹 → 同字节（toolResultBody 同款 WeakMap 先例；
@@ -239,10 +290,15 @@ export function applyAgingToMessages(
     const results = msg.toolResults.map((tr) => {
       if (!plan.agedIds.has(tr.toolCallId)) return tr;
       changed = true;
-      return {
-        ...tr,
-        result: agedToolResultPointer(tr, plan.argsById.get(tr.toolCallId), opts),
-      };
+      // 工具自带策略优先；未声明者走默认机械指针（同一次装配内同一函数，保 write-once）
+      const ager = plan.agersByCallId.get(tr.toolCallId);
+      const replacement =
+        ager?.({
+          args: (plan.argsById.get(tr.toolCallId) as Record<string, unknown>) ?? {},
+          result: tr.result,
+          chars: toolResultBody(tr).length,
+        }) ?? agedToolResultPointer(tr, plan.argsById.get(tr.toolCallId), opts);
+      return { ...tr, result: replacement };
     });
     return changed ? { ...next, toolResults: results } : next;
   });
@@ -251,12 +307,17 @@ export function applyAgingToMessages(
 /**
  * 生成结构化摘要指针（机械、零 LLM、确定性）
  *
- * 布局：工具名 + args 轮廓（截断）+ result 轮廓（截断）+ re-run 提示；
- * 轮廓预算按 `maxPointerChars` 比例派生（旋钮真实生效）。
+ * 布局：工具名 + 结果长度 + 结果轮廓 + 短提示。
+ *
+ * 不含参数轮廓（2026-11-13 实测）：指针里的 args 是**机械截断**产物（130 条指针
+ * 全部恰好 98 字符 = 预算 80 + 截断标记），从不承载有效信息；对应的 tool_use 就在
+ * 前一条 assistant 消息里，`ageToolArgs` 还额外全保 path/command/id。留着是纯重复。
+ * 连同旧尾句（81 字符/条）一并去掉——它把「不要重跑」重复 130 遍，反而在提示重跑。
+ *
  * error 分支为防御性保真（计划永不选中 error 结果）。
  *
  * @param tr - 工具结果（error / result 至少其一）
- * @param args - 对应工具调用参数（可空）
+ * @param args - 对应工具调用参数（保留入参供策略复用；默认指针不再消费）
  * @param opts - 老化配置（已解析）
  * @returns 指针文本（write-once：同输入恒同字节）
  */
@@ -271,19 +332,14 @@ export function agedToolResultPointer(
   const cached = pointerCache.get(tr as object);
   if (cached && cached.fingerprint === fingerprint) return cached.text;
 
-  const argsBudget = Math.max(MIN_ARGS_OUTLINE_CHARS, Math.floor(opts.maxPointerChars * ARGS_OUTLINE_RATIO));
   const resultBudget = Math.max(MIN_RESULT_OUTLINE_CHARS, Math.floor(opts.maxPointerChars * RESULT_OUTLINE_RATIO));
-  const argsOutline = truncateOutline(safeJson(args ?? {}), argsBudget);
   // 结果轮廓只保留头部，若不给总量，读方会把「头部那几条」误当成全部（file_search 尤甚）
   const resultBody = toolResultOutline(tr);
   const errorOrResult =
     tr.error !== undefined
       ? `error: ${tr.error}` // 防御性保真：错误文案不截断、不改写
       : `result ${resultBody.length} chars: ${truncateOutline(resultBody, resultBudget)}`;
-  const text =
-    `${AGED_POINTER_PREFIX} tool: ${tr.name ?? 'unknown'}; ` +
-    `args: ${argsOutline}; ${errorOrResult}; ` +
-    'full output kept in session log — do NOT re-run unless the output is needed again';
+  const text = `${AGED_POINTER_PREFIX} ${tr.name ?? 'unknown'}; ${errorOrResult}${AGED_POINTER_HINT}`;
 
   pointerCache.set(tr as object, { fingerprint, text });
   return text;

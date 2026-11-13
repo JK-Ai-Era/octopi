@@ -47,6 +47,8 @@ export type {
   ToolExecutionContext,
   ToolHandler,
   RegisteredTool,
+  ToolResultAger,
+  ToolResultAgingInput,
   ToolSource,
   HitlDecision,
   ConfirmOutcome,
