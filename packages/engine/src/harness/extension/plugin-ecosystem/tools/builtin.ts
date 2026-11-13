@@ -64,6 +64,80 @@ import { matchesDenyPattern } from '../../../shared/paths/glob.js';
  * - shell: 实际使用的 shell（kind/executable）
  * - hints: 沙箱归因提示（仅当 jail 拒绝并已归因时出现，如 setuid exec）
  */
+/**
+ * shell 短输出阈值：低于此值时**保留完整 stdout**（而不是首尾行）。
+ *
+ * 注意这里不是「不老化」——不老化意味着返回原文，会连 `isolation`/`shell`
+ * 这些逐条重复的元数据一起留下（实测每条 338 字符），26 条短输出累计 8,788
+ * 字符永久驻留。老化恒定执行，只是短输出不必截行。
+ */
+const SHELL_AGING_FULL_KEEP_CHARS = 600;
+/** 老化后保留的首尾行数：尾部多留——错误与汇总通常在末尾 */
+const SHELL_AGING_HEAD_LINES = 3;
+const SHELL_AGING_TAIL_LINES = 5;
+/** 指针里每行/整体长度上限（防单行超长把指针撑成正文） */
+const SHELL_AGING_LINE_CHARS = 160;
+const SHELL_AGING_STDERR_CHARS = 300;
+
+/**
+ * shell 结果老化：保留「够不够成功 + 输出长什么样」，丢掉重复元数据
+ *
+ * 丢弃依据（2026-11-13 实测 35 条未老化结果）：
+ * - `isolation`（315 字符/条，11,025 合计）：同一会话内**只有一种取值**，纯噪音；
+ * - `shell`（43 字符/条）：`{kind, executable}` 全程不变；
+ * - `durationMs`：对历史回看无意义。
+ * 三者合计占 shell 结果的 36%。
+ *
+ * 保留的是「只有结果才知道」的事实：
+ * - `exitCode`：成功与否；`undefined` 表示被终止、没有退出码；
+ * - `terminated` / `terminateReason`：输出可能不完整——模型必须知道，否则会把
+ *   半截输出当完整结果（这是 shell 最危险的误读）；
+ * - `rawStdoutLength`：闸门截断前的真实长度，「还有多少没看到」的唯一依据；
+ * - `stderr`：非空时保留开头——失败原因通常在此。
+ *
+ * @param result - shell 的原始返回对象
+ * @returns 一段事实摘要；短输出返回 undefined（保留原文）
+ */
+function ageShellResult(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const r = result as Record<string, unknown>;
+  const stdout = typeof r.stdout === 'string' ? r.stdout : undefined;
+  if (stdout === undefined) return undefined;
+
+  const raw = typeof r.rawStdoutLength === 'number' ? r.rawStdoutLength : stdout.length;
+  const stderr = typeof r.stderr === 'string' ? r.stderr.trim() : '';
+  const terminated = r.terminated === true;
+  const reason = typeof r.terminateReason === 'string' ? r.terminateReason : '';
+
+  // 短输出：保留完整正文（仍然去掉元数据），不必截成首尾行
+  const keepFull = stdout.length <= SHELL_AGING_FULL_KEEP_CHARS && !terminated;
+
+  const code = typeof r.exitCode === 'number' ? `exit ${r.exitCode}` : 'exit code unknown';
+  const head: string[] = [];
+  if (terminated) head.push(`terminated${reason ? ` (${reason})` : ''}`);
+  if (raw > stdout.length) head.push(`output ${raw} chars, shown ${stdout.length}`);
+
+  const filter = (arr: string[]): string[] => arr.filter((l) => l.trim() !== '');
+  const trim = (l: string): string =>
+    l.length <= SHELL_AGING_LINE_CHARS ? l : `${l.slice(0, SHELL_AGING_LINE_CHARS)}…`;
+  const lines = filter(stdout.split('\n'));
+  const headLines = keepFull ? lines.map(trim) : lines.slice(0, SHELL_AGING_HEAD_LINES).map(trim);
+  const tailLines =
+    !keepFull && lines.length > SHELL_AGING_HEAD_LINES + SHELL_AGING_TAIL_LINES
+      ? lines.slice(-SHELL_AGING_TAIL_LINES).map(trim)
+      : [];
+
+  const parts: string[] = [`[aged] shell ${code}`];
+  if (head.length) parts[0] += `, ${head.join(', ')}`;
+  if (stderr) {
+    const s = stderr.length <= SHELL_AGING_STDERR_CHARS ? stderr : `${stderr.slice(0, SHELL_AGING_STDERR_CHARS)}…`;
+    parts.push(`stderr: ${s.split('\n').slice(0, 3).map(trim).join(' / ')}`);
+  }
+  if (headLines.length) parts.push(`head: ${headLines.join(' ⏎ ')}`);
+  if (tailLines.length) parts.push(`tail: ${tailLines.join(' ⏎ ')}`);
+  return parts.join('\n');
+}
+
 export function createShellTool(options?: {
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
 }): RegisteredTool {
@@ -98,6 +172,7 @@ export function createShellTool(options?: {
       // D1: tool-bus outer watchdog ceiling; ProcessSandbox enforces the real kill.
       timeoutMs: 600_000,
     },
+    ageResult: ({ result }) => ageShellResult(result),
     handler: async (args, context) => {
       const command = args.command as string;
       const cwd = (args.cwd as string | undefined) ?? context?.cwd ?? process.cwd();
