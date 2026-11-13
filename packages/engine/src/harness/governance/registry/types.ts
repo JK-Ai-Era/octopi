@@ -75,6 +75,8 @@ export interface Mount {
   consumerId: string;
   sourceType: MountSourceType;
   sourceId: KnowledgeSourceId | string;
+  /** session 挂载的反物化锚（消费会话所属 agent）；agent/project 挂载为 null */
+  agentRef: string | null;
   createdAt: number;
 }
 

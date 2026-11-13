@@ -124,11 +124,12 @@ export class KnowledgeDatabase {
         PRIMARY KEY (tenant_id, gateway_id, local_agent_id, project_key)
       );
 
-      CREATE TABLE IF NOT EXISTS knowledge_agent_hidden (
+      CREATE TABLE IF NOT EXISTS knowledge_agent_visibility (
         tenant_id      TEXT NOT NULL DEFAULT 'default',
         gateway_id     TEXT NOT NULL DEFAULT 'default',
         local_agent_id TEXT NOT NULL,
         source_id      TEXT NOT NULL,
+        op             TEXT NOT NULL CHECK (op IN ('include', 'exclude')),
         created_at     INTEGER NOT NULL,
         PRIMARY KEY (tenant_id, gateway_id, local_agent_id, source_id)
       );
@@ -334,6 +335,8 @@ export class KnowledgeDatabase {
     this.rebuildLegacyProjectTables();
     // 3) 旧 project_agents/hidden/session：local_agent_id 空则从 agent_id 回填
     this.backfillLegacyAgentColumns();
+    // T3b：hidden → visibility（include|exclude）必须在 backfill 之后（local_agent_id 已回填）
+    this.migrateAgentHiddenToVisibility();
     this.ensureEmbeddingSchema();
   }
 
@@ -423,38 +426,52 @@ export class KnowledgeDatabase {
       }
     }
 
-    // knowledge_agent_hidden
-    const ahSql = tableSql('knowledge_agent_hidden');
-    if (ahSql && !/PRIMARY KEY\s*\(\s*tenant_id/i.test(ahSql)) {
-      this.db.exec('BEGIN');
+    // knowledge_agent_visibility（T3b）转换挪至 upgradeLegacySchema 末尾（backfill 之后）——
+    // 旧库 local_agent_id 由 backfillLegacyAgentColumns 先回填，此处不再拷空值
+  }
+
+  /**
+   * knowledge_agent_hidden → knowledge_agent_visibility（T3b：hidden 泛化为 include|exclude，
+   * 挂载=include、隐藏=exclude，(agent, source) 单 op 无优先级歧义）。旧行以 op='exclude' 迁入。
+   * 幂等（评审 MIN）：hidden 在即迁——两表并存（回滚→再升级）也必收编，不因 visibility 已在而静默丢行。
+   * 必须在 backfillLegacyAgentColumns 之后跑（legacy 行的 local_agent_id 已回填）。
+   */
+  private migrateAgentHiddenToVisibility(): void {
+    const tableSql = (name: string): string | null => {
+      const row = this.db
+        .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
+        .get(name) as { sql?: string } | undefined;
+      return row?.sql ?? null;
+    };
+    if (!tableSql('knowledge_agent_hidden')) return;
+    this.db.exec('BEGIN');
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS knowledge_agent_visibility (
+          tenant_id      TEXT NOT NULL DEFAULT 'default',
+          gateway_id     TEXT NOT NULL DEFAULT 'default',
+          local_agent_id TEXT NOT NULL DEFAULT '',
+          source_id      TEXT NOT NULL,
+          op             TEXT NOT NULL CHECK (op IN ('include', 'exclude')),
+          created_at     INTEGER NOT NULL,
+          PRIMARY KEY (tenant_id, gateway_id, local_agent_id, source_id)
+        );
+        INSERT OR IGNORE INTO knowledge_agent_visibility
+          (tenant_id, gateway_id, local_agent_id, source_id, op, created_at)
+        SELECT COALESCE(tenant_id, 'default'), COALESCE(gateway_id, 'default'),
+               COALESCE(NULLIF(local_agent_id, ''), ''),
+               source_id, 'exclude', created_at
+        FROM knowledge_agent_hidden;
+        DROP TABLE knowledge_agent_hidden;
+      `);
+      this.db.exec('COMMIT');
+    } catch (err) {
       try {
-        this.db.exec(`
-          CREATE TABLE knowledge_agent_hidden_v2 (
-            tenant_id      TEXT NOT NULL DEFAULT 'default',
-            gateway_id     TEXT NOT NULL DEFAULT 'default',
-            local_agent_id TEXT NOT NULL DEFAULT '',
-            source_id      TEXT NOT NULL,
-            created_at     INTEGER NOT NULL,
-            PRIMARY KEY (tenant_id, gateway_id, local_agent_id, source_id)
-          );
-          INSERT OR IGNORE INTO knowledge_agent_hidden_v2
-            (tenant_id, gateway_id, local_agent_id, source_id, created_at)
-          SELECT COALESCE(tenant_id,'default'), COALESCE(gateway_id,'default'),
-                 COALESCE(NULLIF(local_agent_id,''), COALESCE(agent_id,'')),
-                 source_id, created_at
-          FROM knowledge_agent_hidden;
-          DROP TABLE knowledge_agent_hidden;
-          ALTER TABLE knowledge_agent_hidden_v2 RENAME TO knowledge_agent_hidden;
-        `);
-        this.db.exec('COMMIT');
-      } catch (err) {
-        try {
-          this.db.exec('ROLLBACK');
-        } catch {
-          /* ignore */
-        }
-        throw err;
+        this.db.exec('ROLLBACK');
+      } catch {
+        /* ignore */
       }
+      throw err;
     }
   }
 
@@ -633,7 +650,8 @@ export class KnowledgeDatabase {
       memberships: 'SELECT COUNT(*) AS count FROM knowledge_memberships',
       files: 'SELECT COUNT(*) AS count FROM knowledge_files',
       projectAgents: 'SELECT COUNT(*) AS count FROM knowledge_project_agents',
-      agentHidden: 'SELECT COUNT(*) AS count FROM knowledge_agent_hidden',
+      agentHidden: "SELECT COUNT(*) AS count FROM knowledge_agent_visibility WHERE op = 'exclude'",
+      agentMounted: "SELECT COUNT(*) AS count FROM knowledge_agent_visibility WHERE op = 'include'",
       sessionVisibility: 'SELECT COUNT(*) AS count FROM knowledge_session_visibility',
       chunks: 'SELECT COUNT(*) AS count FROM knowledge_chunks',
       ftsChunks: 'SELECT COUNT(*) AS count FROM knowledge_chunks_fts',

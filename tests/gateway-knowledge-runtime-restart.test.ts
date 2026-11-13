@@ -102,10 +102,14 @@ describe('manageLocal 子进程自愈（退避重启）', () => {
       for (const w of healthWaiters.splice(0)) w();
     };
     vi.doMock('@octopi-agent/engine/harness/knowledge/client.js', () => ({
+      runTenantClaimProvider: () => () => undefined,
       KnowledgeClient: class {
         baseUrl: string;
         constructor(cfg: { baseUrl: string }) {
           this.baseUrl = cfg.baseUrl;
+        }
+        setTenantProvider(): void {
+          /* mock：断言提供者不参与本测试 */
         }
         async health(): Promise<void> {
           healthCalls += 1;

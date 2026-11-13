@@ -123,6 +123,33 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.23 (2026-11-13)
+
+### feat(tenancy): T3b registry 知识面 + 挂载物化 + 控制面读口闸
+
+多租户 MVP T3 收口（`arch/multi-tenancy.md` §6：命中 = 挂载库 ∪ 本租户公共 ∪ platform 公共）。
+
+- **定义面/执法面分工**：registry（registry.db）= 挂载与所有权的策略权威；knowledge.db = 唯一检索执法点。挂载写路径**同步物化**到知识面可见性，检索时零跨库查询。
+- **挂载物化**：`knowledge_agent_hidden` 泛化为 `knowledge_agent_visibility`（op include|exclude，(agent,source) 单 op——hidden 是负向、挂载是其正向平行值；一表两向无优先级歧义；旧隐藏行 op='exclude' 迁入保真，幂等迁移）。`isBaseVisible` 挂载并集（会话 overlay > agent 挂载 > 基础可见性）。session 挂载以 `agent_ref` 存反物化锚（Mount 表新列）。
+- **registry HTTP 面**：`/api/v1/registry/knowledge-sources`（platform|tenant 两级所有权；受管注册 = 知识面建档带归属断言 → sourceId 链接登记；platform 库仅平台 admin；`platform` 保留域哨兵拒注册为租户 id）+ `/registry/mounts`（租户内挂载；agent/session 全链物化；**project 消费者 501 not_implemented**——知识面项目模型 scopeRef 1:1 无 M:N 落点，fail-loud 不做假成功）。物化补偿永远朝「少可见」方向：POST 物化失败撤定义（补偿失败大声告警），DELETE 先撤执法再删记录（执法已删视作达成，幂等重试）。
+- **控制面读口闸（评审 MAJ-4）**：query-service 本地 gatewayVisible 第二套实现删除，单源委托 `isTenantVisible ⊕ isGatewayVisible`；无归属 identity = DEFAULT 域（fail-closed，与检索口径一致）。
+- **结构项**：client 实例级 tenant provider（`runTenantClaimProvider`：run 内 = run 租户 DEFAULT 兜底、run 外 = 无断言宿主面）在 request 层单点合并（显式 opts > provider），三构造点接线——防逐方法漏传断言的结构性漂移；listVisible 源行批缓存；retriever 冗余二滤删除；client 分支（生产路径）租户断言锚。
+
+### fix(tenancy): T3b 独立评审修复批（del-ab221558，2 MAJ）+ 读域回归
+
+- **MAJ-1**：`POST /registry/mounts` session 挂载漏传 `agentRef`（body.agentId 校验了却没进 createMount）→ HTTP 面恒 400、反物化锚缺失。补传 + HTTP seam 测试锚（评审指出原测试只锚 service 层与 agent 挂载，正好漏掉这条缝）。
+- **MAJ-2**：session 卸载在 agentRef 缺失时静默跳过反物化仍删定义——include 行永留知识面（越权方向）。改 409 fail-loud（不制造不可撤的可见）+ clearSessionVisibility 增 op 过滤（卸载只撤 include，不误删用户显式 deny）。
+- **读域回归（自审发现）**：http-app `identityOf` 双喂读写——T3b 读路由误用写域，broker 无 claim 的运维读被收窄到 DEFAULT（v0.113.10 明确「读口不受影响」）。拆 `readIdentityOf`（claim-or-token 域）/`identityOf`（归属写域）双身份，query() 读口 12 处归读域。
+- MIN 处置：db.stats() 陈旧表名（表 DROP 后恒 0 假数据）→ 指到 visibility 表（+agentMounted）；hidden→visibility 迁移改幂等（两表并存不丢行）；注册补偿失败大声告警；删除幂等重试；provider 行为锚（run 边界/优先级四断言）。
+
+**BREAKING**：`clearSessionVisibility` 增可选 op 参数（agent 路径不变，session 反物化按 op 级撤）；Mount 类型增 `agentRef` 字段（registry.db mounts 表增列，自动迁移）。
+
+已知边界（`arch/multi-tenancy.md` §10.3）：删 agent 不级联 mounts；visibility 表带 gateway_id 维（多节点挂载语义随 P2）；知识面直写 mount 与 registry 挂载双轨分工已登记。
+
+---
+
+
+
 ## v0.113.22 (2026-11-13)
 
 ### feat(context): file_search / project_run / git_commit 结果老化

@@ -136,6 +136,8 @@ function rowToSource(row: Record<string, unknown>): KnowledgeSource {
 
 export class KnowledgeSourceStore {
   private db: KnowledgeDatabase;
+  /** listVisible 批处理期的 source 行同步缓存（filter 无 await，无并发窗口；平时为 null） */
+  private rowCache: Map<string, { tenant_id?: string; registered_by?: string; visibility?: string }> | null = null;
 
   constructor(db: KnowledgeDatabase) {
     this.db = db;
@@ -262,7 +264,7 @@ export class KnowledgeSourceStore {
    */
   remove(id: KnowledgeSourceId | string): boolean {
     const res = this.db.raw.prepare('DELETE FROM knowledge_sources WHERE id = ?').run(id);
-    this.db.raw.prepare('DELETE FROM knowledge_agent_hidden WHERE source_id = ?').run(id);
+    this.db.raw.prepare('DELETE FROM knowledge_agent_visibility WHERE source_id = ?').run(id);
     this.db.raw
       .prepare(
         "DELETE FROM knowledge_session_visibility WHERE target_type = 'source' AND target_id = ?",
@@ -367,11 +369,12 @@ export class KnowledgeSourceStore {
         `hide is only valid for global sources (got scope ${source.scopeRef.level})`,
       );
     }
+    // 一表两向（T3b）：hide=exclude 覆盖（含翻转既有挂载 include）
     this.db.raw
       .prepare(
-        `INSERT OR IGNORE INTO knowledge_agent_hidden
-           (tenant_id, gateway_id, local_agent_id, source_id, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO knowledge_agent_visibility
+           (tenant_id, gateway_id, local_agent_id, source_id, op, created_at)
+         VALUES (?, ?, ?, ?, 'exclude', ?)`,
       )
       .run(
         opts?.tenantId ?? 'default',
@@ -387,19 +390,74 @@ export class KnowledgeSourceStore {
     sourceId: KnowledgeSourceId | string,
     opts?: { tenantId?: string; gatewayId?: string },
   ): void {
+    // 只撤 exclude（挂载 include 行不受影响）
     this.db.raw
       .prepare(
-        'DELETE FROM knowledge_agent_hidden WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND source_id = ?',
+        `DELETE FROM knowledge_agent_visibility
+         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND source_id = ? AND op = 'exclude'`,
+      )
+      .run(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', agentId, sourceId);
+  }
+
+  /**
+   * 挂载（T3b，arch/multi-tenancy.md §6 挂载库）：include 覆盖基础可见性（含翻转既有隐藏）。
+   * 租户闸不受影响——挂载不出租户（registry 侧另有 guard）。
+   */
+  mountSource(
+    agentId: string,
+    sourceId: KnowledgeSourceId | string,
+    opts?: { tenantId?: string; gatewayId?: string },
+  ): void {
+    this.db.raw
+      .prepare(
+        `INSERT OR REPLACE INTO knowledge_agent_visibility
+           (tenant_id, gateway_id, local_agent_id, source_id, op, created_at)
+         VALUES (?, ?, ?, ?, 'include', ?)`,
+      )
+      .run(
+        opts?.tenantId ?? 'default',
+        opts?.gatewayId ?? 'default',
+        agentId,
+        sourceId,
+        Date.now(),
+      );
+  }
+
+  /** 卸载：只撤 include（隐藏 exclude 行不受影响）；回基础可见性 */
+  unmountSource(
+    agentId: string,
+    sourceId: KnowledgeSourceId | string,
+    opts?: { tenantId?: string; gatewayId?: string },
+  ): void {
+    this.db.raw
+      .prepare(
+        `DELETE FROM knowledge_agent_visibility
+         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND source_id = ? AND op = 'include'`,
       )
       .run(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', agentId, sourceId);
   }
 
   listHidden(agentId: string, opts?: { tenantId?: string; gatewayId?: string }): string[] {
+    return this.listAgentOp(agentId, 'exclude', opts);
+  }
+
+  /** 已挂载源（include） */
+  listMounted(agentId: string, opts?: { tenantId?: string; gatewayId?: string }): string[] {
+    return this.listAgentOp(agentId, 'include', opts);
+  }
+
+  private listAgentOp(
+    agentId: string,
+    op: 'include' | 'exclude',
+    opts?: { tenantId?: string; gatewayId?: string },
+  ): string[] {
     const rows = this.db.raw
       .prepare(
-        'SELECT source_id FROM knowledge_agent_hidden WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? ORDER BY source_id',
+        `SELECT source_id FROM knowledge_agent_visibility
+         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND op = ?
+         ORDER BY source_id`,
       )
-      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', agentId) as Array<{
+      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', agentId, op) as Array<{
       source_id: string;
     }>;
     return rows.map((r) => r.source_id);
@@ -410,11 +468,29 @@ export class KnowledgeSourceStore {
     sourceId: string,
     opts?: { tenantId?: string; gatewayId?: string },
   ): string[] {
+    return this.listAgentsOp(sourceId, 'exclude', opts);
+  }
+
+  /** 哪些 agent 挂载了该源 */
+  listAgentsMountingSource(
+    sourceId: string,
+    opts?: { tenantId?: string; gatewayId?: string },
+  ): string[] {
+    return this.listAgentsOp(sourceId, 'include', opts);
+  }
+
+  private listAgentsOp(
+    sourceId: string,
+    op: 'include' | 'exclude',
+    opts?: { tenantId?: string; gatewayId?: string },
+  ): string[] {
     const rows = this.db.raw
       .prepare(
-        'SELECT local_agent_id FROM knowledge_agent_hidden WHERE tenant_id = ? AND gateway_id = ? AND source_id = ? ORDER BY local_agent_id',
+        `SELECT local_agent_id FROM knowledge_agent_visibility
+         WHERE tenant_id = ? AND gateway_id = ? AND source_id = ? AND op = ?
+         ORDER BY local_agent_id`,
       )
-      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', sourceId) as Array<{
+      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', sourceId, op) as Array<{
       local_agent_id: string;
     }>;
     return rows.map((r) => r.local_agent_id);
@@ -469,17 +545,23 @@ export class KnowledgeSourceStore {
       targetId: string;
     },
     identity?: { tenantId?: string; gatewayId?: string },
+    op?: 'include' | 'exclude',
   ): void {
     const tenant = identity?.tenantId ?? 'default';
     const gateway = identity?.gatewayId ?? 'default';
     if (target) {
+      // op 过滤（T3b unmount 对称）：只撤指定向的 override，不误删用户反向显式设置
       this.db.raw
         .prepare(
           `DELETE FROM knowledge_session_visibility
            WHERE tenant_id = ? AND gateway_id = ? AND local_session_id = ?
-             AND target_type = ? AND target_id = ?`,
+             AND target_type = ? AND target_id = ?${op ? ' AND op = ?' : ''}`,
         )
-        .run(tenant, gateway, sessionId, target.targetType, target.targetId);
+        .run(
+          ...(op
+            ? [tenant, gateway, sessionId, target.targetType, target.targetId, op]
+            : [tenant, gateway, sessionId, target.targetType, target.targetId]),
+        );
       return;
     }
     this.db.raw
@@ -648,14 +730,12 @@ export class KnowledgeSourceStore {
    * 无归属 = DEFAULT 域（fail-closed，评审 MAJ-2：不做全量放行——存量语义即 default 域）。
    */
   isTenantVisible(
-    source: KnowledgeSource,
+    source: { id: string },
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
     const tenant = identity?.tenantId ?? DEFAULT_TENANT_ID;
     if (tenant === PLATFORM_TENANT_ID) return true;
-    const row = this.db.raw
-      .prepare('SELECT tenant_id FROM knowledge_sources WHERE id = ?')
-      .get(source.id) as { tenant_id?: string } | undefined;
+    const row = this.sourceRow(source.id);
     if (!row?.tenant_id) return true;
     if (row.tenant_id === PLATFORM_TENANT_ID) return true;
     return row.tenant_id === tenant;
@@ -663,16 +743,12 @@ export class KnowledgeSourceStore {
 
   /** 网关漏斗：registered_by=己方 ∪ public（租户闸已由 isTenantVisible 独立收口） */
   isGatewayVisible(
-    source: KnowledgeSource,
+    source: { id: string },
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
     const gw = identity?.gatewayId;
     if (!gw) return true;
-    const row = this.db.raw
-      .prepare('SELECT registered_by, visibility, tenant_id FROM knowledge_sources WHERE id = ?')
-      .get(source.id) as
-      | { registered_by?: string; visibility?: string; tenant_id?: string }
-      | undefined;
+    const row = this.sourceRow(source.id);
     if (!row) return true;
     if (row.registered_by && row.registered_by !== gw && row.visibility !== 'public') {
       return false;
@@ -688,6 +764,8 @@ export class KnowledgeSourceStore {
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
     if (source.status === 'removed' || source.status === 'disabled') return false;
+    // 挂载库（T3b，§6 并集）：显式挂载覆盖基础可见性（租户闸仍在其上）
+    if (this.isMounted(agentId, source.id, identity)) return true;
     const { level, key } = source.scopeRef;
     if (level === 'global') {
       return !this.isHidden(agentId, source.id, identity);
@@ -743,17 +821,36 @@ export class KnowledgeSourceStore {
     sourceId: string,
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
+    return this.agentOp(agentId, sourceId, identity) === 'exclude';
+  }
+
+  /** 挂载（T3b）：include 覆盖 = 挂载库（§6 命中=挂载库∪本租户公共∪platform 公共） */
+  private isMounted(
+    agentId: string,
+    sourceId: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
+    return this.agentOp(agentId, sourceId, identity) === 'include';
+  }
+
+  /** (agent, source) 的可见性 override（单 op：include=挂载 / exclude=隐藏；无行=基础语义） */
+  private agentOp(
+    agentId: string,
+    sourceId: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): 'include' | 'exclude' | null {
     const row = this.db.raw
       .prepare(
-        'SELECT 1 AS ok FROM knowledge_agent_hidden WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND source_id = ?',
+        `SELECT op FROM knowledge_agent_visibility
+         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND source_id = ?`,
       )
       .get(
         identity?.tenantId ?? 'default',
         identity?.gatewayId ?? 'default',
         agentId,
         sourceId,
-      ) as { ok?: number } | undefined;
-    return Boolean(row);
+      ) as { op?: string } | undefined;
+    return (row?.op as 'include' | 'exclude' | undefined) ?? null;
   }
 
   private isProjectAssigned(
@@ -897,7 +994,27 @@ export class KnowledgeSourceStore {
     sessionId?: string,
     identity?: { tenantId?: string; gatewayId?: string },
   ): KnowledgeSource[] {
-    return this.list().filter((s) => this.isVisible(s, agentId, sessionId, identity));
+    // 2N 优化（T3b）：一次批量装载 source 行进同步缓存（filter 全程无 await，无并发窗口），
+    // isTenantVisible/isGatewayVisible 走缓存，不再每源一查
+    const rows = this.db.raw
+      .prepare('SELECT id, tenant_id, registered_by, visibility FROM knowledge_sources')
+      .all() as Array<{ id: string; tenant_id?: string; registered_by?: string; visibility?: string }>;
+    this.rowCache = new Map(rows.map((r) => [r.id, r]));
+    try {
+      return this.list().filter((s) => this.isVisible(s, agentId, sessionId, identity));
+    } finally {
+      this.rowCache = null;
+    }
+  }
+
+  /** source 行读取（listVisible 批处理期走同步缓存） */
+  private sourceRow(
+    id: string,
+  ): { tenant_id?: string; registered_by?: string; visibility?: string } | undefined {
+    if (this.rowCache) return this.rowCache.get(id);
+    return this.db.raw
+      .prepare('SELECT tenant_id, registered_by, visibility FROM knowledge_sources WHERE id = ?')
+      .get(id) as { tenant_id?: string; registered_by?: string; visibility?: string } | undefined;
   }
 
   /** Agent 级 base 可见源（不含会话 overlay） */

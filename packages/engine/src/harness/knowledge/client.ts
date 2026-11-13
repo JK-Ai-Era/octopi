@@ -3,6 +3,20 @@
  */
 
 import type { KnowledgeSourceKind } from './types.js';
+import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
+import { getRunScope } from '../run/run-scope.js';
+
+/**
+ * run 归属租户断言提供者（T3b）：run 内 = run 租户（DEFAULT 兜底，fail-closed）；
+ * run 外 = 不断言（宿主面，broker 全量语义）。实例级挂载，防逐方法漏传断言。
+ */
+export function runTenantClaimProvider(): () => string | undefined {
+  return () => {
+    const scope = getRunScope();
+    if (!scope) return undefined;
+    return scope.principal?.tenantId ?? DEFAULT_TENANT_ID;
+  };
+}
 
 export interface KnowledgeClientOptions {
   baseUrl: string;
@@ -20,7 +34,19 @@ export interface KnowledgeClientOptions {
 }
 
 export class KnowledgeClient {
+  /** 实例级租户断言提供者（T3b）：逐方法 opts 缺省时取用——防新增方法漏传断言的结构性漂移 */
+  private tenantProvider?: () => string | undefined;
+
   constructor(private readonly opts: KnowledgeClientOptions) {}
+
+  /**
+   * 设置实例级租户断言提供者（调用时刻求值；逐方法 opts.tenantId 优先）。
+   *
+   * @param provider - 返回断言租户；undefined = 不断言（宿主面）
+   */
+  setTenantProvider(provider: () => string | undefined): void {
+    this.tenantProvider = provider;
+  }
 
   get baseUrl(): string {
     return this.opts.baseUrl;
@@ -53,6 +79,9 @@ export class KnowledgeClient {
         headers: {
           authorization: `Bearer ${this.opts.token}`,
           ...(body != null ? { 'content-type': 'application/json' } : {}),
+          // 租户断言单点收口（T3b）：实例级 provider 兜底，逐方法显式断言优先——
+          // 新增方法不传 opts 也自动带 run 归属，防漏传漂移
+          ...(this.tenantHeaders(undefined) ?? {}),
           ...headers,
         },
         body: body != null ? JSON.stringify(body) : undefined,
@@ -101,19 +130,30 @@ export class KnowledgeClient {
     });
   }
 
-  createSource(input: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return this.request('POST', '/v1/sources', input);
+  createSource(input: Record<string, unknown>, opts?: { tenantId?: string }): Promise<Record<string, unknown>> {
+    return this.request('POST', '/v1/sources', input, this.tenantHeaders(opts?.tenantId));
   }
 
   patchSource(
     sourceId: string,
     patch: Record<string, unknown>,
+    opts?: { tenantId?: string },
   ): Promise<Record<string, unknown>> {
-    return this.request('PATCH', `/v1/sources/${encodeURIComponent(sourceId)}`, patch);
+    return this.request(
+      'PATCH',
+      `/v1/sources/${encodeURIComponent(sourceId)}`,
+      patch,
+      this.tenantHeaders(opts?.tenantId),
+    );
   }
 
-  deleteSource(sourceId: string): Promise<unknown> {
-    return this.request('DELETE', `/v1/sources/${encodeURIComponent(sourceId)}`);
+  deleteSource(sourceId: string, opts?: { tenantId?: string }): Promise<unknown> {
+    return this.request(
+      'DELETE',
+      `/v1/sources/${encodeURIComponent(sourceId)}`,
+      undefined,
+      this.tenantHeaders(opts?.tenantId),
+    );
   }
 
   reindex(sourceId: string): Promise<unknown> {
@@ -391,7 +431,8 @@ export class KnowledgeClient {
 
   /** 租户断言头（T3，arch/multi-tenancy.md §6）：token=platform 时上行 run 归属域 */
   private tenantHeaders(tenantId?: string): Record<string, string> | undefined {
-    return tenantId ? { 'x-octopi-tenant': tenantId } : undefined;
+    const t = tenantId ?? this.tenantProvider?.();
+    return t ? { 'x-octopi-tenant': t } : undefined;
   }
 
   getVisibility(agentId: string): Promise<{
@@ -420,6 +461,28 @@ export class KnowledgeClient {
     );
   }
 
+  /**
+   * agent 级可见性 override（T3b 挂载物化）：op=mount|unmount|hide|unhide。
+   *
+   * @param agentId - 消费 agent
+   * @param op - override 操作
+   * @param sourceId - 目标知识源
+   * @param opts - 租户断言（token=platform 时上行归属域）
+   */
+  setAgentVisibility(
+    agentId: string,
+    op: 'mount' | 'unmount' | 'hide' | 'unhide',
+    sourceId: string,
+    opts?: { tenantId?: string },
+  ): Promise<unknown> {
+    return this.request(
+      'POST',
+      `/v1/principals/${encodeURIComponent(agentId)}/visibility`,
+      { op, sourceId },
+      this.tenantHeaders(opts?.tenantId),
+    );
+  }
+
   setSessionVisibility(
     agentId: string,
     item: {
@@ -428,11 +491,13 @@ export class KnowledgeClient {
       targetId: string;
       op: 'include' | 'exclude';
     },
+    opts?: { tenantId?: string },
   ): Promise<unknown> {
     return this.request(
       'POST',
       `/v1/principals/${encodeURIComponent(agentId)}/session-visibility`,
       item,
+      this.tenantHeaders(opts?.tenantId),
     );
   }
 
@@ -451,15 +516,20 @@ export class KnowledgeClient {
     agentId: string,
     sessionId: string,
     target?: { targetType: 'project' | 'source'; targetId: string },
+    opts?: { tenantId?: string },
+    op?: 'include' | 'exclude',
   ): Promise<unknown> {
     const qs = new URLSearchParams({ sessionId });
     if (target?.targetType && target?.targetId) {
       qs.set('targetType', target.targetType);
       qs.set('targetId', target.targetId);
     }
+    if (op) qs.set('op', op);
     return this.request(
       'DELETE',
       `/v1/principals/${encodeURIComponent(agentId)}/session-visibility?${qs}`,
+      undefined,
+      this.tenantHeaders(opts?.tenantId),
     );
   }
 

@@ -246,7 +246,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     const { sources } = this.deps;
     let list = sources.list();
     if (query.identity) {
-      list = list.filter((s) => this.gatewayVisible(s, query.identity!));
+      list = list.filter((s) => this.domainVisible(s, query.identity!));
     }
     if (query.scopeLevel === 'global' || query.scopeLevel === 'project' || query.scopeLevel === 'session') {
       list = list.filter((s) => s.scopeRef.level === query.scopeLevel);
@@ -276,14 +276,14 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
   ): Promise<{ source: KnowledgeSource; stats: SourceStatsBundle } | null> {
     const src = this.deps.sources.get(sourceId);
     if (!src) return null;
-    if (identity && !this.gatewayVisible(src, identity)) return null;
+    if (identity && !this.domainVisible(src, identity)) return null;
     return { source: src, stats: this.deps.index.sourceStats(sourceId) };
   }
 
   async listFiles(sourceId: string, identity?: QueryIdentity): Promise<IndexedFileRecord[]> {
     if (identity) {
       const src = this.deps.sources.get(sourceId);
-      if (!src || !this.gatewayVisible(src, identity)) return [];
+      if (!src || !this.domainVisible(src, identity)) return [];
     }
     return this.deps.index.listFiles(sourceId);
   }
@@ -308,7 +308,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
   }> {
     if (identity) {
       const src = this.deps.sources.get(sourceId);
-      if (!src || !this.gatewayVisible(src, identity)) {
+      if (!src || !this.domainVisible(src, identity)) {
         return {
           items: [],
           total: 0,
@@ -325,7 +325,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
   async principalStats(agentId: string, identity?: QueryIdentity): Promise<PrincipalStats> {
     const { sources, db } = this.deps;
     const visible = sources.listVisible(agentId, undefined, identity).filter((s) => {
-      return !identity || this.gatewayVisible(s, identity);
+      return !identity || this.domainVisible(s, identity);
     });
     const stats = db.stats();
     return {
@@ -337,7 +337,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
             (s) =>
               s.scopeRef.level === 'project' &&
               sources.isVisible(s, agentId, undefined, identity) &&
-              (!identity || this.gatewayVisible(s, identity)),
+              (!identity || this.domainVisible(s, identity)),
           )
           .map((s) => s.scopeRef.key),
         hiddenSourceIds: sources.listHidden(agentId, identity ?? {}),
@@ -351,7 +351,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     if (!identity) return items;
     return items.filter((item) => {
       const src = this.deps.sources.get(item.id as KnowledgeSourceId);
-      return !src || this.gatewayVisible(src, identity);
+      return !src || this.domainVisible(src, identity);
     });
   }
 
@@ -368,7 +368,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     const { sources, index } = this.deps;
     const src = sources.get(sourceId);
     if (!src) return null;
-    if (identity && !this.gatewayVisible(src, identity)) return null;
+    if (identity && !this.domainVisible(src, identity)) return null;
     if (!sources.isVisible(src, agentId, sessionId, identity)) return null;
     return index.listChunksByPath(sourceId, path);
   }
@@ -382,7 +382,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     const { sources, index } = this.deps;
     const visible = (src: KnowledgeSource | null): boolean => {
       if (!src) return false;
-      if (identity && !this.gatewayVisible(src, identity)) return false;
+      if (identity && !this.domainVisible(src, identity)) return false;
       return sources.isVisible(src, agentId, sessionId, identity);
     };
     if (body.chunkId) {
@@ -429,7 +429,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
         (s) =>
           s.scopeRef.level === 'project' &&
           sources.isVisible(s, agentId, undefined, identity) &&
-          (!identity || this.gatewayVisible(s, identity)),
+          (!identity || this.domainVisible(s, identity)),
       )
       .map((s) => s.scopeRef.key);
     return {
@@ -449,7 +449,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     return (list as Array<{ targetId: string; targetType: string }>).filter((item) => {
       if (item.targetType !== 'source') return true;
       const src = this.deps.sources.get(item.targetId);
-      return !src || this.gatewayVisible(src, identity);
+      return !src || this.domainVisible(src, identity);
     }) as unknown as Array<Record<string, unknown>>;
   }
 
@@ -464,7 +464,7 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     const { sources, index, db } = this.deps;
     const src = sources.get(sourceId);
     if (!src) return null;
-    if (identity && !this.gatewayVisible(src, identity)) return null;
+    if (identity && !this.domainVisible(src, identity)) return null;
     const jobControl = readJobControlState(db, index, sourceId, {
       embeddingEnabled: this.deps.embeddingEnabled ?? true,
     });
@@ -565,14 +565,15 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     /* 只读；连接由调用方持有 */
   }
 
-  private gatewayVisible(src: { id: string; registeredBy?: string }, identity: QueryIdentity): boolean {
-    const row = this.deps.db.raw
-      .prepare('SELECT registered_by, visibility FROM knowledge_sources WHERE id = ?')
-      .get(src.id) as { registered_by?: string; visibility?: string } | undefined;
-    if (!row) return true;
-    if (!identity.gatewayId) return true;
-    if (row.registered_by === identity.gatewayId) return true;
-    return row.visibility === 'public';
+  /**
+   * 控制面读口域闸（T3b，评审 MAJ-4）：租户闸 ⊕ 网关漏斗，单源委托 source-store
+   * （原为本地第二套 gatewayVisible 实现——无租户检查，跨租户可读；且违反单源律）。
+   */
+  private domainVisible(src: { id: string }, identity: QueryIdentity): boolean {
+    return (
+      this.deps.sources.isTenantVisible(src, identity) &&
+      this.deps.sources.isGatewayVisible(src, identity)
+    );
   }
 }
 

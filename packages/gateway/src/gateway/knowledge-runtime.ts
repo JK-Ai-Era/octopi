@@ -170,7 +170,7 @@ export class GatewayKnowledgeRuntime {
         // launchLocal 自带健康握手 + ready 迁移 + 子进程接管（自愈可重入）
         await this.launchLocal();
       } else if (baseUrl) {
-        const { KnowledgeClient } = await import(
+        const { KnowledgeClient, runTenantClaimProvider } = await import(
           '@octopi-agent/engine/harness/knowledge/client.js'
         );
         this.client = new KnowledgeClient({
@@ -178,6 +178,7 @@ export class GatewayKnowledgeRuntime {
           token,
           timeoutMs: cfg?.timeoutMs ?? 30_000,
         });
+        this.client.setTenantProvider(runTenantClaimProvider());
         console.log(`[Knowledge] remote client → ${baseUrl} (gatewayId=${this.gatewayId})`);
         await this.client.health();
         this.setState('ready');
@@ -244,7 +245,7 @@ export class GatewayKnowledgeRuntime {
         this.scheduleRestart('exited');
       });
 
-      const { KnowledgeClient } = await import(
+      const { KnowledgeClient, runTenantClaimProvider } = await import(
         '@octopi-agent/engine/harness/knowledge/client.js'
       );
       this.client = new KnowledgeClient({
@@ -252,6 +253,7 @@ export class GatewayKnowledgeRuntime {
         token: boot.token,
         timeoutMs: boot.cfg?.timeoutMs ?? 30_000,
       });
+      this.client.setTenantProvider(runTenantClaimProvider());
       await this.client.health();
       // stop()/换代可能在 fork+握手窗口内完成：丢弃结果，绝不留下复活的子进程（P0-1 竞态闸）
       if (this.stopped || gen !== this.generation) {

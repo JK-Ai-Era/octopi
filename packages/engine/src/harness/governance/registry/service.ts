@@ -75,6 +75,8 @@ export interface CreateMountInput {
   consumerId: string;
   sourceType: MountSourceType;
   sourceId: string;
+  /** session 挂载必填：反物化锚（消费会话所属 agent） */
+  agentRef?: string;
 }
 
 export interface CreateKnowledgeSourceInput {
@@ -82,7 +84,16 @@ export interface CreateKnowledgeSourceInput {
   /** scope=tenant 时必填 */
   tenantId?: TenantId;
   name: string;
+  /**
+   * 关联的知识面行 id（knowledge.db `knowledge_sources.id`）。
+   * 受管注册入口先在知识面建档、再以同一 id 登记所有权（定义面 ↔ 执法面链接）；
+   * 缺省自生成（纯定义面登记，暂无知识面行）。
+   */
+  sourceId?: string;
 }
+
+/** 保留字：platform 域哨兵不是真实租户（arch/multi-tenancy.md §6）——不得注册为租户 id */
+const RESERVED_TENANT_IDS = new Set(['platform']);
 
 export class RegistryService {
   private db: RegistryDatabase;
@@ -250,6 +261,61 @@ export class RegistryService {
   }
 
   /**
+   * 查询知识源定义（不做可见性过滤——管理面）。
+   *
+   * @param sourceId - 知识面行 id（knowledge.db id）
+   */
+  getKnowledgeSource(sourceId: string): KnowledgeSource | null {
+    const row = this.db.raw
+      .prepare('SELECT * FROM knowledge_sources WHERE source_id = ?')
+      .get(sourceId) as Record<string, unknown> | undefined;
+    return row ? rowToSource(row) : null;
+  }
+
+  /**
+   * 列知识源定义（T3b 管理面）：platform 库 + 本租户库；平台 admin 全量。
+   *
+   * @param input - 调用方租户 / admin
+   */
+  listKnowledgeSources(input: {
+    viewerTenantId: TenantId;
+    isPlatformAdmin: boolean;
+  }): KnowledgeSource[] {
+    const rows = input.isPlatformAdmin
+      ? (this.db.raw
+          .prepare('SELECT * FROM knowledge_sources ORDER BY created_at')
+          .all() as Record<string, unknown>[])
+      : (this.db.raw
+          .prepare(
+            `SELECT * FROM knowledge_sources
+             WHERE scope = 'platform' OR tenant_id = ?
+             ORDER BY created_at`,
+          )
+          .all(input.viewerTenantId) as Record<string, unknown>[]);
+    return rows.map(rowToSource);
+  }
+
+  /**
+   * 知识源写权限断言（platform 库=平台 admin；tenant 库=本租户）。返回记录供调用方使用。
+   *
+   * @param input - sourceId + 调用方租户/admin
+   */
+  assertKnowledgeSourceAccess(input: {
+    sourceId: string;
+    viewerTenantId: TenantId;
+    isPlatformAdmin: boolean;
+  }): KnowledgeSource {
+    const source = this.requireSource(input.sourceId as KnowledgeSourceId);
+    if (source.scope === 'platform') {
+      if (!input.isPlatformAdmin) {
+        throw new Error('registry_forbidden: platform sources are managed by platform admin');
+      }
+    } else if (source.tenantId !== input.viewerTenantId) {
+      throw new Error('registry_cross_tenant: source belongs to another tenant');
+    }
+    return source;
+  }
+  /**
    * 查询 agent（不做可见性过滤——调用方按需用 listAgents）。
    *
    * @param agentId - agent id
@@ -393,11 +459,12 @@ export class RegistryService {
       consumerId: requireNonEmpty(input.consumerId, 'consumer id'),
       sourceType: input.sourceType,
       sourceId: input.sourceId,
+      agentRef: input.consumerType === 'session' ? requireNonEmpty(input.agentRef ?? '', 'agent ref') : (input.agentRef ?? null),
       createdAt: Date.now(),
     };
     this.db.raw
       .prepare(
-        'INSERT INTO mounts (mount_id, tenant_id, consumer_type, consumer_id, source_type, source_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO mounts (mount_id, tenant_id, consumer_type, consumer_id, source_type, source_id, agent_ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         mount.mountId,
@@ -406,6 +473,7 @@ export class RegistryService {
         mount.consumerId,
         mount.sourceType,
         mount.sourceId,
+        mount.agentRef,
         mount.createdAt,
       );
     return mount;
@@ -447,10 +515,13 @@ export class RegistryService {
     const name = requireNonEmpty(input.name, 'source name');
     if (input.scope === 'tenant') {
       if (!input.tenantId) throw new Error('registry_source_tenant_required: tenant scope needs tenantId');
+      if (RESERVED_TENANT_IDS.has(input.tenantId)) {
+        throw new Error(`registry_reserved_tenant: "${input.tenantId}" is reserved (platform domain sentinel)`);
+      }
       this.requireTenant(input.tenantId);
     }
     const source: KnowledgeSource = {
-      sourceId: randomUUID() as KnowledgeSourceId,
+      sourceId: (input.sourceId ?? randomUUID()) as KnowledgeSourceId,
       scope: input.scope,
       tenantId: input.scope === 'tenant' ? (input.tenantId as TenantId) : null,
       name,
@@ -460,6 +531,84 @@ export class RegistryService {
       .prepare('INSERT INTO knowledge_sources (source_id, scope, tenant_id, name, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(source.sourceId, source.scope, source.tenantId, source.name, source.createdAt);
     return source;
+  }
+
+  /**
+   * 删除知识源定义（连带删除其挂载）。platform 库仅平台 admin；tenant 库限本租户。
+   *
+   * @param input - sourceId + 调用方租户/admin
+   * @returns 是否删除了记录
+   */
+  deleteKnowledgeSource(input: {
+    sourceId: string;
+    viewerTenantId: TenantId;
+    isPlatformAdmin: boolean;
+  }): boolean {
+    const source = this.assertKnowledgeSourceAccess(input);
+    this.db.raw.prepare('DELETE FROM mounts WHERE source_id = ?').run(source.sourceId);
+    const res = this.db.raw.prepare('DELETE FROM knowledge_sources WHERE source_id = ?').run(source.sourceId);
+    return Number(res.changes ?? 0) > 0;
+  }
+
+  /**
+   * 列挂载（按消费方或资产过滤；租户收口——platform 库挂载可见，他租户挂载不出界）。
+   *
+   * @param input - 租户 + 过滤条件
+   */
+  listMounts(input: {
+    tenantId: TenantId;
+    consumerType?: MountConsumerType;
+    consumerId?: string;
+    sourceId?: string;
+  }): Mount[] {
+    const clauses: string[] = ['m.tenant_id = ?'];
+    const params: string[] = [input.tenantId];
+    if (input.consumerType) {
+      clauses.push('m.consumer_type = ?');
+      params.push(input.consumerType);
+    }
+    if (input.consumerId) {
+      clauses.push('m.consumer_id = ?');
+      params.push(input.consumerId);
+    }
+    if (input.sourceId) {
+      clauses.push('m.source_id = ?');
+      params.push(input.sourceId);
+    }
+    const rows = this.db.raw
+      .prepare(`SELECT * FROM mounts m WHERE ${clauses.join(' AND ')} ORDER BY m.created_at`)
+      .all(...params) as Record<string, unknown>[];
+    return rows.map(rowToMount);
+  }
+
+  /**
+   * 查询挂载（管理面）。
+   *
+   * @param mountId - 挂载 id
+   */
+  getMount(mountId: MountId): Mount | null {
+    const row = this.db.raw
+      .prepare('SELECT * FROM mounts WHERE mount_id = ?')
+      .get(mountId) as Record<string, unknown> | undefined;
+    return row ? rowToMount(row) : null;
+  }
+
+  /**
+   * 删除挂载（租户收口：本租户挂载才可删）。
+   *
+   * @param input - mountId + 调用方租户
+   * @returns 是否删除了记录
+   */
+  deleteMount(input: { mountId: MountId; tenantId: TenantId }): boolean {
+    const row = this.db.raw
+      .prepare('SELECT tenant_id FROM mounts WHERE mount_id = ?')
+      .get(input.mountId) as { tenant_id?: string } | undefined;
+    if (!row) return false;
+    if (row.tenant_id !== input.tenantId) {
+      throw new Error('registry_cross_tenant: mount belongs to another tenant');
+    }
+    const res = this.db.raw.prepare('DELETE FROM mounts WHERE mount_id = ?').run(input.mountId);
+    return Number(res.changes ?? 0) > 0;
   }
 
   /**
@@ -614,6 +763,19 @@ function rowToSource(row: Record<string, unknown>): KnowledgeSource {
     scope: row.scope as KnowledgeSource['scope'],
     tenantId: (row.tenant_id as TenantId | null) ?? null,
     name: row.name as string,
+    createdAt: row.created_at as number,
+  };
+}
+
+function rowToMount(row: Record<string, unknown>): Mount {
+  return {
+    mountId: row.mount_id as MountId,
+    tenantId: row.tenant_id as TenantId,
+    consumerType: row.consumer_type as MountConsumerType,
+    consumerId: row.consumer_id as string,
+    sourceType: row.source_type as MountSourceType,
+    sourceId: row.source_id as string,
+    agentRef: (row.agent_ref as string | null) ?? null,
     createdAt: row.created_at as number,
   };
 }

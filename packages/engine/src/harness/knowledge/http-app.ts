@@ -133,10 +133,23 @@ export class KnowledgeHttpApp {
     return this.opts.query;
   }
 
+  /** 写身份：归属域（platform token 无 claim → DEFAULT，不写 platform 共享面） */
   private identityOf(ctx: AuthContext): WriteIdentity & QueryIdentity {
     return {
-      // 写路径用归属域（platform token 无 claim → DEFAULT，不写 platform 共享面）
       tenantId: ctx.writeTenantId ?? ctx.tenantId,
+      gatewayId: ctx.gatewayId,
+      claimed: ctx.claimed,
+    };
+  }
+
+  /**
+   * 读身份：claim-or-token 域（v0.113.10 语义「读口不受影响」）——platform broker 无 claim
+   * = 运维面全量；claim 在场 = 租户收口。写域不得代劳读域（T3b 自审修复：曾共用 identityOf，
+   * 把运维读误收窄到 DEFAULT）。
+   */
+  private readIdentityOf(ctx: AuthContext): WriteIdentity & QueryIdentity {
+    return {
+      tenantId: ctx.tenantId,
       gatewayId: ctx.gatewayId,
       claimed: ctx.claimed,
     };
@@ -184,7 +197,7 @@ export class KnowledgeHttpApp {
     });
 
     this.route('GET', '/v1/principals/:agentId', async (_req, res, ctx, params) => {
-      const row = await this.query().getPrincipal(this.identityOf(ctx), params.agentId!);
+      const row = await this.query().getPrincipal(this.readIdentityOf(ctx), params.agentId!);
       if (!row) return err(res, 404, 'principal_not_registered', 'principal not found');
       json(res, 200, { ok: true, data: row });
     });
@@ -192,7 +205,7 @@ export class KnowledgeHttpApp {
     this.route('GET', '/v1/projects', async (_req, res, ctx) => {
       json(res, 200, {
         ok: true,
-        data: await this.query().listProjects(this.identityOf(ctx)),
+        data: await this.query().listProjects(this.readIdentityOf(ctx)),
       });
     });
 
@@ -276,7 +289,7 @@ export class KnowledgeHttpApp {
           : {}),
         ...(projectKey != null && projectKey !== '' ? { projectKey } : {}),
         ...(sessionId != null && sessionId !== '' ? { sessionId } : {}),
-        identity: this.identityOf(ctx),
+        identity: this.readIdentityOf(ctx),
       });
       json(res, 200, { ok: true, data: list });
     });
@@ -299,7 +312,7 @@ export class KnowledgeHttpApp {
     });
 
     this.route('GET', '/v1/sources/:sid', async (_req, res, ctx, params) => {
-      const detail = await this.query().getSourceDetail(params.sid!, this.identityOf(ctx));
+      const detail = await this.query().getSourceDetail(params.sid!, this.readIdentityOf(ctx));
       if (!detail) {
         return err(res, 404, 'source_not_found', 'source not found');
       }
@@ -474,13 +487,13 @@ export class KnowledgeHttpApp {
               ? { pageSize: Number(url.searchParams.get('pageSize')) }
               : {}),
           },
-          this.identityOf(ctx),
+          this.readIdentityOf(ctx),
         );
         return json(res, 200, { ok: true, data });
       }
       json(res, 200, {
         ok: true,
-        data: await this.query().listFiles(params.sid!, this.identityOf(ctx)),
+        data: await this.query().listFiles(params.sid!, this.readIdentityOf(ctx)),
       });
     });
 
@@ -496,7 +509,7 @@ export class KnowledgeHttpApp {
         q: url.searchParams.get('q') ?? '',
         sessionId: url.searchParams.get('sessionId') ?? undefined,
         limit: Number(url.searchParams.get('limit') ?? 8),
-        identity: this.identityOf(ctx),
+        identity: this.readIdentityOf(ctx),
       });
       json(res, 200, { ok: true, data: result });
     });
@@ -519,7 +532,7 @@ export class KnowledgeHttpApp {
         sessionId: url.searchParams.get('sessionId') ?? undefined,
         limit: Number(url.searchParams.get('limit') ?? 8),
         ...(recall ? { recall } : {}),
-        identity: this.identityOf(ctx),
+        identity: this.readIdentityOf(ctx),
       });
       json(res, 200, { ok: true, data: result });
     });
@@ -530,7 +543,7 @@ export class KnowledgeHttpApp {
         params.agentId!,
         this.opts.autoRegisterPrincipals ?? true,
       );
-      const principal = await this.query().principalStats(params.agentId!, this.identityOf(ctx));
+      const principal = await this.query().principalStats(params.agentId!, this.readIdentityOf(ctx));
       json(res, 200, {
         ok: true,
         data: {
@@ -549,7 +562,7 @@ export class KnowledgeHttpApp {
       );
       json(res, 200, {
         ok: true,
-        data: await this.query().catalog(params.agentId!, this.identityOf(ctx)),
+        data: await this.query().catalog(params.agentId!, this.readIdentityOf(ctx)),
       });
     });
 
@@ -569,7 +582,7 @@ export class KnowledgeHttpApp {
         params.agentId!,
         sourceId,
         path,
-        this.identityOf(ctx),
+        this.readIdentityOf(ctx),
         ctx.sessionId,
       );
       if (data == null) {
@@ -592,7 +605,7 @@ export class KnowledgeHttpApp {
         const data = await this.query().read(
           params.agentId!,
           b,
-          this.identityOf(ctx),
+          this.readIdentityOf(ctx),
           ctx.sessionId,
         );
         if (!data.found) {
@@ -604,7 +617,7 @@ export class KnowledgeHttpApp {
         params.agentId!,
         b.sourceId!,
         b.path!,
-        this.identityOf(ctx),
+        this.readIdentityOf(ctx),
         ctx.sessionId,
       );
       if (chunks == null) {
@@ -630,7 +643,7 @@ export class KnowledgeHttpApp {
       );
       json(res, 200, {
         ok: true,
-        data: await this.query().visibility(params.agentId!, this.identityOf(ctx)),
+        data: await this.query().visibility(params.agentId!, this.readIdentityOf(ctx)),
       });
     });
 
@@ -651,6 +664,10 @@ export class KnowledgeHttpApp {
           await this.write.hideSource(identity, agentId, sourceId);
         } else if (op === 'unhide' && sourceId) {
           await this.write.unhideSource(identity, agentId, sourceId);
+        } else if (op === 'mount' && sourceId) {
+          await this.write.mountSource(identity, agentId, sourceId);
+        } else if (op === 'unmount' && sourceId) {
+          await this.write.unmountSource(identity, agentId, sourceId);
         } else {
           return err(res, 400, 'bad_request', 'unknown visibility op');
         }
@@ -674,7 +691,7 @@ export class KnowledgeHttpApp {
         if (!sessionId) return err(res, 400, 'session_required', 'sessionId required');
         json(res, 200, {
           ok: true,
-          data: await this.query().sessionVisibility(agentId, sessionId, this.identityOf(ctx)),
+          data: await this.query().sessionVisibility(agentId, sessionId, this.readIdentityOf(ctx)),
         });
       },
     );
@@ -745,11 +762,17 @@ export class KnowledgeHttpApp {
         if (!sessionId) return err(res, 400, 'session_required', 'sessionId required');
         const targetType = url.searchParams.get('targetType');
         const targetId = url.searchParams.get('targetId');
+        const op = url.searchParams.get('op');
         if (targetType && targetId) {
-          await this.write.clearSessionVisibility(this.identityOf(ctx), sessionId, {
-            targetType: targetType as 'project' | 'source',
-            targetId,
-          });
+          await this.write.clearSessionVisibility(
+            this.identityOf(ctx),
+            sessionId,
+            {
+              targetType: targetType as 'project' | 'source',
+              targetId,
+            },
+            op === 'include' || op === 'exclude' ? op : undefined,
+          );
           json(res, 200, { ok: true, data: { sessionId, targetType, targetId } });
           return;
         }
@@ -763,7 +786,7 @@ export class KnowledgeHttpApp {
       json(res, 200, {
         ok: true,
         data: await this.query().listJobs({
-          identity: this.identityOf(ctx),
+          identity: this.readIdentityOf(ctx),
           sourceId: url.searchParams.get('sourceId') ?? undefined,
           status: url.searchParams.get('status') ?? undefined,
         }),
@@ -777,7 +800,7 @@ export class KnowledgeHttpApp {
       if (!(await this.write.isSourceOwner(sourceId, ctx.gatewayId))) {
         return err(res, 403, 'not_resource_owner', 'not source owner');
       }
-      const detail = await this.query().getSourceDetail(sourceId, this.identityOf(ctx));
+      const detail = await this.query().getSourceDetail(sourceId, this.readIdentityOf(ctx));
       if (!detail) return err(res, 404, 'source_not_found', 'source not found');
       json(res, 200, { ok: true, data: detail.jobControl });
     });

@@ -142,6 +142,10 @@ export interface KnowledgeWriteService {
   unassignProject(identity: WriteIdentity, agentId: string, projectKey: string): Promise<void>;
   hideSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void>;
   unhideSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void>;
+  /** 挂载（T3b）：agent 级 include 覆盖（§6 挂载库）；翻转既有隐藏 */
+  mountSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void>;
+  /** 卸载：撤 include，回基础可见性 */
+  unmountSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void>;
   replaceSessionVisibility(
     identity: WriteIdentity,
     agentId: string,
@@ -157,6 +161,7 @@ export interface KnowledgeWriteService {
     identity: WriteIdentity,
     sessionId: string,
     target?: { targetType: 'project' | 'source'; targetId: string },
+    op?: 'include' | 'exclude',
   ): Promise<void>;
 
   isSourceOwner(sourceId: string, gatewayId: string): Promise<boolean>;
@@ -625,6 +630,14 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     this.sources.unhideSource(agentId, sourceId, identity);
   }
 
+  async mountSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void> {
+    this.sources.mountSource(agentId, sourceId, identity);
+  }
+
+  async unmountSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void> {
+    this.sources.unmountSource(agentId, sourceId, identity);
+  }
+
   async replaceSessionVisibility(
     identity: WriteIdentity,
     _agentId: string,
@@ -660,8 +673,9 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     identity: WriteIdentity,
     sessionId: string,
     target?: { targetType: 'project' | 'source'; targetId: string },
+    op?: 'include' | 'exclude',
   ): Promise<void> {
-    this.sources.clearSessionVisibility(sessionId, target, identity);
+    this.sources.clearSessionVisibility(sessionId, target, identity, op);
   }
 
   async isSourceOwner(sourceId: string, gatewayId: string): Promise<boolean> {

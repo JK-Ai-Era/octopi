@@ -115,6 +115,7 @@ export class RegistryDatabase {
         consumer_id   TEXT NOT NULL,
         source_type   TEXT NOT NULL,
         source_id     TEXT NOT NULL,
+        agent_ref     TEXT,
         created_at    INTEGER NOT NULL,
         UNIQUE (tenant_id, consumer_type, consumer_id, source_type, source_id)
       );
@@ -133,6 +134,12 @@ export class RegistryDatabase {
         created_at INTEGER NOT NULL
       );
     `);
+    // mounts.agent_ref（T3b）：session 挂载的反物化锚（消费会话所属 agent）；
+    // 存量库补列
+    const mountCols = this.db.prepare('PRAGMA table_info(mounts)').all() as Array<{ name: string }>;
+    if (!mountCols.some((c) => c.name === 'agent_ref')) {
+      this.db.exec('ALTER TABLE mounts ADD COLUMN agent_ref TEXT');
+    }
   }
 
   get raw(): DatabaseSync {

@@ -38,7 +38,7 @@ import { SessionAclService } from '@octopi-agent/engine/harness/governance/sessi
 import { SessionScheduleService } from '@octopi-agent/engine/harness/session/schedules/service.js';
 import { ObserverHub } from '@octopi-agent/engine/harness/observability/observer/hub.js';
 import { createProviderFromConfig, createWireDumpSinkFromConfig } from '@octopi-agent/engine/config.js';
-import { KnowledgeClient } from '@octopi-agent/engine/harness/knowledge/client.js';
+import { KnowledgeClient, runTenantClaimProvider } from '@octopi-agent/engine/harness/knowledge/client.js';
 import type {
   KnowledgeStateWire,
   RunControlOp,
@@ -226,6 +226,8 @@ async function main(): Promise<void> {
         token: boot.knowledge.token ?? '',
       })
     : undefined;
+  // 租户断言单点（T3b）：run 内锚 run 租户（DEFAULT 兜底），run 外不断言（宿主面）
+  knowledgeClient?.setTenantProvider(runTenantClaimProvider());
   let knowledgeState: KnowledgeStateWire = boot.knowledge?.state ?? (knowledgeClient ? 'ready' : 'disabled');
 
   const defs = new Map<string, AgentDefinition>();

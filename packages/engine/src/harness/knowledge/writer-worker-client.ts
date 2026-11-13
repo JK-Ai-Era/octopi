@@ -431,6 +431,22 @@ export class WorkerWriteService implements KnowledgeWriteService {
     }
   }
 
+  async mountSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void> {
+    try {
+      await this.call('mountSource', { identity, agentId, sourceId });
+    } catch (e) {
+      this.rethrow(e);
+    }
+  }
+
+  async unmountSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void> {
+    try {
+      await this.call('unmountSource', { identity, agentId, sourceId });
+    } catch (e) {
+      this.rethrow(e);
+    }
+  }
+
   async replaceSessionVisibility(
     identity: WriteIdentity,
     agentId: string,
@@ -465,9 +481,10 @@ export class WorkerWriteService implements KnowledgeWriteService {
     identity: WriteIdentity,
     sessionId: string,
     target?: { targetType: 'project' | 'source'; targetId: string },
+    op?: 'include' | 'exclude',
   ): Promise<void> {
     try {
-      await this.call('clearSessionVisibility', { identity, sessionId, target });
+      await this.call('clearSessionVisibility', { identity, sessionId, target, op });
     } catch (e) {
       this.rethrow(e);
     }

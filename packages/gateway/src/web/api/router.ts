@@ -2074,6 +2074,225 @@ export class WebApiRouter {
       }
     }
 
+    // ── 知识面（T3b，arch/multi-tenancy.md §6）：platform|tenant 两级所有权 + 租户内挂载 ──
+    // 物化纪律：registry=定义面，knowledge.db=执法面；写路径同步物化，
+    // 补偿方向永远朝「少可见」（物化失败撤记录；卸载先撤执法再删记录）。
+    const ownerTenantOf = (scope: 'platform' | 'tenant'): string =>
+      scope === 'platform' ? 'platform' : user.tenantId;
+
+    if (relativePath === '/registry/knowledge-sources' && method === 'GET') {
+      return this.json(res, 200, {
+        ok: true,
+        data: registry.listKnowledgeSources({
+          viewerTenantId: user.tenantId,
+          isPlatformAdmin: user.isPlatformAdmin,
+        }),
+      });
+    }
+
+    if (relativePath === '/registry/knowledge-sources' && method === 'POST') {
+      const body = await this.readBody(req);
+      if (typeof body?.name !== 'string' || typeof body?.location !== 'string') {
+        return this.json(res, 400, { ok: false, error: 'name and location are required strings' });
+      }
+      const scope: 'platform' | 'tenant' = body.scope === 'platform' ? 'platform' : 'tenant';
+      if (scope === 'platform' && !user.isPlatformAdmin) {
+        return this.json(res, 403, {
+          ok: false,
+          error: 'registry_forbidden: platform sources are managed by platform admin',
+        });
+      }
+      const kind = typeof body.kind === 'string' && body.kind ? body.kind : 'directory';
+      const ownerTenant = ownerTenantOf(scope);
+      const client = await this.gateway.getKnowledgeClient();
+      let knowledgeId: string;
+      try {
+        const created = await client.createSource(
+          {
+            kind,
+            location: body.location,
+            // 缺省 = 本租户公共（§6）；body 可给 project/session 级（挂载库语义）
+            scopeRef:
+              body.scopeRef?.level === 'project' || body.scopeRef?.level === 'session'
+                ? { level: body.scopeRef.level, key: String(body.scopeRef.key ?? '') }
+                : { level: 'global', key: 'global' },
+            displayName: body.name,
+            ...(typeof body.description === 'string' ? { description: body.description } : {}),
+          },
+          { tenantId: ownerTenant },
+        );
+        knowledgeId = String(created.id);
+      } catch (err) {
+        return sendError(err);
+      }
+      try {
+        const source = registry.createKnowledgeSource({
+          scope,
+          ...(scope === 'tenant' ? { tenantId: user.tenantId } : {}),
+          name: body.name,
+          sourceId: knowledgeId,
+        });
+        return this.json(res, 201, { ok: true, data: source });
+      } catch (err) {
+        // 补偿：定义面拒绝则撤执法行（不孤儿）。补偿失败必须大声（评审 MIN：孤儿源
+        // scopeRef=global 会立即对本租户全可见——静默吞错=扩大泄漏面）
+        try {
+          await client.deleteSource(knowledgeId, { tenantId: ownerTenant });
+        } catch (compErr) {
+          console.error(
+            `[WebApi] knowledge-source compensation failed for ${knowledgeId}: ${compErr instanceof Error ? compErr.message : String(compErr)}; orphan source remains visible — remove manually`,
+          );
+        }
+        return sendError(err);
+      }
+    }
+
+    if (relativePath.startsWith('/registry/knowledge-sources/') && method === 'DELETE') {
+      const sourceId = relativePath.slice('/registry/knowledge-sources/'.length);
+      try {
+        const source = registry.assertKnowledgeSourceAccess({
+          sourceId,
+          viewerTenantId: user.tenantId,
+          isPlatformAdmin: user.isPlatformAdmin,
+        });
+        const ownerTenant = ownerTenantOf(source.scope);
+        const client = await this.gateway.getKnowledgeClient();
+        // 先撤执法行（少可见方向），再删定义记录。执法已删视作达成（幂等重试——
+        // 评审 MIN：上次执法删成功而定义删失败时，重试不得永久卡在 source_not_found）
+        try {
+          await client.deleteSource(sourceId, { tenantId: ownerTenant });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!/source_not_found|not found/i.test(message)) throw err;
+        }
+        const deleted = registry.deleteKnowledgeSource({
+          sourceId,
+          viewerTenantId: user.tenantId,
+          isPlatformAdmin: user.isPlatformAdmin,
+        });
+        return this.json(res, 200, { ok: true, data: { deleted } });
+      } catch (err) {
+        return sendError(err);
+      }
+    }
+
+    if (relativePath === '/registry/mounts' && method === 'GET') {
+      const url = new URL(req.url ?? '/', 'http://local');
+      const consumerType = url.searchParams.get('consumerType');
+      const consumerId = url.searchParams.get('consumerId');
+      const sourceId = url.searchParams.get('sourceId');
+      return this.json(res, 200, {
+        ok: true,
+        data: registry.listMounts({
+          tenantId: user.tenantId,
+          ...(consumerType === 'agent' || consumerType === 'project' || consumerType === 'session'
+            ? { consumerType }
+            : {}),
+          ...(consumerId ? { consumerId } : {}),
+          ...(sourceId ? { sourceId } : {}),
+        }),
+      });
+    }
+
+    if (relativePath === '/registry/mounts' && method === 'POST') {
+      const body = await this.readBody(req);
+      const consumerType = body?.consumerType;
+      if (consumerType !== 'agent' && consumerType !== 'session' && consumerType !== 'project') {
+        return this.json(res, 400, { ok: false, error: 'consumerType must be agent|session|project' });
+      }
+      if (consumerType === 'project') {
+        // fail-loud（NIT-3 教训）：项目挂载的检索物化在知识面项目模型（scopeRef 1:1）下
+        // 无诚实落点——记录面随项目模型演进后开放，不做假成功
+        return this.json(res, 501, {
+          ok: false,
+          error: 'not_implemented: project mounts materialization lands with the project model (arch/multi-tenancy.md §10.3)',
+        });
+      }
+      if (typeof body?.consumerId !== 'string' || typeof body?.sourceId !== 'string') {
+        return this.json(res, 400, { ok: false, error: 'consumerId and sourceId are required strings' });
+      }
+      if (consumerType === 'session' && typeof body?.agentId !== 'string') {
+        return this.json(res, 400, {
+          ok: false,
+          error: 'agentId is required for session mounts (materialization target)',
+        });
+      }
+      try {
+        const mount = registry.createMount({
+          tenantId: user.tenantId,
+          consumerType,
+          consumerId: body.consumerId,
+          sourceType: body.sourceType === 'project' ? 'project' : 'knowledge',
+          sourceId: body.sourceId,
+          // session 挂载的反物化锚（评审 MAJ-1：body.agentId 校验了却漏传 → 恒 400）
+          ...(consumerType === 'session' ? { agentRef: String(body.agentId) } : {}),
+        });
+        try {
+          const client = await this.gateway.getKnowledgeClient();
+          if (consumerType === 'agent') {
+            await client.setAgentVisibility(mount.consumerId, 'mount', mount.sourceId, {
+              tenantId: user.tenantId,
+            });
+          } else {
+            await client.setSessionVisibility(
+              body.agentId as string,
+              {
+                sessionId: mount.consumerId,
+                targetType: 'source',
+                targetId: mount.sourceId,
+                op: 'include',
+              },
+              { tenantId: user.tenantId },
+            );
+          }
+        } catch (err) {
+          // 补偿：物化失败撤定义记录（不留下无执法的挂载承诺）
+          registry.deleteMount({ mountId: mount.mountId, tenantId: user.tenantId });
+          return sendError(err);
+        }
+        return this.json(res, 201, { ok: true, data: mount });
+      } catch (err) {
+        return sendError(err);
+      }
+    }
+
+    if (relativePath.startsWith('/registry/mounts/') && method === 'DELETE') {
+      const mountId = relativePath.slice('/registry/mounts/'.length) as import('@octopi-agent/engine/harness/governance/registry/types.js').MountId;
+      try {
+        const mount = registry.getMount(mountId);
+        if (!mount || mount.tenantId !== user.tenantId) {
+          return this.json(res, 404, { ok: false, error: 'registry_mount_not_found' });
+        }
+        // 先撤执法（少可见方向）再删定义记录
+        const client = await this.gateway.getKnowledgeClient();
+        if (mount.consumerType === 'agent') {
+          await client.setAgentVisibility(mount.consumerId, 'unmount', mount.sourceId, {
+            tenantId: user.tenantId,
+          });
+        } else if (mount.consumerType === 'session') {
+          if (!mount.agentRef) {
+            // fail-loud（评审 MAJ-2）：无反物化锚就删定义会把 include 行永久留在知识面——
+            // 宁可挡住删除，不制造不可撤的越权可见
+            return this.json(res, 409, {
+              ok: false,
+              error: 'registry_mount_agent_ref_missing: cannot reverse materialization; fix the mount row first',
+            });
+          }
+          await client.clearSessionVisibility(
+            mount.agentRef,
+            mount.consumerId,
+            { targetType: 'source', targetId: mount.sourceId },
+            { tenantId: user.tenantId },
+            'include',
+          );
+        }
+        const deleted = registry.deleteMount({ mountId, tenantId: user.tenantId });
+        return this.json(res, 200, { ok: true, data: { deleted } });
+      } catch (err) {
+        return sendError(err);
+      }
+    }
+
     return this.json(res, 404, { ok: false, error: `registry route not found: ${relativePath}` });
   }
 

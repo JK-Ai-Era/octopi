@@ -218,6 +218,14 @@ async function main(): Promise<void> {
             await write.unhideSource(identity!, String(args.agentId), String(args.sourceId));
             data = null;
             break;
+          case 'mountSource':
+            await write.mountSource(identity!, String(args.agentId), String(args.sourceId));
+            data = null;
+            break;
+          case 'unmountSource':
+            await write.unmountSource(identity!, String(args.agentId), String(args.sourceId));
+            data = null;
+            break;
           case 'replaceSessionVisibility':
             data = await write.replaceSessionVisibility(
               identity!,
@@ -245,6 +253,7 @@ async function main(): Promise<void> {
               args.target as
                 | { targetType: 'project' | 'source'; targetId: string }
                 | undefined,
+              args.op as 'include' | 'exclude' | undefined,
             );
             data = null;
             break;

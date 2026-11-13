@@ -112,7 +112,7 @@ export class KnowledgeRetriever {
   }
 
   /**
-   * 可见 sourceId 列表
+   * 可见 sourceId 列表（isVisible 已含租户闸 ⊕ 网关漏斗，不再二次过滤）
    */
   visibleSourceIds(
     agentId: string,
@@ -121,7 +121,6 @@ export class KnowledgeRetriever {
   ): import('./types.js').KnowledgeSourceId[] {
     return this.sources
       .listVisible(agentId, sessionId, identity)
-      .filter((s) => this.sources.isGatewayVisible(s, identity))
       .map((s) => s.id);
   }
 
