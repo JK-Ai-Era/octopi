@@ -115,6 +115,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.13 (2026-11-13)
+
+### fix(context): purpose 不再被参数老化降级
+
+`purpose` 是「这次调用做了什么、为什么」的唯一人类可读记录，也是用户理解任务过程的主要手段。它作为普通参数进入 `tool_call.arguments`，因而会随结果老化走过 `agedToolArgDigest`——而通用阈值 `ARG_VALUE_KEEP_CHARS = 64` 恰好把它砍掉：生产会话 424 条 purpose 里 **14 条（3.3%）**被替换成 `{"$octopi_elided":{"chars":N}}`，长度 66–77 字符，正是「说清一件事」的常见区间，砍掉的正是信息本身。
+
+`purpose` 现按锚点类字段处理：
+
+- **不占内容预算**（与 `path`/`command` 同列）——否则一条超长载荷就能把唯一的行为说明挤掉；
+- **保留上限 160 字符**（`PURPOSE_KEEP_CHARS`），覆盖 schema 约定的 ≤120 加 JSON 引号/转义余量；超长仍降级，避免它变成第二个内容通道。
+
+**影响面**：已老化调用的 `purpose` 恢复原文（一次性视图变化 → 一次前缀重填）。未老化调用不受影响。
+
+---
+
 ## v0.113.12 (2026-11-13)
 
 ### chore(context): 老化默认值 rawWindow 40→20、freezeBatch 40→60

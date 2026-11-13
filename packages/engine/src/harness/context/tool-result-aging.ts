@@ -437,12 +437,27 @@ function elidedMarker(chars: number): unknown {
 const LOCATOR_FIELDS = new Set(['path', 'file', 'glob', 'pattern', 'cwd']);
 
 /**
+ * purpose 字段：**永不因内容预算被降级**（2026-11-13）
+ *
+ * purpose 是「这次调用做了什么、为什么」的唯一人类可读记录，也是用户理解
+ * 任务过程的主要手段（arch/tool-call-purpose.md）。实测生产会话 424 条
+ * purpose 里 14 条（3.3%）因超过 {@link ARG_VALUE_KEEP_CHARS}=64 被替换成
+ * `{"$octopi_elided":{"chars":N}}`——恰好落在「说清一件事」的常见长度区间
+ * （66–77），被砍掉的正是信息本身。
+ *
+ * 上限 160：schema 约定 ≤120 字符，余量覆盖 JSON 引号与转义；超长仍降级，
+ * 避免把 purpose 当第二个内容通道写入无界文本。
+ */
+const PURPOSE_FIELD = 'purpose';
+const PURPOSE_KEEP_CHARS = 160;
+
+/**
  * 锚点字段：不占用内容预算（否则定位信息会被内容载荷挤出）
  *
  * 定位字段与命令字段都属锚点——`command` 全文回答「跑了什么」，
  * 若让它和 `old_text` 之类抢同一个预算，多条命令一累加就会把命令整体省略掉。
  */
-const ANCHOR_FIELDS = new Set([...LOCATOR_FIELDS, 'command', 'cmd']);
+const ANCHOR_FIELDS = new Set([...LOCATOR_FIELDS, 'command', 'cmd', PURPOSE_FIELD]);
 
 /** 定位字段全保上限（超长的罕见路径才会退化为标记） */
 const LOCATOR_KEEP_CHARS = 200;
@@ -463,6 +478,8 @@ function isLocatorField(key: string): boolean {
  * @returns 保留原值、头部摘录或长度标记
  */
 function digestArgValue(key: string, value: unknown, size: number): unknown {
+  // purpose 先于通用阈值判定：它是锚点类语义（动作说明），不是可牺牲的内容载荷
+  if (key === PURPOSE_FIELD && size <= PURPOSE_KEEP_CHARS) return value;
   if (size <= ARG_VALUE_KEEP_CHARS) return value;
   if (isLocatorField(key) && size <= LOCATOR_KEEP_CHARS) return value;
   if (COMMAND_FIELDS.has(key) && typeof value === 'string') {
