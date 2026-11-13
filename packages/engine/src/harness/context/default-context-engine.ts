@@ -1462,9 +1462,18 @@ export class DefaultContextEngine implements ContextEngine {
         phase: 'summarize',
         requestChars: JSON.stringify(llmPrefix).length + (tools.length > 0 ? JSON.stringify(tools).length : 0),
         // token 口径（2026-11-13）：字符数与顶栏 token 并排显示会误导（实测 966K 字符
-        // ≈ 348k token，看起来像"请求比上下文大 3 倍"）。同一视图用与会话同源的估算器
-        // 给出 token，面板显示 token，字符数仅保留作内部诊断。
-        requestTokens: estimateLLMMessages(llmPrefix) + estimator.estimateTools(tools),
+        // ≈ 348k token，看起来像"请求比上下文大 3 倍"）。面板显示 token，字符仅留内部诊断。
+        // 尺子唯一（2026-11-14）：messages 与 tools 必须在**同一把尺**上相加。旧实现
+        // `estimateLLMMessages(llmPrefix)` 走裸估算器、`estimator.estimateTools()` 走校准
+        // 估算器，把「未校准 messages 187k + 校准 tools 13k」加成一个不存在的量
+        // （面板 200.7k，而 provider 实测 154.2k、顶栏 146.7k）。两边先用 raw 估算，
+        // 再统一乘一次 ratio——与 assemble 的 rawEstimatedTokens 同式，口径不可再分叉。
+        requestTokens: Math.ceil(
+          this.sizeLedger.calibrate(
+            calKey,
+            estimateLLMMessages(llmPrefix) + rawEstimator.estimateTools(tools),
+          ),
+        ),
         requestMessages: llmPrefix.length,
         timeoutMs: this.config.summarizeTimeoutMs || undefined,
       });
@@ -1642,6 +1651,13 @@ export class DefaultContextEngine implements ContextEngine {
     sessionId: string;
     agentId?: string;
     stateKey?: string;
+    /**
+     * 校准台账键（`stateKey::modelKey`）。
+     *
+     * 必须由调用方算好传下来：键里含 `lastModelKey`，本层无法自行推出，
+     * 重新猜一个键会静默命中空 ratio 表（=1.0），把读数悄悄改成裸估算。
+     */
+    calKey: string;
     messages: Message[];
     summarize?: SummarizeFunction;
     estimator: TokenEstimator;
@@ -1782,8 +1798,16 @@ export class DefaultContextEngine implements ContextEngine {
           JSON.stringify(llmPrefix).length +
           (params.tools && params.tools.length > 0 ? JSON.stringify(params.tools).length : 0),
         // token 口径同上：与顶栏同一把尺子，避免字符/token 量纲混排
-        requestTokens:
-          estimateLLMMessages(llmPrefix) + estimator.estimateTools(params.tools ?? []),
+        // 尺子唯一（2026-11-14）：messages 与 tools 必须同尺相加。旧实现 messages 走裸估算
+        // （estimateLLMMessages）、tools 走校准估算（estimator.estimateTools），相加得到不存在的量。
+        // 此处先用 raw 估算、最后乘一次 ratio，与同函数里 rawRequestViewTokens（tokensBefore
+        // 的报告尺）同式，两处读数不可再分叉。
+        requestTokens: Math.ceil(
+          this.sizeLedger.calibrate(
+            params.calKey,
+            estimateLLMMessages(llmPrefix) + raw.estimateTools(params.tools ?? []),
+          ),
+        ),
         requestMessages: llmPrefix.length,
         timeoutMs: this.config.summarizeTimeoutMs || undefined,
       });
@@ -1996,16 +2020,15 @@ export class DefaultContextEngine implements ContextEngine {
     const stateKey = compactStateKey(input.sessionId, input.agentId);
     // R1（评审 #5）：manual 压缩同样是决策路径（目标裁剪 / tokensBefore|After 读数），
     // 须与 assemble 同走校准口径；modelKey 复用会话最近一次 assemble 的分键。
-    const estimator = this.sizeLedger.calibratedEstimator(
-      this.calKey(stateKey, this.states.get(stateKey)?.lastModelKey ?? 'unknown'),
-      this.config.tokenEstimator,
-    );
+    const calKey = this.calKey(stateKey, this.states.get(stateKey)?.lastModelKey ?? 'unknown');
+    const estimator = this.sizeLedger.calibratedEstimator(calKey, this.config.tokenEstimator);
     // 整体透传 + 只覆盖需变换的三个字段：手抄 15 项参数表是「改一边忘另一边」的温床
     // （2026-11-13 前缀分叉就是这么来的）。新增字段自动随 input 流下，无需同步维护。
     const result = await this.structuralCompact({
       ...input,
       ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
       stateKey,
+      calKey,
       estimator,
     });
     return {

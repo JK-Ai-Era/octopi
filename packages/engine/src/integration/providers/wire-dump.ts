@@ -384,8 +384,20 @@ export function defaultWireDumpDir(): string {
 /**
  * 从 wire body 提取前缀单元文本（比对与落盘的唯一权威顺序）
  *
- * - OpenAI：`body.messages`
- * - Anthropic：顶层 `system`（字符串）+ `body.messages`；system 在 wire 语义上位于最前
+ * **本函数的单元序列 ≠ token 顺序**：缓存前缀的真实顺序是 `tools → system → messages`，
+ * 而这里只产出 `system → messages`，tools 另记 `toolsHash`（见 {@link extractWireUnits}
+ * 调用点）。tools 不能作为单元加入本序列：它一变整条前缀即失效，已由 diff 的
+ * `toolsChanged → cacheableChars=0` 单独裁决，重复计入会把 stableChars 算错。
+ *
+ * dump 落盘 body 的 JSON **key 顺序**（`model/max_tokens/messages/system/tools`）只是
+ * provider 代码里对象字面量的书写顺序，被 `JSON.stringify` 保留下来，
+ * **同样不是 token 顺序**——翻看 dump 时若按 key 先后推断缓存结构会得出相反结论
+ * （实测：摘要请求未命中仅 6,890 token = 尾部新增两条消息，system+tools 的 94,949
+ * 字符一次未重算）。
+ *
+ * - OpenAI 形态：`body.messages`（system 作为 messages[0]）
+ * - Anthropic 形态：顶层 `system`（字符串）+ `body.messages`；system 在 wire 语义
+ *   上位于**messages 之前**（但仍晚于 tools）
  *
  * @param body - provider 实际发送的请求体
  * @returns 前缀单元（role + 该单元 JSON 文本）

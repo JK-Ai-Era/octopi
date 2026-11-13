@@ -123,7 +123,47 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.113.27 (2026-11-13)
+## v0.113.28 (2026-11-14)
+
+### fix(context): 摘要进度读数的 messages 与 tools 改回同一把尺
+
+**事故（2026-11-13 手动压缩）**：右栏显示「摘要请求已发出 200.7k tokens」，顶栏同时显示
+「视图估算 146.7k」——同一份请求，两个数字差 36%。排查确认缓存**并未失效**（provider 实测
+`147,328 cached / 6,890 uncached = 95.5%` 命中，未命中的 6,890 恰好就是尾部新增的两条消息），
+问题出在读数本身。
+
+**根因**：`requestTokens` 在同一次加法里混了两个尺——`estimateLLMMessages(llmPrefix)`
+走**裸**估算器，`estimator.estimateTools(tools)` 走**校准后**估算器（已乘 ratio≈0.703）。
+实测 raw `messages 187,157 + tools 18,509`，混用口径得到 `187,157 + 18,509×0.703 = 200,169`，
+而全校准口径应为 `144,583`、provider 实测 `154,218`。messages 占 92%，所以偏差高达 36%。
+
+**修复**：两侧都先用 raw 估算，最后**统一乘一次 ratio**——与 `rawRequestViewTokens`
+（`tokensBefore` 的报告尺）同式，读数口径不可再分叉。proactive 与 manual 两处 emit 同步修正。
+改后同一内容的面板读数会落到 provider 实测附近（而非虚高 36%）。
+
+**测试**：`tests/harness/compact-progress-ruler-parity.test.ts` 以「同一视图跑两次、ratio=1
+对 ratio≈0.55」为判据：统一口径下两次读数之比必须**等于 ratio**（整包同倍缩放），混用口径则
+只缩放 tools 项、比值贴近 1。已验证旧实现在此判据下失败（实测比值 0.998，应为 0.59）。
+原有的「字符/token 比例 1.5–6」量纲检查**发现不了**这个缺陷（混用时该比例仍在区间内）。
+
+### docs(providers): 修正 wire dump 的「前缀单元顺序」误导性注释
+
+`wireUnitPayloads` 原注释称「顶层 system 在 wire 语义上永远位于最前」，容易被读成
+token 顺序的第一位。实际情况有两层错位，翻看 dump 时按 key 先后推断缓存结构会得出相反结论：
+
+1. **真实缓存前缀顺序是 `tools → system → messages`**（tools 最前），而该函数只产出
+   `system → messages`，tools 另记 `toolsHash`。tools 不能作为单元加入此序列——它一变整条
+   前缀即失效，已由 diff 的 `toolsChanged → cacheableChars=0` 单独裁决，重复计入会把
+   `stableChars` 算错。
+2. **dump 落盘 body 的 JSON key 顺序**（`model/max_tokens/messages/system/tools`）只是
+   provider 代码里对象字面量的书写顺序，被 `JSON.stringify` 保留下来，同样**不是 token 顺序**。
+
+判据（本次实测）：若顺序真是 `messages → system → tools`，摘要请求的未命中应含 system（46,888 字符）
+与 tools（48,061 字符），约 37,128 token；实测只有 6,890——system+tools 共 94,949 字符一次未重算。
+
+---
+
+
 
 ### fix(context): 摘要闸门改为可观测 + 回声判据从「行数」改「占比」 + 修 block 正文失明
 
