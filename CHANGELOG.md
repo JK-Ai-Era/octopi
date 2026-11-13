@@ -145,6 +145,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.10 (2026-11-13)
+
+### fix(tenancy): knowledge 写归属护栏——broker token 无 claim 不写 platform 共享面
+
+T3a 收尾修复（`arch/multi-tenancy.md` §6）。上一批把 gateway 的 Knowledge Service token 域提到 `platform`（受信 broker，读口需要全量视图），但 `upsertPrincipal` / `createProject` 等写路径直接用 `identity.tenantId`——broker token 没有显式 claim 时，**用户资产会被写进 `platform` 共享面**，与存量 `default` 域数据分叉（重启后 principal 会分成两套）。
+
+- **单点收口在鉴权边界**：`http-app#authenticate` 增 `writeTenantId`——token 域为 `platform` 且无显式 `x-octopi-tenant` 断言时，写域降级 `DEFAULT_TENANT_ID`；`identityOf()` 写路径取 `writeTenantId ?? tenantId`。读口不受影响（platform 仍是 broker 全量视图）。
+- **显式 claim 仍可建公共库**：broker token + 断言 `platform` 时写域就是 `platform`（platform 公共库必须显式声明，绝不隐式产生）。
+- **一次实现覆盖全部写方法**：principal / project / source / visibility / membership 都走同一 `identityOf`，不逐方法撒护栏（避免又一次漏路径）。
+
+### fix(plugin/weixin): vault 降级日志收敛为每进程一次
+
+`OCTOPI_CREDENTIALS_KEY` 未配置时 vault 永远写不进去，旧的 `saveState()` 在**每次状态变化**（包括 cursor-only 保存）都打一条 error，把日志刷满且掩盖真实信息。
+
+- 新增 `reportVaultDegraded()`：读/写失败各报一次（每进程），文案给出可操作指引（设置 `OCTOPI_CREDENTIALS_KEY` / `_FILE`），并说明降级形态（token 留在 0600 状态文件）。
+- 降级行为本身不变（token 仍内联保存、通道继续可用），失败依旧大声——只是不再重复刷屏。
+
 ## v0.113.8 (2026-11-13)
 
 ### feat(tenancy): T3a 检索租户上下文强制——knowledge 租户闸 + 断言链 + 写归属

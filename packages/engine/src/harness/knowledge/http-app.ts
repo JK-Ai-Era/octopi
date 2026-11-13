@@ -7,6 +7,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import { matchKnowledgeToken, resolveTenantClaim } from './http-bridge.js';
 import { promotionThresholdsFromParams } from './http-params.js';
 import type { KnowledgeQueryService, QueryIdentity } from './query-service.js';
@@ -35,6 +36,12 @@ export interface AuthContext {
   sessionId?: string;
   /** 是否携带显式租户断言（x-octopi-tenant）；归属打标与越域拒区分「显式」与「回落」 */
   claimed?: boolean;
+  /**
+   * 写路径归属域（arch/multi-tenancy.md §6 / T3a 收尾护栏）：
+   * 读口 tenantId 可为 platform（broker 全量视图），但写必须落具体租户域——
+   * 无 claim 时显式降级 DEFAULT 域，绝不把用户资产写进 platform 共享面。
+   */
+  writeTenantId?: string;
 }
 
 type Handler = (
@@ -127,7 +134,12 @@ export class KnowledgeHttpApp {
   }
 
   private identityOf(ctx: AuthContext): WriteIdentity & QueryIdentity {
-    return { tenantId: ctx.tenantId, gatewayId: ctx.gatewayId, claimed: ctx.claimed };
+    return {
+      // 写路径用归属域（platform token 无 claim → DEFAULT，不写 platform 共享面）
+      tenantId: ctx.writeTenantId ?? ctx.tenantId,
+      gatewayId: ctx.gatewayId,
+      claimed: ctx.claimed,
+    };
   }
 
   private route(method: string, pattern: string, handler: Handler): void {
@@ -847,7 +859,16 @@ export class KnowledgeHttpApp {
     if (Array.isArray(claim)) return null;
     const resolved = resolveTenantClaim(hit.tenantId, claim ? claim : undefined);
     if ('error' in resolved) return null;
-    return { tenantId: resolved.tenantId, gatewayId: hit.gatewayId, claimed: Boolean(claim) };
+    // 写归属域（T3a 收尾护栏）：platform 域（broker）无显式 claim 时，写一律降级 DEFAULT 域。
+    // 读口不受影响（platform = 全量视图）；写绝不能把用户资产落进 platform 共享面。
+    const writeTenantId =
+      resolved.tenantId === PLATFORM_TENANT_ID && !claim ? DEFAULT_TENANT_ID : resolved.tenantId;
+    return {
+      tenantId: resolved.tenantId,
+      gatewayId: hit.gatewayId,
+      claimed: Boolean(claim),
+      writeTenantId,
+    };
   }
 }
 

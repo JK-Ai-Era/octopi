@@ -180,6 +180,23 @@ export function createWeixinChannelAdapter(ctx, deps) {
   // (legacy single-file mode, e.g. standalone testing).
   /** Token currently persisted in the vault — skipped on cursor-only saves. */
   let persistedToken = null;
+  /**
+   * Vault degradation reported once per process (review T3a follow-up): a
+   * missing OCTOPI_CREDENTIALS_KEY makes every vault write fail, which used
+   * to log on every state save and bury the log. One loud report per
+   * process, then stay quiet — the degraded mode itself is unchanged.
+   */
+  let vaultDegradationReported = false;
+  function reportVaultDegraded(direction, error) {
+    if (vaultDegradationReported) return;
+    vaultDegradationReported = true;
+    log.error(
+      `weixin: vault ${direction} failed (${String(error)}); ` +
+        'bot_token stays in the state file (0600). ' +
+        'Set OCTOPI_CREDENTIALS_KEY or OCTOPI_CREDENTIALS_KEY_FILE to enable vault storage. ' +
+        'This message is reported once per process.',
+    );
+  }
   /** Trusted-host gate used everywhere a server-provided URL is adopted. */
   function isAcceptableHost(urlString) {
     let url;
@@ -225,7 +242,7 @@ export function createWeixinChannelAdapter(ctx, deps) {
           // Vault unreadable (e.g. master key not configured): surface the real
           // cause instead of pretending "not paired", and fall back to an
           // inline token so the channel keeps working.
-          log.error(`weixin: vault read failed (${String(error)}); falling back to inline state token`);
+          reportVaultDegraded('read', error);
         }
       }
       const token = vaultToken ?? fileToken;
@@ -252,7 +269,7 @@ export function createWeixinChannelAdapter(ctx, deps) {
         await secrets.set('bot_token', token);
         persistedToken = token;
       } catch (error) {
-        log.error(`weixin: vault write failed (${String(error)}); keeping bot_token inline in the state file`);
+        reportVaultDegraded('write', error);
       }
     }
     const vaulted = Boolean(secrets) && persistedToken === token;

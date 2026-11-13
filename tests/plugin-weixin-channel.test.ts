@@ -694,6 +694,9 @@ describe('weixin state + vault (P6-4)', () => {
     const onDisk = JSON.parse(readFileSync(sp, 'utf8')) as Record<string, unknown>;
     expect(onDisk.bot_token).toBe('tok-keep');
     expect(errLog.some((l) => l.includes('vault write failed') && l.includes('master key'))).toBe(true);
+    // Degraded mode is reported once per process, not on every state save
+    // (cursor saves must not bury the log under repeated vault errors).
+    expect(errLog.filter((l) => l.includes('vault write failed')).length).toBeLessThanOrEqual(1);
     await adapter.stop();
   });
 
