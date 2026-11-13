@@ -16,7 +16,7 @@
  */
 
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
-import type { Message, RegisteredTool, ToolExecutionContext } from '@octopi-agent/core/types.js';
+import type { Message, RegisteredTool, ToolExecutionContext, ToolResultAger } from '@octopi-agent/core/types.js';
 import type {
   LLMMessage,
   LLMToolDefinition,
@@ -91,6 +91,14 @@ type StructuralEngine = {
     maxOutputTokens?: number;
     /** 旧压缩快照读口（迁移输入） */
     loadCompactState?: (sessionId: string) => Promise<ContextCompactSnapshot | undefined> | ContextCompactSnapshot | undefined;
+    /**
+     * 老化策略：摘要前缀与主请求同形的必要条件
+     *
+     * 缺它摘要视图退回默认机械指针，而会话请求用 per-tool ager，
+     * 同一条工具结果两种形态 → 前缀从第一条起分叉、缓存 0 命中。
+     */
+    toolAgers?: ReadonlyMap<string, ToolResultAger>;
+    toolArgAgers?: ReadonlySet<string>;
     /** F22：cache-miss 旁路事件出口（ContextEmitFn 形状，经 observerHub 直采进 timeline） */
     emit?: (event: CompactEmitEvent) => void;
   }) => Promise<CompactOutcome>;
@@ -914,7 +922,10 @@ export class RunHost implements RunBackend {
     // （`resolveSessionLlmTools`：toolsForSession ∩ agentToolPolicy ∩ session ACL），
     // 与 run 内 `runContext.tools` 同一漏斗——禁在此手抄，手抄会漂移成两份工具面，
     // 摘要请求 tools 与原请求不同字节 → 前缀缓存从第一字节断开（评审 MAJ-3）。
-    const manualTools: LLMToolDefinition[] = await m.runner.resolveSessionLlmTools(sessionId, agentId);
+    // 老化策略必须与工具面同批取（同一漏斗）：摘要前缀的 messages 半区依赖 toolAgers，
+    // 单独取 tools 会让摘要视图退回默认指针 → 前缀从第一条工具结果起分叉。
+    const surface = await m.runner.resolveSessionToolSurface(sessionId, agentId);
+    const manualTools: LLMToolDefinition[] = surface.tools;
 
     // D1：与 handle 共用 Runner session 锁（E4 键）；持久化走 Runner
     return m.runner.compactSession(sessionId, agentId, {
@@ -931,6 +942,8 @@ export class RunHost implements RunBackend {
           systemPrompt: input.systemPrompt,
           tools: input.tools,
           loadCompactState: input.loadCompactState,
+          toolAgers: surface.toolAgers,
+          toolArgAgers: surface.toolArgAgers,
           // 摘要请求窗口护栏（评审 F5）：窗口/输出上限随会话模型绑定注入，防最满时压缩被 400
           contextWindow: bound?.contextWindow,
           maxOutputTokens: bound?.maxOutputTokens,

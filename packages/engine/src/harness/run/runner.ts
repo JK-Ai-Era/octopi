@@ -27,6 +27,7 @@ import type { ReliabilityHarness } from './reliability/run-agent.js';
 import { createSessionStateMachine } from '../session/state-machine.js';
 import type { StateMachine } from '@octopi-agent/core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from '../context/index.js';
+import { collectToolAgers, collectToolArgAgers } from '../context/tool-result-aging.js';
 import { OpsAuditJournal, OpsAuditFileExportSink, type OpsAuditEvent, type OpsAuditExportSink } from '../extension/execution-environment/ops-audit.js';
 import { getOctopiHome } from '../../paths.js';
 import { extractLayerQuery } from '../context/layer-types.js';
@@ -2881,6 +2882,53 @@ export class SessionAwareRunner {
   }
 
   /**
+   * 某会话的 wire 工具面 **同时**带出老化策略（manual 压缩专用）
+   *
+   * 为什么必须成对返回：摘要请求的 messages 前缀要与会话请求逐字节相同，
+   * 而 messages 老化依赖 toolAgers。只给 tools（wire 定义）不给 agers，
+   * 摘要视图就会退回默认机械指针 —— 2026-11-13 生产实测：678 个共同工具结果中
+   * 515 个（76%）形态不同 → 前缀从第 2 条消息起就分叉，缓存 0 命中。
+   *
+   * 单一漏斗：内部仍走 {@link resolveSessionLlmTools} 的同一过滤（`toolsForSession`
+   * ∩ `agentToolPolicy` ∩ session ACL），两边不可能出现两份工具集。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 归属 agent
+   * @returns wire 工具定义（顺序与会话面一致）与按名索引的老化器
+   */
+  async resolveSessionToolSurface(
+    sessionId: string,
+    agentId: string,
+  ): Promise<{
+    tools: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
+    toolAgers: ReturnType<typeof collectToolAgers>;
+    toolArgAgers: ReturnType<typeof collectToolArgAgers>;
+  }> {
+    const { buildToolDefinitions } = await import('@octopi-agent/core/loop/agent-loop.js');
+    const session = await this.store.load(sessionId);
+    let rights: import('../governance/session-acl/types.js').ToolRights | undefined;
+    const acl = this.config.sessionAcl;
+    if (acl && session) {
+      const auth = acl.authorizeRun({
+        session,
+        agentId,
+        agentMax: this.config.agentMaxSessionRights,
+      });
+      if (auth.ok) rights = auth.rights?.toolRights;
+    }
+    const surface = this.filterToolsForSessionRights(
+      this.agent.toolsForSession(sessionId),
+      rights,
+      this.config.agentToolPolicy,
+    );
+    return {
+      tools: buildToolDefinitions(surface),
+      toolAgers: collectToolAgers(surface),
+      toolArgAgers: collectToolArgAgers(surface),
+    };
+  }
+
+  /**
    * Session compact under the same session lock as handle (E1/E4).
    *
    * Authority is the runner session lock, not status==='processing'.
@@ -2909,12 +2957,17 @@ export class SessionAwareRunner {
         tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
         /** 旧压缩快照读口（迁移输入） */
         loadCompactState?: (sessionId: string) => Promise<import('../context/types.js').ContextCompactSnapshot | undefined> | import('../context/types.js').ContextCompactSnapshot | undefined;
+        toolAgers?: ReturnType<typeof collectToolAgers>;
+        toolArgAgers?: ReturnType<typeof collectToolArgAgers>;
       }) => Promise<import('../context/capabilities/compact/types.js').CompactOutcome>;
       summarize?: import('../context/types.js').SummarizeFunction;
       compactTargetTokens?: number;
       /** 请求口径计量原料（2026-11-08 B1）：透传给 compactStructural */
       systemPrompt?: string;
       tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
+      /** 老化策略：摘要前缀必须与会话请求同形（缺它 → 默认指针 → 前缀分叉） */
+      toolAgers?: ReturnType<typeof collectToolAgers>;
+      toolArgAgers?: ReturnType<typeof collectToolArgAgers>;
     },
   ): Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome> {
     const release = await this.acquireLock(sessionId);
@@ -2944,6 +2997,9 @@ export class SessionAwareRunner {
         // tool schema——「请求口径」名不副实
         systemPrompt: options.systemPrompt,
         tools: options.tools,
+        // 老化策略：缺它摘要视图退回默认指针，与会话前缀分叉（2026-11-13 实测 76% 结果形态不同）
+        toolAgers: options.toolAgers,
+        toolArgAgers: options.toolArgAgers,
         // 交接式摘要素材：task 快照（裸状态块，不含对话引导语）随指令尾部注入
         taskSnapshot: renderSessionTasksInjection(session.tasks ?? [], { includeGuidance: false }),
         // 旧压缩快照读口（迁移输入）：manual 路也要先迁移再产记录，防旧快照在

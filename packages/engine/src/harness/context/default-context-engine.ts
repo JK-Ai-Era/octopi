@@ -1889,6 +1889,15 @@ export class DefaultContextEngine implements ContextEngine {
     emit?: ContextEmitFn;
     /** 旧压缩快照读口（迁移输入；缺省不迁移） */
     loadCompactState?: (sessionId: string) => Promise<ContextCompactSnapshot | undefined> | ContextCompactSnapshot | undefined;
+    /**
+     * 老化策略：摘要前缀的 messages 半区必须与会话请求逐字节同源。
+     *
+     * 缺省时摘要视图退回默认机械指针，而会话请求用 per-tool ager →
+     * 同一条工具结果两种形态，前缀从第一条起分叉、缓存 0 命中
+     * （2026-11-13 生产实测：678 个共同结果中 515 个（76%）形态不同）。
+     */
+    toolAgers?: ReadonlyMap<string, ToolResultAger>;
+    toolArgAgers?: ReadonlySet<string>;
   }): Promise<CompactOutcome> {
     const stateKey = compactStateKey(input.sessionId, input.agentId);
     // R1（评审 #5）：manual 压缩同样是决策路径（目标裁剪 / tokensBefore|After 读数），
@@ -1912,6 +1921,8 @@ export class DefaultContextEngine implements ContextEngine {
       maxOutputTokens: input.maxOutputTokens,
       emit: input.emit,
       loadCompactState: input.loadCompactState,
+      toolAgers: input.toolAgers,
+      toolArgAgers: input.toolArgAgers,
     });
     return {
       ...result,

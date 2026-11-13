@@ -123,6 +123,66 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.24 (2026-11-13)
+
+### fix(compact): manual 压缩摘要前缀带上老化策略——修 76% 工具结果形态分叉
+
+**症状**（default-web-1794346953041，363.8k 上下文时手动压缩）：摘要请求发出 1.11M 字符，
+但缓存前缀几乎全失。不是估算口径问题，是**发送内容真的不一样**。
+
+**证据链**（逐字节对比同一次压缩的摘要请求与会话请求）：
+
+| 项 | 结果 |
+|---|---|
+| `tools`（60 个，hash `046e90f1…`） | **相同** ✓ |
+| `messages[0]`（system） | **相同** ✓ |
+| `messages[1]` | 相同 ✓ |
+| `messages[2]` | **分叉** ✗ |
+
+分叉在同一条工具结果（同一 `tool_use_id`）上：
+
+```
+会话请求: [aged] file_read lines 1-31/31 — call file_read for current text
+摘要请求: [aged tool result · pointer] file_read; result 1624 chars: {...}
+```
+
+全量：**678 个共同工具结果中 515 个（76%）形态不同**，全部是「摘要=默认机械指针，
+会话=per-tool ager」。
+
+**根因**：manual 压缩没透传 `toolAgers`。`structuralCompact` 本就接受该参数，但上游三层
+签名都没有——`compactStructural` → `runner.compactSession` → `run-host` 的手抄透传列表漏了，
+于是 `computeToolResultAgingPlan(messages, cfg, { toolAgers: undefined })` 对每条工具结果退回
+默认指针，而主会话请求用 per-tool ager。
+
+**复现与量化**（同一份 2400 条真实历史，`agedIds` 都是 1199，仅 agers 有无不同）：
+
+```
+不带 agers（事故形状）: 3,812,530 字符  sha=f3bff4125a3615ce
+带   agers（修复后）:   3,772,349 字符  sha=521fb5399409b8e1
+```
+
+同样条数、同样老化决策，**字节不同 → 前缀从第 2 条消息起断开 → 缓存全 miss**。
+
+**修复**：
+
+| 层 | 改动 |
+|---|---|
+| `runner` | 新增 `resolveSessionToolSurface()`——wire 工具面**成对**返回 `tools + toolAgers + toolArgAgers`，内部走 `resolveSessionLlmTools` 同一漏斗（`toolsForSession` ∩ `agentToolPolicy` ∩ session ACL），杜绝两份工具集 |
+| `runner.compactSession` | options 增 `toolAgers`/`toolArgAgers` 并透传 |
+| `run-host` | 用 `resolveSessionToolSurface` 替代只取 tools 的旧调用 |
+| `compactStructural` | 入参声明 `toolAgers`/`toolArgAgers` |
+
+**为什么护栏没拦住**：`checkSummaryToolFace` 只比对 `toolsHash`（本次确实相同），
+**不比对 messages 前缀**——分叉在 messages 半区，护栏视野之外。
+
+**新增回归**：`tests/harness/compact-manual-aging-parity.test.ts`（4 例）——缺 agers 必现默认
+指针、带 agers 必用 per-tool 指针、两者字节必然不同、同输入逐字节稳定。
+
+**未覆盖**：`compactStructural` 未加「缺 agers 就 warn」护栏，只靠调用点正确；未来新增 manual
+入口需同样成对取工具面。
+
+---
+
 ## v0.113.23 (2026-11-13)
 
 ### feat(tenancy): T3b registry 知识面 + 挂载物化 + 控制面读口闸
