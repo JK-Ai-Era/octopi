@@ -2852,6 +2852,24 @@ export class SessionAwareRunner {
     agentId: string,
   ): Promise<import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[]> {
     const { buildToolDefinitions } = await import('@octopi-agent/core/loop/agent-loop.js');
+    return buildToolDefinitions(await this.resolveSessionToolSet(sessionId, agentId));
+  }
+
+  /**
+   * 会话工具面的唯一过滤点（SEC-2 漏斗，禁手抄）
+   *
+   * `resolveSessionLlmTools`（只要 wire 定义）与 `resolveSessionToolSurface`
+   * （wire 定义 + 老化策略）都必须经过这里——**不允许各自复述一遍过滤链**。
+   * 2026-11-13 的前缀分叉正是因为两条路径各自手抄参数表，改一边忘另一边。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - 归属 agent（ACL 授权主体）
+   * @returns 经 ACL/策略过滤后的 AgentTool 集合
+   */
+  private async resolveSessionToolSet(
+    sessionId: string,
+    agentId: string,
+  ): Promise<import('@octopi-agent/core/loop/types.js').AgentTool[]> {
     const session = await this.store.load(sessionId);
     let rights: import('../governance/session-acl/types.js').ToolRights | undefined;
     const acl = this.config.sessionAcl;
@@ -2872,12 +2890,10 @@ export class SessionAwareRunner {
         );
       }
     }
-    return buildToolDefinitions(
-      this.filterToolsForSessionRights(
-        this.agent.toolsForSession(sessionId),
-        rights,
-        this.config.agentToolPolicy,
-      ),
+    return this.filterToolsForSessionRights(
+      this.agent.toolsForSession(sessionId),
+      rights,
+      this.config.agentToolPolicy,
     );
   }
 
@@ -2905,22 +2921,7 @@ export class SessionAwareRunner {
     toolArgAgers: ReturnType<typeof collectToolArgAgers>;
   }> {
     const { buildToolDefinitions } = await import('@octopi-agent/core/loop/agent-loop.js');
-    const session = await this.store.load(sessionId);
-    let rights: import('../governance/session-acl/types.js').ToolRights | undefined;
-    const acl = this.config.sessionAcl;
-    if (acl && session) {
-      const auth = acl.authorizeRun({
-        session,
-        agentId,
-        agentMax: this.config.agentMaxSessionRights,
-      });
-      if (auth.ok) rights = auth.rights?.toolRights;
-    }
-    const surface = this.filterToolsForSessionRights(
-      this.agent.toolsForSession(sessionId),
-      rights,
-      this.config.agentToolPolicy,
-    );
+    const surface = await this.resolveSessionToolSet(sessionId, agentId);
     return {
       tools: buildToolDefinitions(surface),
       toolAgers: collectToolAgers(surface),

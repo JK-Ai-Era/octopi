@@ -123,6 +123,55 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.25 (2026-11-13)
+
+### feat(context): 前缀指纹护栏覆盖 messages 半区，并消除工具面解析的第二份实现
+
+**背景**：`v0.113.24` 修了 manual 压缩漏传 `toolAgers` 导致的前缀分叉。但当时的护栏
+`checkSummaryToolFace` 只比对 `toolsHash`——本次 `tools` 恰好完全相同，护栏正确通过、
+对真实缺陷完全沉默，直到实测发现 1.11M 字符缓存全 miss。护栏守了一半。
+
+**改动一：护栏比完整指纹**
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 记录内容 | `{ toolsHash, count }` | `PrefixFingerprint`（tools + system + messages + 计数） |
+| 比对结果 | 只知「tools 不同」 | 具体到 `tools` / `system` / `messages` 哪一项 |
+| 记录时机 | `assemble` 入口（此时 messages 尚未产出） | 出口（`llmMessages` 就绪后） |
+
+关键点：`buildRequestView` 同时服务于会话请求与摘要请求，因此新增 `recordBaseline`
+开关——摘要路径全部传 `false`，否则摘要会把自己的指纹写成基线，护栏随即永远一致、
+形同虚设。主会话的两个出口（`folds` 分支与 `fits` 分支）各自显式记录。
+
+真实事故数据验证：
+
+```
+摘要前缀指纹: tools=267141a7 system=dd29ecf5 messages=d31b6d1e (928 条)
+会话前缀指纹: tools=267141a7 system=dd29ecf5 messages=7eb41f4b (927 条)
+护栏判定: ['messages']      ← 新护栏命中
+旧护栏（只比 toolsHash）: 沉默（tools 哈希相同——这就是事故）
+```
+
+**改动二：消除工具面解析的第二份实现**
+
+上一轮我新增 `resolveSessionToolSurface` 时，把 `resolveSessionLlmTools` 的过滤链
+（`load session` → `authorizeRun` → `filterToolsForSessionRights`）**又抄了一遍**——
+在修「同一逻辑两处实现」的同时造了一个新的。已抽为私有 `resolveSessionToolSet()`，
+两个公开方法都只调用它；`compactStructural` 的 15 项手抄透传表改为 `...input` 整体透传，
+只有真正需要变换的三个字段（`agentId` 归一、`stateKey`、`estimator`）显式覆盖。
+
+这直接对应 CONstitution 的 **One source of truth**（E-rule 8）：手抄参数表是「改一边忘
+另一边」的温床，本次两个缺陷同源。
+
+**新增测试**：`tests/harness/prefix-fingerprint-guard.test.ts`（8 例）——messages 老化形态
+不同必报 `messages`、tools 相同故旧护栏沉默（事故形状锁定）、同形不误报、tools/system
+优先且不重复报、尾部差异排除、指纹稳定、计数如实。
+
+**代价**：每次压缩多一次前缀 `sha1`（仅摘要时计算，稳态零开销；`toolsHashOf` 仍按数组
+引用缓存）。
+
+---
+
 ## v0.113.24 (2026-11-13)
 
 ### fix(compact): manual 压缩摘要前缀带上老化策略——修 76% 工具结果形态分叉

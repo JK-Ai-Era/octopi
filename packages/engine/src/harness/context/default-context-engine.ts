@@ -57,7 +57,7 @@ import { DefaultBudgetAllocator } from './budget-allocator.js';
 import { compactStateKey } from './compact-key.js';
 import { HookedCompactEngine } from '../extension/plugin-ecosystem/hooks/compaction-integration.js';
 import { isTurnAnchor, isScheduleNotice } from './layer-types.js';
-import { fingerprintRequestView } from './prefix-fingerprint.js';
+import { fingerprintRequestView, diffPrefixFingerprint, type PrefixFingerprint } from './prefix-fingerprint.js';
 import { createCompactEngine } from './capabilities/compact/index.js';
 import type { CompactEngine, CompactOutcome } from './capabilities/compact/index.js';
 import {
@@ -216,9 +216,16 @@ export class DefaultContextEngine implements ContextEngine {
    */
   /** 最近一次工具面哈希（按数组引用缓存，避免每 step 重复 sha1） */
   private lastToolsHash?: { ref: LLMToolDefinition[]; hash: string };
-  private lastRequestTools = new Map<
+  /**
+   * 最近一次**会话请求**的前缀指纹（tools + system + messages）
+   *
+   * 用途：摘要请求发出前比对——任一项不同，前缀缓存必 miss。
+   * 2026-11-13 事故正是 tools/system 相同而 messages 半区（老化形态）分叉，
+   * 旧实现只存 tools 哈希，看不见这类差异。
+   */
+  private lastRequestPrefix = new Map<
     string,
-    { hash: string; count: number; toolsRef: LLMToolDefinition[] }
+    { fingerprint: PrefixFingerprint; toolCount: number; messageCount: number }
   >();
 
   constructor(config?: DefaultContextEngineConfig) {
@@ -294,13 +301,6 @@ export class DefaultContextEngine implements ContextEngine {
     } = params;
     // E4：引擎内部状态键 = (sessionId, agentId)
     const stateKey = compactStateKey(sessionId, agentId);
-    // 可观测护栏（2026-11-12）：记下本次会话请求的工具面前缀指纹，供摘要路径比对。
-    // tools 在会话生命周期内近乎不变，摘要请求与之不同 = 缓存必 miss 且此前完全不可见。
-    this.lastRequestTools.set(stateKey, {
-      hash: this.toolsHashOf(tools),
-      count: tools.length,
-      toolsRef: tools,
-    });
     const ledger = await this.loadLedger(sessionId, agentId, messages, loadCompactState);
     this.restoreGatesFromLedger(stateKey, ledger);
 
@@ -362,6 +362,12 @@ export class DefaultContextEngine implements ContextEngine {
         });
       }
       const llmMessages = this.buildLlmMessages(folded.view, systemPrompt, agingPlan);
+      // 会话请求基线（同出 1：摘要路径以它为比对对象）
+      this.lastRequestPrefix.set(stateKey, {
+        fingerprint: fingerprintRequestView({ messages: llmMessages, tools }),
+        toolCount: tools.length,
+        messageCount: llmMessages.length,
+      });
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       const decision = this.sizeLedger.decisionTokensWithSource(
         this.calKey(stateKey, modelKey),
@@ -483,6 +489,12 @@ export class DefaultContextEngine implements ContextEngine {
       effectiveMessagesLimit;
     if (selection.overflow.length === 0 && fits(view)) {
       const llmMessages = this.buildLlmMessages(view, systemPrompt, agingPlan);
+      // 会话请求基线：摘要路径以它为比对对象（messages 半区含老化形态）
+      this.lastRequestPrefix.set(stateKey, {
+        fingerprint: fingerprintRequestView({ messages: llmMessages, tools }),
+        toolCount: tools.length,
+        messageCount: llmMessages.length,
+      });
       const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
       const decision = this.sizeLedger.decisionTokensWithSource(
         this.calKey(stateKey, modelKey),
@@ -1393,14 +1405,16 @@ export class DefaultContextEngine implements ContextEngine {
       // 且每次重压都把已压缩过的中段原封不动再发一遍（实测 2.13MB 请求、provider 不返回）。
       // 请求视图（原子产物）：messages 与 tools 同批解析，摘要请求原样复用这份前缀。
       // 旧实现只取 messages 半区、tools 由调用方另传——2026-11-12 前缀缓存事故的形状。
+      // recordBaseline:false —— 摘要请求不覆盖会话基线
       const view = this.buildRequestView({
         messages: folded.view,
         systemPrompt,
         tools,
         aging: agingPlan,
+        recordBaseline: false,
       });
       const llmPrefix = view.messages;
-      this.checkSummaryToolFace(stateKey, view.tools);
+      this.checkSummaryPrefix(stateKey, view);
       // 回声源排除既有摘要占位：模型续写上一份交接书不是「复读原文」
       const echoSource = this.buildEchoSource(folded.view, systemPrompt, agingPlan);
       // P3 可观测：摘要请求即将发出——如实上报请求体量与预算，UI 不再只显示「进行中」。
@@ -1633,16 +1647,24 @@ export class DefaultContextEngine implements ContextEngine {
     // P2：前缀 = 折叠视图（与主会话请求同形）。
     // 只能由 buildRequestView 产出（messages+tools 原子）——不接受调用方单独塞
     // messages：那正是「两半各走一路」的入口（评审 del-b5ffc13a MIN-4）。
+    // recordBaseline:false —— 摘要请求不覆盖会话基线，否则护栏永远一致（形同虚设）
     const requestView = systemText
       ? this.buildRequestView({
           messages: folded.view,
           systemPrompt: systemText,
           tools: params.tools ?? [],
           aging: agingPlan,
+          recordBaseline: false,
         })
       : undefined;
     const llmPrefix = requestView?.messages;
-    this.checkSummaryToolFace(compactStateKey(sessionId, params.agentId), requestView?.tools ?? params.tools ?? []);
+    const manualStateKey = compactStateKey(sessionId, params.agentId);
+    if (requestView) {
+      this.checkSummaryPrefix(manualStateKey, requestView);
+    } else {
+      // 无 system 文本 → 视图由调用方提供，形状不可知；退回只比 tools（旧行为）
+      this.checkSummaryToolFace(manualStateKey, params.tools ?? []);
+    }
     // 回声源只用引擎自建的前缀形状（前缀=调用方视图时形状不可知）
     const echoSource =
       llmPrefix
@@ -1906,23 +1928,13 @@ export class DefaultContextEngine implements ContextEngine {
       this.calKey(stateKey, this.states.get(stateKey)?.lastModelKey ?? 'unknown'),
       this.config.tokenEstimator,
     );
+    // 整体透传 + 只覆盖需变换的三个字段：手抄 15 项参数表是「改一边忘另一边」的温床
+    // （2026-11-13 前缀分叉就是这么来的）。新增字段自动随 input 流下，无需同步维护。
     const result = await this.structuralCompact({
-      sessionId: input.sessionId,
+      ...input,
       ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
       stateKey,
-      messages: input.messages,
-      summarize: input.summarize,
       estimator,
-      compactTargetTokens: input.compactTargetTokens,
-      systemPrompt: input.systemPrompt,
-      tools: input.tools,
-      taskSnapshot: input.taskSnapshot,
-      contextWindow: input.contextWindow,
-      maxOutputTokens: input.maxOutputTokens,
-      emit: input.emit,
-      loadCompactState: input.loadCompactState,
-      toolAgers: input.toolAgers,
-      toolArgAgers: input.toolArgAgers,
     });
     return {
       ...result,
@@ -2122,14 +2134,34 @@ export class DefaultContextEngine implements ContextEngine {
    * @returns 无（异常情况打印告警）
    */
   private checkSummaryToolFace(stateKey: string, tools: LLMToolDefinition[]): void {
-    const last = this.lastRequestTools.get(stateKey);
-    if (!last) return; // 无基线（如 manual 压缩发生在任何 assemble 之前）——不虚构告警
+    const last = this.lastRequestPrefix.get(stateKey);
+    if (!last) return;
     const hash = this.toolsHashOf(tools);
-    if (hash === last.hash) return;
+    if (hash === last.fingerprint.toolsHash) return;
     console.warn(
       `[ctx] summary tool face differs from last session request ` +
-        `(key=${stateKey}, summary=${tools.length} tools, session=${last.count}) — ` +
+        `(key=${stateKey}, summary=${tools.length} tools, session=${last.toolCount}) — ` +
         `prefix cache will miss; check tool-face resolution`,
+    );
+  }
+
+  private checkSummaryPrefix(stateKey: string, view: RequestView): void {
+    const last = this.lastRequestPrefix.get(stateKey);
+    if (!last) return; // 无基线（如 manual 压缩发生在任何 assemble 之前）——不虚构告警
+    const mine = fingerprintRequestView(view);
+    const diffs = diffPrefixFingerprint(last.fingerprint, mine);
+    if (diffs.length === 0) return;
+    // 差异项具体到 tools / system / messages：只报「不同」无法定位是哪条路径漏了参数。
+    // messages 不同最常见于老化形态分叉（摘要用默认指针而会话用 per-tool ager）。
+    const detail =
+      diffs.includes('messages') && !last.fingerprint.prefixCount
+        ? ''
+        : `, summary=${mine.prefixCount} msgs/${mine.toolsHash.slice(0, 8)}, ` +
+          `session=${last.messageCount} msgs/${last.fingerprint.toolsHash.slice(0, 8)}`;
+    console.warn(
+      `[ctx] summary prefix differs from last session request ` +
+        `(key=${stateKey}, differs=${diffs.join('+')}${detail}) — ` +
+        `prefix cache will miss; check tool-face resolution AND aging parity`,
     );
   }
 
@@ -2150,13 +2182,30 @@ export class DefaultContextEngine implements ContextEngine {
     systemPrompt: string;
     tools: LLMToolDefinition[];
     aging: ToolResultAgingPlan;
+    /**
+     * 记录为「最近一次会话请求」基线（默认 true）
+     *
+     * 摘要请求必须传 `false`：它同样经此产出前缀，若无条件记录就会把会话基线
+     * 覆盖成摘要自己的指纹，护栏随即永远一致、形同虚设。
+     */
+    recordBaseline?: boolean;
+    /** 基线所属状态键（与 compactStateKey 同源） */
+    stateKey?: string;
   }): RequestView {
     // 只产出前缀两半；尾部摘要指令由 compact 引擎独占追加（单一追加点，
     // 否则重压/旁路会出现两条尾部指令——评审 del-b5ffc13a NIT-8）。
-    return {
+    const view: RequestView = {
       messages: this.buildLlmMessages(input.messages, input.systemPrompt, input.aging),
       tools: input.tools,
     };
+    if (input.recordBaseline !== false && input.stateKey) {
+      this.lastRequestPrefix.set(input.stateKey, {
+        fingerprint: fingerprintRequestView(view),
+        toolCount: view.tools.length,
+        messageCount: view.messages.length,
+      });
+    }
+    return view;
   }
 
   /**
