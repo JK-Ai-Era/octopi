@@ -251,7 +251,15 @@ export class ContextSizeLedger {
     rawTokens: number,
     anchor?: { actual: number; raw: number; modelKey: string },
   ): { tokens: number; source: 'calibrated' | 'anchored' | 'raw' } {
-    const trusted = (this.samplesByModel.get(modelKey) ?? 0) >= 2 && !this.isDegraded(modelKey);
+    // 样本计数与 ratio 必须成对可用：计数随 state 持久化恢复，ratio 只在本进程 observe
+    // 时产生（不落盘）。只看计数会在「重启后 ratio 表为空」的半恢复状态下把 ratio=1.0
+    // 当成已校准读数（2026-11-13 生产：samples=1242 恢复、ratio 空 → 判定 536,102，
+    // 而锚外推应为 452,857；越阈值 0.68%，触发了一次不该发生的压缩）。
+    // 缺 ratio 即降级到锚外推，与「无样本」同路。
+    const trusted =
+      this.ratioByModel.has(modelKey) &&
+      (this.samplesByModel.get(modelKey) ?? 0) >= 2 &&
+      !this.isDegraded(modelKey);
     if (trusted) return { tokens: this.calibrate(modelKey, rawTokens), source: 'calibrated' };
     if (anchor && anchor.modelKey === modelKey && anchor.actual > 0 && anchor.raw > 0) {
       // 锚卫生（2026-11-07）：锚是同请求实测对的外推（配对槽保证同源）。不做比率带拒用——

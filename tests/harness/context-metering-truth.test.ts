@@ -276,6 +276,26 @@ describe('校准作用域与锚卫生（2026-11-08 生产毒读数回归钉）',
     expect(reading.source).toBe('anchored');
   });
 
+  it('红线：样本已恢复而 ratio 表为空（重启半恢复）→ 必须降级到锚，不得拿 ratio=1.0 冒充已校准', () => {
+    // 生产 2026-11-13：samples=1242 随 state 恢复、ratio 只在本进程 observe 时产生（不落盘）。
+    // 旧实现只看样本计数 → trusted=true → ratio 缺省 1.0 → 判定读数 536,102，
+    // 而锚外推应为 452,857；越阈值 532,493 仅 0.68%，触发了一次不该发生的压缩。
+    const ledger = new ContextSizeLedger();
+    // 「重启」：只回填计数与锚，ratio 表为空（真实 importState 行为）
+    ledger.importState({ 's::m': { samples: 1242 } });
+    expect(ledger.ratio('s::m'), '导入不重建 ratio（ratio 只由本进程 observe 产生）').toBe(1.0);
+    const anchor = { actual: 123499, raw: 146201, modelKey: 's::m' }; // 比值 0.8447
+    const raw = 536102;
+    const d = ledger.decisionTokensWithSource('s::m', raw, anchor);
+    expect(d.source, '样本恢复但 ratio 为空必须走锚，不得自称 calibrated').toBe('anchored');
+    expect(d.tokens).toBe(Math.ceil((123499 / 146201) * raw)); // 452,857
+    expect(d.tokens).toBeLessThan(raw); // 锚订正了启发式高估
+    // 对照：本进程 observe 过（ratio 真实存在）后，才允许 calibrated
+    ledger.observe('s::m', 123499, 146201, {});
+    ledger.observe('s::m', 123499, 146201, {});
+    expect(ledger.decisionTokensWithSource('s::m', raw, anchor).source).toBe('calibrated');
+  });
+
   it('红线：毒锚（clamped 极端比率）外推被夹取到 EMA 同界——0.185 毒读数不得复现', () => {
     const ledger = new ContextSizeLedger();
     // 毒锚：大 tools schema 场景 actual/view=0.185（本地估算偏高 5×）——clamped 入账但锚冻结原始对

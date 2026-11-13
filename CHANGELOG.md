@@ -115,6 +115,32 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.18 (2026-11-13)
+
+### fix(context): 重启后校准半恢复不再冒充「已校准」——修一次不该发生的压缩
+
+**症状**：网关重启后第一次装配就触发主动压缩，把 410k 的会话压到 40k（1M 窗口的 39%）。
+用户看到的正是「刚重启、还没说话，上下文就从 400k+ 掉到 40k+」。
+
+**因果链**（每环有证据）：
+
+1. `metadata.calibration` 的 `samples`（1242 条）与 `anchors`（`{actual:123499, raw:146201}`，
+   比值 0.8447）随 state 恢复，但 `ratioByModel` 只在本进程 `observe` 时产生、不落盘 → 重启后为空。
+2. `decisionTokensWithSource` 的 `trusted` 只看样本计数（`>=2`）→ 半恢复状态下判为 true。
+3. 于是走 `calibrate()`，其 `ratio()` 缺省返回 **1.0** → 判定读数 = 未订正的启发式估算 **536,102**。
+4. 阈值 = `min(200k×3, 887,489×0.6)` = **532,493** → 越线 **+0.68%** → 压缩。
+5. 同一请求 provider 实测 409,645（启发式高估 1.31×）——校准系数存在的全部理由，恰在此刻缺席。
+
+**修法**：`trusted` 增加 `ratioByModel.has(modelKey)`。「样本数够」≠「比率可用」；缺 ratio 即降级到
+锚外推（正确读数 452,857，不越线），与「无样本」同路。不把 ratio 另存进 state——那会成为第二个
+真相源，反而放大本缺陷。
+
+**为什么原有回归测试没拦住**：`context-metering-truth.test.ts` 的「重启无冷启动」用例只造了
+**1 个样本**，而 `trusted` 要求 `>=2`，恰好绕过了缺陷路径。新增用例造 1242 个样本（真实量级），
+并已验证在旧实现下失败（`expected 'calibrated' to be 'anchored'`）。
+
+---
+
 ## v0.113.17 (2026-11-13)
 
 ### feat(context): shell 结果老化——去重复元数据，保留首尾输出
