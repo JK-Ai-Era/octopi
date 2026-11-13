@@ -14,8 +14,11 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  ageOneToolResult,
   applyAgingToMessages,
+  shouldAgeArgs,
   collectToolArgAgers,
+  collectToolAgers,
   computeToolResultAgingPlan,
   resolveToolResultAgingOptions,
 } from '@octopi-agent/engine/harness/context/tool-result-aging.js';
@@ -165,5 +168,46 @@ describe('file_read 结果 ager：正文全丢，留定位', () => {
       chars: 9000,
     });
     expect(out).toBeUndefined();
+  });
+});
+
+describe('两条视图构建路径必须一致（防逻辑漂移）', () => {
+  /**
+   * 2026-11-13 实测事故：per-tool ager 只在 applyAgingToMessages 生效，
+   * 而真实 wire 路径走 buildLlmMessages 的另一份内联实现，导致 file_edit
+   * 在生产仍是默认指针、参数仍被全局降级。两边共用一个裁决点后必须永远一致。
+   */
+  it('同一计划下，ageOneToolResult 与 applyAgingToMessages 输出同字节', () => {
+    const messages = history([
+      {
+        id: 'e9',
+        name: 'file_edit',
+        args: { path: '/repo/a.ts', old_text: 'x', new_text: 'y', purpose: 'p' },
+        result: { path: '/repo/a.ts', matchCount: 3, replacedCount: 1, preview: { before: 'B'.repeat(600) } },
+      },
+    ]);
+    const agers = collectToolAgers([{ name: 'file_edit', ageResult: createFileEditTool().ageResult }]);
+    const plan = computeToolResultAgingPlan(messages, OPTS, { toolAgers: agers });
+    expect(plan.agedIds.has('e9')).toBe(true);
+
+    const viaApply = applyAgingToMessages(messages, plan, OPTS).find((m) => m.toolResults?.length)!.toolResults![0]
+      .result as string;
+    const viaOne = ageOneToolResult(
+      { toolCallId: 'e9', name: 'file_edit', result: { path: '/repo/a.ts', matchCount: 3, replacedCount: 1, preview: { before: 'B'.repeat(600) } } },
+      { path: '/repo/a.ts', old_text: 'x', new_text: 'y', purpose: 'p' },
+      plan,
+      OPTS,
+    );
+    expect(viaApply).toBe(viaOne);
+    expect(viaApply).toBe('[aged] file_edit 1/3 replaced in a.ts — 2 other match(es) left unchanged');
+  });
+
+  it('shouldAgeArgs 只看 argAgedIds，不回退 agedIds', () => {
+    // file_edit 结果被老化，但参数未 opt-in → 不得降级
+    const plan = { agedIds: new Set(['e1']), argAgedIds: new Set<string>() };
+    expect(shouldAgeArgs('e1', plan, OPTS)).toBe(false);
+    expect(shouldAgeArgs('e1', { argAgedIds: new Set(['e1']) }, OPTS)).toBe(true);
+    // 总开关关闭时不降级
+    expect(shouldAgeArgs('e1', { argAgedIds: new Set(['e1']) }, { ...OPTS, ageToolArgs: false })).toBe(false);
   });
 });

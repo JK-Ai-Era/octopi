@@ -43,6 +43,8 @@ import { toolResultBody } from './tool-result-body.js';
 import {
   agedToolResultPointer,
   agedToolArgDigest,
+  ageOneToolResult,
+  shouldAgeArgs,
   applyAgingToMessages,
   computeToolResultAgingPlan,
   resolveToolResultAgingOptions,
@@ -2220,7 +2222,7 @@ export class DefaultContextEngine implements ContextEngine {
         // F1-B2：老化条目降级为结构化指针（错误文案保真在指针内；tool_call 配对不动）
         const content =
           aging && aging.agedIds.has(tr.toolCallId)
-            ? agedToolResultPointer(tr, aging.argsById.get(tr.toolCallId), this.config.historyAging)
+            ? ageOneToolResult(tr, aging.argsById.get(tr.toolCallId), aging, this.config.historyAging)
             : toolResultBody(tr);
         result.push({
           role: 'tool',
@@ -2237,7 +2239,7 @@ export class DefaultContextEngine implements ContextEngine {
         content: getTextContent(msg.content) || null,
         tool_calls: msg.toolCalls.map(tc => {
           const args =
-            aging && this.config.historyAging.ageToolArgs && aging.agedIds.has(tc.id)
+            aging && shouldAgeArgs(tc.id, aging, this.config.historyAging)
               ? agedToolArgDigest(tc.name, tc.arguments, this.config.historyAging)
               : tc.arguments;
           return {

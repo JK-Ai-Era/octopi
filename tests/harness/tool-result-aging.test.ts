@@ -421,7 +421,10 @@ describe('tool-call 参数随结果老化', () => {
     ];
   }
 
-  it('应按结果同步老化参数：键名保留、长值换成对象形标记', async () => {
+  // 2026-11-13 语义变更：参数老化改为逐工具 opt-in（默认关闭）。
+  // 原断言「结果被老化 → 参数同步降级」不再成立——该联动正是 OP-TOOL-1
+  // 回抄污染的来源。参数侧行为见 tests/harness/aging-args-optin.test.ts。
+  it('参数默认不随结果老化：结果成指针，arguments 逐字保留', async () => {
     const engine = new DefaultContextEngine({ historyAging: { rawWindow: 0, freezeBatch: 1 } });
     const messages = [...argHeavyTurn(1000), ...argHeavyTurn(1000), ...argHeavyTurn(10)];
     const result = await engine.assemble({ sessionId: 's-args', messages, systemPrompt: 'sys', tools: [] });
@@ -430,14 +433,11 @@ describe('tool-call 参数随结果老化', () => {
     const agedCall = calls[0];
     expect(agedCall).toBeDefined();
     const args = JSON.parse(agedCall.function.arguments) as Record<string, unknown>;
-    // 键名全保（LLM 需要知道改了哪个文件）
+    // 键名与载荷都原样（无降级标记）
     expect(Object.keys(args).sort()).toEqual(['new_string', 'old_string', 'path']);
-    expect(args.path).toMatch(/^src\/f\d+\.ts$/);
-    // 载荷长值被替换为对象形标记（文本形会被模型当内容回抄，OP-TOOL-1）
-    expect(args.old_string).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
-    expect(args.new_string).toMatchObject({ $octopi_elided: { chars: expect.any(Number) } });
-    // 摘要显著小于原文
-    expect(agedCall.function.arguments.length).toBeLessThan(200);
+    expect(typeof args.old_string).toBe('string');
+    expect(typeof args.new_string).toBe('string');
+    expect(agedCall.function.arguments).not.toContain('$octopi_elided');
   });
 
   it('预算账目：已降级值按固定成本计费，多键调用不得被标记挤进 _aged 兜底（评审 M2 回归）', () => {

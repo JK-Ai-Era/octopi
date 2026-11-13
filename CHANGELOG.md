@@ -115,6 +115,25 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.16 (2026-11-13)
+
+### fix(context): 视图构建收敛为单一裁决点（修正 v0.113.15 未生效）
+
+v0.113.15 的 per-tool 老化在**生产未生效**，原因不是接线错误，而是 `buildLlmMessages`（真实 wire 路径）里另有一份内联老化逻辑：结果侧只调 `agedToolResultPointer`、从不查 `agersByCallId`，参数侧仍以 `agedIds` 判定。`applyAgingToMessages` 则是另一份实现——单测覆盖的是后者，前者在生产跑，两份逻辑各自演进。
+
+实测证据：升级到 v0.113.15 并重启后，`default-web-1794485634331` 新请求（17:32:52）中 `file_edit` 结果仍是默认指针、`git_commit`/`file_edit` 等仍被全局降级参数共 101 处，而同一历史经新代码计算只应老化 `file_write` 10 处。
+
+修复：抽出两个**唯一裁决点**，两条视图路径都调用它们——
+
+- `ageOneToolResult(tr, args, plan, opts)`：工具自带 ager → 默认机械指针（顺序唯一）；
+- `shouldAgeArgs(toolCallId, plan, opts)`：只看 `plan.argAgedIds`，**不再回退 `agedIds`**（回退正是「结果够大就能绕过 opt-in」的入口）。
+
+新增防漂移测试：同一计划下两条路径输出必须逐字节相同；`shouldAgeArgs` 不得因 `agedIds` 命中而放行。
+
+**影响面**：升级后 per-tool 结果老化与参数 opt-in 才真正生效（一次性视图变化与一次前缀重填）。旧的「结果老化即同步降级参数」断言已随语义更新。
+
+---
+
 ## v0.113.15 (2026-11-13)
 
 ### feat(context): 参数老化改为逐工具 opt-in；file_edit/file_read 结果只留执行事实

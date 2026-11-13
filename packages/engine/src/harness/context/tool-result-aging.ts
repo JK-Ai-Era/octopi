@@ -308,6 +308,55 @@ export function computeToolResultAgingPlan(
 const pointerCache = new WeakMap<object, { fingerprint: string; text: string }>();
 
 /**
+ * 单条工具结果 → 老化后的文本（**唯一裁决点**）
+ *
+ * 顺序：工具自带 ager → 默认机械指针。两处视图构建（`applyAgingToMessages`
+ * 与 `buildLlmMessages`）都必须走这里：历史上它们各写一份内联逻辑，
+ * 结果 per-tool ager 只在其中一份生效（2026-11-13 实测发现——wire dump 里
+ * file_edit 仍是默认指针，而单测覆盖的却是另一份实现）。
+ *
+ * @param tr - 工具结果条目
+ * @param args - 对应调用参数
+ * @param plan - 老化计划（提供 per-tool ager 与参数表）
+ * @param opts - 老化配置
+ * @returns 供模型读取的文本
+ */
+export function ageOneToolResult(
+  tr: { toolCallId: string; name?: string; error?: string; result?: unknown },
+  args: unknown,
+  plan: Pick<ToolResultAgingPlan, 'agersByCallId'>,
+  opts: ToolResultAgingOptions,
+): string {
+  const ager = plan.agersByCallId.get(tr.toolCallId);
+  const viaAger = ager?.({
+    args: (args as Record<string, unknown>) ?? {},
+    result: tr.result,
+    chars: toolResultBody(tr).length,
+  });
+  return viaAger ?? agedToolResultPointer(tr, args, opts);
+}
+
+/**
+ * 单条工具调用 → 是否应降级其参数（**唯一裁决点**）
+ *
+ * 只看 `plan.argAgedIds`（冻结区 ∩ 工具 opt-in）。不要再回退到 `agedIds`：
+ * 那会让「结果恰好够大」的工具绕过 opt-in 白名单，正是 file_edit 参数在
+ * 2026-11-13 仍被全局降级的原因。
+ *
+ * @param toolCallId - 调用 id
+ * @param plan - 老化计划
+ * @param opts - 老化配置（含总开关 `ageToolArgs`）
+ * @returns 是否降级
+ */
+export function shouldAgeArgs(
+  toolCallId: string,
+  plan: Pick<ToolResultAgingPlan, 'argAgedIds'>,
+  opts: ToolResultAgingOptions,
+): boolean {
+  return opts.ageToolArgs && plan.argAgedIds.has(toolCallId);
+}
+
+/**
  * 把老化计划物化为消息视图副本（新建对象，不改原消息）
  *
  * 供「量实际请求」的估算路径使用（F1-B3：主动压缩触发线必须量老化后的视图，
@@ -334,7 +383,7 @@ export function applyAgingToMessages(
     if (opts.ageToolArgs && plan.argAgedIds.size > 0 && msg.toolCalls?.length) {
       let callsChanged = false;
       const toolCalls = msg.toolCalls.map((tc) => {
-        if (!plan.argAgedIds.has(tc.id)) return tc;
+        if (!shouldAgeArgs(tc.id, plan, opts)) return tc;
         callsChanged = true;
         return { ...tc, arguments: agedToolArgDigest(tc.name, tc.arguments, opts) as typeof tc.arguments };
       });
@@ -346,14 +395,8 @@ export function applyAgingToMessages(
     const results = msg.toolResults.map((tr) => {
       if (!plan.agedIds.has(tr.toolCallId)) return tr;
       changed = true;
-      // 工具自带策略优先；未声明者走默认机械指针（同一次装配内同一函数，保 write-once）
-      const ager = plan.agersByCallId.get(tr.toolCallId);
-      const replacement =
-        ager?.({
-          args: (plan.argsById.get(tr.toolCallId) as Record<string, unknown>) ?? {},
-          result: tr.result,
-          chars: toolResultBody(tr).length,
-        }) ?? agedToolResultPointer(tr, plan.argsById.get(tr.toolCallId), opts);
+      // 统一裁决点（与 buildLlmMessages 同一实现，防两份逻辑漂移）
+      const replacement = ageOneToolResult(tr, plan.argsById.get(tr.toolCallId), plan, opts);
       return { ...tr, result: replacement };
     });
     return changed ? { ...next, toolResults: results } : next;
