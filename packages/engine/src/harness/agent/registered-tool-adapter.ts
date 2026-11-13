@@ -42,6 +42,7 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
     // 与 convertToAgentTool 同构：purpose 统一装配（arch/tool-call-purpose.md）
     ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
     // 结果老化策略（同 executionMode：唯一声明源在 RegisteredTool）
+    ...(tool.ageArgs ? { ageArgs: tool.ageArgs } : {}),
     ...(tool.ageResult ? { ageResult: tool.ageResult } : {}),
     ...(tool.source === undefined ? {} : { source: tool.source }),
     parameters: buildToolLlmParameters(tool.definition.parameters),

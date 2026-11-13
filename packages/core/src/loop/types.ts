@@ -75,6 +75,11 @@ export interface AgentTool {
   executionMode?: 'parallel' | 'sequential';
 
   /**
+   * 参数可随结果老化（透传自 `RegisteredTool.ageArgs`；缺省 false = 参数原样保留）。
+   * 只有参数本身会变成污染源的工具有效（如 `file_write` 的整份文件正文）。
+   */
+  ageArgs?: boolean;
+  /**
    * 结果老化策略（透传自 `RegisteredTool.ageResult`，唯一声明源在 RegisteredTool）。
    *
    * Loop 自身不消费它：老化层（Harness context）按工具名取用，决定历史结果的视图形态。

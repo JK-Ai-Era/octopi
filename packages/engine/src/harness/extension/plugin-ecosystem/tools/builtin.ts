@@ -316,6 +316,32 @@ export function createShellTool(options?: {
  * @param options - 可选 SummaryPort / toolBindings 注入（与 octopi.json summary.tools 同源）
  * @returns RegisteredTool
  */
+/**
+ * file_read 结果老化：正文全丢，只留「读的是哪一段」
+ *
+ * 正文必须丢：留着头几百字符会被读成「文件开头就是这些」，而实际内容可能已被后续
+ * 编辑改动。指针明确要求重读，时态才不歧义。
+ *
+ * 保留 `fromLine`/`toLine`/`totalLines`/`truncated`：这是「重读哪一段」的唯一依据，
+ * 也是「当初是否读全」的证据。摘要结果（`summary.applied`）不老化——它已被提炼，
+ * 丢弃后要再跑一次摘要才能拿回同等信息，成本远高于保留。
+ *
+ * @param result - file_read 的原始返回对象
+ * @returns 一行定位事实；已摘要/字段不全时 undefined（保留原文）
+ */
+function ageFileReadResult(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const r = result as Record<string, unknown>;
+  const summary = r.summary as { applied?: boolean } | undefined;
+  if (summary?.applied === true) return undefined;
+  const from = r.fromLine;
+  const to = r.toLine;
+  const total = r.totalLines;
+  if (typeof from !== 'number' || typeof to !== 'number' || typeof total !== 'number') return undefined;
+  const truncated = r.truncated === true ? ', truncated' : '';
+  return `[aged] file_read lines ${from}-${to}/${total}${truncated} — call file_read for current text`;
+}
+
 export function createFileReadTool(options?: {
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
 }): RegisteredTool {
@@ -358,6 +384,7 @@ export function createFileReadTool(options?: {
         },
       },
     },
+    ageResult: ({ result }) => ageFileReadResult(result),
     handler: async (args, context) => {
       const { readFile } = await import('node:fs/promises');
       const pathModule = await import('node:path');
@@ -453,6 +480,8 @@ export function createFileWriteTool(): RegisteredTool {
     },
     // 整文件覆写无合并语义：所在 tool_call 批次整体串行，防同路径并行写互相抹掉
     executionMode: 'sequential',
+    // content 是整份文件正文：占空间，且文件后续被改后就变成与当前内容不符的过期副本
+    ageArgs: true,
     handler: async (args, context) => {
       const { mkdir } = await import('node:fs/promises');
       const { dirname } = await import('node:path');

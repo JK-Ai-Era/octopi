@@ -115,6 +115,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.15 (2026-11-13)
+
+### feat(context): 参数老化改为逐工具 opt-in；file_edit/file_read 结果只留执行事实
+
+**为什么改**：会话视图里历史 `assistant.tool_calls` 上的降级标记会被模型模仿回抄（`arch/open-problems.md` OP-TOOL-1 定案：「主因=模型从老化视图模仿降级标记形态」）。此前的执行边界拒收只拦住落盘，污染源一直在视图里。参数默认改为**原样保留**，只有「参数本身会成为污染源」的工具显式 opt-in：
+
+- `RegisteredTool.ageArgs` / `AgentTool.ageArgs`（新，默认 false），经三处同构映射透传；`collectToolArgAgers` 按名收集 → `AssembleParams.toolArgAgers`。
+- 当前仅 `file_write` 开启：`content` 是整份文件正文，占空间且随文件后续改动变成过期副本。降级为**对象形**标记 `{"$octopi_elided":{...}}`——该形态放进 string 参数即 schema 违规、被执行边界拒收。
+- 参数老化**与结果老化解耦**（原实现锁在 `agedIds` 上）：`file_write` 结果仅约 120 字符、永远够不到 `maxPointerChars`，锁步会让它唯一的 `content` 永远不被裁。同时修掉 `applyAgingToMessages` 的同源提前返回（只看 `agedIds` 会整段跳过）。
+
+**结果老化**：`file_edit` 只保留执行事实 `N/M replaced in <file>`（+ `dryRun`、匹配未全替换时的提示），丢弃与参数重复的 `path`/`preview.old`/`preview.new` 与编辑后即过时的 `preview.before`/`preview.after`；`file_read` 丢弃正文、保留 `lines x-y/total` 与 `truncated`，`summary.applied` 的结果不老化（重跑摘要成本高于保留）。
+
+**影响面**：`ageToolArgs` 语义由「全局默认开」变为「总开关（默认开）× 逐工具 opt-in」；未声明 `ageArgs` 的工具其历史参数在升级后恢复原文 → 一次性视图变化与一次前缀重填。token 侧净增（本机实测样本 +16.5%），换取的是取消回抄污染源。
+
+---
+
 ## v0.113.14 (2026-11-13)
 
 ### fix(context): purpose 完全豁免老化长度限制

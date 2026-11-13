@@ -86,7 +86,7 @@ import { PersonaSource } from './persona.js';
 import { getRunScope } from '../run/run-scope.js';
 import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { createProviderSummarize } from '../context/summarize.js';
-import { collectToolAgers } from '../context/tool-result-aging.js';
+import { collectToolAgers, collectToolArgAgers } from '../context/tool-result-aging.js';
 import { createDefaultSystemPromptAssembler } from '../context/system-prompt-assembler.js';
 import { SessionAwareRunner } from '../run/runner.js';
 import type { SessionAwareRunnerConfig } from '../run/runner.js';
@@ -267,6 +267,7 @@ function convertToAgentTool(tool: RegisteredTool, contextProvider: ToolContextPr
     description: tool.definition.description,
     executionMode: tool.executionMode,
     // 结果老化策略：唯一声明源在 RegisteredTool，透传供老化层按名取用（同 executionMode）
+    ...(tool.ageArgs ? { ageArgs: tool.ageArgs } : {}),
     ...(tool.ageResult ? { ageResult: tool.ageResult } : {}),
     ...(tool.source === undefined ? {} : { source: tool.source }),
     parameters: buildToolLlmParameters(
@@ -1942,6 +1943,7 @@ export class AgentBuilder {
         tools,
         // 工具自带老化策略：从 run 级工具面按名收集（与 tools 分开——后者是 wire 投影）
         toolAgers: collectToolAgers(toolSource),
+        toolArgAgers: collectToolArgAgers(toolSource),
         tokenBudget: contextWindow,
         contextWindow,
         maxOutputTokens: snapshot?.maxOutputTokens,

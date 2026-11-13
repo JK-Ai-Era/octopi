@@ -310,6 +310,7 @@ export class ThinkExecutor {
       description: t.definition.description,
       executionMode: t.executionMode,
       // 结果老化策略（同 executionMode：唯一声明源在 RegisteredTool）
+      ...(t.ageArgs ? { ageArgs: t.ageArgs } : {}),
       ...(t.ageResult ? { ageResult: t.ageResult } : {}),
       parameters: {
         type: 'object' as const,

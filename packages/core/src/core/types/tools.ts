@@ -341,6 +341,16 @@ export interface RegisteredTool {
    */
   executionMode?: 'parallel' | 'sequential';
   /**
+   * 参数可随结果老化（**缺省 false = 参数原样保留**）。
+   *
+   * 仅「参数本身会成为污染源」的工具应开启：典型是 `file_write`——`content` 是
+   * 整份文件正文，既占空间，又会在文件后续被改动后变成与当前内容不符的过期副本。
+   *
+   * 开启后长值替换为**对象形**标记 `{"$octopi_elided":{...}}`：该形态放进 string
+   * 参数即 schema 违规、被执行边界拒收（OP-TOOL-1 定案：可被回抄的是文本形标记）。
+   */
+  ageArgs?: boolean;
+  /**
    * 结果老化策略（唯一声明源，透传 AgentTool.ageResult 供老化层读取）。
    *
    * 写在这里 = 与 handler 同处：这个工具的结果「该留什么、怎么留」由它自己决定，

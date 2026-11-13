@@ -22,6 +22,39 @@ import {
 import { gateEffect } from '../../execution-environment/effect-policy.js';
 import { detectEol, oldTextCandidates, toEol } from './eol.js';
 
+/**
+ * file_edit 结果老化：只保留「执行事实」，丢掉与参数重复或已过时的部分
+ *
+ * 为什么只留这么多（2026-11-13 拍板）：`assistant.tool_calls` 里已原样保留
+ * `old_text`/`new_text`（参数老化默认关闭），因此结果侧再放一遍 `preview.old`/
+ * `preview.new` 是纯重复；`preview.before`/`preview.after` 是**编辑前**的文件内容，
+ * 成功编辑后必然不成立，属于会误导的过期副本。真正只有结果才知道的是执行事实：
+ *
+ * - `matchCount` / `replacedCount`：`matchCount: 9, replacedCount: 1` 意味着还有
+ *   8 处同形文本未改——参数里看不到这个信息；
+ * - 失败原因（error 原文，红线：不截断、不改写）。
+ *
+ * @param result - file_edit 的原始返回对象
+ * @returns 供模型读取的一行事实；无法识别时 undefined（回落默认指针）
+ */
+function ageFileEditResult(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const r = result as Record<string, unknown>;
+  const base = String(r.path ?? '')
+    .split('/')
+    .pop();
+  if (!base) return undefined;
+
+  const matched = typeof r.matchCount === 'number' ? r.matchCount : undefined;
+  const replaced = typeof r.replacedCount === 'number' ? r.replacedCount : undefined;
+  if (matched === undefined || replaced === undefined) return undefined;
+
+  const dryRun = r.dryRun === true ? ' (dry run)' : '';
+  // 只在「匹配多处但只改一处」时显式提示，避免默认路径制造噪音
+  const partial = matched > replaced ? ` — ${matched - replaced} other match(es) left unchanged` : '';
+  return `[aged] file_edit ${replaced}/${matched} replaced in ${base}${dryRun}${partial}`;
+}
+
 export function createFileEditTool(): RegisteredTool {
   return {
     definition: {
@@ -56,6 +89,7 @@ export function createFileEditTool(): RegisteredTool {
     },
     // 同文件并发读改写互相覆盖（丢编辑）：所在 tool_call 批次整体串行
     executionMode: 'sequential',
+    ageResult: ({ result }) => ageFileEditResult(result),
     handler: async (args, context) => {
       const { readFile } = await import('node:fs/promises');
 

@@ -280,6 +280,7 @@ export class DefaultContextEngine implements ContextEngine {
       systemPrompt,
       tools,
       toolAgers,
+      toolArgAgers,
       contextWindow,
       maxOutputTokens,
       compactTargetTokens,
@@ -303,7 +304,7 @@ export class DefaultContextEngine implements ContextEngine {
 
     // F1-B2：老化计划基于**完整历史**（append-only）一次算好、随视图复用。
     // 估算（estimateLLMMessages）作用于老化后的 LLM 视图，尺子与实际请求一致。
-    const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging, { toolAgers });
+    const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging, { toolAgers, toolArgAgers });
 
     // 窗口未知且无显式 compactTargetTokens：跳过基于预算的自动压缩/截断
     const budgetCap = params.tokenBudget ?? contextWindow ?? compactTargetTokens;
@@ -472,6 +473,7 @@ export class DefaultContextEngine implements ContextEngine {
     const overflowAgingOpts = resolveToolResultAgingOptions(this.config.historyAging);
     const overflowAgingPlan = computeToolResultAgingPlan(messages, overflowAgingOpts, {
       toolAgers,
+      toolArgAgers,
       ignoreTurnBoundary: true,
     });
     const fits = (ms: Message[]): boolean =>
@@ -1582,6 +1584,8 @@ export class DefaultContextEngine implements ContextEngine {
     tools?: LLMToolDefinition[];
     /** 工具老化函数表（报告尺与真实请求同式；缺省 = 全部走默认规则） */
     toolAgers?: ReadonlyMap<string, ToolResultAger>;
+    /** 参数可老化的工具名（报告尺与真实请求同式；缺省 = 参数原样保留） */
+    toolArgAgers?: ReadonlySet<string>;
     /** task 快照：交接式摘要指令尾部注入（B0 易变块走 content 尾部，不进 system） */
     taskSnapshot?: string;
     /** 会话模型窗口/输出上限（评审 F5）：摘要请求硬顶按窗口钳制，防最满时压缩被 400 */
@@ -1609,6 +1613,7 @@ export class DefaultContextEngine implements ContextEngine {
       (managedSystem ? getTextContent(managedSystem.content) : '') || params.systemPrompt;
     const agingPlan = computeToolResultAgingPlan(messages, this.config.historyAging, {
       toolAgers: params.toolAgers,
+      toolArgAgers: params.toolArgAgers,
     });
     // 计量口径（2026-11-08 三数字核对拍板）：before/after 用「报告尺」= fold 视图 + 老化 +
     // system + tools 的未校准估算（rawRequestViewTokens，与 assemble 的 rawEstimatedTokens

@@ -151,6 +151,8 @@ export interface AssembleParams {
    * 而老化函数只在装配视图里用，不能混进 wire 面。未提供 = 全部走默认规则。
    */
   toolAgers?: ReadonlyMap<string, import('@octopi-agent/core/types.js').ToolResultAger>;
+  /** 参数可老化的工具名（缺省 = 参数一律原样保留，见 RegisteredTool.ageArgs） */
+  toolArgAgers?: ReadonlySet<string>;
   /**
    * Token 预算（可用空间）。
    * 未配置 contextWindow 时应省略：跳过基于窗口的自动压缩与预算截断。

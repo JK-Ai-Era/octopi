@@ -15,7 +15,7 @@
  * 红线（§4 能力红线）：user / assistant **正文**永不降级；**error 结果永不降级**（错误可追溯性优先，
  * 字段保真）；不膨胀守卫——只有指针严格小于原文时才降级。
  *
- * tool_call 参数（`ageToolArgs`，默认开）：**只对「结果已被老化」的那条调用**同步降级为键值摘要
+ * tool_call 参数（`ageToolArgs`，总开关，默认开；**逐工具 opt-in** `RegisteredTool.ageArgs`）：
  * （长值换成长度标记，键名全保）。原因：参数是上下文中唯一无界增长的成分——结果老化成指针后
  * 参数仍留原文，实测其总量可达指针本体的 1.1 倍，且随 session 线性增长。
  * 降级不改变 tool_call ↔ tool_result 配对结构（`id`/`name` 不动，`arguments` 仍是合法 JSON）。
@@ -95,6 +95,28 @@ export function collectToolAgers(
   return out;
 }
 
+/**
+ * 收集「参数可老化」的工具名（`AgentTool.ageArgs` → 集合）
+ *
+ * 与 {@link collectToolAgers} 分开：两者语义独立（有结果策略不代表参数可老化，
+ * 反之亦然），混成一张表会让「只声明了 ageArgs」的工具误走结果默认规则。
+ *
+ * @param tools - 本次 run 的工具面
+ * @returns 工具名集合；空表返回 undefined（装配侧据此跳过）
+ */
+export function collectToolArgAgers(
+  tools: ReadonlyArray<{ name: string; ageArgs?: boolean }> | undefined,
+): ReadonlySet<string> | undefined {
+  if (!tools?.length) return undefined;
+  let out: Set<string> | undefined;
+  for (const t of tools) {
+    if (!t.ageArgs) continue;
+    out ??= new Set();
+    out.add(t.name);
+  }
+  return out;
+}
+
 /** 老化计划：一次装配内的降级判定（基于完整历史的纯函数结果，跨轮稳定） */
 export interface ToolResultAgingPlan {
   /** 要降级为指针的 toolCallId 集合 */
@@ -107,6 +129,15 @@ export interface ToolResultAgingPlan {
    * 随计划传给 `applyAgingToMessages`，使该函数签名保持不变（5 个调用点零改动）。
    */
   agersByCallId: ReadonlyMap<string, ToolResultAger>;
+  /**
+   * 启用了**参数**老化的 toolCallId 子集（`AgentTool.ageArgs === true`）。
+   *
+   * 参数老化不再全局默认开启（2026-11-13 拍板）：会话视图里历史 `tool_calls`
+   * 上的降级标记会被模型模仿回抄（OP-TOOL-1 定案「主因=模型从老化视图模仿降级
+   * 标记形态」），因此只对「参数本身会变成污染源」的工具开启——当前仅
+   * `file_write`（整份文件正文，占空间且随文件后续改动变成过期副本）。
+   */
+  argAgedIds: ReadonlySet<string>;
 }
 
 /** 结果轮廓占 maxPointerChars 的比例（0.45；固定骨架 ≈ 70 字符） */
@@ -182,6 +213,8 @@ export function computeToolResultAgingPlan(
     ignoreTurnBoundary?: boolean;
     /** 工具名字 → 自带老化函数（`AgentTool.ageResult`）；未声明的工具走默认规则 */
     toolAgers?: ReadonlyMap<string, ToolResultAger>;
+    /** 参数可老化的工具名（`AgentTool.ageArgs`）；缺省 = 参数一律原样保留 */
+    toolArgAgers?: ReadonlySet<string>;
   },
 ): ToolResultAgingPlan {
   const argsById = new Map<string, unknown>();
@@ -209,7 +242,7 @@ export function computeToolResultAgingPlan(
 
   const agesByCallId = new Map<string, ToolResultAger>();
   const agedIds = new Set<string>();
-  if (!opts.enabled) return { agedIds, argsById, agersByCallId: agesByCallId };
+  if (!opts.enabled) return { agedIds, argsById, agersByCallId: agesByCallId, argAgedIds: new Set<string>() };
 
   // 边界 = 完整历史最后一个真实 user（两遍判定：旧轮结果在遇到后续 user 前不可下结论）。
   // overflow 第 0 轮豁免（ignoreTurnBoundary）：全历史候选、rawWindow 归 0——
@@ -250,7 +283,24 @@ export function computeToolResultAgingPlan(
       agedIds.add(cand.toolCallId);
     }
   }
-  return { agedIds, argsById, agersByCallId: agesByCallId };
+
+  // 参数老化集合：**冻结区内 + 工具 opt-in**，与「结果是否成指针」解耦。
+  //
+  // 早期实现让它与 agedIds 锁步，被 file_write 证伪：该工具结果只有
+  // `{path, bytesWritten, mode}` 约 120 字符，永远小于 maxPointerChars 而不会被
+  // 老化，于是它 10k 级的 `content` 参数也就永远不会被裁——恰好放走了唯一需要
+  // 参数老化的场景。参数老化本就独立于结果大小：判据是「这条调用已经旧到冻结区」
+  // +「该工具声明参数会成为污染源」。
+  const toolArgAgers = override?.toolArgAgers;
+  const argAgedIds = new Set<string>();
+  if (toolArgAgers?.size) {
+    for (let i = 0; i < covered; i++) {
+      const cand = candidates[i];
+      if (cand.isError) continue; // 红线同结果侧：错误调用参数保留现场
+      if (cand.tr.name && toolArgAgers.has(cand.tr.name)) argAgedIds.add(cand.toolCallId);
+    }
+  }
+  return { agedIds, argsById, agersByCallId: agesByCallId, argAgedIds };
 }
 
 // 指针 write-once 缓存：同 `tr` 对象 + 同配置指纹 → 同字节（toolResultBody 同款 WeakMap 先例；
@@ -274,15 +324,17 @@ export function applyAgingToMessages(
   plan: ToolResultAgingPlan,
   opts: ToolResultAgingOptions,
 ): Message[] {
-  if (plan.agedIds.size === 0) return messages;
+  // 提前返回必须同时看两个集合：file_write 这类「结果小、参数大」的调用只会在
+  // argAgedIds 里出现（结果永远够不到 maxPointerChars），只看 agedIds 会整段跳过。
+  if (plan.agedIds.size === 0 && plan.argAgedIds.size === 0) return messages;
   return messages.map((msg) => {
     let next = msg;
 
     // 参数与结果同步老化：只动「结果已老化」的那条调用，配对结构不变
-    if (opts.ageToolArgs && msg.toolCalls?.length) {
+    if (opts.ageToolArgs && plan.argAgedIds.size > 0 && msg.toolCalls?.length) {
       let callsChanged = false;
       const toolCalls = msg.toolCalls.map((tc) => {
-        if (!plan.agedIds.has(tc.id)) return tc;
+        if (!plan.argAgedIds.has(tc.id)) return tc;
         callsChanged = true;
         return { ...tc, arguments: agedToolArgDigest(tc.name, tc.arguments, opts) as typeof tc.arguments };
       });
