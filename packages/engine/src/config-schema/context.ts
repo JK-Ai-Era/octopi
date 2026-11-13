@@ -8,11 +8,12 @@ import { z } from 'zod';
 /** 历史工具结果批量冻结老化（F1-B2）：视图级降级、批量冻结、write-once */
 export const HistoryAgingConfigSchema = z.object({
   enabled: z.boolean().optional(),
-  /** 跨轮原文保留条数（默认 40） */
+  /** 跨轮原文保留条数（默认 20） */
   rawWindow: z.number().int().nonnegative().optional(),
   /**
-   * 批量冻结步长（默认 40；最小 1）。⚠️ 1 = 逐候选即降级（等同渐进老化、
-   * 每轮烧前缀缓存，仅调试用）；生产取值应 ≥ 每轮工具结果数。
+   * 批量冻结步长（默认 60；最小 1）。⚠️ 1 = 逐候选即降级（等同渐进老化、
+   * 每轮烧前缀缓存，仅调试用）；生产取值应 ≥ 每轮工具结果数——老化定位为
+   * 污染控制后，优化目标是减少冻结事件次数，而不是尽早缩小视图。
    */
   freezeBatch: z.number().int().min(1).optional(),
   /** 指针目标字符数（默认 400） */

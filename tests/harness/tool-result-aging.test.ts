@@ -20,6 +20,7 @@ import {
 } from '@octopi-agent/engine/harness/context/tool-result-aging.js';
 import type { Message } from '@octopi-agent/core/types.js';
 
+/** 测试夹具的显式取值（**不是**生产缺省；缺省断言见「disable aging entirely」用例） */
 const OPTS = (over?: Partial<ToolResultAgingOptions>): ToolResultAgingOptions => ({
   enabled: true,
   rawWindow: 40,
@@ -298,8 +299,8 @@ describe('tool-result-aging plan', () => {
     const plan = computeToolResultAgingPlan(messages, OPTS({ enabled: false, rawWindow: 0, freezeBatch: 1 }));
     expect(plan.agedIds.size).toBe(0);
     expect(resolveToolResultAgingOptions({ enabled: false }).enabled).toBe(false);
-    expect(resolveToolResultAgingOptions({}).rawWindow).toBe(40);
-    expect(resolveToolResultAgingOptions({ freezeBatch: 0 }).freezeBatch).toBe(40); // 0 = 非法步长回落缺省
+    expect(resolveToolResultAgingOptions({}).rawWindow).toBe(20);
+    expect(resolveToolResultAgingOptions({ freezeBatch: 0 }).freezeBatch).toBe(60); // 0 = 非法步长回落缺省
   });
 });
 

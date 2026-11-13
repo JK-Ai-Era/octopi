@@ -115,6 +115,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.12 (2026-11-13)
+
+### chore(context): 老化默认值 rawWindow 40→20、freezeBatch 40→60
+
+老化定位从「成本优化」改为「污染控制」后（`arch/history-aging-economics.md`，实测缓存命中价率仅 0.83%–3.33%，远低于该文档原假设的 10%），优化目标随之改变：不再追求「尽早缩小视图」，而是**减少冻结事件次数**——每次冻结都是常数级全价重算（实测 128k–293k token）。
+
+`freezeBatch` 40 → 60 把冻结间隔从约每 40 条跨轮结果一次拉到约 60 条一次；`rawWindow` 40 → 20 让更多结果在变旧后一次成批让位。沿 crossTurn 从 0 增长到 400 模拟：**冻结事件 9 → 6 次（−33%）**，每批 40 → 60 条，累计老化量不变。
+
+顺带修正 `octopi.example.json` 原有的不一致（它写 `rawWindow: 40, freezeBatch: 20`，与代码缺省 `40/40` 不符），现统一为新缺省 `20/60`。
+
+**影响面**：未显式配置这两个旋钮的部署在本次升级后，首次装配的冻结点会与之前不同（一次性视图变化 → 一次前缀重填），此后恢复 write-once 稳定。显式配置者不受影响。
+
+---
+
 ## v0.113.11 (2026-11-13)
 
 ### feat(context): per-tool 结果老化契约 + 指针去噪

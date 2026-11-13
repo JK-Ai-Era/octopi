@@ -98,7 +98,7 @@ describe('proactive compact at working target (F1-B3)', () => {
       ...Array.from({ length: 40 }, () => toolTurn(1, 2000)).flat(),
       { role: 'user', content: 'next', timestamp: 1 } as Message,
     ];
-    // 40 × 2000 字符 = 80k chars ≈ 40k token（跨轮 39 条 < rawWindow 40：不触发老化，量的是原文）
+    // 40 × 2000 字符 = 80k chars ≈ 40k token（跨轮 39 条 − rawWindow 20 = 19 候选 < freezeBatch 60：不触发老化，量的是原文）
 
     const strict = mockSummarize();
     await new DefaultContextEngine({ proactiveCooldownMs: 0, targetTokens: 10_000 }).assemble({

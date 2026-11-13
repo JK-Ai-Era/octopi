@@ -74,8 +74,8 @@
     "summaryBudget": { "ratioPct": 2, "minTokens": 2000, "maxTokens": 8000 },
     "historyAging": {
       "enabled": true,
-      "rawWindow": 40,
-      "freezeBatch": 20,
+      "rawWindow": 20,
+      "freezeBatch": 60,
       "maxPointerChars": 400
     }
   },

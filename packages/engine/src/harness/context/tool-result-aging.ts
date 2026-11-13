@@ -32,14 +32,18 @@ import { toolResultBody } from './tool-result-body.js';
 export interface ToolResultAgingConfig {
   /** 总开关（默认 true） */
   enabled?: boolean;
-  /** 跨轮原文保留条数（默认 40） */
+  /** 跨轮原文保留条数（默认 20） */
   rawWindow?: number;
   /**
-   * 批量冻结步长：老化边界只成批推进（默认 40；最小 1）。
+   * 批量冻结步长：老化边界只成批推进（默认 60；最小 1）。
    * ⚠️ 1 = 逐候选即降级（等同渐进老化、每轮烧前缀缓存，仅调试用）；
    * 生产取值应 ≥ 每轮工具结果数，使冻结事件隔数轮一次。
-   * 默认 40 的实测依据：单轮工具结果数峰值 34、均值 15，批 20 会近乎每轮触发一次，
-   * 而每次燃烧量是常数级（rawWindow + 半批 + 当轮），小批次摊不动 → 回本点被拉到 100 次调用。
+   * 默认值 40 → 60（2026-11-13）：老化定位从「成本优化」改为「污染控制」后
+   * （见 arch/history-aging-economics.md），优化目标是**减少冻结事件次数**
+   * 而非尽早缩小视图——每次冻结都是常数级全价重算。
+   * 实测单轮工具结果数峰值 34、均值 15：批 40 仍会近乎每轮触发，
+   * 批 60 把冻结事件间隔拉到约 4 轮一次；配合 rawWindow 20 降低近窗的
+   * 常驻体积，同时让更多结果在变旧后一次成批让位。
    */
   freezeBatch?: number;
   /** 指针目标字符数（默认 400；是目标非硬顶——error/固定骨架可超出） */
@@ -129,8 +133,8 @@ const ELIDED_VALUE_BUDGET_COST = '…';
  * @returns 全字段解析结果（非法值/0 步长回落缺省——0 或负步长等同禁用批量冻结）
  */
 export function resolveToolResultAgingOptions(input?: ToolResultAgingConfig): ToolResultAgingOptions {
-  const rawWindow = Number.isInteger(input?.rawWindow) && (input?.rawWindow ?? -1) >= 0 ? (input!.rawWindow as number) : 40;
-  const freezeBatch = Number.isInteger(input?.freezeBatch) && (input?.freezeBatch ?? -1) >= 1 ? (input!.freezeBatch as number) : 40;
+  const rawWindow = Number.isInteger(input?.rawWindow) && (input?.rawWindow ?? -1) >= 0 ? (input!.rawWindow as number) : 20;
+  const freezeBatch = Number.isInteger(input?.freezeBatch) && (input?.freezeBatch ?? -1) >= 1 ? (input!.freezeBatch as number) : 60;
   const maxPointerChars =
     Number.isInteger(input?.maxPointerChars) && (input?.maxPointerChars ?? -1) > 0 ? (input!.maxPointerChars as number) : 400;
   const maxAgedArgChars =
