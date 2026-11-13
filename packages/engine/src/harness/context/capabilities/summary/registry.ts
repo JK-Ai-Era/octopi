@@ -140,6 +140,8 @@ export function createDefaultToolBindings(): Record<string, ToolSummaryBinding> 
       // code 默认不 L2，保护「需要可编辑原文」的场景
       informationalKinds: ['document', 'log', 'file_text', 'web_page'],
       onFail: 'truncate_l1',
+      // 保头：后续用 offset 续读，头部才是入口
+      l1Keep: 'head',
     },
     // 列表/命令输出：L1 必须生效（CONTRIBUTING）；L2 对 opaque 无益，关掉省调用
     file_list: {
@@ -149,6 +151,8 @@ export function createDefaultToolBindings(): Record<string, ToolSummaryBinding> 
       kindFromSource: false,
       informationalKinds: [],
       onFail: 'truncate_l1',
+      // 保头：路径树前缀一致，头部信息密度最高
+      l1Keep: 'head',
     },
     // 搜索结果 = 定位符清单 + 预览体：L1 结构化收口在工具内（file+line 全保），
     // L2 永不改写（摘要丢 file:line 保真度）
@@ -159,7 +163,10 @@ export function createDefaultToolBindings(): Record<string, ToolSummaryBinding> 
       kindFromSource: false,
       informationalKinds: [],
       onFail: 'truncate_l1',
+      // 保头：定位符清单从头部开始，尾部是可丢弃的低优先级命中
+      l1Keep: 'head',
     },
+    // 命令输出：结论在末尾（测试汇总、构建结果、错误堆栈收尾）
     shell: {
       tool: 'shell',
       mode: 'never',
@@ -167,6 +174,19 @@ export function createDefaultToolBindings(): Record<string, ToolSummaryBinding> 
       kindFromSource: false,
       informationalKinds: [],
       onFail: 'truncate_l1',
+      // 2026-11-13：head 会丢掉测试汇总/失败结论（project_run 43 次里仅 4 次见到
+      // 「Tests N passed」）。shell 类输出开头是命令回显与进度、末尾才是结论。
+      l1Keep: 'tail',
+    },
+    // 同 shell：脚本输出结论在末尾
+    project_run: {
+      tool: 'project_run',
+      mode: 'never',
+      maxReturnChars: 8000,
+      kindFromSource: false,
+      informationalKinds: [],
+      onFail: 'truncate_l1',
+      l1Keep: 'tail',
     },
   };
 }

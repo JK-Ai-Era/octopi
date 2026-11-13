@@ -123,6 +123,57 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.21 (2026-11-13)
+
+### fix(context): L1 截断可选保留尾部——修「测试汇总被整个丢掉」
+
+**症状**（default-web-1794346953041 实测）：`project_run` 43 次输出中 **17 次触发 L1 硬顶**，
+而旧实现永远保留**开头**（`raw.slice(0, shown)`）。测试汇总在末尾，所以 43 次里**只有 4 次**
+能看到 `Tests N passed`。`shell` 同理：开头是命令回显与进度，结论在末尾。
+
+**这不是老化问题**——老化是事后修剪历史，而 L1 发生在工具 handler 返回之前，
+落盘的就已经是砍掉尾部的版本。16 条历史 stdout 里带着 `[truncated: showing first …]`，
+原始尾部从未进入会话。
+
+**改动**：
+
+| 层 | 改动 |
+|---|---|
+| `applyL1Truncate` | 新增 `keep: 'head' \| 'tail' \| 'both'`（**缺省 `head`**，既有行为不变） |
+| `ToolSummaryBinding` | 新增 `l1Keep?`，由**工具定义方**声明（不是 LLM 参数） |
+| `applyToolOutputGate` | 6 处 L1 调用收敛为单一入口，避免逐分支传参漂移 |
+| 配置 schema | `summary.tools.*.l1Keep` 可覆盖内置声明 |
+
+**按语义分配**：
+
+| 工具 | `l1Keep` | 理由 |
+|---|---|---|
+| `shell` / `project_run` | **`tail`** | 结论在末尾（测试汇总、构建结果、错误收尾） |
+| `file_read` | `head` | 头部是入口，后续可用 offset 续读 |
+| `file_list` / `file_search` | `head` | 路径树/定位符清单从头部开始，信息密度最高 |
+| `http_request` / 未声明工具 | 缺省 `head` | 保持既有行为 |
+
+**关于缺省值的取舍**：`tail` 模式把通知放在**头部**（`[truncated: showing last N of M chars] …尾巴`），
+否则通知本身会遮住要保留的尾部。`both` 各取一半、余数给头部（头部通常承载「这是什么」的语境）。
+
+**验证**（用构造数据对照三种模式，因为历史数据已被截断无法复验）：
+
+```
+原文 9,193 字符，maxChars 8,000
+  head  len=8000  含末尾汇总: false   ← 旧行为，丢结论
+  tail  len=8000  含末尾汇总: true
+  both  len=8000  含末尾汇总: true
+```
+
+新增 `tests/harness/l1-truncate-keep.test.ts`（6 例：缺省仍为 head / tail 保尾 / both 保两端 /
+三模式都不破 maxChars / 未超限不截断 / 极小配额仍留 hint），并已验证**旧实现下 4 例失败**
+（`tail 模式必须保留测试汇总: expected false to be true`）。
+
+**顺带记录的踩坑**：首次写测试时构造数据只有 5,694 字符（未超 8,000 门限），
+三种模式全部「通过」——测试根本没触发被测逻辑。已修正为超过门限的数据。
+
+---
+
 ## v0.113.20 (2026-11-13)
 
 ### chore(release): 补齐三个缺失的 release tag

@@ -88,11 +88,28 @@ export interface SummaryGateConfig {
 
 export type ToolSummaryMode = 'auto' | 'over_threshold' | 'always' | 'never' | 'kind_sensitive';
 
+/**
+ * L1 硬顶截断的保留策略
+ *
+ * - `head`：保留开头（缺省，向后兼容）——适合「后续可用 offset 续读」的场景（file_read）
+ * - `tail`：保留结尾——适合「结论在末尾」的场景（测试汇总、退出信息、日志尾）
+ * - `both`：保头 + 保尾 + 中间省略——适合「开头是上下文、末尾是结论」的混合输出
+ *
+ * 缺省 `head`：不改变任何既有工具的行为，只在声明的工具上生效。
+ */
+export type L1KeepMode = 'head' | 'tail' | 'both';
+
 export interface ToolSummaryBinding {
   tool: string;
   mode: ToolSummaryMode;
   gate?: SummaryGateConfig;
   maxReturnChars: number;
+  /**
+   * L1 截断保留策略（缺省 `head`）
+   *
+   * 由**工具定义方**声明（不是 LLM 参数）：工具作者知道自己的输出哪一端承载结论。
+   */
+  l1Keep?: L1KeepMode;
   defaultPolicyId?: string;
   kindFromSource?: boolean;
   informationalKinds?: ContentKind[];

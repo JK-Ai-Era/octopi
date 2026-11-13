@@ -152,6 +152,11 @@ export async function applyToolOutputGate(input: ApplyToolOutputGateInput): Prom
     usage,
   });
 
+  // L1 唯一入口：保留策略由 binding 声明（缺省 head，与既有行为一致）。
+  // 全部 6 个分支共用，避免逐分支传入时漂移。
+  const l1Keep = binding.l1Keep ?? 'head';
+  const l1 = (raw: string) => applyL1Truncate(raw, maxChars, input.truncateHint, l1Keep);
+
   // L2 决策（L1 在所有分支末尾都会做）
   let runL2 = false;
   if (mode === 'never' || arg === 'off') {
@@ -173,16 +178,16 @@ export async function applyToolOutputGate(input: ApplyToolOutputGateInput): Prom
       try {
         const r = await port.extract(unit, { previousSummary: undefined });
         if (r.skipped) {
-          const l1 = applyL1Truncate(input.rawBody, maxChars, input.truncateHint);
-          return finish(l1.text, l1.truncated, {
+          const trunc = l1(input.rawBody);
+          return finish(trunc.text, trunc.truncated, {
             applied: false,
             skipped: true,
             skipReason: r.skipReason,
             kind,
           });
         }
-        const l1 = applyL1Truncate(r.text, maxChars, input.truncateHint);
-        return finish(l1.text, l1.truncated, {
+        const trunc = l1(r.text);
+        return finish(trunc.text, trunc.truncated, {
           applied: true,
           policyId: r.policyId,
           kind: r.kind,
@@ -193,16 +198,16 @@ export async function applyToolOutputGate(input: ApplyToolOutputGateInput): Prom
         }, r.usage);
       } catch (err) {
         if (binding.onFail === 'error') throw err;
-        const l1 = applyL1Truncate(input.rawBody, maxChars, input.truncateHint);
-        return finish(l1.text, l1.truncated, {
+        const trunc = l1(input.rawBody);
+        return finish(trunc.text, trunc.truncated, {
           applied: false,
           failed: true,
           kind,
         });
       }
     } else {
-      const l1 = applyL1Truncate(input.rawBody, maxChars, input.truncateHint);
-      return finish(l1.text, l1.truncated, {
+      const trunc = l1(input.rawBody);
+      return finish(trunc.text, trunc.truncated, {
         applied: false,
         skipped: true,
         skipReason: 'below_gate',
@@ -210,8 +215,8 @@ export async function applyToolOutputGate(input: ApplyToolOutputGateInput): Prom
       });
     }
   } else if (runL2 && !port) {
-    const l1 = applyL1Truncate(input.rawBody, maxChars, input.truncateHint);
-    return finish(l1.text, l1.truncated, {
+    const trunc = l1(input.rawBody);
+    return finish(trunc.text, trunc.truncated, {
       applied: false,
       skipped: true,
       skipReason: 'no_summary_port',
@@ -220,8 +225,8 @@ export async function applyToolOutputGate(input: ApplyToolOutputGateInput): Prom
   }
 
   // L1 only（mode never / summarize off / 无 L2 路径）
-  const l1 = applyL1Truncate(input.rawBody, maxChars, input.truncateHint);
-  return finish(l1.text, l1.truncated, {
+  const trunc = l1(input.rawBody);
+  return finish(trunc.text, trunc.truncated, {
     applied: false,
     skipped: true,
     skipReason: arg === 'off' ? 'summarize_off' : mode === 'never' ? 'mode_never' : 'l1_only',

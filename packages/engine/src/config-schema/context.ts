@@ -85,6 +85,8 @@ export const ContextAssemblerConfigSchema = z.object({
 const ToolSummaryBindingConfigSchema = z.object({
   mode: z.enum(['auto', 'over_threshold', 'always', 'never', 'kind_sensitive']).optional(),
   maxReturnChars: z.number().int().positive().optional(),
+  /** L1 截断保留策略；缺省 head（与工具内置声明一致） */
+  l1Keep: z.enum(['head', 'tail', 'both']).optional(),
   defaultPolicyId: z.string().optional(),
   kindFromSource: z.boolean().optional(),
   informationalKinds: z

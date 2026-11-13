@@ -1396,6 +1396,14 @@
                 "exclusiveMinimum": 0,
                 "maximum": 9007199254740991
               },
+              "l1Keep": {
+                "type": "string",
+                "enum": [
+                  "head",
+                  "tail",
+                  "both"
+                ]
+              },
               "defaultPolicyId": {
                 "type": "string"
               },
