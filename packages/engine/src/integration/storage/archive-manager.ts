@@ -17,6 +17,7 @@ import { gzip, gunzip } from 'node:zlib';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
+import { atomicWriteFile } from './atomic-tmp.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
@@ -156,10 +157,10 @@ export class SessionArchiveManager {
 
     const newContent = existing + line;
     const compressed = await this.compress(Buffer.from(newContent, 'utf-8'));
-    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmpPath, compressed);
-    const { rename } = await import('node:fs/promises');
-    await rename(tmpPath, filePath);
+    // tmp+rename 原子落位（读侧不见半截）。已知局限（评审 del-3c3fcfeb MIN-3）：
+    // existing+line 的读改写无并发串行，同文件并发追加会丢行——当前 runArchive
+    // 顺序执行无触发点；启用归档调度前必须按文件路径串行化（arch/open-problems.md）。
+    await atomicWriteFile(filePath, compressed);
   }
 
   /**

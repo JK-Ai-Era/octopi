@@ -123,6 +123,29 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.32 (2026-11-14)
+
+### fix(storage): 会话持久层并发写完整性——原子写原语统一 + 元索引 RMW 串行（T5 演练实锤）
+
+**症状与实证**（T5 双租户演练现场 + fresh-eyes 评审 del-3c3fcfeb 探针）：
+- tmp 名 `pid+毫秒` 非按写唯一：同毫秒双写撞名 → rename ENOENT，或半截文件被 rename 进目标（静默损坏）；
+- `sessions.json` 元索引 read-modify-write 只有 per-session 写队列：跨 session 并发 save/updateMetadata 读旧写旧丢条目（演练对撞方实录：委派子会话 save × SessionTitle 异步 updateMetadata）；
+- `save()` 转录与 `delete()` 元索引写回截断直写：并发 load 254/320 读到空转录（load→save 放大链路可把转录**永久清空**）；delete 并发 6ms 损坏整份元索引（此后 save/load/list 全店拒写、无自愈），且写回吞错让 delete 假成功；
+- `.state.json` 两处同款非原子（torn 读被当空态重写 = 静默清字段）。
+
+**修复**：
+- 新模块 `integration/storage/atomic-tmp.ts`：`atomicTmpPath`（按写唯一：pid+ms+进程内序号+随机段）+ `atomicWriteFile`（tmp+rename 整文件写）——元索引/转录/state/archive 全部收口一处真相；
+- `withMetaLock` 元索引 RMW 串行：**模块级按 meta 路径**（同进程多 store 实例互斥——daemon 同进程双实例）；锁序 session→meta 单向无死锁环。**边界如实**：跨进程（gateway 与 run-serve 子进程同写一份 sessions.json）窗口未关，登记 `arch/multi-tenancy.md` §9.1-14，随 P2-1 session-serve（单写者）或 flock 收口；
+- `removeSessionFiles`：元索引先摘（归锁+原子写）后删数据文件（crash 只留孤儿文件、不留幽灵条目/半截索引），摘除失败**上抛**不再吞。
+
+**回归锚** `tests/session-store-write-race.test.ts`（5）：并发 save 丢条目（25 轮对撞，先红后绿）、delete×save（不损坏/不吞他人条目/不复活）、updateMetadata×save、save×load torn read（恒见完整消息数）、\*.tmp 零残留。评审对未修复代码探针：无锁 25/25 丢条目、旧 tmp 25/25 ENOENT、delete 并发 6ms corrupt、torn read 254/320。
+
+**登记**：归档 gz 追加无串行（`arch/open-problems.md` OP-ARCH-1，绑定「启用归档调度前必修」）；list() crash 幽灵条目过滤（OP-STORE-1）。
+
+**BREAKING**：`JsonlSessionStore.delete()` 元索引摘除失败现如实上抛（旧状静默吞错假成功）。全量 4962 绿、lint 0。
+
+---
+
 ## v0.113.31 (2026-11-14)
 
 ### fix(context): 活跃插话跨进程注入——human 插话不再被 lease 闸静默丢弃（§2.1-1 清偿）

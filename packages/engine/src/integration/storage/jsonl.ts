@@ -15,6 +15,7 @@
 import { access, mkdir, readFile, writeFile, unlink, rename, appendFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionStore, SessionListFilter } from '@octopi-agent/core/interfaces/session-store.js';
+import { atomicTmpPath, atomicWriteFile } from './atomic-tmp.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { SessionMeta } from '@octopi-agent/core/types.js';
@@ -73,6 +74,38 @@ function slimSteps(steps: unknown): SessionData['steps'] {
     const { input: _dropped, ...rest } = t as Record<string, unknown>;
     return [rest as unknown as SessionData['steps'][number]];
   });
+}
+
+/**
+ * `sessions.json` 元索引 read-modify-write 串行队列，按 meta 文件路径在**进程内**
+ * 共享（模块级：同进程多 store 实例也互斥——daemon 同进程就有双实例）。
+ *
+ * T5 演练实锤 2026-11-14：元索引是全店共享文件，per-session 的 withWriteLock 挡不住
+ * 跨 session 并发 read-modify-write——读旧写旧丢条目，且截断直写曾让并发 delete 6ms
+ * 即损坏整份元索引（评审 del-3c3fcfeb MAJ-1/2）。锁序恒为 session 锁 → meta 锁；
+ * meta 锁内不取任何 session 锁，无死锁环。回归锚 tests/session-store-write-race.test.ts。
+ *
+ * 已知边界（勿当已闭）：**跨进程**窗口仍在——gateway 与 run-serve 子进程同写一份
+ * sessions.json，本锁不跨进程；收口走 P2-1 session-serve 或 flock，登记
+ * arch/multi-tenancy.md §9.1-14。
+ *
+ * @param metaPath - 元索引文件路径（锁键）
+ * @param fn - 元索引 RMW 整段（read → mutate → write）
+ * @returns fn 的结果
+ */
+const metaWriteQueues = new Map<string, Promise<void>>();
+
+function withMetaLock<T>(metaPath: string, fn: () => Promise<T>): Promise<T> {
+  const prev = metaWriteQueues.get(metaPath) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  metaWriteQueues.set(
+    metaPath,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
 }
 
 export class JsonlSessionStore implements SessionStore<SessionData> {
@@ -171,9 +204,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
 
   private async writeMetaIndex(index: SessionIndex): Promise<void> {
     await mkdir(this.sessionsDir, { recursive: true });
-    const tmpPath = `${this.metaFile()}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmpPath, JSON.stringify(index, null, 2));
-    await rename(tmpPath, this.metaFile());
+    await atomicWriteFile(this.metaFile(), JSON.stringify(index, null, 2));
   }
 
   private buildIndexEntry(data: SessionData): SessionMeta {
@@ -281,6 +312,18 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   }
 
   private async removeSessionFiles(sessionId: string): Promise<void> {
+    // 元索引先摘（meta RMW 归锁 + 原子写）、数据文件后删（MAJ-1，评审 del-3c3fcfeb）：
+    // 旧序「先删文件、后截断写回索引」曾让并发 delete 6ms 即损坏整份元索引，且读旧
+    // 写回会复活/吞掉他人条目。新序 crash 只会留孤儿文件（磁盘清理兜底），不留幽灵
+    // 条目。摘除失败如实上抛：吞错只会把「delete 假成功」和「索引损坏」都藏起来。
+    const metaPath = this.metaFile();
+    if (await fileExists(metaPath)) {
+      await withMetaLock(metaPath, async () => {
+        const allMeta = await this.readMetaIndex();
+        delete allMeta[sessionId];
+        await this.writeMetaIndex(allMeta);
+      });
+    }
     for (const p of [this.sessionFile(sessionId), this.sessionStateFile(sessionId)]) {
       if (await fileExists(p)) {
         await unlink(p);
@@ -299,14 +342,6 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       }
     } catch {
       // 附件/转换记录清理失败不阻断 session 删除；残留由磁盘清理兜底
-    }
-    const metaPath = this.metaFile();
-    if (await fileExists(metaPath)) {
-      try {
-        const allMeta = await this.readMetaIndex();
-        delete allMeta[sessionId];
-        await writeFile(metaPath, JSON.stringify(allMeta, null, 2));
-      } catch { /* ignore */ }
     }
   }
 
@@ -329,7 +364,9 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       // 写数据文件在前，索引在后：crash 时索引最多缺条目（load 仍能直接读文件），
       // 不会出现索引有但数据没写完的不一致
       const jsonl = data.messages.map(msg => JSON.stringify(msg)).join('\n') + '\n';
-      await writeFile(this.sessionFile(sessionId), jsonl);
+      // tmp+rename 原子写（MAJ-2，评审 del-3c3fcfeb）：截断直写曾让并发 load 读到
+      // 0 条消息（实测 254/320），load→save 放大链路会把转录永久清空
+      await atomicWriteFile(this.sessionFile(sessionId), jsonl);
       // 全量重写后同步增量缓存（防止下一次 syncMessages 误判漂移）
       this.noteSyncCache(sessionId, Buffer.byteLength(jsonl, 'utf-8'), data.messages.slice());
 
@@ -356,7 +393,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         metadata.titleUpdatedAt = fresh.titleUpdatedAt;
       }
 
-      await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
+      await atomicWriteFile(this.sessionStateFile(sessionId), JSON.stringify({
         // 字段集必须与 updateMetadata() 的 state 重写保持一致：漏写即静默清字段
         tenantId: data.tenantId ?? data.meta.tenantId,
         agentId: data.agentId,
@@ -376,10 +413,12 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
 
       // 索引携带 lifecycle 投影：list 过滤 / 归档扫描不必打开 state
 
-      // 索引最后更新：数据就绪才写入
-      const index = await this.readMetaIndex();
-      index[sessionId] = this.buildIndexEntry({ ...data, id: sessionId, metadata });
-      await this.writeMetaIndex(index);
+      // 索引最后更新：数据就绪才写入（meta RMW 进程内串行，见模块级 withMetaLock）
+      await withMetaLock(this.metaFile(), async () => {
+        const index = await this.readMetaIndex();
+        index[sessionId] = this.buildIndexEntry({ ...data, id: sessionId, metadata });
+        await this.writeMetaIndex(index);
+      });
 
       // 可搜投影（失败不阻断；权威已落盘，可 rebuild）
       if (this.index) {
@@ -415,7 +454,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       const metadata = replaced === undefined ? meta : replaced;
 
       await mkdir(this.sessionsDir, { recursive: true });
-      await writeFile(this.sessionStateFile(sessionId), JSON.stringify({
+      await atomicWriteFile(this.sessionStateFile(sessionId), JSON.stringify({
         tenantId: prev?.tenantId,
         agentId: prev?.agentId,
         // 字段集必须与 save() 的 state 重写保持一致：漏写即静默清字段
@@ -436,19 +475,21 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       }, null, 2));
 
       try {
-        const index = await this.readMetaIndex();
-        const entry = index[sessionId];
-        if (entry) {
-          index[sessionId] = {
-            ...entry,
-            // pinnedAt 投影与 buildIndexEntry 同规则（置顶/取消即时可见于 list）
-            pinnedAt: readPinnedAt(metadata.pinnedAt),
-            // 标题投影同规则（rename / 自动标题即时可见于 list）
-            ...readTitleState(metadata),
-            updatedAt: Date.now(),
-          };
-          await this.writeMetaIndex(index);
-        }
+        await withMetaLock(this.metaFile(), async () => {
+          const index = await this.readMetaIndex();
+          const entry = index[sessionId];
+          if (entry) {
+            index[sessionId] = {
+              ...entry,
+              // pinnedAt 投影与 buildIndexEntry 同规则（置顶/取消即时可见于 list）
+              pinnedAt: readPinnedAt(metadata.pinnedAt),
+              // 标题投影同规则（rename / 自动标题即时可见于 list）
+              ...readTitleState(metadata),
+              updatedAt: Date.now(),
+            };
+            await this.writeMetaIndex(index);
+          }
+        });
       } catch {
         // 索引投影可重建；metadata 权威已落盘
       }
@@ -488,9 +529,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
 
       // 整文件对齐走 tmp+rename：读侧（浏览器刷新 load）不得撞见写半截的转录
       const jsonl = messages.map((m) => JSON.stringify(m)).join('\n') + '\n';
-      const tmpPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-      await writeFile(tmpPath, jsonl);
-      await rename(tmpPath, path);
+      await atomicWriteFile(path, jsonl);
       this.noteSyncCache(sessionId, Buffer.byteLength(jsonl, 'utf-8'), messages.slice());
     });
   }
