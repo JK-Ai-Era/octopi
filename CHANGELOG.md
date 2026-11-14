@@ -123,6 +123,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.113.33 (2026-11-14)
+
+### test(tenancy): T5 双租户全流程演练——多租户 MVP（T1–T5）收官
+
+**演练件** `tests/tenancy-drill-e2e.test.ts`（6 站 scenario walk，站站相扣共享现场）：①注册（HTTP register 面：root=平台 admin + alice/bob 各成一租户）②建 agent + 家当物化（`workspace/<tenant>/<agent>` 分域实证）③挂知识（tenant A/B 源 + platform 公共 + agent 挂载解析按域收口）④渠道锚定 + binding（两租户 bot 各路由自己的 agent——假 LLM 回显 marker 实证「谁真正跑了」；会话归属=bot 锚）⑤委派闸 + 归属继承位（A→A2 同租户跑通，`ChildRunInput.tenantId` 与子会话 `meta.tenantId` 双证继承位落持久层；A↔B `delegate_cross_tenant` 对称 fail-loud）⑥隔离矩阵（agents/sessions/knowledge/audit 四面 HTTP 闸 + 文件树，A/B 互不可见、audit 分区与记录同租户）。
+
+**验收面口径**（评审 del-3c3fcfeb 收窄，勿放大）：knowledge 行 = registry 定义面（检索执法面锚在 T3b）；audit 行 = AuditWriter 分区契约 + ops 文件实证（run 链路 tenantId 传递锚在 T2 装配）；委派站 runner 边界为脚本事件源（真 runner 的 principal 接线已有 delegation 系锚）。假件仅外部 LLM 服务与该脚本 runner；创建走 registry 服务面，可见性断言走 HTTP 闸面。
+
+**评审**（del-3c3fcfeb，fresh-eyes，2 MAJ/8 MIN/6 NIT，fix-then-ship 有条件）：MAJ 属共享持久层缺陷，已随 v0.113.32 修复（演练价值所在：验收路径揪出生产数据完整性 bug）；MIN-1/4/7/8 同批修；MIN-2/3 登记 §9.1-14 / OP-ARCH-1；MIN-5/6 + Q4 验收口径收窄；NIT 全清。评审 Q1 纠错收下：delete 本就摘元索引条目（此前记录「不清条目」有误，已改正）。
+
+**登记缺口**：§9.1-13 ops 审计账本无租户段/键（P2-5 audit 聚合 / ops P5 外送时补）；§9.1-14 元索引跨进程 RMW 窗口（随 P2-1 session-serve 或 flock 收口）。
+
+**测试**：演练 6 锚 + 并发回归 5 锚（v0.113.32）；全量 **4962 绿**、lint 0。**多租户 MVP（T1–T5）至此收官，P2-0 部署清单解锁。**
+
+---
+
 ## v0.113.32 (2026-11-14)
 
 ### fix(storage): 会话持久层并发写完整性——原子写原语统一 + 元索引 RMW 串行（T5 演练实锤）
