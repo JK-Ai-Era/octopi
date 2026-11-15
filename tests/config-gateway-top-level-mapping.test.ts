@@ -24,6 +24,14 @@ type Classification =
   | { kind: 'ignored'; reason: string };
 
 const CLASSIFICATION: Record<string, Classification> = {
+  language: {
+    kind: 'host-consumed',
+    where: 'CLI/webui/tui i18n 渲染（product-onboarding.md §5b；向导步 1 写入）',
+  },
+  deploymentMode: {
+    kind: 'host-consumed',
+    where: 'onboarding 播种（§4 部署模式三选）+ 后续 registry 登录面语义',
+  },
   agents: { kind: 'mapped', target: 'agents' },
   models: {
     kind: 'mapped',

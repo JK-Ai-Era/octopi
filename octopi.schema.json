@@ -3288,6 +3288,21 @@
         }
       }
     },
+    "language": {
+      "type": "string",
+      "enum": [
+        "zh",
+        "en"
+      ]
+    },
+    "deploymentMode": {
+      "type": "string",
+      "enum": [
+        "personal",
+        "organization",
+        "multi-organization"
+      ]
+    },
     "gateway": {
       "type": "object",
       "properties": {

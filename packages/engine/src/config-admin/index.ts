@@ -9,14 +9,20 @@
 
 export { assertSafeConfigName } from './name-guard.js';
 
+export { pickLocalized } from './i18n.js';
+export type { ProductLang, LocalizedText } from './i18n.js';
+
 export {
   BUILTIN_AGENT_ROLE_PRESETS,
   getAgentRolePreset,
   renderAgentRole,
+  renderRolePreset,
 } from './agent-presets.js';
 export type {
   AgentRolePreset,
   AgentRoleSlots,
+  AgentRoleSkill,
+  AgentRolePersonaFile,
   RenderedAgentRole,
   EffectMode,
 } from './agent-presets.js';
@@ -49,3 +55,21 @@ export type {
 
 export { discoverProviderModels } from './discover.js';
 export type { DiscoverModelsRequest, DiscoverModelsResult } from './discover.js';
+
+export {
+  ONBOARDING_STEPS,
+  DEPLOYMENT_MODES,
+  pickLang,
+  apiKeyEnvVar,
+  validateStep,
+  assembleOnboarding,
+  providerChoices,
+} from './onboarding.js';
+export type {
+  OnboardingStepId,
+  InitMode,
+  DeploymentMode,
+  DeploymentModeChoice,
+  OnboardingChoices,
+  OnboardingOutput,
+} from './onboarding.js';

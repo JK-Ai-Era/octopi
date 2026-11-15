@@ -17,7 +17,7 @@ import { validateConfigOrThrow } from './config-schema.js';
 import { applyLegacyBudget, applyLegacyPluginConfigs, applyRemovedAttachmentKeys, applyRemovedKeys, detectConfigMigrations } from './config-migrations.js';
 import { detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
 import { detectUnwiredConfigKeys } from './config-schema/unwired-keys.js';
-import { expandEnvPlaceholders as expandEnvPlaceholdersShared } from '@octopi-agent/engine/config-admin/env.js';
+import { expandEnvPlaceholders as expandEnvPlaceholdersShared, loadOctopiEnvFile } from '@octopi-agent/engine/config-admin/env.js';
 import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -91,6 +91,9 @@ export function resolveConfigFilePath(configPath?: string): string {
 }
 
 export function loadConfig(configPath?: string): NormalizedHarnessConfig {
+  // .env 先于 ${ENV} 展开加载（env.ts 时机约束）；进程树经 process.env 继承，子进程无需各自加载
+  loadOctopiEnvFile(getOctopiHome());
+
   const filePath = resolveConfigFilePath(configPath);
 
   console.log(`[config] Loading config from ${filePath}`);

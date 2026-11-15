@@ -140,6 +140,19 @@ export class RegistryDatabase {
     if (!mountCols.some((c) => c.name === 'agent_ref')) {
       this.db.exec('ALTER TABLE mounts ADD COLUMN agent_ref TEXT');
     }
+    // 密码认证面（product-onboarding.md §6）：users 补 scrypt 列、auth_tokens 补过期列；
+    // 存量库补列（同 agent_ref 先例；NULL = 无密码/不过期，兼容存量）
+    const userCols = this.db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+    if (!userCols.some((c) => c.name === 'password_hash')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+    }
+    if (!userCols.some((c) => c.name === 'password_salt')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT');
+    }
+    const tokenCols = this.db.prepare('PRAGMA table_info(auth_tokens)').all() as Array<{ name: string }>;
+    if (!tokenCols.some((c) => c.name === 'expires_at')) {
+      this.db.exec('ALTER TABLE auth_tokens ADD COLUMN expires_at INTEGER');
+    }
   }
 
   get raw(): DatabaseSync {

@@ -1,6 +1,9 @@
 {
   "$schema": "./octopi.schema.json",
 
+  "language": "zh",
+  "deploymentMode": "personal",
+
   "models": {
     "level": {
       "mini": { "primary": "openai/gpt-5-mini" },

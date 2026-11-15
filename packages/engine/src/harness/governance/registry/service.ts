@@ -9,7 +9,12 @@
  * 迁 C 机服务、调用面不变。
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scryptAsync = promisify(scryptCb) as (password: string, salt: string, keylen: number) => Promise<Buffer>;
+/** M3 等耗时路径的固定盐（防时序枚举；非凭据，公开无害） */
+const DUMMY_SALT = 'octopi-dummy-salt-for-constant-time-auth';
 import { RegistryDatabase } from './db.js';
 import type { RegistryDatabaseOptions } from './db.js';
 import type {
@@ -642,28 +647,34 @@ export class RegistryService {
    * 签发会话 token（MVP 鉴权：token 会话；企业 SSO 属 P3）。
    *
    * @param userId - 用户 id
+   * @param ttlMs - 可选有效期（毫秒）；缺省不过期（兼容存量语义）
    * @returns 不透明 token（存储于 registry.db auth_tokens）
    */
-  issueToken(userId: UserId): AuthToken {
+  issueToken(userId: UserId, ttlMs?: number): AuthToken {
     if (!this.getUser(userId)) throw new Error(`registry_user_not_found: ${userId}`);
     const token = randomUUID() as AuthToken;
+    const now = Date.now();
     this.db.raw
-      .prepare('INSERT INTO auth_tokens (token, user_id, created_at) VALUES (?, ?, ?)')
-      .run(token, userId, Date.now());
+      .prepare('INSERT INTO auth_tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+      .run(token, userId, now, ttlMs ? now + ttlMs : null);
     return token;
   }
 
   /**
-   * 解析会话 token → 用户。
+   * 解析会话 token → 用户（过期 token 视为无效并顺手清除）。
    *
    * @param token - Bearer token
    */
   resolveToken(token: string): User | null {
     if (!token.trim()) return null;
-    const row = this.db.raw.prepare('SELECT user_id FROM auth_tokens WHERE token = ?').get(token) as
-      | { user_id: string }
+    const row = this.db.raw.prepare('SELECT user_id, expires_at FROM auth_tokens WHERE token = ?').get(token) as
+      | { user_id: string; expires_at: number | null }
       | undefined;
     if (!row) return null;
+    if (row.expires_at != null && row.expires_at < Date.now()) {
+      this.revokeToken(token); // 过期条目不留账面（防无限堆积）
+      return null;
+    }
     return this.getUser(row.user_id as UserId);
   }
 
@@ -675,6 +686,161 @@ export class RegistryService {
    */
   revokeToken(token: string): boolean {
     return this.db.raw.prepare('DELETE FROM auth_tokens WHERE token = ?').run(token).changes > 0;
+  }
+
+  /**
+   * 设置/更新用户密码（scrypt + 随机盐；节点内置，不引第三方依赖）。
+   *
+   * 异步 scrypt 走线程池，不阻塞事件循环（评审 M5）。
+   *
+   * @param userId - 用户 id
+   * @param password - 明文密码（两遍确认等 UX 由调用方负责）
+   * @throws registry_user_not_found 用户不存在
+   */
+  async setUserPassword(userId: UserId, password: string): Promise<void> {
+    if (!this.getUser(userId)) throw new Error(`registry_user_not_found: ${userId}`);
+    if (!password) throw new Error('registry_password_required');
+    const salt = randomBytes(16).toString('hex');
+    const hash = (await scryptAsync(password, salt, 32)).toString('hex');
+    this.db.raw
+      .prepare('UPDATE users SET password_hash = ?, password_salt = ? WHERE user_id = ?')
+      .run(hash, salt, userId);
+  }
+
+  /**
+   * 用户是否已设密码（路由层据此决定是否强制验密）。
+   *
+   * @param userId - 用户 id
+   */
+  hasPassword(userId: UserId): boolean {
+    const row = this.db.raw
+      .prepare('SELECT password_hash FROM users WHERE user_id = ?')
+      .get(userId) as { password_hash: string | null } | undefined;
+    return Boolean(row?.password_hash);
+  }
+
+  /**
+   * 密码登录校验（product-onboarding.md §6：身份 = (tenant, name) 二元组 + 密码）。
+   *
+   * tenant 显式给定时按二元组定位（多租户撞名消歧）；缺省按用户名唯一定位
+   * （registerUser 一用户一租户的形态）。返回 null 的一切路径**等耗时**（评审 M3：
+   * 未知用户/无密码用户也跑一次等价 KDF，抹平时序侧信道）；比较用 timingSafeEqual。
+   * 无密码用户返回 null——免密语义只属于 loopback 名登录兼容路径。
+   *
+   * @param input - 用户名 + 明文密码（可选组织/租户名）
+   * @returns 校验通过的用户；失败 null
+   */
+  async authenticate(input: { tenant?: string; name: string; password: string }): Promise<User | null> {
+    const row = input.tenant
+      ? (this.db.raw
+          .prepare(
+            `SELECT u.user_id AS user_id FROM users u JOIN tenants t ON t.tenant_id = u.tenant_id
+             WHERE t.name = ? AND u.name = ?`,
+          )
+          .get(input.tenant, input.name) as { user_id: string } | undefined)
+      : (this.db.raw.prepare('SELECT user_id FROM users WHERE name = ?').get(input.name) as
+          | { user_id: string }
+          | undefined);
+    const cred = row
+      ? (this.db.raw
+          .prepare('SELECT password_hash, password_salt FROM users WHERE user_id = ?')
+          .get(row.user_id) as { password_hash: string | null; password_salt: string | null } | undefined)
+      : undefined;
+    if (!cred?.password_hash || !cred.password_salt) {
+      // 等耗时路径：对固定 dummy 盐跑同参 KDF（几十 ms），未知用户不再微秒返回
+      await scryptAsync(input.password, DUMMY_SALT, 32);
+      return null;
+    }
+    const hash = await scryptAsync(input.password, cred.password_salt, 32);
+    const expected = Buffer.from(cred.password_hash, 'hex');
+    if (hash.length !== expected.length || !timingSafeEqual(hash, expected)) return null;
+    return this.getUser(row!.user_id as UserId);
+  }
+
+  /**
+   * 在既有租户内创建用户（②③部署模式的成员面；registerUser「一用户一租户」之外的补充入口）。
+   *
+   * 插入 + 设密同事务（m7 对称 registerUser）：设密失败不留「无密码半用户」。
+   *
+   * @param input - tenantId + name + 可选 password / isPlatformAdmin
+   * @returns 新建用户
+   * @throws registry_tenant_not_found / registry_password 相关
+   */
+  async createUserInTenant(input: {
+    tenantId: TenantId;
+    name: string;
+    password?: string;
+    isPlatformAdmin?: boolean;
+  }): Promise<User> {
+    const name = requireNonEmpty(input.name, 'user name');
+    if (!this.hasTenant(input.tenantId)) throw new Error(`registry_tenant_not_found: ${input.tenantId}`);
+    const now = Date.now();
+    const userId = randomUUID() as UserId;
+    this.db.raw.exec('BEGIN');
+    try {
+      this.db.raw
+        .prepare('INSERT INTO users (user_id, tenant_id, name, is_platform_admin, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(userId, input.tenantId, name, input.isPlatformAdmin ? 1 : 0, now);
+      if (input.password) await this.setUserPassword(userId, input.password);
+      this.db.raw.exec('COMMIT');
+    } catch (err) {
+      this.db.raw.exec('ROLLBACK');
+      throw err;
+    }
+    return {
+      userId,
+      tenantId: input.tenantId,
+      name,
+      isPlatformAdmin: Boolean(input.isPlatformAdmin),
+      createdAt: now,
+    };
+  }
+
+  /**
+   * 按 (tenantId, name) 取用户（部署模式播种的精确查找，M10；不做全局名碰撞误配）。
+   *
+   * @param tenantId - 租户 id
+   * @param name - 用户名
+   */
+  getUserInTenant(tenantId: TenantId, name: string): User | null {
+    const row = this.db.raw
+      .prepare('SELECT user_id FROM users WHERE tenant_id = ? AND name = ?')
+      .get(tenantId, name) as { user_id: string } | undefined;
+    return row ? this.getUser(row.user_id as UserId) : null;
+  }
+
+  /**
+   * 幂等确保租户存在（部署模式播种用；registerUser「一用户一租户」之外的主机侧配置面）。
+   *
+   * @param name - 租户（组织）名
+   * @param explicitId - 显式租户 id（personal/②模式用 'default' = core DEFAULT_TENANT_ID 语义，
+   *   与 config agent 的 default 域同 ID 空间；缺省自生成 uuid）
+   * @returns 租户（已存在则返回既有；同 id 撞异名 fail-loud）
+   * @throws registry_tenant_id_conflict 显式 id 已被不同名占用
+   */
+  ensureTenant(name: string, explicitId?: string): Tenant {
+    const tenantName = requireNonEmpty(name, 'tenant name');
+    const existing = this.db.raw.prepare('SELECT tenant_id, name, created_at FROM tenants WHERE name = ?').get(tenantName) as
+      | { tenant_id: string; name: string; created_at: number }
+      | undefined;
+    if (existing) {
+      return { tenantId: existing.tenant_id as TenantId, name: existing.name, createdAt: existing.created_at };
+    }
+    if (explicitId) {
+      const byId = this.db.raw.prepare('SELECT tenant_id, name, created_at FROM tenants WHERE tenant_id = ?').get(explicitId) as
+        | { tenant_id: string; name: string; created_at: number }
+        | undefined;
+      if (byId) {
+        if (byId.name !== tenantName) {
+          throw new Error(`registry_tenant_id_conflict: id ${explicitId} 已被租户「${byId.name}」占用`);
+        }
+        return { tenantId: byId.tenant_id as TenantId, name: byId.name, createdAt: byId.created_at };
+      }
+    }
+    const now = Date.now();
+    const tenantId = (explicitId ?? randomUUID()) as TenantId;
+    this.db.raw.prepare('INSERT INTO tenants (tenant_id, name, created_at) VALUES (?, ?, ?)').run(tenantId, tenantName, now);
+    return { tenantId, name: tenantName, createdAt: now };
   }
 
   /**

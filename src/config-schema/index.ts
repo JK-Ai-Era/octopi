@@ -70,6 +70,14 @@ export { NetworkHostSchema } from '@octopi-agent/engine/config-schema/shared.js'
  * 历史名 `HarnessConfigSchema` 保留为兼容别名。
  */
 export const OctopiConfigSchema = engineConfigSchema.extend({
+  /** 产品语言（CLI/webui/tui 共读；缺省 zh） */
+  language: z.enum(['zh', 'en']).optional(),
+  /**
+   * 部署模式（product-onboarding.md §4）：
+   * personal = 个人使用（单租户单用户免登录）；organization = 单组织多用户；
+   * multi-organization = 多组织多租户。缺省按 personal 语义运行。
+   */
+  deploymentMode: z.enum(['personal', 'organization', 'multi-organization']).optional(),
   /** 未来 @octopi-agent/gateway 进程面覆盖；无键时由 toGatewayConfig() 派生 */
   gateway: GatewayOverrideConfigSchema.optional(),
   /** 未来 @octopi-agent/webui */

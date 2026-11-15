@@ -33,12 +33,16 @@ export interface ProviderPreset {
   id: string;
   /** 展示名 */
   label: string;
+  /** 展示名本地化（缺省回落 label；品牌名常两语同形） */
+  labels?: import('./i18n.js').LocalizedText;
   /** API 协议 */
   api: 'openai-completions' | 'anthropic-messages';
   /** 默认 baseUrl */
   baseUrl: string;
   /** 建议的 apiKey 环境变量名（表单提示用，非绑定） */
   apiKeyEnvHint: string;
+  /** 「去哪拿 key」提示（向导用；缺省回落 docsUrl） */
+  keyHints?: import('./i18n.js').LocalizedText;
   /** 厂商文档链接 */
   docsUrl?: string;
   /** 预置模型清单（参考值） */
@@ -55,6 +59,10 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
     api: 'openai-completions',
     baseUrl: 'https://api.openai.com/v1',
     apiKeyEnvHint: 'OPENAI_API_KEY',
+    keyHints: {
+      zh: '在 platform.openai.com → API keys 创建',
+      en: 'Create one at platform.openai.com → API keys',
+    },
     docsUrl: 'https://platform.openai.com/docs/models',
     models: [
       {
@@ -81,6 +89,10 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
     api: 'anthropic-messages',
     baseUrl: 'https://api.anthropic.com',
     apiKeyEnvHint: 'ANTHROPIC_API_KEY',
+    keyHints: {
+      zh: '在 console.anthropic.com → API keys 创建',
+      en: 'Create one at console.anthropic.com → API keys',
+    },
     docsUrl: 'https://docs.anthropic.com/en/docs/about-claude/models',
     models: [
       {
@@ -107,6 +119,10 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
     api: 'openai-completions',
     baseUrl: 'https://api.deepseek.com/v1',
     apiKeyEnvHint: 'DEEPSEEK_API_KEY',
+    keyHints: {
+      zh: '在 platform.deepseek.com → API keys 创建',
+      en: 'Create one at platform.deepseek.com → API keys',
+    },
     docsUrl: 'https://api-docs.deepseek.com/',
     models: [
       {
@@ -129,9 +145,14 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'qwen',
     label: '通义千问（百炼 DashScope）',
+    labels: { en: 'Qwen (DashScope)' },
     api: 'openai-completions',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     apiKeyEnvHint: 'DASHSCOPE_API_KEY',
+    keyHints: {
+      zh: '在百炼控制台 bailian.console.aliyun.com → API-KEY 创建',
+      en: 'Create one at the DashScope console (bailian.console.aliyun.com) → API-KEY',
+    },
     docsUrl: 'https://help.aliyun.com/zh/model-studio',
     models: [
       {
@@ -160,9 +181,14 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'kimi',
     label: 'Kimi（月之暗面）',
+    labels: { en: 'Kimi (Moonshot)' },
     api: 'openai-completions',
     baseUrl: 'https://api.moonshot.cn/v1',
     apiKeyEnvHint: 'MOONSHOT_API_KEY',
+    keyHints: {
+      zh: '在 platform.moonshot.cn → API Key 管理创建',
+      en: 'Create one at platform.moonshot.cn → API Key management',
+    },
     docsUrl: 'https://platform.moonshot.cn/docs',
     models: [
       {
@@ -178,9 +204,14 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'glm',
     label: '智谱 GLM',
+    labels: { en: 'Zhipu GLM' },
     api: 'openai-completions',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     apiKeyEnvHint: 'ZHIPU_API_KEY',
+    keyHints: {
+      zh: '在 open.bigmodel.cn → API Keys 创建',
+      en: 'Create one at open.bigmodel.cn → API Keys',
+    },
     docsUrl: 'https://open.bigmodel.cn/dev',
     models: [
       {
@@ -196,9 +227,14 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'gemini',
     label: 'Google Gemini（OpenAI 兼容端点）',
+    labels: { en: 'Google Gemini (OpenAI-compatible endpoint)' },
     api: 'openai-completions',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     apiKeyEnvHint: 'GEMINI_API_KEY',
+    keyHints: {
+      zh: '在 aistudio.google.com → API keys 创建',
+      en: 'Create one at aistudio.google.com → API keys',
+    },
     docsUrl: 'https://ai.google.dev/gemini-api/docs',
     models: [
       {
@@ -221,9 +257,14 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'ollama',
     label: 'Ollama（本地）',
+    labels: { en: 'Ollama (Local)' },
     api: 'openai-completions',
     baseUrl: 'http://localhost:11434/v1',
     apiKeyEnvHint: '',
+    keyHints: {
+      zh: '本地运行无需 key（ollama.com 下载安装 Ollama 后即可）',
+      en: 'No key needed for local use (install Ollama from ollama.com)',
+    },
     docsUrl: 'https://ollama.com/library',
     models: [
       { id: 'qwen3', name: 'Qwen3（本地）', input: ['text'], contextWindow: 32768, maxTokens: 8192 },
@@ -233,9 +274,14 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
   {
     id: 'custom',
     label: '自定义（OpenAI 兼容）',
+    labels: { en: 'Custom (OpenAI-compatible)' },
     api: 'openai-completions',
     baseUrl: '',
     apiKeyEnvHint: 'API_KEY',
+    keyHints: {
+      zh: '填写服务方给你的 key（若服务不要鉴权可留空）',
+      en: 'Use the key from your provider (leave empty if the service needs no auth)',
+    },
     models: [],
     custom: true,
   },

@@ -25,6 +25,12 @@ export interface CliArgs {
   agent?: string;
   /** chat：启动即续接的会话 id（含历史加载） */
   resume?: string;
+  /** init：向导形态（--web 请求 Web 向导 / --cli 强制命令行） */
+  web?: boolean;
+  cliMode?: boolean;
+  /** init --yes：provider / 模型预选（缺省 provider=ollama、模型=预设默认） */
+  provider?: string;
+  model?: string;
   /** llm-diff：wire dump 根目录 */
   dir?: string;
   /** llm-diff：展示的调用条数（0 = 全部） */
@@ -69,6 +75,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   let dir: string | undefined;
   let limit: number | undefined;
   let cacheDiscount: number | undefined;
+  let web = false;
+  let cliMode = false;
+  let provider: string | undefined;
+  let model: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -154,6 +164,18 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
         cacheDiscount = parsed;
         break;
       }
+      case '--web':
+        web = true;
+        break;
+      case '--cli':
+        cliMode = true;
+        break;
+      case '--provider':
+        provider = requireFlagValue(argv, ++i, '--provider');
+        break;
+      case '--model':
+        model = requireFlagValue(argv, ++i, '--model');
+        break;
       default:
         positional.push(argv[i]!);
         break;
@@ -181,5 +203,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     dir,
     limit,
     cacheDiscount,
+    web,
+    cliMode,
+    provider,
+    model,
   };
 }

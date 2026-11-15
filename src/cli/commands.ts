@@ -29,6 +29,7 @@ Commands:
   serve status      Show Gateway server status
   serve fg          Start the Gateway server in foreground (for debugging)
   chat  (or tui)        Interactive TUI chat with an agent
+  agent new           Create an agent wizard (pick type → name → attach knowledge → chat)
   health            Check the health of configured providers
   webui start       Start the Web UI server
   webui stop        Stop the Web UI server
@@ -58,13 +59,17 @@ Options:
   --fix                 doctor: apply safe migrations (backs up config)
   --dry-run             doctor: show what --fix would do
   --json                doctor: machine-readable report (secrets redacted)
-  --yes, -y             doctor: required for non-interactive --fix (apply all fixable groups)
+  --yes, -y             doctor: required for non-interactive --fix (apply all fixable groups);
+                        init: non-interactive onboarding (defaults + env/flags, provider=ollama)
   --only <list>         doctor: limit to domains/ids (config,layout,data,runtime)
   --restore [path]      doctor: restore octopi.json from latest (or given) backup
   --allow-delete-legacy-dirs
                         doctor: with --fix layout, rename obsolete memory/wisdom/extract dirs
   --session <id>        llm-diff: target session (default: most recently updated)
   --agent <id>          chat: agent to chat with (default: first agent in config)
+  --web | --cli         init: wizard form (web wizard ships in a later release)
+  --provider <id>       init --yes: provider preset id (default: ollama)
+  --model <id>          init --yes: model id (default: preset's first model)
   --resume <id>         chat: resume an existing session (loads recent history)
   --dir <path>          llm-diff: wire dump root (default: ~/.octopi/logs/llm-requests)
   --limit <n>           llm-diff: number of calls to show (0 = all, default 20)
@@ -90,7 +95,27 @@ Examples:
 export async function initCommand(args: CliArgs): Promise<void> {
   const homeDir = args.config ? resolve(args.config, '..') : undefined;
   const result = await initOctopi(homeDir);
-  console.log(formatInitReport(result));
+
+  // init = 首启体验器（product-onboarding.md §0）：脚手架后直接走向导。
+  // M6：.env/registry.db 恒落 OCTOPI_HOME（与 loadConfig/gateway 读取同源；-c 只挪配置文件）。
+  // n10：交互模式不打「Next steps: 手动编辑配置」报告（向导本身就是 next step）。
+  const { runOnboardingWizard } = await import('./wizard/onboarding.js');
+  const interactive = !args.yes;
+  if (!interactive) console.log(formatInitReport(result));
+  const onboarding = await runOnboardingWizard({
+    configPath: result.configPath,
+    octopiHome: getOctopiHome(),
+    yes: args.yes,
+    provider: args.provider,
+    model: args.model,
+    webEnabled: false, // Web 向导批 2 起打开
+    webRequested: args.web === true && args.cliMode !== true,
+    adminName: process.env.OCTOPI_ADMIN_NAME,
+  });
+  if (interactive) console.log(onboarding.completed ? `\n✅ 初始化完成：${result.configPath}` : '\n⚠️ 向导中止——配置未改，重跑 octopi init 继续。');
+  if (onboarding.launchChat) {
+    await chatCommand(args);
+  }
 }
 
 export async function ensureInitialized(args: CliArgs): Promise<string | undefined> {
@@ -112,19 +137,58 @@ export async function ensureInitialized(args: CliArgs): Promise<string | undefin
   return result.configPath;
 }
 
+/**
+ * 从 gateway registry 面解析 chat 目标（registry agent）——旅程 B「做完即用」。
+ *
+ * token 来源：env `OCTOPI_REGISTRY_TOKEN` 优先；personal 模式回落免密 login('default')。
+ * ②③模式需 export OCTOPI_REGISTRY_TOKEN（webui 登录后获取）——tui 登录面属后续。
+ * gateway 不可达 / 无匹配一律返回 null（调用方回落错误面，不吞不装）。
+ *
+ * @param gatewayUrl - gateway 基址
+ * @param requested - 目标 agent id 或名；缺省取 registry 第一个
+ * @returns 命中的 registry agent 摘要；无则 null
+ */
+async function resolveRegistryChatAgent(
+  gatewayUrl: string,
+  requested?: string,
+): Promise<{ id: string; name: string } | null> {
+  try {
+    let token = process.env.OCTOPI_REGISTRY_TOKEN ?? '';
+    if (!token) {
+      const login = await fetch(`${gatewayUrl}/api/v1/registry/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'default' }),
+        signal: AbortSignal.timeout(3000),
+      });
+      if (login.ok) {
+        const body = (await login.json()) as { data?: { token?: string } };
+        token = body.data?.token ?? '';
+      }
+    }
+    if (!token) return null;
+    const res = await fetch(`${gatewayUrl}/api/v1/registry/agents`, {
+      headers: { 'x-registry-token': token },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { data?: Array<{ agentId: string; name: string }> };
+    const agents = body.data ?? [];
+    const hit = requested
+      ? agents.find((a) => a.agentId === requested || a.name === requested)
+      : agents[0];
+    return hit ? { id: hit.agentId, name: hit.name } : null;
+  } catch {
+    return null; // gateway 不可达/登录失败：调用方错误面接管
+  }
+}
+
 export async function chatCommand(args: CliArgs): Promise<void> {
   const configPath = await ensureInitialized(args);
   const config = loadConfig(configPath);
-  const agent = selectChatAgent(config.agents, args.agent);
-  if (!agent) {
-    const available = config.agents.map((a) => a.id).join(', ') || '(none)';
-    console.error(
-      args.agent
-        ? `[Error] Agent "${args.agent}" not found in config; available: ${available}`
-        : '[Error] No agents defined in config',
-    );
-    process.exit(1);
-  }
+  // agent 解析顺序：config agents 优先，registry 面回落（旅程 B「做完即用」）——
+  // registry 回落要连 gateway，故推迟到 gateway 就绪后（见下方 resolveRegistryChatAgent）
+  let agent: { id: string } | null = selectChatAgent(config.agents, args.agent) ?? null;
 
   let pidFile = readPidFile();
   let gatewayRunning = pidFile && isProcessAlive(pidFile.pid);
@@ -182,6 +246,19 @@ export async function chatCommand(args: CliArgs): Promise<void> {
   }
 
   const gatewayUrl = resolveGatewayUrl(config as unknown as Record<string, unknown>);
+
+  if (!agent) {
+    agent = await resolveRegistryChatAgent(gatewayUrl, args.agent);
+  }
+  if (!agent) {
+    const available = config.agents.map((a) => a.id).join(', ') || '(none)';
+    console.error(
+      args.agent
+        ? `[Error] Agent "${args.agent}" not found in config or registry; available (config): ${available}`
+        : '[Error] No agents defined in config or registry',
+    );
+    process.exit(1);
+  }
 
   const { TuiApp } = await import('../integration/tui/app.js');
   const app = new TuiApp({

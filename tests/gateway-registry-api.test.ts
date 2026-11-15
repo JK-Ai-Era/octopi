@@ -84,7 +84,7 @@ describe('WebApiRouter /registry — 注册/登录（一用户一租户）', () 
     expect(dup.status).toBe(409);
   });
 
-  it('POST /registry/login 按名直登（演练级）→ token 可用；未知名 → 404', async () => {
+  it('POST /registry/login 名登录（loopback）→ token 可用；未知/远程 → 401 防枚举', async () => {
     await call(router, { method: 'POST', url: '/api/v1/registry/register', body: { name: 'alice' } });
     const login = await call(router, { method: 'POST', url: '/api/v1/registry/login', body: { name: 'alice' } });
     expect(login.status).toBe(200);
@@ -92,7 +92,30 @@ describe('WebApiRouter /registry — 注册/登录（一用户一租户）', () 
     const me = await call(router, { method: 'GET', url: '/api/v1/registry/me', token });
     expect(me.status).toBe(200);
     const missing = await call(router, { method: 'POST', url: '/api/v1/registry/login', body: { name: 'nobody' } });
-    expect(missing.status).toBe(404);
+    expect(missing.status).toBe(401); // 防枚举：不暴露「用户不存在」
+  });
+
+  it('登录矩阵（M4/M12）：设密用户免密 401；错密/未知同形 401；(tenant,name) 二元组生效', async () => {
+    const reg = await call(router, { method: 'POST', url: '/api/v1/registry/register', body: { name: 'bob' } });
+    const { user } = reg.body?.data as { user: { userId: string } };
+    await registry.setUserPassword(user.userId as never, 'pw-123'); // UserId 品牌类型（body 解出为 string）
+    // 设密后免密名登录即失效（loopback 也一样）
+    expect((await call(router, { method: 'POST', url: '/api/v1/registry/login', body: { name: 'bob' } })).status).toBe(401);
+    // 错密码与未知用户同形（防枚举）
+    expect((await call(router, { method: 'POST', url: '/api/v1/registry/login', body: { name: 'bob', password: 'wrong' } })).status).toBe(401);
+    expect((await call(router, { method: 'POST', url: '/api/v1/registry/login', body: { name: 'ghost', password: 'wrong' } })).status).toBe(401);
+    // 正确密码 → token 可用
+    const ok = await call(router, { method: 'POST', url: '/api/v1/registry/login', body: { name: 'bob', password: 'pw-123' } });
+    expect(ok.status).toBe(200);
+    const { token } = ok.body?.data as { token: string };
+    expect((await call(router, { method: 'GET', url: '/api/v1/registry/me', token })).status).toBe(200);
+    // (tenant, name) 二元组：正确租户过、错误租户 401
+    expect(
+      (await call(router, { method: 'POST', url: '/api/v1/registry/login', body: { tenant: 'bob', name: 'bob', password: 'pw-123' } })).status,
+    ).toBe(200);
+    expect(
+      (await call(router, { method: 'POST', url: '/api/v1/registry/login', body: { tenant: 'other', name: 'bob', password: 'pw-123' } })).status,
+    ).toBe(401);
   });
 
   it('缺/错 token → 401；logout 后失效', async () => {

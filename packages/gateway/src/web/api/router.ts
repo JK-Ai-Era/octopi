@@ -2000,9 +2000,35 @@ export class WebApiRouter {
       if (typeof body?.name !== 'string') {
         return this.json(res, 400, { ok: false, error: 'name is a required string' });
       }
-      const user = registry.getUserByName(body.name);
-      if (!user) return this.json(res, 404, { ok: false, error: `registry_user_not_found: ${body.name}` });
-      return this.json(res, 200, { ok: true, data: { user, token: registry.issueToken(user.userId) } });
+      // 密码登录（product-onboarding.md §6）：(tenant, name) + password；失败一律 401
+      // invalid_credentials 不区分原因（防枚举，评审 M4）+ 失败退避（M5 最小限流）
+      if (typeof body?.password === 'string' && body.password) {
+        const authed = await registry.authenticate({
+          ...(typeof body?.tenant === 'string' && body.tenant ? { tenant: body.tenant } : {}),
+          name: body.name,
+          password: body.password,
+        });
+        if (!authed) {
+          await new Promise((r) => setTimeout(r, 500)); // 简单退避；完整限流随安全面
+          return this.json(res, 401, { ok: false, error: 'invalid_credentials' });
+        }
+        return this.json(res, 200, {
+          ok: true,
+          data: { user: authed, token: registry.issueToken(authed.userId, 30 * 24 * 3600 * 1000) },
+        });
+      }
+      // 免密名登录：仅 loopback + 未设密码用户（M12：远程一律 401，不发「用户名存在」信号）
+      const remote = req.socket?.remoteAddress ?? '';
+      const isLoopback = remote === '' || remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+      const user = isLoopback ? registry.getUserByName(body.name) : undefined;
+      if (!user || registry.hasPassword(user.userId)) {
+        await new Promise((r) => setTimeout(r, 500));
+        return this.json(res, 401, { ok: false, error: 'invalid_credentials' });
+      }
+      return this.json(res, 200, {
+        ok: true,
+        data: { user, token: registry.issueToken(user.userId, 30 * 24 * 3600 * 1000) },
+      });
     }
 
     // ── 租户身份层：以下端点要求 X-Registry-Token ──
