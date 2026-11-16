@@ -227,6 +227,9 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       // 置顶是用户数据：权威在 metadata.pinnedAt（受 save 浅合并保护，
       // 长驻 run 对象的整包 save 抹不掉）；meta.pinnedAt 仅作旧数据回退
       pinnedAt: readPinnedAt(data.metadata?.pinnedAt) ?? readPinnedAt(data.meta.pinnedAt),
+      // 委派来源投影（D7）：历史隐藏子会话 / 父子归组（右栏"子会话"）依赖本字段；
+      // 权威在 state.json 的 spawnBy（存量条目由 ensureSpawnLinkBackfill 补投影）
+      spawnBy: data.spawnBy,
       // 标题是用户数据：权威在 metadata 三键（同 pinnedAt 通道，save 按 titleUpdatedAt 仲裁）；
       // 投影必须覆盖 ...data.meta 展开带出的陈旧 meta.title，不做旧数据回退
       ...readTitleState(data.metadata),
@@ -400,7 +403,9 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         primaryAgentId: data.primaryAgentId ?? data.agentId,
         preferredAgentId: data.preferredAgentId,
         switchAudit: data.switchAudit ?? [],
-        spawnBy: data.spawnBy,
+        // spawnBy 只增不清：陈旧整包 save（从零构造 SessionData）不得抹掉委派关联（D7），
+        // 与 metadata 浅合并 / 标题仲裁同哲学；删关联不做（子会话归属是审计链）
+        spawnBy: data.spawnBy ?? prevState?.spawnBy,
         participants: data.participants ?? [],
         contextDetachIndex: data.contextDetachIndex,
         contextCompact: data.contextCompact,
@@ -416,7 +421,13 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
       // 索引最后更新：数据就绪才写入（meta RMW 进程内串行，见模块级 withMetaLock）
       await withMetaLock(this.metaFile(), async () => {
         const index = await this.readMetaIndex();
-        index[sessionId] = this.buildIndexEntry({ ...data, id: sessionId, metadata });
+        index[sessionId] = this.buildIndexEntry({
+          ...data,
+          id: sessionId,
+          metadata,
+          // 与 state 写同口径：陈旧整包 save 不得抹掉委派关联投影
+          spawnBy: data.spawnBy ?? prevState?.spawnBy,
+        });
         await this.writeMetaIndex(index);
       });
 
@@ -483,6 +494,8 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
               ...entry,
               // pinnedAt 投影与 buildIndexEntry 同规则（置顶/取消即时可见于 list）
               pinnedAt: readPinnedAt(metadata.pinnedAt),
+              // 委派关联投影同规则（MIN-5：只经历 updateMetadata 的会话也补投影）
+              spawnBy: entry.spawnBy ?? prev?.spawnBy,
               // 标题投影同规则（rename / 自动标题即时可见于 list）
               ...readTitleState(metadata),
               updatedAt: Date.now(),
@@ -534,7 +547,54 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     });
   }
 
+  /**
+   * spawnBy 投影 backfill（每实例一次）：升级前落盘的会话其索引条目缺 `spawnBy`
+   * （权威值在 state.json），历史隐藏子会话 / 父子归组依赖该投影。
+   * 只补缺失条目，幂等；失败不阻断 list（显式降级 = 子会话暂在历史露出），
+   * warn 后清缓存待下次 list 重试，不静默吞。
+   */
+  private spawnLinkBackfill?: Promise<void>;
+
+  private ensureSpawnLinkBackfill(): Promise<void> {
+    this.spawnLinkBackfill ??= this.backfillSpawnLinks().then(
+      () => undefined,
+      (err) => {
+        this.spawnLinkBackfill = undefined;
+        console.warn(
+          `[JsonlSessionStore] spawnBy backfill failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      },
+    );
+    return this.spawnLinkBackfill;
+  }
+
+  private async backfillSpawnLinks(): Promise<void> {
+    const snapshot = await this.readMetaIndex();
+    const missing = Object.values(snapshot).filter((e) => !e.spawnBy);
+    if (missing.length === 0) return;
+    // state 读取放锁外（只读；state 原子写保证不读到半截）；meta 锁内只做短 RMW 补写
+    const patches = new Map<string, NonNullable<SessionData['spawnBy']>>();
+    for (const entry of missing) {
+      const spawnBy = (await this.readStateData(entry.id))?.spawnBy;
+      if (spawnBy) patches.set(entry.id, spawnBy);
+    }
+    if (patches.size === 0) return;
+    await withMetaLock(this.metaFile(), async () => {
+      const index = await this.readMetaIndex();
+      let changed = false;
+      for (const [id, spawnBy] of patches) {
+        const entry = index[id];
+        if (entry && !entry.spawnBy) {
+          entry.spawnBy = spawnBy;
+          changed = true;
+        }
+      }
+      if (changed) await this.writeMetaIndex(index);
+    });
+  }
+
   async list(filter?: SessionListFilter): Promise<SessionMeta[]> {
+    await this.ensureSpawnLinkBackfill();
     let entries = Object.values(await this.readMetaIndex());
     if (filter?.tenantId) {
       const tenantId = filter.tenantId;

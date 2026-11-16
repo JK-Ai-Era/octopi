@@ -17,6 +17,27 @@ export const DEFAULT_TENANT_ID = 'default' as TenantId;
 /** 平台公共域哨兵：platform 公共资产（§6 跨租户共享唯一合法形态）——对所有租户可见 */
 export const PLATFORM_TENANT_ID = 'platform' as TenantId;
 
+/**
+ * 委派产生的 Session 父子关联（I2 投影可重建）
+ *
+ * 子 agent 经委派（`arch/delegation.md`）起 Run 时落**独立 Session**，
+ * 并在此记录来源，使审计链不断（D7）。父 Run 结束后子 Session 继续存在（C1），
+ * 故关联必须持久化。权威数据在 `SessionData.spawnBy`（<sid>.state.json）；
+ * 本形状放在 core 供 {@link SessionMeta} 投影复用（单一来源，勿另行复制）。
+ */
+export interface SessionSpawnLink {
+  /** 委派单 ID（`harness/collaboration/delegation`） */
+  delegationId: string;
+  /** 发起委派的 agentId */
+  parentAgentId: string;
+  /** 父 session ID */
+  parentSessionId: string;
+  /** 父 run ID */
+  parentRunId: string;
+  /** 委派链深度（根委派 = 1） */
+  depth?: number;
+}
+
 /** Session 元数据 */
 export interface SessionMeta {
   id: string;
@@ -73,6 +94,12 @@ export interface SessionMeta {
    * 由 SessionStore 写入并投影到索引；不要直接改写本字段。
    */
   pinnedAt?: number;
+  /**
+   * 委派来源投影（只读）：本 Session 由父 agent 委派产生时存在；用户直接创建的会话无此字段。
+   * 权威数据在 `SessionData.spawnBy`（`<sid>.state.json`，arch/delegation.md D7），
+   * 由 SessionStore 写入索引时投影；供列表侧父子归组（右栏"子会话"）与历史隐藏子会话。
+   */
+  spawnBy?: SessionSpawnLink;
 }
 
 /** 标题投影三键（权威在 `session.metadata`；见 {@link SessionMeta.title}） */

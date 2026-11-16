@@ -55,7 +55,13 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
       metadata.titleSource = freshTitle.titleSource;
       metadata.titleUpdatedAt = freshTitle.titleUpdatedAt;
     }
-    this.sessions.set(sessionId, { ...data, id: sessionId, metadata });
+    // spawnBy 只增不清（与 JsonlSessionStore.save 同口径）：陈旧整包 save 不得抹掉委派关联（D7）
+    this.sessions.set(sessionId, {
+      ...data,
+      id: sessionId,
+      metadata,
+      spawnBy: data.spawnBy ?? prev?.spawnBy,
+    });
   }
 
   async updateMetadata(
@@ -102,6 +108,8 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
           typeof s.metadata?.pinnedAt === 'number' && Number.isFinite(s.metadata.pinnedAt)
             ? s.metadata.pinnedAt
             : s.meta.pinnedAt,
+        // 与 JsonlSessionStore.buildIndexEntry 同规则：委派来源投影（D7）
+        spawnBy: s.spawnBy,
         // 与 JsonlSessionStore.buildIndexEntry 同规则：标题权威在 metadata 三键（无旧数据回退）
         ...readTitleState(s.metadata),
       }));

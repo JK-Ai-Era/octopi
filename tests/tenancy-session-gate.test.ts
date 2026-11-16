@@ -15,7 +15,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { WebApiRouter } from '@octopi-agent/gateway/web/api/router.js';
 import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
-import type { SessionMeta } from '@octopi-agent/core/types.js';
+import type { SessionMeta, TenantId } from '@octopi-agent/core/types.js';
+import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import { createRegistryAgentBridge } from '../src/registry-bridge.js';
 
 interface CallResult {
@@ -201,6 +202,54 @@ describe('T4b 单会话端点租户闸（真实 Gateway 链路）', () => {
     const own = await call(router, { method: 'GET', url: '/api/v1/sessions/sess-a/events', token: aliceToken });
     expect(own.status).toBe(200);
     expect(Array.isArray(own.body?.data)).toBe(true);
+  });
+
+  it('/sessions/:id/children 在闸内（子会话面板锚）：越域 404、同域 200 回子会话、缺失 404', async () => {
+    await makeSession('parent-a', tenantA);
+    await makeSession('parent-b', tenantB);
+    // 委派子会话（spawnBy 归属，D7）：租户随父继承，可见性以父会话闸为准
+    const now = Date.now();
+    const child: SessionData = {
+      id: 'child-a',
+      agentId: 'host-agent',
+      tenantId: tenantA as TenantId,
+      meta: {
+        id: 'child-a',
+        agentId: 'host-agent',
+        tenantId: tenantA as TenantId,
+        channelId: 'web',
+        peerId: 'ui',
+        status: 'idle',
+        createdAt: now,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+        updatedAt: now,
+      },
+      messages: [],
+      steps: [],
+      metadata: {},
+      spawnBy: {
+        delegationId: 'del-1',
+        parentAgentId: 'host-agent',
+        parentSessionId: 'parent-a',
+        parentRunId: 'run-1',
+        depth: 1,
+      },
+    };
+    await gateway['store'].save('child-a', child);
+
+    const cross = await call(router, { method: 'GET', url: '/api/v1/sessions/parent-b/children', token: aliceToken });
+    expect(cross.status).toBe(404);
+
+    const own = await call(router, { method: 'GET', url: '/api/v1/sessions/parent-a/children', token: aliceToken });
+    expect(own.status).toBe(200);
+    const rows = (own.body?.data ?? []) as Array<{ id: string; spawnBy?: { parentSessionId: string } }>;
+    expect(rows.map((c) => c.id)).toEqual(['child-a']);
+    expect(rows[0].spawnBy?.parentSessionId).toBe('parent-a');
+
+    // 缺失会话走端点自身 404 映射（host 面不经租户闸预检）
+    const missing = await call(router, { method: 'GET', url: '/api/v1/sessions/nope/children' });
+    expect(missing.status).toBe(404);
   });
 
   it('/debug/run/:id/* 同闸（MAJ-5 锚）：越域 404、同域 200', async () => {

@@ -19,7 +19,7 @@ import type {
   ViewMode,
 } from '@octopi-agent/gateway/web/conversation/types';
 import type { RunStatus, InspectorState, ModelRetryInfo } from '@octopi-agent/gateway/web/runtime/store';
-import type { SessionTaskView, SessionScheduleView, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, PendingApproval, ApprovalScope, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
+import type { SessionTaskView, SessionScheduleView, SessionSummary, ModelCatalog, SessionModelView, CommandCatalogItemDto, PendingQuestion, PendingApproval, ApprovalScope, ClientToolCallDto, ClientToolDescriptorDto } from '@octopi-agent/gateway/web/sdk/client';
 import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './ClientToolCallCard';
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
 import { looksLikeCodeOrMarkup } from '@octopi-agent/engine/harness/session/title';
@@ -842,6 +842,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     pinnedAt?: number;
     /** 实时运行态（服务端标注 + WS state 事件更新） */
     running?: boolean;
+    /** 委派来源投影（D7）：子会话在历史中彻底隐藏，收进右栏"子会话" */
+    spawnBy?: { parentSessionId: string };
   }>>([]);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -883,7 +885,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
   // §5b：null = 概览（默认）；点 section 行进详情
-  const [rightTab, setRightTab] = useState<'context' | 'run' | 'services' | 'tasks' | 'schedules' | 'attachments' | 'roots' | 'git' | 'file' | 'tools' | null>(null);
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'services' | 'tasks' | 'schedules' | 'subsessions' | 'attachments' | 'roots' | 'git' | 'file' | 'tools' | null>(null);
   // 专家模式：显示「运行时透明」组（上下文/Run/服务）——普通用户不需要关注这 3 个
   const [expertMode, setExpertMode] = useState(() => {
     try {
@@ -899,6 +901,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const [switchingAgent, setSwitchingAgent] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'left' | 'right'>('chat');
   const [showAllSessions, setShowAllSessions] = useState(false);
+  /** 左栏历史高亮会话（与查看态解耦：点子会话只切中/右栏，左栏保持主会话选中） */
+  const [sidebarSessionId, setSidebarSessionId] = useState<string | null>(null);
+  /** 当前查看会话的直接子会话（右栏"子会话"数据源；委派 spawnBy 归属） */
+  const [childSessions, setChildSessions] = useState<SessionSummary[]>([]);
 
   const clientRef = useRef<OctopiClient | null>(null);
   const storeRef = useRef<OctopiRuntimeStore | null>(null);
@@ -927,19 +933,22 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       }
     }) as EventListener);
     store.addEventListener('sessions', ((e: CustomEvent) => {
-      const list = (e.detail.sessions ?? []) as Array<{ id: string; lastInteractionAt?: number }>;
+      const list = (e.detail.sessions ?? []) as Array<{ id: string; lastInteractionAt?: number; spawnBy?: unknown }>;
       setSessions(e.detail.sessions);
       // 刷新后自动打开最近会话，否则回放文件卡片无从恢复。
       // 若 store 已有活动会话（createSession 刚建完）或本组件已选中，禁止抢开旧会话。
+      // 子会话（spawnBy）不参与自动打开：历史对用户隐藏，收进右栏"子会话"
       const storeChatId = storeRef.current?.getState().chat.sessionId;
       if (
         !activeSessionIdRef.current &&
         !storeChatId &&
         list.length > 0
       ) {
-        const latest = [...list].sort(
-          (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
-        )[0];
+        const latest = [...list]
+          .filter((s) => !s.spawnBy)
+          .sort(
+            (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
+          )[0];
         if (latest) void openSession(latest.id);
       }
     }) as EventListener);
@@ -1236,7 +1245,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     await refresh();
   };
 
-  const openSession = async (sessionId: string) => {
+  const openSession = async (sessionId: string, opts?: { keepSidebarSelection?: boolean }) => {
     const store = storeRef.current;
     if (!store) return;
     await store.openSession(sessionId);
@@ -1245,6 +1254,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     stickToBottomRef.current = true;
     setActiveSessionId(sessionId);
     activeSessionIdRef.current = sessionId;
+    // 点子会话下钻时左栏保持主会话选中（其余入口：高亮跟随打开的会话）
+    if (!opts?.keepSidebarSelection) setSidebarSessionId(sessionId);
     // 从 store 恢复，不硬编码 idle —— 切回时可能仍有 running 工具或流式内容
     setRunStatus(state.chat.runStatus);
     setStream(state.chat.streamingContent ?? '');
@@ -1317,6 +1328,42 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       // Gateway 未升级/路由不可用时不阻塞会话
     }
   };
+
+  /**
+   * 点子会话行：中栏对话与右栏信息切换为子会话，左栏历史保持主会话选中
+   * （产品定稿 2026-11-17：行为同点历史会话，仅左栏高亮不解耦）。
+   */
+  const openChildSession = (childId: string) => {
+    setRightTab(null);
+    void openSession(childId, { keepSidebarSelection: true });
+  };
+
+  /** 切换查看会话先清空子会话列表：防上一个会话的列表在拉取间隙闪现（NIT-2） */
+  useEffect(() => {
+    setChildSessions([]);
+  }, [activeSessionId]);
+
+  /** 当前查看会话的直接子会话（右栏"子会话"徽标与列表）：开面板/运行态/会话增删时刷新 */
+  useEffect(() => {
+    const client = clientRef.current;
+    if (!client || !activeSessionId || connection !== 'connected') {
+      setChildSessions([]);
+      return;
+    }
+    let cancelled = false;
+    void client
+      .listChildSessions(activeSessionId)
+      .then((list) => {
+        if (!cancelled) setChildSessions(list);
+      })
+      .catch(() => {
+        // 查询失败显式清空：不拿陈旧列表冒充当前会话的子会话
+        if (!cancelled) setChildSessions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, connection, runStatus, rightTab, sessions.length]);
 
   // 在线性心跳：30s 续期（服务端 90s TTL）
   useEffect(() => {
@@ -1429,8 +1476,12 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
 
   /** 清空活动会话的 UI 态（删除会话后 / 远端删除广播）。useCallback：挂载期监听器长期持有，只碰稳定 setter/ref */
   const clearActiveSessionUi = useCallback(() => {
+    const clearedId = activeSessionIdRef.current;
     setActiveSessionId(null);
     activeSessionIdRef.current = null;
+    // 左栏高亮仅在正指向被清会话时清除：查看子会话时它被删，主会话高亮保留
+    setSidebarSessionId((prev) => (prev === clearedId ? null : prev));
+    setChildSessions([]);
     setRunStatus('idle');
     setStream('');
     setConversationItems([]);
@@ -1467,6 +1518,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       if (activeSessionIdRef.current === sessionId) {
         clearActiveSessionUi();
       }
+      if (sidebarSessionId === sessionId) setSidebarSessionId(null);
       setToast('会话已删除');
     } catch (e) {
       pushFlowError(classifyProviderError(e instanceof Error ? e.message : String(e)));
@@ -1482,6 +1534,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     stickToBottomRef.current = true;
     setActiveSessionId(created.id);
     activeSessionIdRef.current = created.id;
+    setSidebarSessionId(created.id);
     setRunStatus('idle');
     setStream('');
     setConversationItems(storeRef.current!.getState().chat.conversation ?? []);
@@ -1608,9 +1661,12 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const prevAgentId = agentId;
     try {
       const list = await store.refreshSessions(id);
-      const latest = [...list].sort(
-        (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
-      )[0];
+      // 与 sessions 事件自动打开同口径：子会话（spawnBy）历史中彻底隐藏，不作打开候选
+      const latest = [...list]
+        .filter((s) => !s.spawnBy)
+        .sort(
+          (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
+        )[0];
       // 成功拉到该 agent 的会话列表后才切换 UI agentId
       setAgentId(id);
       if (latest) {
@@ -1651,6 +1707,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       stickToBottomRef.current = true;
       setActiveSessionId(created.id);
       activeSessionIdRef.current = created.id;
+      // 分支是用户选择的新会话：左栏高亮跟随（否则高亮停在旧会话上）
+      setSidebarSessionId(created.id);
       setRunStatus('idle');
       setStream('');
       setTasks(store.getTasks());
@@ -1904,7 +1962,9 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   // Derive lists from conversation items
   const toolItems = conversationItems.filter((i): i is ToolConversationItem => i.role === 'tool');
 
-  const agentSessions = sessions.filter(s => agentId ? s.agentId === agentId : true)
+  // 子会话（spawnBy）在历史中彻底隐藏（产品定稿 2026-11-17）：收进右栏"子会话"
+  const agentSessions = sessions.filter(s => !s.spawnBy)
+    .filter(s => agentId ? s.agentId === agentId : true)
     .sort((a, b) => {
       // 置顶优先，组内按最近交互倒序
       const pinDelta = (b.pinnedAt ? 1 : 0) - (a.pinnedAt ? 1 : 0);
@@ -2071,7 +2131,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 ) : (
                   <div key={s.id} className="session-card">
                     <button
-                      className={`btn-secondary session-btn ${activeSessionId === s.id ? 'session-btn-active' : ''}`}
+                      className={`btn-secondary session-btn ${(sidebarSessionId ?? activeSessionId) === s.id ? 'session-btn-active' : ''}`}
                       onClick={() => openSession(s.id)}
                       onDoubleClick={() => startRenameSession(s.id, s.title ?? sessionDisplayTitle(s))}
                       title="单击打开 · 双击重命名"
@@ -2636,6 +2696,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   rows: [
                     { id: 'tasks', icon: '☑', label: '任务', badge: tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length },
                     { id: 'schedules', icon: '◷', label: '日程', badge: schedules.filter((sc) => sc.status === 'active' || sc.status === 'paused').length },
+                    { id: 'subsessions', icon: '🖇', label: '子会话', badge: childSessions.length },
                   ],
                 },
                 {
@@ -2719,7 +2780,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                     ← 概览
                   </button>
                   <span className="rail-detail-title">
-                    {{ context: '上下文', run: 'Run', services: '服务', tasks: '任务', schedules: '日程', attachments: '附件', roots: '目录', git: 'Git', file: '文件', tools: '工具' }[rightTab]}
+                    {{ context: '上下文', run: 'Run', services: '服务', tasks: '任务', schedules: '日程', subsessions: '子会话', attachments: '附件', roots: '目录', git: 'Git', file: '文件', tools: '工具' }[rightTab]}
                   </span>
                 </div>
 
@@ -2803,6 +2864,45 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   void store.controlSchedule(id, action).catch(() => undefined);
                 }}
               />
+            </div>
+          )}
+
+          {rightTab === 'subsessions' && (
+            <div>
+              <div className="tasks-panel-header">
+                <div className="sidebar-title" style={{ marginBottom: 0 }}>子会话</div>
+                <span className="small muted">{childSessions.length} 个</span>
+              </div>
+              <div className="tasks-panel-hint">
+                本会话委派产生的直接子会话（按时间倒序）。点开后回概览，中栏对话与右栏信息切换为
+                该子会话（左栏保持主会话选中）；嵌套委派点进子会话后再看它的「子会话」。
+              </div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {childSessions.map((s) => (
+                  <button
+                    key={s.id}
+                    className="btn-secondary session-btn"
+                    style={{ textAlign: 'left' }}
+                    onClick={() => openChildSession(s.id)}
+                    title="打开子会话（中栏对话与右栏信息切换；左栏保持主会话选中）"
+                  >
+                    <div className="session-card-title-row">
+                      <span className="session-card-title">{sessionDisplayTitle(s)}</span>
+                      {s.running && (
+                        <span className="session-running-badge" title="子会话正在运行中">
+                          <span className="session-running-dot" />
+                          运行中
+                        </span>
+                      )}
+                    </div>
+                    <div className="small muted session-card-meta">
+                      {s.agentId} · {formatTimestamp(s.createdAt ?? s.lastInteractionAt)}
+                      {s.spawnBy?.depth ? ` · 深度 ${s.spawnBy.depth}` : ''}
+                    </div>
+                  </button>
+                ))}
+                {!childSessions.length && <div className="small muted">暂无子会话</div>}
+              </div>
             </div>
           )}
 

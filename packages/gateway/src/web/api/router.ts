@@ -294,6 +294,21 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: events });
       }
 
+      const childSessionsMatch = /^\/sessions\/([^/]+)\/children$/.exec(relativePath);
+      if (childSessionsMatch && method === 'GET') {
+        // 直接子会话（委派 spawnBy 归属，D7）：右栏"子会话"数据源；租户闸已由单会话闸覆盖
+        try {
+          const children = await this.gateway.listChildSessions(childSessionsMatch[1]);
+          return this.json(res, 200, { ok: true, data: children });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (/not found/i.test(message)) {
+            return this.json(res, 404, { ok: false, error: message });
+          }
+          throw err;
+        }
+      }
+
       if (relativePath === '/sessions' && method === 'POST') {
         const body = await this.readBody(req);
         if (!body?.agentId) {

@@ -160,6 +160,16 @@ export interface SessionSummary {
   pinnedAt?: number;
   /** 实时运行态投影（服务端按活跃 Run 标注；不落盘） */
   running?: boolean;
+  /** 委派来源投影（D7）：本会话由父会话委派产生时存在；用户直接创建的会话无此字段。
+   *  镜像 core `SessionSpawnLink`（本 SDK 零依赖自包含，属既有 SessionSummary 镜像模式；
+   *  形状变更须与 core 同步，勿静默漂移） */
+  spawnBy?: {
+    delegationId: string;
+    parentAgentId: string;
+    parentSessionId: string;
+    parentRunId: string;
+    depth?: number;
+  };
 }
 
 export interface SessionView {
@@ -1014,6 +1024,12 @@ export class OctopiClient {
       ...s,
       lastInteractionAt: s.lastInteractionAt ?? s.updatedAt ?? s.createdAt ?? Date.now(),
     }));
+  }
+
+  /** 直接子会话列表（委派 spawnBy 归属，D7；时间倒序，含 running 投影） */
+  async listChildSessions(parentSessionId: string): Promise<SessionSummary[]> {
+    const data = await this.getJson(`/sessions/${encodeURIComponent(parentSessionId)}/children`);
+    return (data?.data as SessionSummary[]) ?? [];
   }
 
   async createSession(options: {

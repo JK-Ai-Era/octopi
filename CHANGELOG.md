@@ -126,6 +126,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.116.5 (2026-11-17)
+
+### feat(session): 委派子会话面板——右栏"子会话"归拢、历史隐藏、spawnBy 投影链路
+
+**产品定稿（大哥 2026-11-17）**：委派子会话在左栏历史**彻底隐藏**；右栏"工作进度"组新增"子会话"弹层，列当前查看会话的**直接**子会话（全部历史，时间倒序）；点开后中栏对话与右栏信息切换为该子会话、**左栏保持主会话选中**；嵌套委派在子会话的"子会话"里逐层下钻，面板不递归成树。
+
+**数据链路（单一来源 `SessionData.spawnBy`，delegation D7）**：`SessionSpawnLink` 形状收进 core（engine re-export；SDK 零依赖镜像并标注同步义务）；spawnBy 投影进 `SessionMeta` 与 sessions.json 索引，存量条目由首次 `list()` 的 backfill 从 state.json 补投影（幂等、失败 warn 显式降级）。`save`/`updateMetadata`/backfill 三条写路径同口径"只增不清"——陈旧整包 save 不得抹掉委派关联（与 metadata 浅合并/标题仲裁同哲学）。新端点 `GET /sessions/:id/children`：仅直接子会话、createdAt 倒序（id tie-breaker）、带 running 投影、父缺失 404、tenantId 纵深过滤；租户闸由 `/sessions/:id*` 前缀闸覆盖并补真实链路测试锚。
+
+**webui**：查看态与左栏高亮解耦（`sidebarSessionId`）；切换 agent/自动打开均不把子会话当打开候选；删除/新建/分叉全路径高亮同步；子会话列表随会话切换即清、随运行态与会话增删刷新。
+
+**验证**：五包 build ✓ / 全量 **5144 绿**（新增 9 用例：投影直接读盘、updateMetadata 补投影、backfill 幂等/不覆盖、children 行为/running 真路径/路由映射/租户闸）/ lint 0。独立评审（del-c3f1c600）：2 MAJ 已修；backfill 拓扑三项裁决为注记债务，TUI 端历史可见性待议——见 `arch/subsession-panel.md` §5。
+
 ## v0.116.4 (2026-11-17)
 
 ### fix(webui): 专家模式开关改 Switch——修布局挤压 + 模式切换语义

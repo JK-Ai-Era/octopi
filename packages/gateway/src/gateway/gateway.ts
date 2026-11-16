@@ -3270,6 +3270,39 @@ export class Gateway {
   }
 
   /**
+   * 直接子会话列表（委派 `spawnBy` 归属投影，arch/delegation.md D7；右栏"子会话"数据源）。
+   *
+   * 按 createdAt 倒序（id 次级键防同毫秒抖动）；含实时 running 投影（注：与 listSessions
+   * 同源，读 gateway 进程内 activeRuns；run 拆到独立进程的拓扑下可能恒 false——继承限制）。
+   * **不按 agentId 收口**：子会话归属子 agent，父子归组以 `spawnBy.parentSessionId` 为准；
+   * tenantId 做纵深防御（子会话随父继承租户，正常恒命中）。仅直接子会话；
+   * 嵌套委派沿 `spawnBy` 链逐层下钻（UI 语义，不在本查询递归）。
+   *
+   * @param parentSessionId - 父会话 id
+   * @returns 直接子会话（meta + running）
+   */
+  async listChildSessions(parentSessionId: string): Promise<Array<SessionMeta & { running: boolean }>> {
+    const sessions = await this.store.list();
+    // 父存在性用索引判（store.load 会全量解析消息转录，对查询端点太重）
+    const parent = sessions.find((meta) => meta.id === parentSessionId);
+    if (!parent) {
+      throw new Error(`Session "${parentSessionId}" not found`);
+    }
+    const parentTenant = parent.tenantId ?? DEFAULT_TENANT_ID;
+    return sessions
+      .filter(
+        (meta) =>
+          meta.spawnBy?.parentSessionId === parentSessionId &&
+          (meta.tenantId ?? DEFAULT_TENANT_ID) === parentTenant,
+      )
+      .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1))
+      .map((meta) => ({
+        ...meta,
+        running: this.runtime.hasActiveRunForSession(meta.id),
+      }));
+  }
+
+  /**
    * 手动重命名会话标题（titleSource=user，永不被自动摘要覆盖）。
    *
    * 标题是用户数据：写 `session.metadata` 三键（updateMetadata 通道，与 pinnedAt 同款），
