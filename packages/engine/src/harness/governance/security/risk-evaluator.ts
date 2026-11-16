@@ -870,32 +870,318 @@ const INTERPRETER_BASES = new Set([
 const DOWNLOAD_BASES = new Set(['curl', 'wget', 'http', 'https']);
 
 /** 解释器前的合法 wrapper（不改变 RCE 语义） */
-const EXEC_WRAPPER_BASES = new Set(['sudo', 'env', 'nice', 'nohup', 'exec', 'xargs', 'time']);
+const EXEC_WRAPPER_BASES = new Set(['sudo', 'env', 'nice', 'nohup', 'exec', 'xargs', 'time', 'timeout']);
 
 /**
- * 硬边界：下载并执行（管道链上同时出现下载源与解释器）
+ * 硬边界：下载并执行（下载内容真实流入解释器）
  *
- * 覆盖 `curl|bash`、`curl|/bin/bash`、`curl|env bash`、`curl|tee x|bash`。
- * 仅下载（`curl -o file`）或普通管道（`cat|grep`）不命中。
+ * 数据流判定（非共存判定），三条规则：
+ * 1. **管道链**：同一条 `|` 链上下载源在解释器上游 → 拦
+ *    （`curl | sh`、`curl | /bin/bash`、`curl | env bash`、`curl | tee x | bash`）
+ * 2. **文件交接**：下载落盘（`curl -o f` / `curl -O` / `wget` 默认落盘 / `wget -O f` /
+ *    `> f` 重定向 / 链下游 `tee f`）且同一命令串在下载之后执行同一文件（`bash f` /
+ *    `python f` / `./f` / `source f` / `sh -c "./f"`）→ 拦（`curl -o s.sh … && bash s.sh`）
+ * 3. **嵌入注入**：下载源出现在解释器的内联载荷（`sh -c "$(curl …)"`）或进程替换
+ *    （`bash <(curl …)`）里——下载文本直接进入解释器代码位 → 拦
+ *
+ * 仅共存不算数据流：`curl -o data.csv … && python analyze.py`、
+ * `bash build.sh && curl …`（解释器与下载无交接或顺序相反）不命中。
+ * 仅下载（`curl -o file` 无执行）或普通管道（`cat | grep`）不命中。
  */
 export function detectDownloadToInterpreter(command: string): string | null {
   const parsed = parseShellCommand(command);
-  if (!parsed.parsed || parsed.segments.length < 2) return null;
+  if (!parsed.parsed || parsed.segments.length === 0) return null;
 
-  let hasDownload = false;
-  let hasInterpreter = false;
-  for (const seg of parsed.segments) {
-    // 包装链：env / nice / xargs 后的真实命令
-    let key = cmdKey(seg.command);
-    if (EXEC_WRAPPER_BASES.has(key) && seg.args.length > 0) {
-      const next = seg.args.find((a) => !a.startsWith('-') && !a.includes('='));
-      if (next) key = cmdKey(next);
+  const keys = parsed.segments.map((s) => resolveExecCommand(s).key);
+  // 单段命令无管道/交接形态，但内联载荷注入仍可能（`sh -c "curl x | sh"`）
+  const viaFlow = parsed.segments.length >= 2
+    ? detectDownloadPipeToInterpreter(parsed, keys) ?? detectDownloadFileHandoff(parsed)
+    : null;
+  return viaFlow ?? detectDownloadEmbeddedInjection(parsed);
+}
+
+/** 已知命令词（wrapper 剥离时优先认出真实命令，越过带值选项的值） */
+const KNOWN_EXEC_BASES = new Set<string>([...INTERPRETER_BASES, ...DOWNLOAD_BASES, 'tee', 'source', '.']);
+
+/**
+ * 段的有效命令：剥 wrapper（sudo/env/nice/nohup/exec/xargs/time/timeout）。
+ * wrapper 后先找已知命令词（`sudo -u bob bash s.sh` 的 `bob` 是 -u 的值，不是命令），
+ * 找不到再退第一个非选项/非赋值/非纯数字参数。
+ */
+function resolveExecCommand(seg: ParsedSegment): { key: string; args: string[]; cmdArg: string } {
+  const key = cmdKey(seg.command);
+  if (!EXEC_WRAPPER_BASES.has(key)) return { key, args: seg.args, cmdArg: seg.command };
+
+  const knownIdx = seg.args.findIndex((a) => !a.includes('=') && KNOWN_EXEC_BASES.has(cmdKey(a)));
+  const nextIdx = knownIdx >= 0
+    ? knownIdx
+    : seg.args.findIndex((a) => !a.startsWith('-') && !a.includes('=') && !/^\d+$/.test(a));
+  if (nextIdx < 0) return { key, args: seg.args, cmdArg: seg.command };
+  return {
+    key: cmdKey(seg.args[nextIdx]),
+    args: seg.args.slice(nextIdx + 1),
+    cmdArg: seg.args[nextIdx],
+  };
+}
+
+/** 规则 1：同管道链（连接符全为 `|` 的极大段组）内下载源在解释器上游 */
+function detectDownloadPipeToInterpreter(parsed: ParsedCommand, keys: string[]): string | null {
+  let start = 0;
+  for (let i = 0; i < parsed.segments.length; i++) {
+    const continues = i + 1 < parsed.segments.length && (parsed.connectors[i] ?? ';') === '|';
+    if (continues) continue;
+    const dlIdx = keys.slice(start, i + 1).findIndex((k) => DOWNLOAD_BASES.has(k));
+    if (dlIdx >= 0) {
+      for (let j = start + dlIdx + 1; j <= i; j++) {
+        if (INTERPRETER_BASES.has(keys[j])) {
+          return 'download pipe to interpreter (remote code execution)';
+        }
+      }
     }
-    if (DOWNLOAD_BASES.has(key)) hasDownload = true;
-    if (INTERPRETER_BASES.has(key)) hasInterpreter = true;
+    start = i + 1;
   }
-  if (hasDownload && hasInterpreter) {
-    return 'download pipe to interpreter (remote code execution)';
+  return null;
+}
+
+/** URL basename（去 query/hash），`curl -O` 落盘名 */
+function urlBasename(url: string): string | null {
+  const path = url.replace(/[?#].*$/, '');
+  const base = path.split('/').pop() ?? '';
+  return base && base !== '/' ? base : null;
+}
+
+/**
+ * 同一文件判定：归一路径相等（大小写敏感）。
+ * 不做 basename 合并——跨目录/跨大小写是不同文件（`…/a/run.sh` 与 `…/b/run.sh`、
+ * `S.sh` 与 `s.sh` 在大小写敏感文件系统上不相交）。
+ */
+function sameHandoffFile(a: string, b: string): boolean {
+  return normalizeHandoffPath(a) === normalizeHandoffPath(b);
+}
+
+/** 归一路径（统一斜杠、剥 `./` 前缀；大小写保留） */
+function normalizeHandoffPath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/** 直接执行脚本形态：`./s.sh` / `s.sh` / `/path/s.sh` */
+function isScriptPath(cmd: string): boolean {
+  return cmd.startsWith('./') || /\.(sh|bash|zsh|ksh|py|js|rb|pl|php|ps1|cmd|bat)$/i.test(cmd);
+}
+
+/**
+ * 规则 2：下载落盘文件（name = 落盘名；afterIdx = 落盘段索引，执行须在其后）。
+ * 选项解析覆盖短选项簇（`-sSLo f` / `-qO f` / `-of` 粘连值）与长选项别名
+ * （`--remote-name` / `--output=…`）；wget 无输出选项时默认按 URL basename 落盘，
+ * wget 的 `-o` 是日志文件不算落盘，curl 的 `-O` 是无值选项（落盘名 = URL basename）。
+ */
+function collectDownloadDrops(parsed: ParsedCommand): Array<{ name: string; afterIdx: number }> {
+  const drops: Array<{ name: string; afterIdx: number }> = [];
+  for (let i = 0; i < parsed.segments.length; i++) {
+    const seg = parsed.segments[i];
+    const { key, args } = resolveExecCommand(seg);
+    if (!DOWNLOAD_BASES.has(key)) continue;
+
+    let outFileFlag = false; // 显式指定内容落盘文件（抑制 wget 默认落盘）
+    let remoteName = false; // curl -O / --remote-name：落盘名 = URL basename
+    let httpDownload = false; // httpie --download
+    for (let j = 0; j < args.length; j++) {
+      const a = args[j];
+      if (a === '--output' || a === '--output-document') {
+        const target = args[j + 1];
+        // `-O -` 是写 stdout，不落盘
+        if (target && target !== '-' && !target.startsWith('-')) {
+          drops.push({ name: target, afterIdx: i });
+          outFileFlag = true;
+        }
+        continue;
+      }
+      const eq = /^--output(?:-document)?=(.+)$/i.exec(a);
+      if (eq) {
+        if (eq[1] !== '-') drops.push({ name: eq[1], afterIdx: i });
+        outFileFlag = true;
+        continue;
+      }
+      if (a === '--remote-name') {
+        remoteName = true;
+        continue;
+      }
+      if (a === '--download') {
+        httpDownload = true;
+        continue;
+      }
+      if (a.startsWith('--') || !a.startsWith('-') || a.length < 2 || a.includes('=')) continue;
+
+      // 短选项簇：`-sSLo f`（O 后取值）/ `-os.sh`（粘连值）/ `-OJ`（O 无值，J 另一选项）
+      for (let k = 1; k < a.length; k++) {
+        const c = a[k];
+        if (key === 'wget') {
+          if (c === 'O') {
+            // wget -O = 内容落盘文件（值可粘连/下一参数；`-O -` 写 stdout）
+            const value = a.slice(k + 1) || args[j + 1];
+            if (a.slice(k + 1)) k = a.length;
+            else j += 1;
+            if (value && value !== '-' && !value.startsWith('-')) drops.push({ name: value, afterIdx: i });
+            outFileFlag = true;
+          } else if (c === 'o') {
+            // wget -o = 日志文件（不记内容落盘；消耗其值防止被误认）
+            if (a.slice(k + 1)) k = a.length;
+            else j += 1;
+          }
+        } else if (c === 'o') {
+          // curl/httpie -o = 内容落盘文件
+          const value = a.slice(k + 1) || args[j + 1];
+          if (a.slice(k + 1)) k = a.length;
+          else j += 1;
+          if (value && value !== '-' && !value.startsWith('-')) drops.push({ name: value, afterIdx: i });
+          outFileFlag = true;
+        } else if (c === 'O') {
+          // curl -O = 无值选项，落盘名 = URL basename（下方统一记，多 -O 全记）
+          remoteName = true;
+        }
+      }
+    }
+
+    // URL basename 落盘：curl -O/--remote-name（段内全部 URL）；httpie --download；
+    // wget 无输出选项时默认落盘（裸 `wget URL` 就是下载执行最常见写法）
+    const wantsUrlBasename = remoteName || httpDownload || (key === 'wget' && !outFileFlag);
+    if (wantsUrlBasename) {
+      for (const u of args) {
+        if (/^https?:\/\//i.test(u)) {
+          const base = urlBasename(u);
+          if (base) drops.push({ name: base, afterIdx: i });
+        }
+      }
+    }
+
+    // 重定向落盘（`> f` / `>> f`）
+    for (const r of seg.redirects) {
+      if (r.type !== 'input') drops.push({ name: r.target, afterIdx: i });
+    }
+
+    // 管道链下游 `tee f`：下载内容经 tee 落盘（`curl … | tee f | grep x && bash f`）
+    for (let j = i + 1; j < parsed.segments.length && (parsed.connectors[j - 1] ?? '|') === '|'; j++) {
+      const tee = resolveExecCommand(parsed.segments[j]);
+      if (tee.key === 'tee') {
+        for (const f of tee.args) {
+          if (!f.startsWith('-')) drops.push({ name: f, afterIdx: j });
+        }
+      }
+    }
+  }
+  return drops;
+}
+
+/**
+ * 规则 2：脚本执行段。候选是解释器的**全部**非选项参数（带值选项的值多收，保守向：
+ * `bash -O extglob ./s.sh` 不漏 `./s.sh`）；内联载荷（`sh -c "…"`）若是纯脚本路径
+ * （`sh -c "./s.sh"`、`cmd /c s.bat`）也算文件执行；`python -m mod` 是模块文件
+ * 执行（候选含 `mod` 与 `mod.py`）；内联多词载荷不是文件执行（嵌入注入走规则 3）。
+ */
+function collectScriptExecs(parsed: ParsedCommand): Array<{ name: string; idx: number }> {
+  const execs: Array<{ name: string; idx: number }> = [];
+  for (let i = 0; i < parsed.segments.length; i++) {
+    const seg = parsed.segments[i];
+    const { key, args, cmdArg } = resolveExecCommand(seg);
+
+    if (key === 'source' || key === '.') {
+      const target = args[0];
+      if (target && !target.startsWith('-')) execs.push({ name: target, idx: i });
+      continue;
+    }
+    if (INTERPRETER_BASES.has(key)) {
+      const inlineFlags = INTERPRETER_INLINE_FLAGS[key] ?? [];
+      const firstArgIdx = args.findIndex((a) => !a.startsWith('-') && !a.includes('='));
+      const preArgs = args.slice(0, firstArgIdx < 0 ? args.length : firstArgIdx);
+      const inlineIdx = preArgs.findIndex((a) => inlineFlags.includes(a.toLowerCase()));
+      if (inlineIdx >= 0) {
+        const payload = args.slice(inlineIdx + 1).join(' ').trim();
+        if (payload && (isScriptPath(payload) || payload.startsWith('./'))) {
+          execs.push({ name: payload, idx: i });
+        }
+        continue;
+      }
+      for (const a of args) {
+        if (!a.startsWith('-') && !a.includes('=') && !/^\d+$/.test(a)) {
+          execs.push({ name: a, idx: i });
+        }
+      }
+      // `python -m mod` 模块执行：模块主文件是 `mod.py`
+      for (let j = 0; j < args.length - 1; j++) {
+        if (args[j].toLowerCase() === '-m') {
+          execs.push({ name: `${args[j + 1]}.py`, idx: i });
+        }
+      }
+      // stdin 交接（`bash < s.sh`）：输入重定向的文件也是执行对象
+      for (const r of seg.redirects) {
+        if (r.type === 'input') execs.push({ name: r.target, idx: i });
+      }
+      continue;
+    }
+    if (isScriptPath(cmdArg)) {
+      execs.push({ name: cmdArg, idx: i });
+    }
+  }
+  return execs;
+}
+
+/** 规则 2：下载落盘文件在下载之后被同一命令串执行 */
+function detectDownloadFileHandoff(parsed: ParsedCommand): string | null {
+  const drops = collectDownloadDrops(parsed);
+  if (drops.length === 0) return null;
+  for (const e of collectScriptExecs(parsed)) {
+    for (const d of drops) {
+      if (e.idx > d.afterIdx && sameHandoffFile(e.name, d.name)) {
+        return 'downloaded file executed (remote code execution)';
+      }
+    }
+  }
+  return null;
+}
+
+/** 文本中出现下载源命令（词边界，防 `mycurl` 之类误报） */
+function hasDownloadSource(text: string): boolean {
+  return /(^|[\s|;&($<])((sudo|env|nice|nohup|exec|timeout)\s+)*(curl|wget|http|https)\b/i.test(text);
+}
+
+/**
+ * 规则 3：下载源进入解释器代码位——内联载荷（`sh -c "$(curl …)"`）或进程替换
+ * （`bash <(curl …)`）里的下载文本直接成为解释器的代码/输入文件。
+ * 内联载荷内的 shell 文本另递归跑规则 1/2（`bash -c "curl x | sh"`）。
+ */
+function detectDownloadEmbeddedInjection(parsed: ParsedCommand): string | null {
+  const hasDownload = parsed.segments.some(
+    (s) => DOWNLOAD_BASES.has(resolveExecCommand(s).key) || hasDownloadSource(s.raw),
+  );
+  if (!hasDownload) return null;
+
+  for (const seg of parsed.segments) {
+    const { key, args } = resolveExecCommand(seg);
+    if (!INTERPRETER_BASES.has(key) && key !== 'source' && key !== '.') continue;
+
+    const inlineFlags = INTERPRETER_INLINE_FLAGS[key] ?? [];
+    const firstArgIdx = args.findIndex((a) => !a.startsWith('-') && !a.includes('='));
+    const preArgs = args.slice(0, firstArgIdx < 0 ? args.length : firstArgIdx);
+    const inlineIdx = preArgs.findIndex((a) => inlineFlags.includes(a.toLowerCase()));
+
+    if (inlineIdx >= 0) {
+      const payload = args.slice(inlineIdx + 1).join(' ').trim();
+      if (!payload) continue;
+      // 载荷是 shell 文本：内层 `curl x | sh` 走规则 1/2 递归
+      const inner = detectDownloadToInterpreter(payload);
+      if (inner) return inner;
+      // 命令替换/进程替换把下载文本拼进代码位（`sh -c "$(curl x)"`）
+      if (/\$\(|<\(|>\(/.test(payload) && hasDownloadSource(payload)) {
+        return 'download injected into interpreter payload (remote code execution)';
+      }
+      continue;
+    }
+    // 进程替换参数（`bash <(curl …)`）：下载文本成为解释器的输入文件
+    for (const a of args) {
+      if (/[<>]\(/.test(a) && hasDownloadSource(a)) {
+        return 'download injected into interpreter process substitution (remote code execution)';
+      }
+    }
   }
   return null;
 }

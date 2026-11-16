@@ -126,6 +126,24 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.116.8 (2026-11-17)
+
+### fix(security): download-to-interpreter 硬边界改数据流判定——修组合命令误拦与三类真 RCE 回归
+
+**根因**：`detectDownloadToInterpreter` 名为 "download **pipe** to"，实为共存检测——同一命令串里下载命令与解释器并存即硬拦，不区分 `|`/`&&`/`;`，`curl -o data.csv … && python analyze.py`、`bash build.sh && curl …` 等无数据流关系的组合命令被误判 RCE 硬拦（用户实测大量组合命令被挡）。
+
+**改法（三规则数据流判定，均保持硬边界）**：
+
+1. **管道链**：同一条 `|` 链上下载源在解释器上游 → 拦（`curl | sh`、`curl | tee x | bash`）。
+2. **文件交接**：下载落盘（`curl -o/-O`、短选项簇 `-sSLo`/粘连值、`--remote-name`、`wget` 默认落盘、`wget -O`、`>` 重定向、链下游 `tee f`）且同一命令串在下载之后执行同一文件（`bash f`/`python f`/`./f`/`source f`/`sh -c "./f"`/`cmd /c s.bat`/`bash < s.sh`/`python -m mod`）→ 拦，reason `downloaded file executed`。
+3. **嵌入注入**：下载源进入解释器内联载荷（`sh -c "$(curl …)"`）或进程替换（`bash <(curl …)`）→ 拦；载荷内 shell 文本递归走规则 1/2（`bash -c "curl x | sh"`）。
+
+**独立评审（del-6762398a）**：初版双规则被 B1–B3 砸出三个真 RCE 安全回归（wget 默认落盘、短选项簇/长选项别名、嵌套命令替换/进程替换）——已补齐并留 40 断言矩阵；M1–M3（stdin 交接、内联载荷纯路径、带值选项/wrapper 宽候选、多 `-O`）一并修复。**结构修复**：tree-sitter 整句重定向（`A && B < f`）原挂句内第一段（`echo a && bash < s.sh` 错挂 echo），改为按源位置归属作用域命令段（`A && B < f` 归 B、`A < f && B` 归 A）。
+
+**残余边界（接受）**：跨工具调用两步交接拦不住；`sh -c "bash s.sh"` 多词载荷不识别（纯路径载荷已覆盖）；载荷内命令替换保守拦（误报向）；重定向 fd 不分（`2> err.log` 算落盘）；`sudo ./s.sh` wrapper 直接执行不识别（提权另有 high 档）。
+
+**验证**：F11 矩阵 40 断言 + security 47 + windows-security 49 + risk-policy 11 全绿；全量 **5163 绿** / lint 0 / build ✓。
+
 ## v0.116.7 (2026-11-17)
 
 ### feat(delegation): delegate_dispatch 必填 `title`——委派时显式设置子会话标题
