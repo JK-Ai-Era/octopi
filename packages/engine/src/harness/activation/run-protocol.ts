@@ -121,6 +121,12 @@ export type RunControlOp =
   | { type: 'reloadAgent'; agentId: string; definition: AgentDefinitionWire }
   /** 退役执行体（removeAgent） */
   | { type: 'retireAgent'; agentId: string }
+  /**
+   * provider 热重建（评审 B4 深层：run worker 是独立进程，boot 拿 config 快照——
+   * gateway 热应用后 worker 的 provider 表过期，startRun 409 "provider not found"）。
+   * 执行：按快照全量重建 provider 表。
+   */
+  | { type: 'reloadProviders'; modelProviders: Record<string, unknown> }
   /** 动态客户端工具同步（E5 语义：add/remove + 可见性快照） */
   | {
       type: 'setClientTools';

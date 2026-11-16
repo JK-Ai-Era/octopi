@@ -1,14 +1,39 @@
 /**
  * 关于（§5d 关于组）：版本 / 帮助与快捷指引 / 文档链接。
  * 顶栏帮助按钮直达本页（批 2-2 留尾的收口）。
+ *
+ * 版本号运行时下发（`__OCTOPI_WEB__.version`，源自 package.json——批 3-2），
+ * 不硬编码在 bundle 里（版本随发布走，UI 不重编）。
  */
 
+import { getProductVersion } from '../runtime-config';
+
+/** 文档与源码链接（产品页文案；仓库搬家时随 package.json homepage 同步改） */
+const LINKS = {
+  repo: 'https://github.com/JK-Ai-Era/octopi',
+  docs: 'https://github.com/JK-Ai-Era/octopi/tree/main/docs',
+  changelog: 'https://github.com/JK-Ai-Era/octopi/blob/main/CHANGELOG.md',
+} as const;
+
 export function AboutPanel(): JSX.Element {
+  const version = getProductVersion();
   return (
     <div className="panel" style={{ display: 'grid', gap: 12, maxWidth: 640 }}>
       <h3 style={{ margin: 0 }}>关于 Octopi 🐙</h3>
-      <div className="small muted">
-        版本信息见 <code>package.json</code> / 启动日志；文档与源码见仓库。
+      <div className="small">
+        版本：<code>{version ? `v${version}` : '未知（服务端未下发）'}</code>
+        {' · '}
+        <a href={LINKS.docs} target="_blank" rel="noreferrer">
+          文档
+        </a>
+        {' · '}
+        <a href={LINKS.changelog} target="_blank" rel="noreferrer">
+          更新日志
+        </a>
+        {' · '}
+        <a href={LINKS.repo} target="_blank" rel="noreferrer">
+          源码
+        </a>
       </div>
       <div>
         <h4 style={{ margin: '8px 0 4px' }}>帮助与快捷指引</h4>

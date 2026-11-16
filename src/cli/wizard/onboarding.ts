@@ -23,6 +23,7 @@ import {
   providerChoices,
   validateStep,
 } from '@octopi-agent/engine/config-admin/onboarding.js';
+import { probeErrorCopy } from '@octopi-agent/engine/config-admin/error-copy.js';
 import type {
   DeploymentMode,
   OnboardingChoices,
@@ -98,19 +99,13 @@ interface ProbeLabels {
 }
 
 function probeLabels(zh: boolean): ProbeLabels {
-  return zh
-    ? {
-        auth: 'API Key 不对或没权限——检查 key 是否复制完整、是否有效。',
-        network: '连不上服务——检查网络 / Base URL / 代理。',
-        model: '这个模型名没找到——回到模型步重拉清单或改名。',
-        server: '服务方异常——稍后重试，或换一个模型服务。',
-      }
-    : {
-        auth: 'The API key was rejected — check it was pasted correctly and is active.',
-        network: 'Cannot reach the service — check network / base URL / proxy.',
-        model: 'Model not found — go back and pick from the list or type the exact id.',
-        server: 'The provider is having trouble — retry later or switch provider.',
-      };
+  // 文案单源在 engine error-copy（批 3-2 四份单源化）；CLI 单句 = 标题 + 详情
+  const lang = zh ? 'zh' : 'en';
+  const one = (kind: 'auth' | 'network' | 'model' | 'server'): string => {
+    const copy = probeErrorCopy(kind, lang);
+    return `${copy.title} —— ${copy.detail}`;
+  };
+  return { auth: one('auth'), network: one('network'), model: one('model'), server: one('server') };
 }
 
 /** 交互向导主循环（状态机驱动——M2：步骤图真相在 engine nextStep） */
@@ -133,7 +128,16 @@ async function runInteractive(opts: RunOnboardingOptions): Promise<OnboardingRes
   let state: OnboardingMachineState = initialOnboardingState();
   let launchChat = false;
   const commit = async (): Promise<void> => {
-    await applyOnboarding(choices, applyDeps(opts));
+    const applied = await applyOnboarding(choices, applyDeps(opts));
+    // M3：降级显式——demo 播种失败的警告必须透出到 CLI（此前静默丢弃）
+    if (applied.demoWarning) {
+      console.warn(`\n⚠️  ${choices.lang === 'en' ? 'Demo kit not seeded:' : '示例任务包未播种：'}${applied.demoWarning}`);
+      console.warn(
+        choices.lang === 'en'
+          ? '   Main config is saved and unaffected; the "Try this example" card will be unavailable.'
+          : '   主配置已保存不受影响；「试试这个示例」暂不可用。',
+      );
+    }
   };
 
   while (state.current !== null) {
@@ -365,7 +369,11 @@ async function runNonInteractive(opts: RunOnboardingOptions): Promise<Onboarding
     if (err) throw new Error(`onboarding_${step}: ${err}`);
   }
 
-  await applyOnboarding(choices, applyDeps(opts));
+  const applied = await applyOnboarding(choices, applyDeps(opts));
+  if (applied.demoWarning) {
+    // M3：--yes 路径同权透出（降级显式不因非交互而消失）
+    console.warn(`\n⚠️  ${choices.lang === 'en' ? 'Demo kit not seeded:' : '示例任务包未播种：'}${applied.demoWarning}`);
+  }
   return { configPath: opts.configPath, launchChat: false, completed: true };
 }
 

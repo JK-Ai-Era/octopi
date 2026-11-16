@@ -552,6 +552,21 @@ async function main(): Promise<void> {
 
         if (req.method === 'POST' && url.pathname === '/control') {
           const op = JSON.parse(await readBody(req)) as RunControlOp;
+          // provider 热重建（评审 B4 深层）：provider 表是本进程 closure 态，不归 RunHost——
+          // 在入口特判（与 compact 特判同位），按快照全量重建（boot 注册循环同语义）。
+          if (op.type === 'reloadProviders') {
+            providers.clear();
+            for (const [name, providerCfg] of Object.entries(op.modelProviders)) {
+              const provider = await createProviderFromConfig(name, providerCfg as never, {
+                resolvePluginProvider,
+                wireDump,
+              });
+              providers.set(name, provider);
+              notify({ type: 'log', level: 'log', message: `[RunServe] Reloaded provider: ${name}` });
+            }
+            sendJson(res, 200, { ok: true });
+            return;
+          }
           // compact 需已挂载执行体；未挂载即经装配懒建（get-or-mount，与 /runs 同语义）
           if (op.type === 'compact' && !host.get(op.agentId)) {
             const def = defs.get(op.agentId);

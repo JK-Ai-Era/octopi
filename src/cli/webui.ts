@@ -50,6 +50,7 @@ function readConfigWebSettings(configPath?: string): {
   gatewayUrl?: string;
   gatewayApiKey?: string;
   deploymentMode?: string;
+  language?: string;
 } {
   try {
     let filePath: string;
@@ -64,6 +65,7 @@ function readConfigWebSettings(configPath?: string): {
     const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as {
       web?: { dir?: unknown; host?: unknown; port?: unknown; gitStatusPollSeconds?: unknown; gatewayUrl?: unknown };
       deploymentMode?: unknown;
+      language?: unknown;
       channels?: unknown;
       gateway?: unknown;
     };
@@ -112,6 +114,7 @@ function readConfigWebSettings(configPath?: string): {
       gatewayUrl,
       gatewayApiKey,
       deploymentMode: typeof raw.deploymentMode === 'string' && raw.deploymentMode ? raw.deploymentMode : undefined,
+      language: typeof raw.language === 'string' && raw.language ? raw.language : undefined,
     };
   } catch {
     return {};
@@ -302,6 +305,7 @@ export async function webuiStartCommand(
     gatewayBaseUrl: webSettings.gatewayUrl,
     consoleApiKey: webSettings.gatewayApiKey, // §7b：仅本机部署（readConfigWebSettings 已判 localhost）
     deploymentMode: webSettings.deploymentMode,
+    language: webSettings.language,
   });
   if (!pid) {
     if (soft) {

@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { resolveDefaultBase } from '../gateway-base';
+import { probeErrorCopy, type ProbeErrorKind } from '@octopi-agent/engine/config-admin/error-copy.js';
 
 interface WizardRender {
   /** 步骤进度（服务端 ONBOARDING_STEPS 派生——前端不自维护步骤序） */
@@ -26,6 +27,11 @@ interface WizardRender {
   };
   notice?: 'back-at-first';
   probeError?: { kind: 'auth' | 'network' | 'model' | 'server'; message: string };
+  /** 演示任务包播种失败的非致命警告（主配置已保存） */
+  demoWarning?: string;
+  /** M-6 热应用结果（true=已即时生效；false=失败见 hotApplyError；undefined=未热应用需重启） */
+  hotApplied?: boolean;
+  hotApplyError?: string;
   options: {
     languages: Array<{ id: string; label: string }>;
     deploymentModes: Array<{ id: string; label: string; description: string }>;
@@ -50,17 +56,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** probe 分类码 → 人话文案（与 error-classify 同口径的向导语境文案） */
-function probeCopy(kind: 'auth' | 'network' | 'model' | 'server'): { title: string; detail: string } {
-  switch (kind) {
-    case 'auth':
-      return { title: '密钥没通过校验', detail: '请检查 API Key 是否正确（回到上一步修改）。' };
-    case 'network':
-      return { title: '连不上模型服务', detail: '请检查 baseUrl 与网络连接后重试。' };
-    case 'model':
-      return { title: '模型不存在', detail: '请回到上一步换一个模型。' };
-    case 'server':
-      return { title: '模型服务出错', detail: '服务端异常，请稍后重试；持续失败请查看服务日志。' };
-  }
+function probeCopy(kind: ProbeErrorKind): { title: string; detail: string } {
+  // 文案单源在 engine error-copy（批 3-2 四份单源化）；此函数保留语义别名
+  return probeErrorCopy(kind, 'zh');
 }
 
 export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Element {
@@ -322,11 +320,35 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
 
   return (
     <div className="panel wizard-panel">
-      {render.completed && (
+      {render.completed && render.hotApplied === true && (
+        <div className="status-card" role="status">
+          <div className="status-card-title">配置已保存并即时生效</div>
+          <div className="status-card-detail">
+            新会话即用新配置，无需重启。现在就可以点「进入对话」开始使用。
+          </div>
+        </div>
+      )}
+      {render.completed && render.hotApplied === false && (
+        <div className="error-card error-card-user-action" role="status">
+          <div className="error-card-title">配置已保存（热应用失败，需重启）</div>
+          <div className="error-card-detail">
+            {render.hotApplyError} —— 请运行 <code>octopi serve restart</code> 使新配置生效。
+          </div>
+        </div>
+      )}
+      {render.completed && render.hotApplied === undefined && (
         <div className="error-card error-card-user-action" role="status">
           <div className="error-card-title">配置已保存</div>
           <div className="error-card-detail">
             重启服务后生效：<code>octopi serve restart</code>。在此之前，对话所用的仍是旧配置。
+          </div>
+        </div>
+      )}
+      {render.completed && render.demoWarning && (
+        <div className="error-card error-card-user-action" role="status">
+          <div className="error-card-title">示例任务包未播种</div>
+          <div className="error-card-detail">
+            {render.demoWarning} —— 主配置已保存，不受影响；示例助手与样例资料未就绪，「试试这个示例」暂不可用。
           </div>
         </div>
       )}

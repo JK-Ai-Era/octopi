@@ -5,6 +5,8 @@
  * - support（需支持）：错误卡 + 诊断 ID 可复制 + raw 折叠
  */
 
+import { classifyErrorKind, runtimeErrorCopy } from '@octopi-agent/engine/config-admin/error-copy.js';
+
 export type FlowErrorLevel = 'user-action' | 'support';
 
 /** 对话流错误卡数据（按 createdAt 交错进时间线） */
@@ -30,59 +32,38 @@ export function makeDiagnosticId(): string {
 }
 
 /**
- * provider/运行期错误人话化分类（§5d 全链人话化：auth/network/model/server 四类）。
+ * provider/运行期错误人话化分类（§5d 全链人话化）。
+ * 分类与文案单源在 engine `config-admin/error-copy.ts`（批 3-2 四份单源化）——
+ * 此处只做 UI 装配（level 分级 / CTA / 诊断 ID / raw 折叠）。
  *
  * @param raw - 原始错误文本
- * @param onOpenSettings - auth/model 类错误的「去设置」回调
+ * @param onOpenSettings - auth/network/model 类错误的「去设置」回调
  * @returns 可直接进时间线的错误卡数据（id/at 由调用方补）
  */
 export function classifyProviderError(
   raw: string,
   onOpenSettings?: () => void,
 ): Omit<FlowErrorItem, 'id' | 'at'> {
-  const t = raw.toLowerCase();
-  const isAuth = t.includes('401') || t.includes('unauthorized') || t.includes('api key') || t.includes('apikey') || t.includes('invalid key') || t.includes('authentication');
-  const isNetwork = t.includes('econnrefused') || t.includes('etimedout') || t.includes('enotfound') || t.includes('fetch failed') || t.includes('network') || t.includes('econnreset');
-  const isModel = t.includes('model') && (t.includes('not found') || t.includes('does not exist') || t.includes('unknown model') || t.includes('no such model'));
-  const isContext = t.includes('context') && (t.includes('length') || t.includes('exceed') || t.includes('too long') || t.includes('maximum'));
-
-  if (isAuth) {
+  const kind = classifyErrorKind(raw);
+  const copy = runtimeErrorCopy(kind, 'zh');
+  if (kind === 'context') {
+    return { level: 'user-action', title: copy.title, detail: copy.detail };
+  }
+  if (kind === 'server') {
     return {
-      level: 'user-action',
-      title: '模型服务的密钥无效或已过期',
-      detail: '请到「设置 → 模型」更新 API Key 后重试。',
-      action: onOpenSettings ? { label: '去设置', run: onOpenSettings } : undefined,
+      level: 'support',
+      title: copy.title,
+      detail: copy.detail,
+      diagnosticId: makeDiagnosticId(),
+      raw,
     };
   }
-  if (isNetwork) {
-    return {
-      level: 'user-action',
-      title: '连不上模型服务',
-      detail: '请检查网络或模型服务地址（设置 → 模型），稍后重试。',
-      action: onOpenSettings ? { label: '去设置', run: onOpenSettings } : undefined,
-    };
-  }
-  if (isModel) {
-    return {
-      level: 'user-action',
-      title: '所选模型不可用',
-      detail: '模型名可能已下线或拼写有误，请到「设置 → 模型」换一个模型。',
-      action: onOpenSettings ? { label: '去设置', run: onOpenSettings } : undefined,
-    };
-  }
-  if (isContext) {
-    return {
-      level: 'user-action',
-      title: '消息太长，超出模型的记忆容量',
-      detail: '可以压缩早期消息（对话顶部「压缩」）或新开会话再试。',
-    };
-  }
+  // auth / network / model：用户可自救——带「去设置」出路
   return {
-    level: 'support',
-    title: '模型服务出错了',
-    detail: '这不是你的操作问题。复制下面的诊断 ID 反馈给支持人员即可。',
-    diagnosticId: makeDiagnosticId(),
-    raw,
+    level: 'user-action',
+    title: copy.title,
+    detail: copy.detail,
+    action: onOpenSettings ? { label: '去设置', run: onOpenSettings } : undefined,
   };
 }
 

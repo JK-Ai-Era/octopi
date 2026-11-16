@@ -283,16 +283,37 @@ dependencies — so the entire runtime above it is contracts you can swap:
 **Prerequisites**: Node.js ≥ 24.
 
 ```bash
-npm install octopi-agent
+npm install -g octopi-agent
 ```
 
-### Fastest path — the CLI
+### Three minutes to your first conversation
 
 ```bash
-npx octopi init      # scaffold OCTOPI_HOME: agents/, sessions/, config
-npx octopi doctor    # verify the environment
-npx octopi chat      # talk to your agent in the terminal
-npx octopi serve     # start the gateway (REST + WS)
+octopi serve start
+```
+
+On a fresh machine this scaffolds `OCTOPI_HOME` and prints a personal setup
+link in the terminal:
+
+```text
+🧙 First-run setup wizard (Web): http://localhost:8180/?setup=<token>
+```
+
+(Port `8180` is the default; if you set `web.port`, use that value — the terminal prints the exact link.)
+
+Open it and walk the nine-step wizard (language → model provider → API key →
+pick a model → …). When you finish, the config takes effect immediately —
+open the web console at `http://localhost:8180`, and on the empty state hit
+**Try this example**: the demo agent really reads sample files, writes a
+weekly report and saves it to disk (real agent, real tools — no fake
+animation). Or open a session and just start chatting.
+
+Prefer the terminal?
+
+```bash
+octopi init      # the same nine-step wizard, in your terminal
+octopi chat      # talk to your agent right away
+octopi doctor    # verify the environment
 ```
 
 ### Embed in code

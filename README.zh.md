@@ -181,16 +181,33 @@ Loop 层是**纯 async generator**——零状态、零外部依赖——所以�
 **前置**：Node.js ≥ 24。
 
 ```bash
-npm install octopi-agent
+npm install -g octopi-agent
 ```
 
-### 最快路径——CLI
+### 三分钟跑通第一次对话
 
 ```bash
-npx octopi init      # 脚手架 OCTOPI_HOME：agents/、sessions/、config
-npx octopi doctor    # 检查环境
-npx octopi chat      # 在终端里和你的 agent 对话
-npx octopi serve     # 启动 Gateway（REST + WS）
+octopi serve start
+```
+
+全新机器上它会脚手架 `OCTOPI_HOME`，并在终端打印你的专属配置向导链接：
+
+```text
+🧙 首启配置向导（Web）：http://localhost:8180/?setup=<token>
+```
+
+（`8180` 是默认端口；配置了 `web.port` 时以终端打印的链接为准。）
+
+打开链接走完九步向导（语言 → 模型服务 → API Key → 选模型 → …）。完成后配置**即时生效**——
+浏览器打开 `http://localhost:8180` 进入 Web 控制台，空态上点**「试试这个示例」**：示例助手会真读
+样例资料、真写一份周报存到磁盘（真 agent、真工具——不是假动画）。或者直接开会话开聊。
+
+喜欢终端？
+
+```bash
+octopi init      # 同款九步向导，在终端里走
+octopi chat      # 立刻和你的 agent 对话
+octopi doctor    # 检查环境
 ```
 
 ### 嵌入代码

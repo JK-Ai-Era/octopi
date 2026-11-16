@@ -114,6 +114,8 @@ export interface StartWebUiOptions {
   consoleApiKey?: string;
   /** 部署模式（②③模式 webui 需登录；personal 免登录） */
   deploymentMode?: string;
+  /** 配置语言（demo 剧本等语言对齐——评审 m9） */
+  language?: string;
 }
 
 /**
@@ -135,6 +137,7 @@ export function webUiServeArgs(distDir: string, options?: StartWebUiOptions): st
   if (options?.gatewayBaseUrl) args.push('--gateway-base-url', options.gatewayBaseUrl);
   // M-7：apiKey 不进 argv（ps 可见）——走 env，spawnDetached 注入
   if (options?.deploymentMode) args.push('--deployment-mode', options.deploymentMode);
+  if (options?.language) args.push('--language', options.language);
   return args;
 }
 
@@ -192,13 +195,57 @@ export function gatewayConfigScript(
  * 前端走内置默认。与 `gatewayConfigScript` 分开发射——网关地址与 UI 行为是
  * 两类语义，各归各的全局（`window.__OCTOPI_GATEWAY__` / `window.__OCTOPI_WEB__`）。
  *
- * @param web - UI 旋钮对象；undefined 时下发 null
+ * @param web - UI 旋钮对象；undefined 时仅下发 version（无 version 则下发 null）
+ * @param version - 产品版本（package.json 构建信息——非配置项，随脚本下发给「关于」页）
+ * @param language - 配置语言（demo 剧本语言对齐）
  * @returns JavaScript 赋值语句
  */
-export function webConfigScript(web?: { gitStatusPollSeconds?: number; deploymentMode?: string }): string {
-  return web !== undefined
-    ? `window.__OCTOPI_WEB__=${JSON.stringify(web)};\n`
+export function webConfigScript(
+  web?: { gitStatusPollSeconds?: number; deploymentMode?: string; language?: string },
+  version?: string,
+): string {
+  const merged = web !== undefined || version !== undefined ? { ...(web ?? {}), ...(version !== undefined ? { version } : {}) } : undefined;
+  return merged !== undefined
+    ? `window.__OCTOPI_WEB__=${JSON.stringify(merged)};\n`
     : 'window.__OCTOPI_WEB__=null;\n';
+}
+
+/**
+ * 首启向导 URL 拼接（单源：fg 判据打印与 serve start 显示面共用）。
+ *
+ * @param token - setup token
+ * @param webPort - web 端口
+ * @param webHost - NetworkHostConfig 语义值（'local'/'lan'/host）
+ * @returns 浏览器可开的向导 URL（lan 语义值返回占位提示）
+ */
+export function setupWizardUrl(token: string, webPort: number, webHost: string | undefined): string {
+  const hostHint = webHost === '0.0.0.0' || webHost === 'lan' ? '<本机IP>' : 'localhost';
+  return `http://${hostHint}:${webPort}/?setup=${token}`;
+}
+
+/**
+ * 读 setup-token.json（daemon 签发的单源产物；serve start 启动后显示面消费）。
+ *
+ * @param octopiHome - OCTOPI_HOME
+ * @param now - 时间源（测试注入）
+ * @returns 有效 token 与过期时间；文件缺失/损坏/过期返回 null
+ */
+export function readSetupToken(
+  octopiHome: string,
+  now: number = Date.now(),
+): { token: string; expiresAt: number } | null {
+  try {
+    const raw = JSON.parse(readFileSync(join(octopiHome, 'setup-token.json'), 'utf8')) as {
+      token?: unknown;
+      expiresAt?: unknown;
+    };
+    if (typeof raw.token !== 'string' || !raw.token) return null;
+    const expiresAt = typeof raw.expiresAt === 'number' ? raw.expiresAt : 0;
+    return now <= expiresAt ? { token: raw.token, expiresAt } : null; // 与 OnboardingService.authorize 同边界（NIT）
+  } catch {
+    // 文件缺失/损坏 = 无可用 token（不是错误：向导可能已完成或从未签发）
+    return null;
+  }
 }
 
 export function getWebUiPidPath(): string {

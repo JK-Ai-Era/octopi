@@ -8,6 +8,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join, normalize, extname, resolve, sep } from 'node:path';
 import { gatewayConfigScript, webConfigScript } from './helpers.js';
 import { isValidGitStatusPollSeconds } from '../config-schema/webui.js';
+import enginePackage from '@octopi-agent/engine/package.json' with { type: 'json' };
 
 const distArg = process.argv[2];
 if (!distArg) {
@@ -24,6 +25,7 @@ let gatewayPort: number | undefined;
 let gatewayBaseUrl: string | undefined;
 let consoleApiKey: string | undefined = process.env.OCTOPI_CONSOLE_API_KEY || undefined; // M-7：env 传递（argv 泄漏）
 let deploymentMode: string | undefined;
+let language: string | undefined;
 let gitStatusPollSeconds: number | undefined;
 for (let i = 3; i < process.argv.length; i++) {
   if (process.argv[i] === '--host' && process.argv[i + 1]) host = process.argv[++i];
@@ -41,6 +43,9 @@ for (let i = 3; i < process.argv.length; i++) {
   }
   if (process.argv[i] === '--deployment-mode' && process.argv[i + 1]) {
     deploymentMode = process.argv[++i];
+  }
+  if (process.argv[i] === '--language' && process.argv[i + 1]) {
+    language = process.argv[++i];
   }
 }
 
@@ -88,10 +93,14 @@ const server = createServer(async (req, res) => {
             ? consoleApiKey
             : undefined,
         }) +
-          webConfigScript({
-            ...(gitStatusPollSeconds !== undefined ? { gitStatusPollSeconds } : {}),
-            ...(deploymentMode !== undefined ? { deploymentMode } : {}),
-          }),
+          webConfigScript(
+            {
+              ...(gitStatusPollSeconds !== undefined ? { gitStatusPollSeconds } : {}),
+              ...(deploymentMode !== undefined ? { deploymentMode } : {}),
+              ...(language !== undefined ? { language } : {}),
+            },
+            enginePackage.version,
+          ),
       );
       return;
     }

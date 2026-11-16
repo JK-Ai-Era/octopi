@@ -318,6 +318,42 @@ describe('webConfigScript（/octopi-config.js UI 旋钮下发）', () => {
   test('emits null when no knobs (frontend falls back to defaults)', () => {
     expect(webConfigScript(undefined)).toBe('window.__OCTOPI_WEB__=null;\n');
   });
+
+  test('version (AboutPanel) merges into payload; version alone still serializes', () => {
+    // 批 3-2：产品版本运行时下发（构建信息非配置），「关于」页不硬编码
+    expect(webConfigScript({ gitStatusPollSeconds: 5 }, '0.115.0')).toBe(
+      'window.__OCTOPI_WEB__={"gitStatusPollSeconds":5,"version":"0.115.0"};\n',
+    );
+    expect(webConfigScript(undefined, '0.115.0')).toBe('window.__OCTOPI_WEB__={"version":"0.115.0"};\n');
+  });
+});
+
+describe('setup 向导链接（批 3-4 旅程：签发单源、显示面共用）', () => {
+  test('setupWizardUrl：lan 语义值给占位提示，localhost 直出', async () => {
+    const { setupWizardUrl } = await import('../src/cli/helpers.js');
+    expect(setupWizardUrl('tok123', 8180, 'lan')).toBe('http://<本机IP>:8180/?setup=tok123');
+    expect(setupWizardUrl('tok123', 8180, '0.0.0.0')).toBe('http://<本机IP>:8180/?setup=tok123');
+    expect(setupWizardUrl('tok123', 8290, undefined)).toBe('http://localhost:8290/?setup=tok123');
+    expect(setupWizardUrl('tok123', 8290, 'local')).toBe('http://localhost:8290/?setup=tok123');
+  });
+
+  test('readSetupToken：有效返回 token、过期返回 null、损坏返回 null（不抛）', async () => {
+    const { readSetupToken } = await import('../src/cli/helpers.js');
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const home = mkdtempSync(join(tmpdir(), 'octopi-tok-'));
+    try {
+      const now = 1_000_000;
+      writeFileSync(join(home, 'setup-token.json'), JSON.stringify({ token: 'abc', expiresAt: now + 60 }));
+      expect(readSetupToken(home, now)).toEqual({ token: 'abc', expiresAt: now + 60 });
+      expect(readSetupToken(home, now + 120)).toBeNull(); // 过期
+      writeFileSync(join(home, 'setup-token.json'), '{broken');
+      expect(readSetupToken(home, now)).toBeNull(); // 损坏不抛
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('readGitStatusPollSeconds', () => {

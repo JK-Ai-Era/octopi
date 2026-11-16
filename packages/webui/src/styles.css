@@ -13,11 +13,11 @@
   --color-surface: #ffffff;
   --color-surface-2: #f9fafb;
   --color-surface-3: #f3f4f6;
+  --color-border-strong: #79839a;
   --color-border: #e5e7eb;
-  --color-border-strong: #d0d5dd;
   --color-text: #111827;
   --color-text-invert: #ffffff;
-  --color-muted: #6b7280;
+  --color-muted: #5f6b7c;
   --color-primary: #111827;
   --color-primary-hover: #1f2937;
   --color-primary-disabled: #9ca3af;
@@ -32,11 +32,18 @@
   --color-error-bg: #fef2f2;
   --color-info: #2563eb;
   --color-info-bg: #f0f9ff;
-  --color-focus: #93c5fd;
-  --color-star: #fcd34d;
+  --color-focus: #2563eb;
+  --color-star: #c2620a;
   --color-teal-soft: #99f6e4;
   /* 恒暗底上的文字（代码块/深色徽标）——双主题同值 */
   --color-on-dark: #e5e7eb;
+  /* 语法高亮（恒暗代码块底 #0b1020 专属）——双主题同值，勿引用主题变量 */
+  --syntax-comment: #9ca3af;
+  --syntax-keyword: #a78bfa;
+  --syntax-string: #4ade80;
+  --syntax-title: #fbbf24;
+  --syntax-attr: #f87171;
+  --syntax-builtin: #38bdf8;
   --sidebar-w: 280px;
   --right-panel-w: 300px;
 }
@@ -49,7 +56,7 @@
   --color-surface-2: #172033;
   --color-surface-3: #1f2937;
   --color-border: #2a3548;
-  --color-border-strong: #3a465c;
+  --color-border-strong: #6e788e;
   --color-text: #e5e7eb;
   --color-text-invert: #0b1220;
   --color-muted: #9ca3af;
@@ -411,31 +418,32 @@ pre { font-family: var(--font-mono); font-size: 13px; }
   white-space: pre-wrap;
 }
 
-/* highlight.js (minimal light palette) */
+/* highlight.js——恒暗代码块底（#0b1020）专属色板（双主题同值）。
+ * 语法色不得引用主题变量（ok/warn/error 亮色值为亮底设计，在恒暗底全部失读——批 3-3 对比度审计实锤）。 */
 .hljs-comment,
-.hljs-quote { color: var(--color-muted); }
+.hljs-quote { color: var(--syntax-comment); }
 .hljs-keyword,
 .hljs-selector-tag,
-.hljs-addition { color: #7c3aed; }
+.hljs-addition { color: var(--syntax-keyword); }
 .hljs-number,
 .hljs-string,
 .hljs-meta .hljs-meta-string,
 .hljs-literal,
 .hljs-doctag,
-.hljs-regexp { color: var(--color-ok); }
+.hljs-regexp { color: var(--syntax-string); }
 .hljs-title,
 .hljs-section,
 .hljs-name,
 .hljs-selector-id,
-.hljs-selector-class { color: var(--color-warn); }
+.hljs-selector-class { color: var(--syntax-title); }
 .hljs-attr,
 .hljs-variable,
 .hljs-template-variable,
 .hljs-class .hljs-title,
-.hljs-type { color: var(--color-error); }
+.hljs-type { color: var(--syntax-attr); }
 .hljs-built_in,
-.hljs-params { color: #0369a1; }
-.hljs-deletion { color: var(--color-error); }
+.hljs-params { color: var(--syntax-builtin); }
+.hljs-deletion { color: var(--syntax-attr); }
 
 /* ── Tool Progress ── */
 .tool-progress { height: 2px; background: var(--color-border); border-radius: 1px; overflow: hidden; margin-bottom: 4px; }
@@ -543,6 +551,36 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 }
 .quick-prompts { display: flex; gap: 8px; flex-wrap: wrap; }
 .quick-prompt { cursor: pointer; }
+.demo-kit-card { margin-top: 12px; padding: 12px; border: 1px dashed var(--color-border); border-radius: 8px; text-align: left; }
+
+/* 成功态提示（评审 NIT：成功不用 error-card 视觉） */
+.status-card {
+  padding: 10px 12px;
+  border: 1px solid var(--color-ok);
+  border-radius: var(--radius-md);
+  background: var(--color-ok-bg);
+  color: var(--color-text);
+  margin-top: 10px;
+}
+.status-card-title { font-weight: 600; margin-bottom: 4px; }
+.status-card-detail { color: var(--color-text); }
+
+/* 详情浮层（批 3-3）：右栏点行下钻——居中浮层，概览保留在后 */
+.detail-modal-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex; align-items: center; justify-content: center;
+}
+.detail-modal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+  width: min(680px, 92vw);
+  max-height: 82vh;
+  overflow: auto;
+  padding: 12px 16px;
+}
 
 .rail-expert-toggle {
   display: flex;
@@ -780,7 +818,7 @@ button.ctx-band {
 .badge-idle { color: var(--color-muted); background: var(--color-surface-3); border-color: var(--color-border); }
 .badge-dropped { color: var(--color-error); background: var(--color-error-bg); border-color: var(--color-error-bg); }
 .badge-error { color: var(--color-error); background: var(--color-error-bg); border-color: var(--color-error); }
-.badge-carrier { color: var(--color-ok); background: var(--color-ok-bg); border-color: #5eead4; }
+.badge-carrier { color: var(--color-ok); background: var(--color-ok-bg); border-color: var(--color-ok); }
 
 /* ── E8 双组（G1）：placement 分组与语义标注 ── */
 .ctx-group {
@@ -1332,7 +1370,7 @@ button.ctx-band {
   background: var(--color-surface);
 }
 .kn-op-feedback.info { border-color: var(--color-focus); color: var(--color-info); }
-.kn-op-feedback.ok { border-color: var(--color-ok); color: #15803d; }
+.kn-op-feedback.ok { border-color: var(--color-ok); color: var(--color-ok); }
 .kn-op-feedback.warn { border-color: var(--color-star); color: var(--color-warn); }
 .kn-progress {
   display: flex;

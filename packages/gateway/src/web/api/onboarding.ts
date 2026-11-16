@@ -49,6 +49,11 @@ export interface OnboardingRender {
     hasAdminPassword?: boolean;
   };
   notice?: 'back-at-first';
+  /** 演示任务包播种失败的非致命警告（主配置已落盘；webui 完成页提示） */
+  demoWarning?: string;
+  /** M-6 热应用结果：true=已即时生效（新会话即用新配置）；false=失败（见 hotApplyError，仍需重启）；undefined=未热应用 */
+  hotApplied?: boolean;
+  hotApplyError?: string;
   /** probe 失败：分类码 + 原始信息（人话映射在渲染层单源——webui error-classify / CLI 四选） */
   probeError?: { kind: 'auth' | 'network' | 'model' | 'server'; message: string };
   /** 步骤校验失败（HTTP 400 语义的回显） */
@@ -79,6 +84,12 @@ export interface OnboardingServiceDeps {
   validateConfig: (raw: Record<string, unknown>) => void;
   /** 模式②③ admin 名覆盖（env 注入） */
   adminName?: string;
+  /**
+   * 落盘后的热应用钩子（M-6：向导产物接 ApplyEngine——daemon 注入
+   * `configApply.applyFromDisk`）。抛错不回滚落盘（配置已是真相），
+   * 警告随 render 透出；未注入 = 保留「需重启生效」提示。
+   */
+  onConfigApplied?: () => Promise<void>;
   /** 测试注入 */
   now?: () => number;
   /** 测试注入（默认 crypto 随机 token） */
@@ -103,6 +114,10 @@ export class OnboardingService {
     choices: OnboardingChoices;
     probeError?: OnboardingRender['probeError'];
     notice?: 'back-at-first';
+    demoWarning?: string;
+    /** M-6：热应用结果（true=已即时生效；undefined=未注入钩子/未走到） */
+    hotApplied?: boolean;
+    hotApplyError?: string;
   } | null = null;
 
   constructor(deps: OnboardingServiceDeps) {
@@ -112,13 +127,13 @@ export class OnboardingService {
   }
 
   /**
-   * serve 启动时调用：生成 setup token，返回终端打印用的 URL path（§7：只打印终端）。
+   * serve 启动时调用：生成 setup token（§7：只打印终端）。
    *
-   * @returns `/?setup=<token>`；同一实例重复调用返回同一 token（幂等到过期）
+   * @returns token 与 URL path（token 是权威——URL 拼接由 setupWizardUrl 单源负责，评审 m8）
    */
-  issueSetupToken(): string {
+  issueSetupToken(): { token: string; path: string } {
     const active = this.setupToken && this.now() < this.setupToken.expiresAt ? this.setupToken : null;
-    if (active) return `/?setup=${active.token}`;
+    if (active) return { token: active.token, path: `/?setup=${active.token}` };
     const token = this.randomToken();
     this.setupToken = { token, expiresAt: this.now() + SETUP_TOKEN_TTL_MS };
     // 落盘（0600）：`octopi init --web` 读它拼浏览器 URL；写失败不挡签发（终端打印是主渠道）
@@ -131,7 +146,7 @@ export class OnboardingService {
     } catch {
       // 磁盘不可写时向导仍可用（终端链接 + loopback 免闸），文件只是 init --web 便利
     }
-    return `/?setup=${token}`;
+    return { token, path: `/?setup=${token}` };
   }
 
   /** 清除 token（完成/过期/换发统一入口——内存与磁盘一致） */
@@ -239,12 +254,26 @@ export class OnboardingService {
 
     // commit 时机（状态机语义）：测通后 / 保存退出 / 走完——半截状态不组装
     if (t.commit !== 'none') {
-      await applyOnboarding(s.choices, {
+      const applied = await applyOnboarding(s.choices, {
         configPath: this.deps.configPath,
         octopiHome: this.deps.octopiHome,
         adminName: this.deps.adminName,
         validateConfig: this.deps.validateConfig,
       });
+      // m1：无条件赋值（undefined 即清除）——after-probe 残留的旧警告不得带到完成页
+      s.demoWarning = applied.demoWarning;
+      // M-6：落盘后热应用（同一 ApplyEngine 通路）。抛错不回滚落盘（配置已是真相），
+      // 以 hotApplyError 透出——完成页降级提示重启（fail-loud 的显式降级）。
+      if (this.deps.onConfigApplied) {
+        try {
+          await this.deps.onConfigApplied();
+          s.hotApplied = true;
+          s.hotApplyError = undefined;
+        } catch (err) {
+          s.hotApplied = false;
+          s.hotApplyError = err instanceof Error ? err.message : String(err);
+        }
+      }
       // §7：完成/保存退出才一次性失效；after-probe 落盘后向导还要走完（远程中途断线=断）
       if (t.commit === 'on-done' || t.commit === 'on-exit-save') this.clearSetupToken();
     }
@@ -292,6 +321,9 @@ export class OnboardingService {
       },
       notice: s.notice,
       probeError: s.probeError,
+      demoWarning: s.demoWarning,
+      hotApplied: s.hotApplied,
+      hotApplyError: s.hotApplyError?.split(this.deps.octopiHome).join('~'), // NIT：本地路径打码再出浏览器
       options,
       stepIndex,
       stepCount,

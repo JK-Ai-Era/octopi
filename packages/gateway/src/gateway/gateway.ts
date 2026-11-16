@@ -872,6 +872,11 @@ export class Gateway {
    *
    * @param levels - level 映射；undefined 仅清展示源（启动路径兼容）
    */
+  /** 当前运行时 provider 名单（applyFromDisk 对比删除用；只读快照） */
+  getProviderNames(): string[] {
+    return [...this.providers.keys()];
+  }
+
   setModelLevels(levels: Record<string, { primary: string; fallback?: string[] }> | undefined): void {
     this.modelLevels = levels;
     this.config.levels = levels;
@@ -1179,15 +1184,7 @@ export class Gateway {
       }
       // T2 桥接线：registry 托管 agent 装载为可跑定义（物化 + 注册）；单个失败不阻启动
       if (this.registryAgentBridge) {
-        for (const record of this.registry.listAllAgents()) {
-          try {
-            await this.attachRegistryAgent(record);
-          } catch (err) {
-            console.warn(
-              `[Gateway] registry agent ${record.agentId} attach failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        }
+        await this.syncRegistryAgents();
       }
     }
 
@@ -1445,6 +1442,46 @@ export class Gateway {
    * @param record - registry agent 记录（归属与身份权威）
    * @returns 是否实际挂上运行时（未接桥 = false，数据面可用但不产运行时）
    */
+  /**
+   * provider 热重建广播到 run fleet（评审 B4 深层：run worker 独立进程的 provider 表随热应用同步）。
+   *
+   * @param modelProviders - 展开后的 providers 快照（与 boot 交接同形态）
+   */
+  async reloadProvidersOnFleet(modelProviders: Record<string, unknown>): Promise<void> {
+    for (const entry of this.fleet.list()) {
+      try {
+        await entry.backend.control({ type: 'reloadProviders', modelProviders }, { timeoutMs: 5000 });
+      } catch (err) {
+        console.warn(
+          `[Gateway] run instance ${entry.record.instanceId} reloadProviders failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * registry → 运行时全量同步（幂等 attach）。启动装载与向导播种后热同步（评审 B2）共用。
+   *
+   * @returns attached 成功数；failed 失败 agentId 列表（单个失败不阻塞——启动语义）
+   */
+  async syncRegistryAgents(): Promise<{ attached: number; failed: string[] }> {
+    const failed: string[] = [];
+    let attached = 0;
+    if (!this.registryAgentBridge || !this.registry) return { attached, failed };
+    for (const record of this.registry.listAllAgents()) {
+      try {
+        await this.attachRegistryAgent(record);
+        attached += 1;
+      } catch (err) {
+        failed.push(record.agentId as string);
+        console.warn(
+          `[Gateway] registry agent ${record.agentId} attach failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return { attached, failed };
+  }
+
   async attachRegistryAgent(
     record: import('@octopi-agent/engine/harness/governance/registry/types.js').AgentRecord,
   ): Promise<boolean> {

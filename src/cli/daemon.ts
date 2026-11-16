@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import type { CliArgs } from './args.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
+import { setupWizardUrl, readSetupToken } from './helpers.js';
 import { loadConfig, toGatewayConfig, resolveConfigFilePath } from '../config.js';
 import { resolveListenConfig } from './listen-config.js';
 import { assembleGlobalTools } from '@octopi-agent/engine/integration/tools/assemble.js';
@@ -551,7 +552,7 @@ export async function ensureDaemonConfig(args: CliArgs): Promise<string | undefi
 
   console.log('🐙 First run detected. Initializing Octopi...\n');
   const result = await initOctopi();
-  console.log(formatInitReport(result));
+  console.log(formatInitReport(result, { context: 'serve' }));
   console.log('');
   return result.configPath;
 }
@@ -722,6 +723,23 @@ export async function serveStartCommand(args: CliArgs): Promise<void> {
   console.log(`   Config: ${configPath ?? join(getOctopiHome(), 'octopi.json')}`);
   console.log(`   Port:   ${port}`);
   console.log(`   Log:    ${logPath}`);
+
+  // 首启向导链接透出（批 3-4 旅程修复）：签发单源在 daemon 子进程（setup-token.json 0600），
+  // 此处只做显示——否则 URL 只落 gateway.log，用户终端看不到（旅程断点）。
+  // 显示面失败不挡启动（轻量读 JSON，不走 loadConfig 校验路径）。
+  try {
+    const setupTok = readSetupToken(getOctopiHome());
+    if (setupTok) {
+      const cfgRaw = JSON.parse(readFileSync(configPath ?? join(getOctopiHome(), 'octopi.json'), 'utf8')) as {
+        web?: { port?: number; host?: string };
+      };
+      const url = setupWizardUrl(setupTok.token, cfgRaw.web?.port ?? 8180, cfgRaw.web?.host ?? 'localhost');
+      console.log(`\n🧙 首启配置向导（Web）：${url}`);
+      console.log('   （链接 30 分钟内有效；完成配置后自动失效。Web 控制台正在启动，几秒后打开即可）\n');
+    }
+  } catch {
+    // 显示失败不阻塞启动；向导链接仍见 gateway.log
+  }
 
   // Knowledge Service 启动状态（manageLocal / 远程 / disabled）。
   // HTTP 端口先于 Knowledge 就绪，需等待本次启动的 [Knowledge] 终态，避免竞态误报。
@@ -1164,6 +1182,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const { HttpChannelAdapter } = await import('@octopi-agent/gateway/protocols/http.js');
     const { WebApiRouter } = await import('@octopi-agent/gateway/web/api/router.js');
     const { OnboardingService } = await import('@octopi-agent/gateway/web/api/onboarding.js');
+    const { DemoKitService } = await import('@octopi-agent/gateway/web/api/demo-kit.js');
     const { OctopiConfigSchema } = await import('../config-schema/index.js');
     const { resolveListenHost } = await import('@octopi-agent/engine/config.js');
     // 配置管理面（arch/config-hot-reload.md）：FileConfigService（IO）+ provider 工厂（带 wireDump）
@@ -1211,6 +1230,13 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       validateConfig: (raw) => {
         void OctopiConfigSchema.parse(raw); // fail-loud：合并后配置必须过 schema（未过则 zod 抛）
       },
+      // M-6：向导产物接 ApplyEngine 热应用（L0-L2；新会话即用新配置，免重启）
+      // 评审 B2：播种的 registry agent（如 demo agent）同步 attach 进运行时——
+      // 向导在 gateway 启动后经 HTTP 运行，绕过启动装载路径。
+      onConfigApplied: async () => {
+        await configApply?.applyFromDisk();
+        await gateway.syncRegistryAgents();
+      },
     });
     // 首启判据（冒烟修正）：脚手架自带占位 providers，「providers 空」永不成立——
     // 真实首启 = 向导没跑过（deploymentMode 缺失，向导独有产物）且 providers 全是占位/无 key。
@@ -1229,12 +1255,12 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       onboardingSvc.closeWizard(); // B-3：向导跑过的部署关闭写门（loopback 也不再放行）
     }
     if (!wizardRan && providersUnconfigured) {
-      const setupPath = onboardingSvc.issueSetupToken();
+      const { token } = onboardingSvc.issueSetupToken();
       const webPort = (config as { web?: { port?: number } }).web?.port ?? 8180;
       const webHost = config.web?.host ?? 'localhost';
-      // NetworkHostConfig 语义值：'local'/'localhost'→localhost；'lan'/'0.0.0.0'→占位（用浏览器所在机器的地址访问）
-      const hostHint = webHost === '0.0.0.0' || webHost === 'lan' ? '<本机IP>' : 'localhost';
-      console.log(`\n🧙 首启配置向导（Web）：http://${hostHint}:${webPort}${setupPath}`);
+      // URL 拼接单源在 helpers.setupWizardUrl（serve start 显示面共用）
+      const url = setupWizardUrl(token, webPort, webHost);
+      console.log(`\n🧙 首启配置向导（Web）：${url}`);
       console.log('   （链接仅打印在此终端，30 分钟内有效；完成配置后自动失效）\n');
     }
     const webApiRouter = new WebApiRouter({
@@ -1243,6 +1269,10 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       configApply,
       approverIdentity: httpConfig?.apiKey ? 'owner' : undefined,
       onboarding: onboardingSvc,
+      demoKit: new DemoKitService({
+        octopiHome: getOctopiHome(),
+        deploymentMode: (config as { deploymentMode?: unknown }).deploymentMode as string | undefined,
+      }),
     });
     const listenHost = resolveListenHost(listenHostConfig);
     // SEC-7 边界显式化：无 apiKey 时 console/config API 不设防（checkAuth 放行），

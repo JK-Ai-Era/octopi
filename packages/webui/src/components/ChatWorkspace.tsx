@@ -24,7 +24,8 @@ import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './Clie
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
 import { looksLikeCodeOrMarkup } from '@octopi-agent/engine/harness/session/title';
 import { resolveDefaultBase } from '../gateway-base';
-import { getConsoleKey, setConsoleKey } from '../console-key';
+import { getConsoleKey, setConsoleKey, getRegistryToken } from '../console-key';
+import { getLanguage } from '../runtime-config';
 
 const DEFAULT_BASE = resolveDefaultBase();
 
@@ -767,6 +768,9 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     effectModeSource?: 'agent' | 'global' | 'default';
   }>>([]);
   const [agentId, setAgentId] = useState('');
+  /** 演示任务包（批 3-1）：demo agent 发现 + 剧本 prompt（单源下发，见 /api/v1/demo/kit） */
+  const [demoKit, setDemoKit] = useState<{ available: boolean; agentId?: string; prompt?: string } | null>(null);
+  const [demoRunning, setDemoRunning] = useState(false);
   // §5d：错误卡进对话流（按时间交错）；self-heal 级走 toast/静默，不进卡
   const [flowErrors, setFlowErrors] = useState<Array<FlowErrorItem & { sessionId: string }>>([]);
   const pushFlowError = useCallback((e: Omit<FlowErrorItem, 'id' | 'at'>): void => {
@@ -1421,6 +1425,33 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     }
   };
 
+  /**
+   * 新建会话后的 UI 全量激活（评审 M5：createSession / demo 一键跑共用——
+   * activeSessionIdRef/状态重置/文件卡清空/模型刷新缺一即状态分叉）。
+   */
+  const activateCreatedSession = async (created: { id: string }) => {
+    stickToBottomRef.current = true;
+    setActiveSessionId(created.id);
+    activeSessionIdRef.current = created.id;
+    setRunStatus('idle');
+    setStream('');
+    setConversationItems(storeRef.current!.getState().chat.conversation ?? []);
+    setTasks(storeRef.current!.getTasks());
+    setSchedules(storeRef.current!.getSchedules());
+    setQuestions(storeRef.current!.getQuestions());
+    setApprovals(storeRef.current!.getApprovals());
+    setClientToolCalls(storeRef.current!.getClientToolCalls());
+    // 新会话不得残留上一会话的文件卡片/预览
+    setRenderedWebViews([]);
+    setDeliveredFiles([]);
+    setFocusFileId(null);
+    void registerSampleClientTools(created.id);
+    await storeRef.current!.refreshSessionModel();
+    const sm = storeRef.current!.getSessionModel();
+    setSessionModel(sm);
+    if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
+  };
+
   const createSession = async () => {
     if (connection !== 'connected') { setActionError('请先连接 Gateway，再新建会话。'); return; }
     if (!agentId) { setActionError('请先选择一个 Agent，再新建会话。'); return; }
@@ -1433,26 +1464,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         ? selectedModelId
         : undefined;
       const created = await store.createSession(agentId, modelToApply ? { model: modelToApply } : undefined);
-      stickToBottomRef.current = true;
-      setActiveSessionId(created.id);
-      activeSessionIdRef.current = created.id;
-      setRunStatus('idle');
-      setStream('');
-      setConversationItems(store.getState().chat.conversation ?? []);
-      setTasks(store.getTasks());
-      setSchedules(store.getSchedules());
-      setQuestions(store.getQuestions());
-      setApprovals(store.getApprovals());
-      setClientToolCalls(store.getClientToolCalls());
-      // 新会话不得残留上一会话的文件卡片/预览
-      setRenderedWebViews([]);
-      setDeliveredFiles([]);
-      setFocusFileId(null);
-      void registerSampleClientTools(created.id);
-      await store.refreshSessionModel();
-      const sm = store.getSessionModel();
-      setSessionModel(sm);
-      if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
+      await activateCreatedSession(created);
     } catch (error) {
       pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
       setActionError('操作失败，详情见对话流中的错误卡。');
@@ -1460,6 +1472,73 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       setCreating(false);
     }
   };
+
+  /** 详情浮层 Esc 关闭 + 焦点管理（批 3-3 / 评审 m10） */
+  const detailModalRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (rightTab === null) return;
+    detailModalRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setRightTab(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [rightTab]);
+
+  /** 演示任务包（批 3-1）：连接后拉 demo kit（网关未起/无 demo agent = 不显示示例卡，非关键路径） */
+  useEffect(() => {
+    if (connection !== 'connected') return;
+    // M2：带鉴权头（apiKey Bearer + registry token）与语言（m9）——裸 fetch 会被 checkAuth 401 静默吞
+    const headers: Record<string, string> = {};
+    const consoleKey = getConsoleKey();
+    if (consoleKey) headers['Authorization'] = `Bearer ${consoleKey}`;
+    const registryToken = getRegistryToken();
+    if (registryToken) headers['X-Registry-Token'] = registryToken;
+    fetch(`${resolveDefaultBase()}/api/v1/demo/kit?lang=${getLanguage()}`, { headers })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: unknown) => {
+        const kit = j as { ok?: boolean; available?: boolean; agentId?: string; prompt?: string } | null;
+        if (kit?.ok && kit.available && kit.agentId && kit.prompt) {
+          setDemoKit({ available: true, agentId: kit.agentId, prompt: kit.prompt });
+        }
+      })
+      .catch(() => setDemoKit(null));
+  }, [connection]);
+
+  /**
+   * 一键跑演示剧本（真 agent 真工具）：选 demo agent → 新会话 → 发剧本 prompt，
+   * 后续读资料/写周报都走普通 run + 真实文件工具（同数据路径，无假动画）。
+   */
+  const runDemoScript = async () => {
+    const store = storeRef.current;
+    if (!store || !demoKit?.agentId || !demoKit.prompt || demoRunning) return;
+    setDemoRunning(true);
+    setActionError(null);
+    try {
+      // M5：不依赖 selectAgent 前置（switchingAgent 短路会分叉状态）——直接对齐 agent 后激活新会话
+      setAgentId(demoKit.agentId);
+      const created = await store.createSession(demoKit.agentId, undefined);
+      await activateCreatedSession(created);
+      await sendMessage(demoKit.prompt);
+    } catch (error) {
+      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      setActionError('演示启动失败，详情见对话流中的错误卡。');
+    } finally {
+      setDemoRunning(false);
+    }
+  };
+
+  /** 「试试这个示例」卡：demo agent 可用才渲染（批 3-1 演示剧本一键跑） */
+  const demoCard = demoKit?.available && demoKit.agentId && demoKit.prompt ? (
+    <div className="demo-kit-card">
+      <div className="small muted" style={{ marginBottom: 8 }}>
+        第一次来？让示例助手跑一个<b>真 agent、真工具</b>的三步剧本（读资料 → 总结周报 → 存成文件）：
+      </div>
+      <button className="btn-primary" onClick={() => void runDemoScript()} disabled={demoRunning}>
+        {demoRunning ? '演示启动中…' : '试试这个示例'}
+      </button>
+    </div>
+  ) : null;
 
   /**
    * 切换 agent：会话列表 + 中部窗口 + 右栏 + store 活动会话全量联动。
@@ -2151,6 +2230,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 <div className="small muted">
                   在左侧选择一个助手，然后点击 <b>新建会话</b>，就可以开始对话了。
                 </div>
+                {demoCard}
               </div>
             )}
             {activeSessionId && conversationItems.length === 0 && (
@@ -2173,6 +2253,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                     </button>
                   ))}
                 </div>
+                {demoCard}
               </div>
             )}
 
@@ -2586,16 +2667,26 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             </label>
           </div>
 
+          {/* ── 详情浮层（批 3-3）：点行下钻——概览保留在后，Esc/遮罩/「← 概览」关闭 ── */}
           {rightTab !== null && (
-            <div className="rail-detail-head">
-              <button className="btn-ghost small" onClick={() => setRightTab(null)}>
-                ← 概览
-              </button>
-              <span className="rail-detail-title">
-                {{ context: '上下文', run: 'Run', services: '服务', tasks: '任务', schedules: '日程', attachments: '附件', roots: '目录', git: 'Git', file: '文件', tools: '工具', help: '帮助' }[rightTab]}
-              </span>
-            </div>
-          )}
+            <div className="detail-modal-overlay" role="presentation" onClick={() => setRightTab(null)}>
+              <div
+                className="detail-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label="详情"
+                tabIndex={-1}
+                ref={detailModalRef}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="rail-detail-head">
+                  <button className="btn-ghost small" onClick={() => setRightTab(null)}>
+                    ← 概览
+                  </button>
+                  <span className="rail-detail-title">
+                    {{ context: '上下文', run: 'Run', services: '服务', tasks: '任务', schedules: '日程', attachments: '附件', roots: '目录', git: 'Git', file: '文件', tools: '工具', help: '帮助' }[rightTab]}
+                  </span>
+                </div>
 
           {rightTab === 'context' && (
             <ContextRuntimePanel
@@ -2753,6 +2844,9 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 <li>Enter 发送，Shift+Enter 换行；输入法选词阶段不会误触</li>
               </ul>
             </section>
+          )}
+              </div>
+            </div>
           )}
         </aside>
       </main>

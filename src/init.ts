@@ -425,7 +425,18 @@ export function isInitialized(homeDir?: string): boolean {
 /**
  * 生成初始化报告（人类可读）
  */
-export function formatInitReport(result: Awaited<ReturnType<typeof initOctopi>>): string {
+/**
+ * 初始化报告（CLI 展示）。
+ *
+ * @param result - initOctopi 结果
+ * @param opts.context - 'init'（独立 init 命令，打 Next steps）| 'serve'（serve start 首启静默初始化——
+ *   Next steps 里的「运行 serve start」正是用户正在执行的命令，改为指向随后打印的向导链接；评审 m2）
+ * @returns 报告文本
+ */
+export function formatInitReport(
+  result: Awaited<ReturnType<typeof initOctopi>>,
+  opts?: { context?: 'init' | 'serve' },
+): string {
   const lines: string[] = [];
 
   lines.push(result.isFresh ? '🐙 Octopi initialized!' : '🐙 Octopi already initialized.');
@@ -447,10 +458,16 @@ export function formatInitReport(result: Awaited<ReturnType<typeof initOctopi>>)
   }
 
   lines.push('\n   Next steps:');
-  lines.push(`     1. Edit ${result.configPath} to configure your providers`);
-  lines.push(`     2. Set OPENAI_API_KEY (or other provider keys) in your environment`);
-  lines.push(`     3. Run: octopi serve`);
-  lines.push(`     4. Or chat directly: octopi chat`);
+  if (opts?.context === 'serve') {
+    lines.push(`     1. 等下方 🧙 首启配置向导链接打印后，在浏览器打开走完九步向导`);
+    lines.push(`     2. 或在终端走同款向导：octopi init`);
+    lines.push(`     （进阶：手改 ${result.configPath} + 环境变量里的 API key）`);
+  } else {
+    lines.push(`     1. Run: octopi serve start — 打印首启配置向导链接（Web 九步向导，无需手改配置）`);
+    lines.push(`     2. 或在终端走同款向导：octopi init`);
+    lines.push(`     3. 配置完成后直接对话：octopi chat（终端）或浏览器打开 Web 控制台`);
+    lines.push(`     （进阶：手改 ${result.configPath} + 环境变量里的 API key）`);
+  }
 
   return lines.join('\n');
 }

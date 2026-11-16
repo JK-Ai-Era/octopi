@@ -54,18 +54,19 @@ const baseChoices: Partial<import('../packages/engine/src/config-admin/onboardin
 describe('setup token 闸（§7）', () => {
   it('幂等签发（TTL 内重复调用同 token）+ URL 形态', () => {
     const svc = makeService();
-    expect(svc.issueSetupToken()).toBe('/?setup=tok-fixed');
-    expect(svc.issueSetupToken()).toBe('/?setup=tok-fixed');
+    expect(svc.issueSetupToken()).toEqual({ token: 'tok-fixed', path: '/?setup=tok-fixed' });
+    expect(svc.issueSetupToken()).toEqual({ token: 'tok-fixed', path: '/?setup=tok-fixed' });
   });
 
   it('30 分钟过期：过期后远程拒、再签发换新 token', () => {
     let now = T0;
     const svc = makeService({ now: () => now, randomToken: () => `tok-${now}` });
-    svc.issueSetupToken();
+    const first = svc.issueSetupToken();
     now = T0 + 30 * 60_000 + 1; // 过期
-    expect(svc.authorize('tok-0', false)).toBe(false);
-    expect(svc.issueSetupToken()).toContain(`tok-${now}`); // 新 token
-    expect(svc.authorize(`tok-${now}`, false)).toBe(true);
+    expect(svc.authorize(first.token, false)).toBe(false);
+    const second = svc.issueSetupToken();
+    expect(second.token).toContain(`tok-${now}`); // 新 token
+    expect(svc.authorize(second.token, false)).toBe(true);
   });
 
   it('远程无 token / 错 token 拒；loopback 免闸', () => {
@@ -157,5 +158,55 @@ describe('M2 单源契约', () => {
       if (step === 'welcome') continue;
       expect(cases, `webui 缺 case '${step}'`).toContain(step);
     }
+  });
+});
+
+describe('M-6 热应用（向导产物接 ApplyEngine）', () => {
+  type OnboardingServiceInstance = InstanceType<typeof OnboardingService>;
+  type OnboardingRender = ReturnType<OnboardingServiceInstance['render']>;
+  async function walk(svc: OnboardingServiceInstance): Promise<OnboardingRender> {
+    svc.start();
+    const steps = ['welcome', 'init-mode', 'deployment-mode', 'provider', 'api-key', 'model', 'probe', 'services', 'first-chat'] as const;
+    let last: OnboardingRender | undefined;
+    for (const step of steps) {
+      last = await svc.submit({ kind: 'next' }, ['provider', 'api-key', 'model'].includes(step) ? baseChoices : undefined);
+    }
+    return last!;
+  }
+
+  it('钩子成功：hotApplied=true（完成页不再要求重启）', async () => {
+    probeMock.mockResolvedValueOnce({ ok: true });
+    let called = 0;
+    const svc = makeService({
+      onConfigApplied: async () => {
+        called += 1;
+      },
+    });
+    const last = await walk(svc);
+    // commit 双时机（after-probe + on-done）→ 钩子跟调 2 次；applyFromDisk 幂等重放无害
+    expect(called).toBe(2);
+    expect(last.completed).toBe(true);
+    expect(last.hotApplied).toBe(true);
+  });
+
+  it('钩子抛错：hotApplied=false + hotApplyError（落盘保留，降级提示重启——不静默）', async () => {
+    probeMock.mockResolvedValueOnce({ ok: true });
+    const svc = makeService({
+      onConfigApplied: async () => {
+        throw new Error('apply exploded');
+      },
+    });
+    const last = await walk(svc);
+    expect(last.completed).toBe(true);
+    expect(last.hotApplied).toBe(false);
+    expect(last.hotApplyError).toContain('apply exploded');
+    expect(existsSync(svc.__config)).toBe(true); // 落盘不回滚（配置已是真相）
+  });
+
+  it('未注入钩子：hotApplied=undefined（保留「需重启」提示）', async () => {
+    probeMock.mockResolvedValueOnce({ ok: true });
+    const svc = makeService();
+    const last = await walk(svc);
+    expect(last.hotApplied).toBeUndefined();
   });
 });

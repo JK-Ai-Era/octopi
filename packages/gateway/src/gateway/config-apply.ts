@@ -353,6 +353,67 @@ export class ConfigApplyService {
   }
 
   /**
+   * 盘 → 运行时全量热应用（M-6 根治：向导产物接 ApplyEngine）。
+   *
+   * 语义：octopi.json 已是真相（写盘方已完成），本方法只做「盘 → 运行时」重放——
+   * L0（level 路由）+ L2（providers 全量重建，staging 后原子 swap——评审 M4）+ L1
+   * （config agents 定义重建 + 构建全量失效；registry agents 不动——评审 B4：
+   * invalidateAllAgentBuilds 重建用的是旧 definition 快照，model 变更必须重解析）。
+   * 与 CRUD 热应用共用同一 ApplyEngine 通路（不另起炉灶）。
+   * L3（channels/web/knowledge 端口）不在热应用范围——若向导改了这些，仍需重启
+   * （向导产物不碰端口，正常路径全覆盖）。
+   *
+   * @returns 应用摘要；任一 provider 构造失败即抛且运行时零变更（staging 先行）
+   */
+  async applyFromDisk(): Promise<{ providers: string[]; removedProviders: string[]; agentsInvalidated: boolean }> {
+    const snapshot = this.deps.configAdmin.read();
+    const raw = snapshot.raw as Record<string, unknown>;
+    const level = getJsonPath(raw, ['models', 'level']) as
+      | Record<string, { primary: string; fallback?: string[] }>
+      | undefined;
+    this.deps.gateway.setModelLevels(level && typeof level === 'object' ? level : undefined);
+
+    // L2 staging：全部构造成功后才 swap（M4——任一失败运行时零变更，不产混合态）
+    const providers = (getJsonPath(raw, ['models', 'providers']) ?? {}) as Record<string, Record<string, unknown>>;
+    const staged: Array<{ name: string; config: Record<string, unknown>; provider: unknown }> = [];
+    for (const [name, cfg] of Object.entries(providers)) {
+      if (!cfg || typeof cfg !== 'object') continue;
+      const expanded = expandEnvValues(cfg);
+      staged.push({ name, config: expanded, provider: await this.deps.providerFactory(name, expanded) });
+    }
+    for (const s of staged) {
+      await this.deps.gateway.replaceProvider(s.provider as never, s.config, []);
+    }
+    // m6：盘上已删/改名的 provider 摘除（对比运行时名单）
+    const onDisk = new Set(staged.map((s) => s.name));
+    const removed: string[] = [];
+    for (const name of this.deps.gateway.getProviderNames()) {
+      if (!onDisk.has(name)) {
+        await this.deps.gateway.removeProvider(name, []);
+        removed.push(name);
+      }
+    }
+
+    // B4：config agents 定义重建（model 快照重解析）；registry agents 不在此域（不覆盖）
+    const agentEntries = (getJsonPath(raw, ['agents']) ?? []) as Array<Record<string, unknown>>;
+    for (const entry of agentEntries) {
+      if (!entry || typeof entry !== 'object') continue;
+      this.deps.gateway.registerAgent(this.deps.agentDefFactory(entry, raw as never));
+    }
+    await this.deps.gateway.invalidateAllAgentBuilds();
+    // B4 深层：run worker 独立进程的 provider 表随热应用同步（boot 快照过期否则 409）
+    await this.deps.gateway.reloadProvidersOnFleet(
+      Object.fromEntries(staged.map((s) => [s.name, s.config])),
+    );
+    this.audit(
+      'config.applyFromDisk',
+      `向导产物热应用（providers: ${staged.map((s) => s.name).join(', ') || 'none'}；removed: ${removed.join(', ') || 'none'}；agents: ${agentEntries.length}）`,
+      { hashAfter: snapshot.hash },
+    );
+    return { providers: staged.map((s) => s.name), removedProviders: removed, agentsInvalidated: true };
+  }
+
+  /**
    * 删除 provider（L2）：引用完整性把关 → 写盘 → 热摘除
    *
    * @param name - provider 名

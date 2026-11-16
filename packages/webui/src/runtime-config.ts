@@ -13,8 +13,35 @@
 /** serve-webui 启动时注入的 UI 配置（`window.__OCTOPI_WEB__`） */
 declare global {
   interface Window {
-    __OCTOPI_WEB__?: { gitStatusPollSeconds?: number; deploymentMode?: string } | null;
+    __OCTOPI_WEB__?: {
+      gitStatusPollSeconds?: number;
+      deploymentMode?: string;
+      /** 产品版本（package.json 构建信息；AboutPanel 展示） */
+      version?: string;
+      /** 配置语言（demo 剧本/文案语言对齐用） */
+      language?: string;
+    } | null;
   }
+}
+
+/**
+ * 产品版本（「关于」页展示）。
+ *
+ * @returns 下发的版本号；缺失时 undefined（UI 显示占位）
+ */
+export function getProductVersion(): string | undefined {
+  const v = typeof window !== 'undefined' ? window.__OCTOPI_WEB__?.version : undefined;
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/**
+ * 配置语言（demo 剧本等语言对齐——评审 m9）。
+ *
+ * @returns 'zh' | 'en'；缺失时 'zh'
+ */
+export function getLanguage(): 'zh' | 'en' {
+  const v = typeof window !== 'undefined' ? window.__OCTOPI_WEB__?.language : undefined;
+  return v === 'en' ? 'en' : 'zh';
 }
 
 /** 无运行时下发时的 Git 页签轮询间隔（秒） */
