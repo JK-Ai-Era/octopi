@@ -1745,19 +1745,30 @@ button.ctx-band {
   display: flex;
   flex-direction: column;
   height: var(--composer-h, 240px);
-  min-height: 140px;
+  min-height: 0;
   max-height: 70vh;
   overflow: visible;
   box-sizing: border-box;
-  /* 固定高度（手柄直接调它）：chips 区可独立滚动、textarea 弹性吸收剩余；
-     弹层不裁（overflow visible），附件 chips 在固定区内部滚动不外溢 */
+  /* 固定高度（手柄直接调它）：rows=1 让 flex 全权决定 textarea 高度；
+     chips 区独立滚动、弹层不裁（overflow visible 保留 B1 修复） */
 }
 .composer-input-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .composer-attachments { flex-shrink: 0; max-height: 72px; overflow-y: auto; }
-.composer-textarea { flex: 1; min-height: 56px; resize: none; }
-.composer-footer { flex-shrink: 0; display: grid; gap: 6px; }
-.composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.composer-bottom-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.composer-textarea { flex: 1; min-height: 0; resize: none; }
+.composer-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.composer-footer-center { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; }
+.composer-footer-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.composer-footer-right .model-select { max-width: 220px; }
+/* footer 控件尺寸统一：附件/语料/发送 同 small 高度；模型 select 同高对齐 */
+.composer-footer .btn-primary.small,
+.composer-footer .btn-secondary.small { height: 30px; padding: 0 12px; display: inline-flex; align-items: center; }
+.composer-footer .model-select { height: 30px; }
 .composer-usage {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -1767,8 +1778,6 @@ button.ctx-band {
   padding: 2px 8px;
   white-space: nowrap;
 }
-.composer-hint { white-space: nowrap; }
-.composer-tools .model-select { max-width: 240px; }
 
 /* ── ② 右栏概览重设计：图标 + 组卡 + 箭头 ── */
 .rail-overview { display: grid; gap: 12px; align-content: start; }

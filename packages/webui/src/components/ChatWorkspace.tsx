@@ -2177,12 +2177,28 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                     </button>
                   )}
                 </div>
-                <div className="small muted">{agentId ? `Agent: ${agentId}` : '请先选择 Agent'}</div>
+                <div className="small muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>{agentId ? `Agent: ${agentId}` : '请先选择 Agent'}</span>
+                  <span
+                    className="composer-usage small"
+                    title={`上下文：上次实测 ${promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / 模型窗口 ${contextWindowLabel}`}
+                  >
+                    {promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / {contextWindowLabel}
+                  </span>
+                </div>
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>
                 <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{runStatus}</span>
-                <button className="btn-secondary" onClick={abort} disabled={!['streaming', 'waiting', 'tools', 'sending'].includes(runStatus)}>中止</button>
+                <button
+                  className="btn-secondary small"
+                  onClick={() => void runManualCompact()}
+                  disabled={!activeSessionId || compacting}
+                  title="结构压缩：头尾保护 + 中间摘要；不依赖 contextWindow"
+                >
+                  {compacting ? '压缩中…' : '压缩'}
+                </button>
+                <button className="btn-secondary small" onClick={abort} disabled={!['streaming', 'waiting', 'tools', 'sending'].includes(runStatus)}>中止</button>
               </div>
             </div>
             {compactMsg && (
@@ -2470,25 +2486,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               }
             }}
           >
-            <div className="composer-input-wrap">
-            {showCmdSuggest && (
-              <div className="cmd-suggest" role="listbox">
-                {cmdMatches.map((c, idx) => (
-                  <div
-                    key={c.name}
-                    className={`cmd-suggest-item ${idx === cmdSuggestIndex ? 'cmd-suggest-active' : ''}`}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      applyCommand(c.name);
-                    }}
-                  >
-                    <span className="cmd-suggest-name">{c.display || `/${c.name}`}</span>
-                    <span className="cmd-suggest-desc">{c.description}</span>
-                    {c.usage && <span className="cmd-suggest-meta">{c.usage} · {c.source}</span>}
-                  </div>
-                ))}
-              </div>
-            )}
             <div className="composer-attachments">
               {pendingAttachments.length > 0 && (
                 <div className="attachment-chips">
@@ -2510,6 +2507,25 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 </div>
               )}
             </div>
+            <div className="composer-input-wrap">
+            {showCmdSuggest && (
+              <div className="cmd-suggest" role="listbox">
+                {cmdMatches.map((c, idx) => (
+                  <div
+                    key={c.name}
+                    className={`cmd-suggest-item ${idx === cmdSuggestIndex ? 'cmd-suggest-active' : ''}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applyCommand(c.name);
+                    }}
+                  >
+                    <span className="cmd-suggest-name">{c.display || `/${c.name}`}</span>
+                    <span className="cmd-suggest-desc">{c.description}</span>
+                    {c.usage && <span className="cmd-suggest-meta">{c.usage} · {c.source}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea
               className="composer-textarea"
               value={input}
@@ -2518,7 +2534,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 setCmdSuggestIndex(0);
               }}
               onKeyDown={handleComposerKeyDown}
-              rows={4}
+              rows={1}
               placeholder="输入消息，或 / 打开命令列表；可拖拽/粘贴附件"
               title={activeSessionId ? `发送到会话 ${activeSessionId}` : '请先打开一个会话'}
             />
@@ -2543,6 +2559,18 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   sessionId={activeSessionId}
                   onToast={setToast}
                 />
+              </div>
+              {/* 单行 footer：左=附件/语料；中=toast/警告；右=模型选择 + 发送（按钮尺寸统一） */}
+              <div className="composer-footer-center small muted">
+                {toast && <span className="corpus-toast">{toast}</span>}
+                {openIssues.length > 0 && (
+                  <span className="small" style={{ color: 'var(--color-warn)' }}>
+                    ⚠️ {openIssues.length} issue · /issues
+                  </span>
+                )}
+                {modelError && <span className="small status-error">{modelError}</span>}
+              </div>
+              <div className="composer-footer-right">
                 <select
                   aria-label="会话模型"
                   className="model-select"
@@ -2573,38 +2601,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                     </option>
                   ))}
                 </select>
-                {activeSessionId && sessionModel?.modelId && sessionModel.modelId !== sessionModel.defaultModelId && (
-                  <span className="small status-ok" title="会话模型覆盖生效中">覆盖</span>
-                )}
-                {modelError && <span className="small status-error">{modelError}</span>}
-              </div>
-              {/* 底行：左=上下文用量 chip + 压缩（轻量文字钮）+ toast；右=发送（清空钮按裁决移除） */}
-              <div className="composer-bottom">
-                <div className="composer-bottom-left">
-                  <span
-                    className="composer-usage small"
-                    title={`上下文：上次实测 ${promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / 模型窗口 ${contextWindowLabel}`}
-                  >
-                    {promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / {contextWindowLabel}
-                  </span>
-                  <button
-                    className="btn-ghost small"
-                    onClick={() => void runManualCompact()}
-                    disabled={!activeSessionId || compacting}
-                    title="结构压缩：头尾保护 + 中间摘要；不依赖 contextWindow"
-                  >
-                    {compacting ? '压缩中…' : '压缩'}
-                  </button>
-                  {toast && <span className="corpus-toast">{toast}</span>}
-                  {openIssues.length > 0 && (
-                    <span className="small" style={{ color: 'var(--color-warn)' }}>
-                      ⚠️ {openIssues.length} issue · /issues
-                    </span>
-                  )}
-                  <span className="small muted composer-hint">Enter 发送 · Shift+Enter 换行</span>
-                </div>
                 <button
-                  className="btn-primary"
+                  className="btn-primary small"
                   onClick={() => void sendMessage()}
                   disabled={!activeSessionId || (!input.trim() && pendingAttachments.length === 0)}
                 >

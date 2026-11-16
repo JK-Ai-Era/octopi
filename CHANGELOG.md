@@ -126,6 +126,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.116.3 (2026-11-17)
+
+### fix(webui): UI 第三轮——初始高度修复 + footer 单行 + 上下文/压缩归位头部
+
+**初始高度**：textarea `rows=4` + `min-height:140` 把固定高度顶穿（初始看起来最大）→ `rows=1` + `min-height:0` 让 flex 全权决定，初始稳定 240px（手柄持久值生效）。
+
+**footer 单行**：左 = 附件 + 语料；中 = toast / issue 警告 / 模型错误；右 = 模型选择（去「覆盖」徽标）+ 发送；附件/语料/发送/select 高度统一 30px。两行底行删除。
+
+**头部归位**：上下文 chip（等宽数字 `实测/窗口`）挪到「Agent: xxx」后；「压缩」钮回「中止」左侧，两钮统一 `btn-secondary small`。
+
+**验证**：webui build ✓ / 全量 **5133 绿** / lint 0。
+
 ## v0.116.2 (2026-11-17)
 
 ### fix(webui): UI 第二轮——输入区拖拽修复 + 中部区域两行重排 + 连接状态窄条
