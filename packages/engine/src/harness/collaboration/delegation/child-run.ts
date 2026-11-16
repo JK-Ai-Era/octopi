@@ -37,6 +37,8 @@ export interface ChildRunInput {
   /** 目标 agentId（已解析） */
   childAgentId: string;
   task: string;
+  /** 子会话显示标题（工具面必填；缺省时退任务派生标题，不产生「新会话」） */
+  title?: string;
   input: string;
   /** 上下文传递模式 */
   context: DelegationContextMode;
@@ -254,11 +256,13 @@ export class RunnerChildRunPort implements ChildRunPort {
   /** 构造带 `spawnBy` 的 child session 骨架 */
   private newChildSession(sessionId: string, input: ChildRunInput): SessionData {
     const timestamp = Date.now();
-    // 委派任务作初始标题（snippet 三键）：子会话不再一律「新会话」。
+    // 委派标题落三键：子会话不再一律「新会话」。
     // 权威在 metadata 三键（写端恒打三键）；meta.title 仅镜像——只写 meta.title
-    // 会被 readTitleState 投影覆盖为 undefined（正是「新会话」的根因）。
-    // snippet 语义：可被后续自动标题升级；user 重命名永不被覆盖（shouldUpdateTitle）
-    const title = delegationTaskTitle(input.task);
+    // 会被 readTitleState 投影覆盖为 undefined（曾是「新会话」的根因）。
+    // 显式标题按 user 语义保护（不被自动标题覆盖——"设了就是设了"）；
+    // 任务派生为临时（snippet，可被自动标题升级）——shouldUpdateTitle 既有仲裁
+    const title = delegationSessionTitle(input);
+    const titleSource = input.title?.trim() ? 'user' : 'snippet';
     return {
       id: sessionId,
       agentId: input.childAgentId,
@@ -268,7 +272,7 @@ export class RunnerChildRunPort implements ChildRunPort {
       meta: {
         tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
         title,
-        titleSource: 'snippet',
+        titleSource,
         titleUpdatedAt: timestamp,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -279,16 +283,18 @@ export class RunnerChildRunPort implements ChildRunPort {
       metadata: {
         delegationId: input.delegationId,
         title,
-        titleSource: 'snippet',
+        titleSource,
         titleUpdatedAt: timestamp,
       },
     };
   }
 }
 
-/** 委派任务 → 子会话初始标题：压单行空白、连同前缀截 120 */
-function delegationTaskTitle(task: string): string {
-  return `delegation: ${task.replace(/\s+/g, ' ').trim()}`.slice(0, 120);
+/** 委派 → 子会话标题（单一来源，委派单记录与子会话同用此值）：显式 title 优先（压单行、截 120）；缺省退任务派生（delegation: 前缀，兼容直连 API 老调用方） */
+export function delegationSessionTitle(input: { title?: string; task: string }): string {
+  const explicit = input.title?.replace(/\s+/g, ' ').trim();
+  if (explicit) return explicit.slice(0, 120);
+  return `delegation: ${input.task.replace(/\s+/g, ' ').trim()}`.slice(0, 120);
 }
 
 /**
@@ -385,6 +391,7 @@ export function createChildRunExecutor(
         childSessionId: request.childSessionId,
         childRunId: request.childRunId,
         task: request.task,
+        title: request.title,
         input: request.input,
         context: request.context,
         parentMessages: request.parentMessages,

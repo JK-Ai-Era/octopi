@@ -207,7 +207,7 @@ describe('delegate_dispatch max_output_chars 透传与校验', () => {
     const { service, calls } = fakeService();
     const tool = createDelegateDispatchTool(service);
     const res = (await tool.handler!(
-      { agent: 'worker', task: 't', input: 'i', max_output_chars: 500 },
+      { agent: 'worker', title: 'T', task: 't', input: 'i', max_output_chars: 500 },
       ctx,
     )) as { ok: boolean };
     expect(res.ok).toBe(true);
@@ -218,7 +218,7 @@ describe('delegate_dispatch max_output_chars 透传与校验', () => {
     const { store, service } = realService();
     const tool = createDelegateDispatchTool(service);
     const res = (await tool.handler!(
-      { agent: 'worker', task: 't', input: 'i', max_output_chars: 500 },
+      { agent: 'worker', title: 'T', task: 't', input: 'i', max_output_chars: 500 },
       ctx,
     )) as { ok: boolean };
     expect(res.ok).toBe(true);
@@ -230,7 +230,7 @@ describe('delegate_dispatch max_output_chars 透传与校验', () => {
     const tool = createDelegateDispatchTool(service);
     for (const bad of [NaN, 0, -5, Infinity, 1.5]) {
       const res = (await tool.handler!(
-        { agent: 'worker', task: 't', input: 'i', max_output_chars: bad },
+        { agent: 'worker', title: 'T', task: 't', input: 'i', max_output_chars: bad },
         ctx,
       )) as { ok: boolean; error?: string };
       expect(res.ok, `max_output_chars=${String(bad)}`).toBe(false);
@@ -241,7 +241,7 @@ describe('delegate_dispatch max_output_chars 透传与校验', () => {
   it('缺省 → undefined（渲染侧回落 DEFAULT_DELEGATION_OUTPUT_CHARS）', async () => {
     const { service, calls } = fakeService();
     const tool = createDelegateDispatchTool(service);
-    await tool.handler!({ agent: 'worker', task: 't', input: 'i' }, ctx);
+    await tool.handler!({ agent: 'worker', title: 'T', task: 't', input: 'i' }, ctx);
     expect(calls[0]!.maxOutputChars).toBeUndefined();
   });
 });

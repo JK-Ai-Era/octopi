@@ -584,54 +584,75 @@ describe('regression guard: child ids are never undefined', () => {
 });
 
 // ══════════════════════════════════════════════════════════════
-// 委派子会话初始标题：任务文本三键落 metadata（修「新会话」）
+// 委派子会话标题：显式 title 落三键；缺省退任务派生（修「新会话」）
 // ══════════════════════════════════════════════════════════════
 
-describe('child session gets a title at delegation time（非「新会话」）', () => {
-  it('newChildSession 写标题三键，且 list 投影可见（读端不再覆盖为 undefined）', async () => {
+describe('child session title（委派显式 title；缺省退任务派生）', () => {
+  /** 真 Jsonl store 走一次子 Run；title 省略 = 不传该字段（缺省路径） */
+  async function runChild(store: JsonlSessionStore, title?: string): Promise<void> {
+    const fakeRunner = {
+      async *handle() {
+        yield {
+          type: 'step.end',
+          timestamp: Date.now(),
+          agentId: 'w',
+          sessionId: 's',
+          data: { content: 'ok' },
+        } as never;
+      },
+    };
+    const { RunnerChildRunPort } = await import(
+      '@octopi-agent/engine/harness/collaboration/delegation/child-run.js'
+    );
+    const port = new RunnerChildRunPort({
+      resolve: () => ({ runner: fakeRunner as never, store }),
+    });
+
+    await port.run({
+      delegationId: 'del-t',
+      childAgentId: 'worker',
+      childSessionId: 'cs-title-1',
+      childRunId: 'run-title-1',
+      task: '调研 子会话\n标题 语义',
+      input: 'i',
+      context: 'clean',
+      spawnBy: { delegationId: 'del-t', parentAgentId: 'main', parentSessionId: 's', parentRunId: 'r' },
+      systemPrompt: 'p',
+      ...(title === undefined ? {} : { title }),
+    });
+  }
+
+  it('显式 title 原样落三键（压单行），且 list 投影可见（读端不覆盖为 undefined）', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'del-title-'));
     try {
       const store = new JsonlSessionStore({ sessionsDir: join(dir, 'sessions') });
-      const fakeRunner = {
-        async *handle() {
-          yield {
-            type: 'step.end',
-            timestamp: Date.now(),
-            agentId: 'w',
-            sessionId: 's',
-            data: { content: 'ok' },
-          } as never;
-        },
-      };
-      const { RunnerChildRunPort } = await import(
-        '@octopi-agent/engine/harness/collaboration/delegation/child-run.js'
-      );
-      const port = new RunnerChildRunPort({
-        resolve: () => ({ runner: fakeRunner as never, store }),
-      });
+      await runChild(store, '  调研 子会话\n标题 语义  ');
 
-      await port.run({
-        delegationId: 'del-t',
-        childAgentId: 'worker',
-        childSessionId: 'cs-title-1',
-        childRunId: 'run-title-1',
-        task: '调研 子会话\n标题 语义',
-        input: 'i',
-        context: 'clean',
-        spawnBy: { delegationId: 'del-t', parentAgentId: 'main', parentSessionId: 's', parentRunId: 'r' },
-        systemPrompt: 'p',
-      });
-
-      const expected = 'delegation: 调研 子会话 标题 语义';
+      const expected = '调研 子会话 标题 语义';
       const child = await store.load('cs-title-1');
-      // 标题三键权威（写端恒打三键）；任务文本压单行
+      // 标题三键权威（写端恒打三键）；显式标题原样（无 delegation: 前缀），
+      // titleSource=user（显式保护：不被自动标题覆盖）
       expect(child?.metadata.title).toBe(expected);
-      expect(child?.metadata.titleSource).toBe('snippet');
+      expect(child?.metadata.titleSource).toBe('user');
       expect(typeof child?.metadata.titleUpdatedAt).toBe('number');
       // 投影层（UI 消费面）：readTitleState 不再把 meta.title 覆盖成 undefined
       const meta = (await store.list()).find((m) => m.id === 'cs-title-1');
       expect(meta?.title).toBe(expected);
-      expect(meta?.titleSource).toBe('snippet');
+      expect(meta?.titleSource).toBe('user');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('缺省 title 退任务派生（delegation: 前缀），不产生「新会话」', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'del-title-'));
+    try {
+      const store = new JsonlSessionStore({ sessionsDir: join(dir, 'sessions') });
+      await runChild(store);
+
+      const child = await store.load('cs-title-1');
+      expect(child?.metadata.title).toBe('delegation: 调研 子会话 标题 语义');
+      expect(child?.metadata.titleSource).toBe('snippet');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1261,7 +1261,7 @@ describe('resolution failure returns available targets for self-correction', () 
     );
 
     const result = await byName.delegate_dispatch.handler(
-      { trait: 'nonexistent', task: 't', input: 'i' },
+      { trait: 'nonexistent', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as {
       ok: boolean;
@@ -1296,14 +1296,14 @@ describe('resolution failure returns available targets for self-correction', () 
 
     // 第一次失败 → 模型从 available_targets 里挑 id → 第二次成功
     const fail = await byName.delegate_dispatch.handler(
-      { trait: 'nope', task: 't', input: 'i' },
+      { trait: 'nope', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { ok: boolean; available_targets?: { agents: Array<{ id: string }> } };
     const picked = fail.available_targets?.agents[0]?.id;
     expect(picked).toBe('alpha');
 
     const ok = await byName.delegate_dispatch.handler(
-      { agent: picked, task: 't', input: 'i' },
+      { agent: picked, title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { ok: boolean };
     expect(ok.ok).toBe(true);

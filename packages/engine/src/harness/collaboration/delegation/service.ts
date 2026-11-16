@@ -33,6 +33,7 @@ import { DELEGATION_SCHEMA_VERSION, DelegationEvents, isTerminalDelegationStatus
 import type { DelegationBudget, DelegationContextMode } from './types.js';
 import type { DelegationListFilter, DelegationStore } from './store.js';
 import type { DelegateTransport } from './transport.js';
+import { delegationSessionTitle } from './child-run.js';
 import { tightenSessionRights } from '../../governance/session-acl/rights.js';
 import { effectiveDelegationPolicy } from './registry-types.js';
 
@@ -56,6 +57,8 @@ export interface DispatchDelegationInput {
    */
   parentRights?: import('../../governance/session-acl/types.js').SessionRights;
   task: string;
+  /** 子会话显示标题（工具面必填；写入委派单与子会话标题三键） */
+  title?: string;
   input: string;
   /** 自动返回通知 `<output>` 截断上限（chars）；缺省 = DEFAULT_DELEGATION_OUTPUT_CHARS（B 方案 2026-11-09） */
   maxOutputChars?: number;
@@ -258,6 +261,7 @@ export class DelegateService {
       parent: input.parent,
       target: input.target,
       task: input.task,
+      title: delegationSessionTitle(input),
       input: input.input,
       maxOutputChars: input.maxOutputChars,
       context: input.context,
@@ -535,6 +539,7 @@ export class DelegateService {
       childSessionId,
       childRunId,
       task: input.task,
+      title: delegationSessionTitle(input),
       input: input.input,
       context: input.context ?? 'clean',
       parentMessages: input.context === 'fork' ? input.parentMessages : undefined,

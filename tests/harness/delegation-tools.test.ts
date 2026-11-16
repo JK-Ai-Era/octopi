@@ -297,6 +297,7 @@ describe('createChildRunExecutor', () => {
       from: { agentId: 'main', sessionId: 's', runId: 'r' },
       to: { agentId: 'worker' },
       task: 't',
+      title: 'T-7',
       input: 'i',
       context: 'clean',
       schemaVersion: DELEGATION_SCHEMA_VERSION,
@@ -306,6 +307,9 @@ describe('createChildRunExecutor', () => {
     expect(result.output).toBe('answer');
     expect(result.delegationId).toBe('del-7');
     expect(result.schemaVersion).toBe(DELEGATION_SCHEMA_VERSION);
+    // 回归钉：DelegateRequest.title → ChildRunInput → 子会话标题（漏传即红）
+    const child = await store.load('cs-test-7');
+    expect(child?.metadata.title).toBe('T-7');
   });
 
   it('fails cleanly when the request has no resolved agentId', async () => {
@@ -393,19 +397,49 @@ describe('delegate_* tools', () => {
   it('dispatch requires exactly one of agent / trait', async () => {
     const { byName } = makeToolHarness();
     const both = await byName.delegate_dispatch.handler(
-      { agent: 'worker', trait: 'research', task: 't', input: 'i' },
+      { agent: 'worker', trait: 'research', title: 'T', task: 't', input: 'i' },
       CTX,
     );
     expect(both).toMatchObject({ ok: false });
 
-    const neither = await byName.delegate_dispatch.handler({ task: 't', input: 'i' }, CTX);
+    const neither = await byName.delegate_dispatch.handler({ title: 'T', task: 't', input: 'i' }, CTX);
     expect(neither).toMatchObject({ ok: false });
+  });
+
+  it('dispatch requires a non-empty title and passes it through to the record', async () => {
+    const { byName } = makeToolHarness();
+    // schema 标 required（LLM 面必填契约；删标志即红）
+    const params = byName.delegate_dispatch.definition.parameters as Record<string, { required?: boolean }>;
+    expect(params.title?.required).toBe(true);
+
+    const missing = await byName.delegate_dispatch.handler(
+      { agent: 'worker', task: 't', input: 'i' },
+      CTX,
+    );
+    expect(missing).toMatchObject({ ok: false });
+
+    const blank = await byName.delegate_dispatch.handler(
+      { agent: 'worker', title: '   ', task: 't', input: 'i' },
+      CTX,
+    );
+    expect(blank).toMatchObject({ ok: false });
+
+    const ok = await byName.delegate_dispatch.handler(
+      { agent: 'worker', title: '调研 简报', task: 't', input: 'i' },
+      CTX,
+    ) as { ok: boolean; delegation_id: string };
+    expect(ok.ok).toBe(true);
+    // title 落委派单（delegate_list/get 摘要与子会话标题的数据源）
+    const listed = await byName.delegate_list.handler({}, CTX) as {
+      delegations: Array<{ title?: string }>;
+    };
+    expect(listed.delegations[0]?.title).toBe('调研 简报');
   });
 
   it('dispatch is non-blocking and returns a delegation id', async () => {
     const { byName } = makeToolHarness();
     const result = await byName.delegate_dispatch.handler(
-      { agent: 'worker', task: 't', input: 'i' },
+      { agent: 'worker', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { ok: boolean; delegation_id: string; status: string };
 
@@ -417,7 +451,7 @@ describe('delegate_* tools', () => {
   it('reports a resolution failure without throwing', async () => {
     const { byName } = makeToolHarness();
     const result = await byName.delegate_dispatch.handler(
-      { agent: 'ghost', task: 't', input: 'i' },
+      { agent: 'ghost', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { ok: boolean; reason?: string };
 
@@ -427,7 +461,7 @@ describe('delegate_* tools', () => {
 
   it('list shows delegations of the calling session only', async () => {
     const { byName } = makeToolHarness();
-    await byName.delegate_dispatch.handler({ agent: 'worker', task: 'a', input: 'i' }, CTX);
+    await byName.delegate_dispatch.handler({ agent: 'worker', title: 'T', task: 'a', input: 'i' }, CTX);
 
     const listed = await byName.delegate_list.handler({}, CTX) as { total: number };
     expect(listed.total).toBe(1);
@@ -441,7 +475,7 @@ describe('delegate_* tools', () => {
   it('get enforces ownership', async () => {
     const { byName } = makeToolHarness();
     const dispatched = await byName.delegate_dispatch.handler(
-      { agent: 'worker', task: 't', input: 'i' },
+      { agent: 'worker', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { delegation_id: string };
 
@@ -465,7 +499,7 @@ describe('delegate_* tools', () => {
     expect(missing.ok).toBe(false);
 
     const dispatched = await byName.delegate_dispatch.handler(
-      { agent: 'worker', task: 't', input: 'i' },
+      { agent: 'worker', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { delegation_id: string };
 
@@ -479,7 +513,7 @@ describe('delegate_* tools', () => {
   it('get reflects the finished result once the child run settles', async () => {
     const { byName } = makeToolHarness();
     const dispatched = await byName.delegate_dispatch.handler(
-      { agent: 'worker', task: 't', input: 'i' },
+      { agent: 'worker', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { delegation_id: string };
 
@@ -496,7 +530,7 @@ describe('delegate_* tools', () => {
   it('get marks a terminal delegation surfaced (§7.3 hint de-dup)', async () => {
     const { byName, store, service } = makeToolHarness();
     const dispatched = await byName.delegate_dispatch.handler(
-      { agent: 'worker', task: 't', input: 'i' },
+      { agent: 'worker', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { delegation_id: string };
 
@@ -516,7 +550,7 @@ describe('delegate_* tools', () => {
   it('LLM 面 delivering 期间 surfaced 为 false（异步投递窗口不误报）', async () => {
     const { byName, store } = makeToolHarness();
     const dispatched = (await byName.delegate_dispatch.handler(
-      { agent: 'worker', task: 't', input: 'i' },
+      { agent: 'worker', title: 'T', task: 't', input: 'i' },
       CTX,
     )) as { delegation_id: string };
     await vi.waitFor(() =>
@@ -532,7 +566,7 @@ describe('delegate_* tools', () => {
 
   it('list stays read-only: the hint survives until delegate_get surfaces the result', async () => {
     const { byName, store, service } = makeToolHarness();
-    await byName.delegate_dispatch.handler({ agent: 'worker', task: 't', input: 'i' }, CTX);
+    await byName.delegate_dispatch.handler({ agent: 'worker', title: 'T', task: 't', input: 'i' }, CTX);
     await vi.waitFor(() => expect(store.list()[0]?.status).toBe('completed'));
 
     const listed = await byName.delegate_list.handler({}, CTX) as {
@@ -574,7 +608,7 @@ describe('delegate_* tools', () => {
     );
 
     const result = await byName.delegate_dispatch.handler(
-      { agent: 'worker', task: 't', input: 'i' },
+      { agent: 'worker', title: 'T', task: 't', input: 'i' },
       CTX,
     ) as { ok: boolean; reason?: string };
 

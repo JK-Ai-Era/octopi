@@ -31,6 +31,7 @@ function delegationSummary(d: Delegation) {
     status: d.status,
     target: d.target.agentId ?? d.resolvedAgentId ?? d.target.trait,
     resolved_agent_id: d.resolvedAgentId,
+    title: d.title,
     task: d.task,
     depth: d.depth,
     child_session_id: d.childSessionId,
@@ -124,6 +125,13 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
           description: 'What the child should accomplish (goes into the child user message)',
           required: true,
         },
+        title: {
+          type: 'string',
+          description:
+            'Short session title for the child session (plain text single line, ≤120 chars; ' +
+            'shown in session lists and the sub-session panel). Set it explicitly when dispatching.',
+          required: true,
+        },
         input: {
           type: 'string',
           description:
@@ -167,6 +175,11 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
       }
 
       const contextMode = args.context === 'fork' ? 'fork' : 'clean';
+      // 非字符串一律拒绝（数字/对象强转会变出假标题）；空白压缩后为空也拒绝
+      const title = typeof args.title === 'string' ? args.title.replace(/\s+/g, ' ').trim() : '';
+      if (!title) {
+        return { ok: false, error: 'delegate_dispatch requires `title` (non-empty session title)' };
+      }
       const timeoutMs = args.timeout_ms != null ? Number(args.timeout_ms) : undefined;
       const maxSteps = args.max_steps != null ? Number(args.max_steps) : undefined;
       const maxTokens = args.max_tokens != null ? Number(args.max_tokens) : undefined;
@@ -190,6 +203,7 @@ export function createDelegateDispatchTool(service: DelegateService): Registered
           parentRights: await readRunSessionRights(),
           target: agent ? { agentId: agent } : { trait },
           task: String(args.task ?? ''),
+          title,
           input: String(args.input ?? ''),
           maxOutputChars,
           context: contextMode as DelegationContextMode,

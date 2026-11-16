@@ -126,6 +126,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.116.7 (2026-11-17)
+
+### feat(delegation): delegate_dispatch 必填 `title`——委派时显式设置子会话标题
+
+**产品定稿（大哥 2026-11-17）**：`delegate_dispatch` 新增**必填** `title` 参数，主 agent 委派时显式设置子会话标题（替代从任务文本派生）。
+
+**链路**：schema `required` + handler 非空/非字符串校验（fail loud，数字/对象强转一律拒绝）→ `DispatchDelegationInput` → 委派单记录 / `DelegateRequest` → `ChildRunInput` → 子会话标题三键。标题派生收口单一函数 `delegationSessionTitle`：显式 title 原样（压单行、截 120），委派单记录与子会话同值（不再出现两侧形态不一致）；直连 API 缺省仍退任务派生（`delegation: ` 前缀，不产生「新会话」）。`delegationSummary` 带 `title`（与 `task` 对称，LLM 辨识委派单）。
+
+**标题仲裁裁决**：显式 title → `titleSource: 'user'`（**受保护**，不被自动标题覆盖——"设了就是设了"）；任务派生 → `'snippet'`（临时，可被自动标题升级）。**breaking note**：工具面 `title` 必填，旧工具调用需补；直连 `DelegateRequest` 路径 `title` 可选（wire 容忍，不升 schemaVersion）。
+
+**独立评审（del-76f3aac1）**：无 MAJ；MIN-1/2/3/4 已修（显式标题保护、单一派生源、适配器 title 透传回归钉、schema required 标志钉），MIN-5 即本条目；NIT 修 typeof 校验与参数描述（plain text ≤120）。已知边界：marker/代码形标题被展示层 `looksLikeCodeOrMarkup` 回退为「新会话」（展示层既有卫生规则，未动）；notify `<delegation_result>` 只带 task 不带 title（摘要已有）。
+
+**验证**：全量 **5147 绿**（新增回归钉：适配器透传、schema 标志、显式/派生双路径三键）/ lint 0 / build ✓。
+
 ## v0.116.6 (2026-11-17)
 
 ### fix(delegation): 委派子会话初始标题落三键——修子会话一律「新会话」

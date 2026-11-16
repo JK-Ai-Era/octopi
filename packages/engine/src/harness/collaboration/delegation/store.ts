@@ -42,6 +42,8 @@ export interface CreateDelegationInput {
   parent: DelegationParentRef;
   target: DelegationTarget;
   task: string;
+  /** 子会话显示标题（工具面必填；缺省时子 Run 侧退任务派生） */
+  title?: string;
   input: string;
   /** 自动返回通知 `<output>` 截断上限（chars）；缺省 = DEFAULT_DELEGATION_OUTPUT_CHARS */
   maxOutputChars?: number;
@@ -130,6 +132,7 @@ export class DelegationStore {
       parent: { ...input.parent },
       target: { ...input.target },
       task: input.task,
+      title: input.title,
       input: input.input,
       maxOutputChars: normalizeMaxOutputChars(input.maxOutputChars),
       context: input.context ?? 'clean',

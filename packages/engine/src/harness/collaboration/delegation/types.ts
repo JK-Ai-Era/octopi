@@ -155,6 +155,11 @@ export interface Delegation {
 
   /** 任务描述（进子的 user 消息） */
   task: string;
+  /**
+   * 子会话显示标题（委派时显式给定，落 child session 标题三键）。
+   * 缺省时子 Run 侧退化为任务派生标题（不产生「新会话」）。
+   */
+  title?: string;
   /** 显式输入（不传父上下文，D6/⑥） */
   input: string;
   /** 上下文传递模式（默认 clean） */
@@ -236,6 +241,8 @@ export interface DelegateRequest {
   childRunId: string;
 
   task: string;
+  /** 子会话显示标题（工具面必填；缺省时子 Run 侧退任务派生标题） */
+  title?: string;
   input: string;
 
   /** 上下文传递模式 */
