@@ -126,6 +126,31 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.116.1 (2026-11-17)
+
+### fix(webui): 八项 UI 打磨——连接条瘦身 / 头部信息下沉 / 输入区分割条 / 右栏重设计 / 关于页 / 滚动条自动隐藏
+
+**布局与交互**：
+
+- 对话头部瘦身为「会话标题 + Agent + 状态 + 中止」；模型选择 / 上下文实测 / 手动压缩下沉到输入框下方 `composer-meta` 行（控制紧邻输入）；「视图估算」从对话面移除（Run 页签 rawTokens 保留）
+- 对话历史 ↔ 输入区新增横向分割条：拖拽调输入区高度（200px–60vh），双击复位，localStorage 持久；textarea 改为 flex 撑满、禁原生 resize 手柄
+- 左栏连接卡去 URL/key 表单（设置-服务已有）：状态 + 地址回显 + 重连/刷新 + 「设置 →」深链（`#settings-services`，hashchange 监听 + 消费后清 hash）；顶栏「?」帮助按钮删除（收归关于页）
+- 右栏功能选择区重设计：图标 + 分组卡片 + chevron + 徽标；「帮助」组内容收归关于页；专家模式开关收口底部
+- 设置-关于重设计：hero（🐙 + 运行时版本）+ 快捷键 kbd 表 + 布局导览 + 口径速查卡（原右栏 help 事实保留）+ 链接卡网格
+- 滚动条自动隐藏：真实滚动容器默认细条透明，hover 才显（WebKit + Firefox 双轨；不用全局 `*` 规则避免占位）
+
+**评审修复**（fresh-eyes del-f410a98a：2B/3M/8m/9n 全处置）：
+
+- B1：composer `overflow:hidden` 裁掉斜杠补全/语料弹层 → 去裁切 + `composer-input-wrap` 锚定（弹层随 textarea 而非 composer 顶部）
+- B2：`#settings-services` 深链只认初始加载 → hashchange 监听 + 消费清 hash
+- M1：composer 最小高 140 < 内容地板 → 200 + `max-height` 模型（内容自然撑开）
+- M2：分割条缺 `touch-action`/`pointercancel` → 补齐（新旧分割条同构），ref 持久化替代 setState 副作用
+- M3：设置-服务改 URL 对工作区无效 → reconnect 调用时读 `resolveDefaultBase()`/`getConsoleKey()`
+- m1–m8：滚动条规则收窄容器、分割条可见性（border-strong）、窗口 resize 重 clamp、伪 state 清理、About 口径卡、死 CSS 删除、注释归位
+- NIT：图标换字体安全字符（📎📁📄🌿🔧📚）、chevron 可见性、会话 id 提示保留、命中区加宽
+
+**验证**：webui build ✓ / 全量 **5133 绿** / lint 0 / 100 对比度锚保持。留尾：分割条键盘可达（方向键）与详情浮层 focus trap 归优化清单。
+
 ## v0.116.0 (2026-11-16)
 
 ### feat(demo): 产品雏形批 3——演示任务包 + 打磨（错误映射单源 / M-6 热生效 / 对比度 / 浮层 / README）

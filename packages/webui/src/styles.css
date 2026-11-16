@@ -129,14 +129,6 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-tab:hover { background: var(--color-surface-3); }
 .btn-tab-active { background: var(--color-accent); border-color: var(--color-accent-border); }
 
-.center-model-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  flex-wrap: wrap;
-}
-
 .model-select {
   font: inherit;
   font-size: var(--text-sm);
@@ -223,9 +215,9 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 /* 斜杠命令补全 */
 .cmd-suggest {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: calc(100% - 4px);
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
   max-height: 240px;
   overflow: auto;
   background: var(--color-surface);
@@ -1706,4 +1698,142 @@ button.ctx-band {
 .set-levels h3 {
   margin: 0 0 4px 0;
   font-size: 15px;
+}
+
+/* ═══════════════ UI 打磨批（八项） ═══════════════ */
+
+/* ── ① 左栏连接条（精简版：状态 + 操作 + 设置入口） ── */
+.connection-strip { display: grid; gap: 8px; }
+.connection-status { font-weight: 600; }
+.connection-settings-link { text-decoration: none; display: inline-flex; align-items: center; }
+
+/* ── ⑦ 对话 ↔ 输入区分割条 ── */
+.composer-splitter {
+  height: 11px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  position: relative;
+  background: transparent;
+  touch-action: none;
+}
+.composer-splitter::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  transform: translateX(-50%);
+  width: 44px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+.composer-splitter:hover::before,
+.composer-splitter:active::before { background: var(--color-accent-border); }
+.composer {
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+  max-height: var(--composer-h, 60vh);
+  overflow: visible;
+  box-sizing: border-box;
+}
+.composer-input-wrap { position: relative; flex: 1; min-height: 60px; display: flex; flex-direction: column; }
+.composer-textarea { flex: 1; min-height: 60px; resize: none; }
+.composer-footer { flex-shrink: 0; }
+.composer-meta-right { flex: 1; padding: 0 10px; }
+
+/* ── ⑥ 输入区下方会话 meta 行（模型 / 上下文 / 压缩） ── */
+.composer-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.composer-meta .model-select { max-width: 300px; }
+
+/* ── ② 右栏概览重设计：图标 + 组卡 + 箭头 ── */
+.rail-overview { display: grid; gap: 12px; align-content: start; }
+.rail-group {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  display: grid;
+  gap: 1px;
+}
+.rail-group-title { padding: 6px 8px 4px; }
+.rail-row { padding: 8px 8px; gap: 10px; }
+.rail-row-icon {
+  width: 22px;
+  text-align: center;
+  color: var(--color-muted);
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.rail-row-label { flex: 1; }
+.rail-row-chevron { color: var(--color-muted); opacity: 0.8; }
+.rail-row:hover .rail-row-chevron { opacity: 1; }
+.rail-expert-toggle { padding: 2px 8px; }
+
+/* ── ⑤ 滚动条自动隐藏（仅真实滚动容器；默认细条透明，hover/focus 才显） ── */
+.conversation-scroll, .left-sidebar, .right-panel, .session-list-scroll,
+.detail-modal, .cmd-suggest, .corpus-list, .settings-workspace,
+.knowledge-workspace, .messages, .composer-textarea {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.conversation-scroll:hover, .left-sidebar:hover, .right-panel:hover,
+.session-list-scroll:hover, .detail-modal:hover, .cmd-suggest:hover,
+.corpus-list:hover, .settings-workspace:hover, .knowledge-workspace:hover,
+.messages:hover, .composer-textarea:hover {
+  scrollbar-color: var(--color-border) transparent;
+}
+.conversation-scroll::-webkit-scrollbar, .left-sidebar::-webkit-scrollbar,
+.right-panel::-webkit-scrollbar, .session-list-scroll::-webkit-scrollbar,
+.detail-modal::-webkit-scrollbar, .cmd-suggest::-webkit-scrollbar,
+.corpus-list::-webkit-scrollbar, .settings-workspace::-webkit-scrollbar,
+.knowledge-workspace::-webkit-scrollbar, .messages::-webkit-scrollbar,
+.composer-textarea::-webkit-scrollbar { width: 8px; height: 8px; }
+.conversation-scroll::-webkit-scrollbar-thumb, .left-sidebar::-webkit-scrollbar-thumb,
+.right-panel::-webkit-scrollbar-thumb, .session-list-scroll::-webkit-scrollbar-thumb,
+.detail-modal::-webkit-scrollbar-thumb, .cmd-suggest::-webkit-scrollbar-thumb,
+.corpus-list::-webkit-scrollbar-thumb, .settings-workspace::-webkit-scrollbar-thumb,
+.knowledge-workspace::-webkit-scrollbar-thumb, .messages::-webkit-scrollbar-thumb,
+.composer-textarea::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+.conversation-scroll:hover::-webkit-scrollbar-thumb, .left-sidebar:hover::-webkit-scrollbar-thumb,
+.right-panel:hover::-webkit-scrollbar-thumb, .session-list-scroll:hover::-webkit-scrollbar-thumb,
+.detail-modal:hover::-webkit-scrollbar-thumb, .cmd-suggest:hover::-webkit-scrollbar-thumb,
+.corpus-list:hover::-webkit-scrollbar-thumb, .settings-workspace:hover::-webkit-scrollbar-thumb,
+.knowledge-workspace:hover::-webkit-scrollbar-thumb, .messages:hover::-webkit-scrollbar-thumb,
+.composer-textarea:hover::-webkit-scrollbar-thumb { background: var(--color-border); }
+
+/* ── ③④ 关于页：hero + 卡网格（不再是一截矮块） ── */
+.about-page { display: grid; gap: 16px; max-width: 860px; }
+.about-hero { display: flex; gap: 16px; align-items: center; padding: 20px; }
+.about-hero-mark { font-size: 44px; line-height: 1; }
+.about-hero-title { margin: 0 0 2px; font-size: 22px; }
+.about-grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; align-items: start; }
+.about-card { padding: 16px; }
+.about-card-title { margin: 0 0 10px; font-size: var(--text-sm); }
+.about-card-wide { grid-column: 1 / -1; }
+.about-shortcuts { border-collapse: collapse; width: 100%; font-size: var(--text-sm); }
+.about-shortcuts td { padding: 5px 8px 5px 0; vertical-align: top; }
+.about-shortcuts td:first-child { white-space: nowrap; width: 1%; }
+.about-shortcuts kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.about-list { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.about-links { display: flex; gap: 16px; flex-wrap: wrap; }
+.about-links a { text-decoration: none; }
+@media (max-width: 720px) {
+  .about-grid { grid-template-columns: 1fr; }
 }

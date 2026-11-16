@@ -26,6 +26,20 @@ export default function App() {
   });
   const [surface, setSurface] = useState<Surface>('playground');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('models');
+  // 设置深链（#settings / #settings-services）：左栏连接条「设置 →」入口。
+  // hashchange 监听 + 消费后清 hash——已加载页点击即跳；点回 Playground 后刷新不回跳（打磨批 B2/NIT-9）。
+  useEffect(() => {
+    const apply = (): void => {
+      const h = window.location.hash;
+      if (!h.startsWith('#settings')) return;
+      setSurface('settings');
+      setSettingsTab(h === '#settings-services' ? 'services' : 'models');
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    };
+    apply();
+    window.addEventListener('hashchange', apply);
+    return () => window.removeEventListener('hashchange', apply);
+  }, []);
   const [agentId, setAgentId] = useState('default');
   // §1/§7：Web 向导入口——URL 带 setup 参数（token 见 §7）或首启（providers 未配置）检测
   // m4：②③模式需 registry 登录（personal 免登录）
@@ -106,17 +120,6 @@ export default function App() {
           {/* 自愈可见性（v0.98.14）：知识服务生命周期常驻标记，正常时零占位 */}
           <KnowledgeServiceStatus />
           <ThemeToggle />
-          <button
-            type="button"
-            className="btn-ghost small"
-            title="帮助与关于"
-            onClick={() => {
-              setSettingsTab('about');
-              setSurface('settings');
-            }}
-          >
-            ?
-          </button>
           {surface === 'playground' && (
             <button
               type="button"

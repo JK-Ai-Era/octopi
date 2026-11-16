@@ -24,10 +24,8 @@ import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './Clie
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
 import { looksLikeCodeOrMarkup } from '@octopi-agent/engine/harness/session/title';
 import { resolveDefaultBase } from '../gateway-base';
-import { getConsoleKey, setConsoleKey, getRegistryToken } from '../console-key';
+import { getConsoleKey, getRegistryToken } from '../console-key';
 import { getLanguage } from '../runtime-config';
-
-const DEFAULT_BASE = resolveDefaultBase();
 
 /** WebUI 会话级 clientInstanceId（同一标签页稳定） */
 function webuiClientInstanceId(): string {
@@ -724,8 +722,11 @@ export interface ChatWorkspaceProps {
 }
 
 export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: ChatWorkspaceProps) {
-  const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE);
-  const [apiKey, setApiKey] = useState(() => getConsoleKey());  // §5b splitter：右栏宽度（280px–约视口 50%，双击复位；localStorage 持久）
+  // 连接参数调用时读取（resolveDefaultBase/getConsoleKey）——设置-服务改地址/密钥后
+  // 重连即生效，无需刷新页面（打磨批 M3；勿退回模块级常量/伪 state）。
+  const baseUrl = resolveDefaultBase();
+  const apiKey = getConsoleKey();
+  // §5b splitter：右栏宽度（280px–约视口 50%，双击复位；localStorage 持久）
   const RIGHT_W_DEFAULT = 360;
   const clampRightW = (w: number): number => Math.min(Math.max(w, 280), Math.round(window.innerWidth * 0.5));
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
@@ -738,28 +739,75 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     }
   });
   const rightDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const rightWRef = useRef(rightPanelWidth);
+  rightWRef.current = rightPanelWidth;
   const onSplitterPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     e.currentTarget.setPointerCapture(e.pointerId); // Pointer Capture：拖出元素不丢事件
-    rightDragRef.current = { startX: e.clientX, startW: rightPanelWidth };
+    rightDragRef.current = { startX: e.clientX, startW: rightWRef.current };
   };
   const onSplitterPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
     const drag = rightDragRef.current;
     if (!drag) return;
     setRightPanelWidth(clampRightW(drag.startW + (drag.startX - e.clientX)));
   };
+  // pointerup/pointercancel 共用收尾（与输入区分割条同构）
   const onSplitterPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
     if (!rightDragRef.current) return;
     rightDragRef.current = null;
-    e.currentTarget.releasePointerCapture(e.pointerId);
-    setRightPanelWidth((w) => {
-      localStorage.setItem('octopi.rightPanel.width', String(w));
-      return w;
-    });
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    localStorage.setItem('octopi.rightPanel.width', String(rightWRef.current));
   };
   const onSplitterDoubleClick = (): void => {
     setRightPanelWidth(RIGHT_W_DEFAULT);
     localStorage.setItem('octopi.rightPanel.width', String(RIGHT_W_DEFAULT));
-  };  const [showAdvanced, setShowAdvanced] = useState(false);
+  };
+  // 输入区高度拖拽：对话历史 ↔ 输入区横向分割条（140–60vh，双击复位，localStorage 持久）
+  const COMPOSER_H_DEFAULT = 240;
+  const clampComposerH = (h: number): number => Math.min(Math.max(h, 200), Math.round(window.innerHeight * 0.6));
+  const [composerHeight, setComposerHeight] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem('octopi.composer.height'));
+      return Number.isFinite(saved) && saved > 0 ? clampComposerH(saved) : COMPOSER_H_DEFAULT;
+    } catch {
+      return COMPOSER_H_DEFAULT;
+    }
+  });
+  const composerDragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const composerHRef = useRef(composerHeight);
+  composerHRef.current = composerHeight;
+  const onComposerSplitterDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    composerDragRef.current = { startY: e.clientY, startH: composerHRef.current };
+  };
+  const onComposerSplitterMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const drag = composerDragRef.current;
+    if (!drag) return;
+    setComposerHeight(clampComposerH(drag.startH + (drag.startY - e.clientY)));
+  };
+  // pointerup/pointercancel 共用收尾：cancel 也必须清拖拽态并持久化（否则之后划过横条会误拖；M2/NIT-2）
+  const onComposerSplitterUp = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!composerDragRef.current) return;
+    composerDragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    localStorage.setItem('octopi.composer.height', String(composerHRef.current));
+  };
+  const onComposerSplitterDoubleClick = (): void => {
+    setComposerHeight(COMPOSER_H_DEFAULT);
+    localStorage.setItem('octopi.composer.height', String(COMPOSER_H_DEFAULT));
+  };
+  // 窗口尺寸变化重 clamp（横屏/软键盘导致 innerHeight 缩小时，持久化值可能越界；打磨批 m3）
+  useEffect(() => {
+    const onResize = (): void => {
+      setComposerHeight((h) => clampComposerH(h));
+      setRightPanelWidth((w) => clampRightW(w));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   const [connection, setConnection] = useState('idle');
   const [agents, setAgents] = useState<Array<{
     id: string;
@@ -835,7 +883,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const [cmdSuggestIndex, setCmdSuggestIndex] = useState(0);
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
   // §5b：null = 概览（默认）；点 section 行进详情
-  const [rightTab, setRightTab] = useState<'context' | 'run' | 'services' | 'tasks' | 'schedules' | 'attachments' | 'roots' | 'git' | 'file' | 'tools' | 'help' | null>(null);
+  const [rightTab, setRightTab] = useState<'context' | 'run' | 'services' | 'tasks' | 'schedules' | 'attachments' | 'roots' | 'git' | 'file' | 'tools' | null>(null);
   // 专家模式：显示「运行时透明」组（上下文/Run/服务）——普通用户不需要关注这 3 个
   const [expertMode, setExpertMode] = useState(() => {
     try {
@@ -1183,7 +1231,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const store = storeRef.current;
     if (!store) return;
     // Use reconnect instead of destroying/recreating store
-    store.reconnect(baseUrl, apiKey || undefined);
+    // 调用时读地址/密钥：设置-服务保存后重连立即生效（M3，勿用挂载时快照）
+    store.reconnect(resolveDefaultBase(), getConsoleKey() || undefined);
     await refresh();
   };
 
@@ -1871,12 +1920,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const hiddenSessionCount = agentSessions.length - displayedSessions.length;
 
   const isReconnecting = connection === 'reconnecting';
-  // 上下文用量三量纲（P0-C 单源分账）：实测只进主显示（step.end usage / 持久化恢复），
-  // 无实测不猜（新会话/未对话显示 '~'）；视图估算分行标注；rawTokens 只在 Run 页签。
+  // 上下文用量：实测只进主显示（step.end usage / 持久化恢复），无实测不猜（新会话显示 '~'）；
+  // 视图估算按产品裁决不再在对话面呈现（rawTokens 仍只在 Run 页签）。
   // 不用「已加载消息」估算——那只是末页 100 条，会把 400k 的会话显示成 21.6k 误导人。
   const promptTokensActual = typeof inspector.promptTokensActual === 'number' ? inspector.promptTokensActual : undefined;
-  const viewTokensEst = typeof inspector.viewTokensEst === 'number' ? inspector.viewTokensEst : undefined;
-  const viewTokensEstStale = inspector.viewTokensEstSource === 'restore';
   // 预算展示：只读引擎下发的 snapshot（catalog / sessionModel.resolved），UI 不做策略
   const selectedModelMeta =
     (sessionModel?.resolved?.id === effectiveModelId ? sessionModel.resolved : undefined)
@@ -1910,42 +1957,20 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       >
         {/* ── 左栏：连接、Agent、会话 ── */}
         <aside className="left-sidebar">
-          <section className="panel sidebar-section">
+          <section className="panel sidebar-section connection-strip">
             <div className="sidebar-title">连接 Gateway</div>
-            <div className="small muted" style={{ marginBottom: 8 }}>
-              状态：<span className={connectionLabel}>{connection}</span>
+            <div className="small connection-status">
+              <span className={connectionLabel}>{connection}</span>
+              <span className="muted" style={{ marginLeft: 8 }}><code>{baseUrl}</code></span>
             </div>
-            <div style={{ display: 'grid', gap: 8 }}>
-              <label className="small">
-                Gateway URL
-                <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} style={{ marginTop: 4 }} />
-              </label>
-              <button className="btn-ghost small" onClick={() => setShowAdvanced(v => !v)}>
-                {showAdvanced ? '收起高级设置' : '展开高级设置'}
-              </button>
-              {showAdvanced && (
-                <label className="small">
-                  Gateway API Key
-                  <input
-                    value={apiKey}
-                    onChange={e => {
-                      setApiKey(e.target.value);
-                      setConsoleKey(e.target.value);
-                    }}
-                    style={{ marginTop: 4 }}
-                  />
-                  <div className="small muted" style={{ marginTop: 4 }}>
-                    非 LLM Key。仅当 Gateway 配置了协议鉴权时需要填写。钥匙保存在本机浏览器
-                    （localStorage），换浏览器或清站点数据后需重填。
-                  </div>
-                </label>
-              )}
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn-secondary" onClick={reconnect}>重连</button>
-                <button className="btn-secondary" onClick={refresh}>刷新数据</button>
-              </div>
-              {connectError && <div className="small status-error" style={{ marginTop: 4 }}>{connectError}</div>}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn-secondary small" onClick={reconnect}>重连</button>
+              <button className="btn-secondary small" onClick={refresh}>刷新</button>
+              <a className="btn-ghost small connection-settings-link" href="#settings-services">
+                设置 →
+              </a>
             </div>
+            {connectError && <div className="small status-error" style={{ marginTop: 4 }}>{connectError}</div>}
           </section>
 
           <section className="panel sidebar-section">
@@ -2159,62 +2184,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   )}
                 </div>
                 <div className="small muted">{agentId ? `Agent: ${agentId}` : '请先选择 Agent'}</div>
-                <div className="center-model-row">
-                  <label className="small muted" htmlFor="session-model-select">模型</label>
-                  <select
-                    id="session-model-select"
-                    className="model-select"
-                    value={effectiveModelId}
-                    onChange={(e) => void applyModelChange(e.target.value)}
-                    disabled={connection !== 'connected' || !agentId}
-                  >
-                    {!effectiveModelId && <option value="">（默认）</option>}
-                    {agentDefaultModelId && (
-                      <option value={agentDefaultModelId}>
-                        {agentDefaultModelId}（Agent 默认）
-                      </option>
-                    )}
-                    {modelOptions.items
-                      .filter(m => m.id !== agentDefaultModelId)
-                      .map(m => (
-                        <option key={m.id} value={m.id}>
-                          {m.id}
-                          {m.known && m.contextWindow != null
-                            ? ` · ${formatTokens(m.contextWindow)}`
-                            : ' · 窗口未知'}
-                        </option>
-                      ))}
-                    {modelOptions.levelItems.map(lv => (
-                      <option key={`level-${lv.levelName}`} value={lv.id}>
-                        [{lv.levelName}] → {lv.id}
-                      </option>
-                    ))}
-                  </select>
-                  {activeSessionId && sessionModel?.modelId && sessionModel.modelId !== sessionModel.defaultModelId && (
-                    <span className="small status-ok">会话覆盖</span>
-                  )}
-                </div>
-                {modelError && <div className="small status-error">{modelError}</div>}
-                <div className="small muted" style={{ marginTop: 2 }}>
-                  {`上下文(上次实测): ${promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / ${contextWindowLabel}`}
-                </div>
-                {viewTokensEst !== undefined && (
-                  <div className="small muted" style={{ marginTop: 2 }}>
-                    {`视图估算: ${formatTokens(viewTokensEst)}${viewTokensEstStale ? ' (旧)' : ''}`}
-                  </div>
-                )}
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>
                 <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{runStatus}</span>
-                <button
-                  className="btn-secondary"
-                  onClick={() => void runManualCompact()}
-                  disabled={!activeSessionId || compacting}
-                  title="结构压缩：头尾保护 + 中间摘要；不依赖 contextWindow"
-                >
-                  {compacting ? '压缩中…' : '压缩'}
-                </button>
                 <button className="btn-secondary" onClick={abort} disabled={!['streaming', 'waiting', 'tools', 'sending'].includes(runStatus)}>中止</button>
               </div>
             </div>
@@ -2467,8 +2440,21 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             )}
           </div>
 
+          {/* 对话 ↔ 输入区分割条（拖动调整输入区高度，双击复位） */}
+          <div
+            className="composer-splitter"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="拖动调整输入区高度；双击复位"
+            onPointerDown={onComposerSplitterDown}
+            onPointerMove={onComposerSplitterMove}
+            onPointerUp={onComposerSplitterUp}
+            onPointerCancel={onComposerSplitterUp}
+            onDoubleClick={onComposerSplitterDoubleClick}
+          />
           <div
             className="composer"
+            style={{ '--composer-h': `${composerHeight}px` } as React.CSSProperties}
             onDragOver={(e) => {
               if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
                 e.preventDefault();
@@ -2490,6 +2476,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               }
             }}
           >
+            <div className="composer-input-wrap">
             {showCmdSuggest && (
               <div className="cmd-suggest" role="listbox">
                 {cmdMatches.map((c, idx) => (
@@ -2530,6 +2517,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               )}
             </div>
             <textarea
+              className="composer-textarea"
               value={input}
               onChange={e => {
                 setInput(e.target.value);
@@ -2539,6 +2527,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               rows={4}
               placeholder="输入消息，或 / 打开命令列表；可拖拽/粘贴附件"
             />
+            </div>
             <div className="composer-footer">
               <div className="composer-tools">
                 <label className="btn-secondary small" style={{ cursor: 'pointer' }}>
@@ -2559,14 +2548,14 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   onToast={setToast}
                 />
               </div>
-              <div className="small muted">
+              <div className="small muted composer-meta-right">
                 {toast && <span className="corpus-toast">{toast}</span>}
                 {openIssues.length > 0 && (
                   <span style={{ color: 'var(--color-warn)', marginRight: 8 }}>
                     ⚠️ {openIssues.length} issue · /issues
                   </span>
                 )}
-                {activeSessionId ? `发送到 ${activeSessionId}` : '请先打开一个会话'}。Enter 发送，Shift+Enter 换行。
+                {activeSessionId ? `发送到 ${activeSessionId} · ` : ''}Enter 发送 · Shift+Enter 换行
               </div>
               <div className="composer-actions">
                 <button className="btn-secondary" onClick={() => setInput('')}>清空</button>
@@ -2578,6 +2567,56 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   发送
                 </button>
               </div>
+            </div>
+
+            {/* 会话 meta 行：模型选择 + 上下文用量 + 压缩（原对话头部信息下沉，输入区紧邻控制） */}
+            <div className="composer-meta small muted">
+              <select
+                aria-label="会话模型"
+                className="model-select"
+                value={effectiveModelId}
+                onChange={(e) => void applyModelChange(e.target.value)}
+                disabled={connection !== 'connected' || !agentId}
+              >
+                {!effectiveModelId && <option value="">（默认）</option>}
+                {agentDefaultModelId && (
+                  <option value={agentDefaultModelId}>
+                    {agentDefaultModelId}（Agent 默认）
+                  </option>
+                )}
+                {modelOptions.items
+                  .filter(m => m.id !== agentDefaultModelId)
+                  .map(m => (
+                    <option key={m.id} value={m.id}>
+                      {m.id}
+                      {m.known && m.contextWindow != null
+                        ? ` · ${formatTokens(m.contextWindow)}`
+                        : ' · 窗口未知'}
+                    </option>
+                  ))}
+                {modelOptions.levelItems.map(lv => (
+                  <option key={`level-${lv.levelName}`} value={lv.id}>
+                    [{lv.levelName}] → {lv.id}
+                  </option>
+                ))}
+              </select>
+              {activeSessionId && sessionModel?.modelId && sessionModel.modelId !== sessionModel.defaultModelId && (
+                <span className="small status-ok">会话覆盖</span>
+              )}
+              <span
+                title={`上次实测 ${promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / 模型窗口 ${contextWindowLabel}`}
+              >
+                上下文 {promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / {contextWindowLabel}
+              </span>
+              <button
+                className="btn-ghost small"
+                onClick={() => void runManualCompact()}
+                disabled={!activeSessionId || compacting}
+                title="结构压缩：头尾保护 + 中间摘要；不依赖 contextWindow"
+              >
+                {compacting ? '压缩中…' : '压缩'}
+              </button>
+              {modelError && <span className="small status-error">{modelError}</span>}
             </div>
           </div>
         </section>
@@ -2593,41 +2632,42 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             onPointerDown={onSplitterPointerDown}
             onPointerMove={onSplitterPointerMove}
             onPointerUp={onSplitterPointerUp}
+            onPointerCancel={onSplitterPointerUp}
             onDoubleClick={onSplitterDoubleClick}
           />
-          {/* ── 概览（§5b）：分组 section + 徽标，一眼扫完多件事；点行进详情 ── */}
+          {/* ── 概览（重设计）：图标行 + 分组卡片 + 徽标；专家开关收口底部 ── */}
           <div className="rail-overview">
             {(() => {
-              const railGroups: Array<{ title: string; rows: Array<{ id: NonNullable<typeof rightTab>; label: string; badge?: number }> }> = [
+              const railGroups: Array<{ title: string; rows: Array<{ id: NonNullable<typeof rightTab>; icon: string; label: string; badge?: number }> }> = [
                 {
                   title: '工作进度',
                   rows: [
-                    { id: 'tasks', label: '任务', badge: tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length },
-                    { id: 'schedules', label: '日程', badge: schedules.filter((sc) => sc.status === 'active' || sc.status === 'paused').length },
+                    { id: 'tasks', icon: '☑', label: '任务', badge: tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length },
+                    { id: 'schedules', icon: '◷', label: '日程', badge: schedules.filter((sc) => sc.status === 'active' || sc.status === 'paused').length },
                   ],
                 },
                 {
                   title: '会话物料',
                   rows: [
-                    { id: 'attachments', label: '附件', badge: pendingAttachments.length },
-                    { id: 'roots', label: '目录' },
-                    { id: 'file', label: '文件', badge: deliveredFiles.length },
+                    { id: 'attachments', icon: '📎', label: '附件', badge: pendingAttachments.length },
+                    { id: 'roots', icon: '📁', label: '目录' },
+                    { id: 'file', icon: '📄', label: '文件', badge: deliveredFiles.length },
                   ],
                 },
                 {
                   title: '环境',
                   rows: [
-                    { id: 'git', label: 'Git' },
-                    { id: 'tools', label: '工具' },
+                    { id: 'git', icon: '🌿', label: 'Git' },
+                    { id: 'tools', icon: '🔧', label: '工具' },
                   ],
                 },
                 ...(expertMode
                   ? [{
                       title: '运行时透明',
                       rows: [
-                        { id: 'context' as const, label: '上下文' },
-                        { id: 'run' as const, label: 'Run' },
-                        { id: 'services' as const, label: '服务' },
+                        { id: 'context' as const, icon: '📚', label: '上下文' },
+                        { id: 'run' as const, icon: '▶', label: 'Run' },
+                        { id: 'services' as const, icon: '⚙', label: '服务' },
                       ],
                     }]
                   : []),
@@ -2637,20 +2677,16 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   <div className="rail-group-title">{g.title}</div>
                   {g.rows.map((r) => (
                     <button key={r.id} className="rail-row" onClick={() => setRightTab(r.id)}>
-                      <span>{r.label}</span>
+                      <span className="rail-row-icon" aria-hidden>{r.icon}</span>
+                      <span className="rail-row-label">{r.label}</span>
                       {r.badge ? <span className="tab-count">{r.badge}</span> : null}
+                      <span className="rail-row-chevron" aria-hidden>›</span>
                     </button>
                   ))}
                 </section>
               ));
             })()}
-            <section className="rail-group">
-              <div className="rail-group-title">帮助</div>
-              <button className="rail-row" onClick={() => setRightTab('help')}>
-                <span>帮助与快捷指引</span>
-              </button>
-            </section>
-            <label className="rail-expert-toggle small muted">
+            <label className="rail-expert-toggle small muted" title="显示运行时透明组（上下文 / Run / 服务）">
               <input
                 type="checkbox"
                 checked={expertMode}
@@ -2663,7 +2699,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   }
                 }}
               />{' '}
-              专家模式（显示运行时透明组）
+              专家模式
             </label>
           </div>
 
@@ -2684,7 +2720,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                     ← 概览
                   </button>
                   <span className="rail-detail-title">
-                    {{ context: '上下文', run: 'Run', services: '服务', tasks: '任务', schedules: '日程', attachments: '附件', roots: '目录', git: 'Git', file: '文件', tools: '工具', help: '帮助' }[rightTab]}
+                    {{ context: '上下文', run: 'Run', services: '服务', tasks: '任务', schedules: '日程', attachments: '附件', roots: '目录', git: 'Git', file: '文件', tools: '工具' }[rightTab]}
                   </span>
                 </div>
 
@@ -2819,32 +2855,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             </section>
           )}
 
-          {rightTab === 'help' && (
-            <section className="panel sidebar-section">
-              <div className="sidebar-title">使用说明</div>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)' }}>
-                <li>左栏：连接 Gateway、选 Agent、开/开会话</li>
-                <li>中栏：主对话（模型切换、压缩）</li>
-                <li>右栏：上下文 / Run / 任务 / 附件 / 工具 — 观察本轮 agent 为什么这样答</li>
-                <li>附件：选文件/拖拽/粘贴上传；默认仅本会话；卡片「…」可归入项目或删除</li>
-                <li>顶栏「面板」：显示/隐藏右栏（概览 + 详情）；手柄拖宽，双击复位</li>
-                <li>右栏概览按「工作进度 / 会话物料 / 环境」分组，点行进详情；专家模式显示「运行时透明」组（上下文 / Run / 服务）</li>
-                <li>「模型」下拉切换会话模型；新建会话时作为预选</li>
-                <li>会话级模型覆盖只影响该会话，不改 Agent 默认</li>
-                <li>contextWindow 仅认配置；未配置显示「未知」</li>
-                <li>「压缩」= 手动结构压缩（头尾+摘要），也可 POST /api/v1/sessions/:id/compact</li>
-                <li>右栏「上下文」：产品八层 = System 契约层 L1–L7（含 Runtime）+ Information L8</li>
-                <li>Information 是消息窗口（第 8 层），不进 System 装配栈</li>
-                <li>右栏「Run」：Observer — RunScope / 时间线 / run messages</li>
-                <li>右栏「任务」：会话任务树；对 Agent 说「把 xx 标为完成」即可更新</li>
-                <li>右栏「附件」：本会话参考语料；可 file_read 深读</li>
-                <li>右栏「文件」：send_file 发送的文本文件；图片/音视频在对话中展示，可转存</li>
-                <li>右栏「Git」：选定目录的 git 工作区状态；按 web.gitStatusPollSeconds 轮询（默认 5s，0=不自动轮询），切换目录即刷新</li>
-                <li>连接成功后自动刷新 Agent、模型目录和会话</li>
-                <li>Enter 发送，Shift+Enter 换行；输入法选词阶段不会误触</li>
-              </ul>
-            </section>
-          )}
               </div>
             </div>
           )}
