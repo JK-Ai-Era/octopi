@@ -2678,21 +2678,28 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 </section>
               ));
             })()}
-            <label className="rail-expert-toggle small muted" title="显示运行时透明组（上下文 / Run / 服务）">
-              <input
-                type="checkbox"
-                checked={expertMode}
-                onChange={(e) => {
-                  setExpertMode(e.target.checked);
+            <div className="rail-expert-toggle">
+              <span className="small muted">专家模式</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={expertMode}
+                aria-label="专家模式（显示运行时透明组：上下文 / Run / 服务）"
+                title="显示运行时透明组（上下文 / Run / 服务）"
+                className={`switch ${expertMode ? 'switch-on' : ''}`}
+                onClick={() => {
+                  const next = !expertMode;
+                  setExpertMode(next);
                   try {
-                    localStorage.setItem('octopi.expert', e.target.checked ? '1' : '0');
+                    localStorage.setItem('octopi.expert', next ? '1' : '0');
                   } catch {
                     // 存储不可用：本次会话生效
                   }
                 }}
-              />{' '}
-              专家模式
-            </label>
+              >
+                <span className="switch-knob" />
+              </button>
+            </div>
           </div>
 
           {/* ── 详情浮层（批 3-3）：点行下钻——概览保留在后，Esc/遮罩/「← 概览」关闭 ── */}

@@ -126,6 +126,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.116.4 (2026-11-17)
+
+### fix(webui): 专家模式开关改 Switch——修布局挤压 + 模式切换语义
+
+**根因**：全局 `input { flex:1 }` 表单布局误伤 checkbox——勾选框被拉满占大半宽，「专家模式」文字挤到最右。
+
+**改法**：原生 checkbox → **Switch 切换钮**（`role="switch"` + `aria-checked`，键盘/读屏可达）：轨道 32×18、knob 14、on 态 accent 色 + knob 平移；左文字右开关，`justify-content: space-between` 一行排开。语义上「模式切换」用 Switch 比 checkbox 更准（iOS/Material 惯例）。
+
+**验证**：webui build ✓ / 全量 **5133 绿** / 100 对比度锚 ✓ / lint 0。
+
 ## v0.116.3 (2026-11-17)
 
 ### fix(webui): UI 第三轮——初始高度修复 + footer 单行 + 上下文/压缩归位头部
