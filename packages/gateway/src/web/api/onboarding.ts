@@ -26,6 +26,7 @@ import {
   type OnboardingStepId,
 } from '@octopi-agent/engine/config-admin/onboarding.js';
 import { pickLocalized } from '@octopi-agent/engine/config-admin/i18n.js';
+import type { ProbeErrorKind } from '@octopi-agent/engine/config-admin/error-copy.js';
 import {
   applyOnboarding,
   classifyProbeError,
@@ -54,8 +55,8 @@ export interface OnboardingRender {
   /** M-6 热应用结果：true=已即时生效（新会话即用新配置）；false=失败（见 hotApplyError，仍需重启）；undefined=未热应用 */
   hotApplied?: boolean;
   hotApplyError?: string;
-  /** probe 失败：分类码 + 原始信息（人话映射在渲染层单源——webui error-classify / CLI 四选） */
-  probeError?: { kind: 'auth' | 'network' | 'model' | 'server'; message: string };
+  /** probe 失败：分类码 + 原始信息（人话映射在渲染层单源——webui/CLI 的 probeErrorCopy） */
+  probeError?: { kind: ProbeErrorKind; message: string };
   /** 步骤校验失败（HTTP 400 语义的回显） */
   invalid?: string;
   /** 步骤进度（单源 ONBOARDING_STEPS 派生；webui 不得自维护步骤序） */

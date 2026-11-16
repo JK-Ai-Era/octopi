@@ -16,6 +16,7 @@ import type {
 import { extractUserMessageText } from '@octopi-agent/engine/harness/context/turn-envelope.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import { isChatReplayHidden } from '@octopi-agent/engine/harness/context/layer-types.js';
+import { classifyError, makeDiagnosticId, securityBlockedCopy } from '@octopi-agent/engine/config-admin/error-copy.js';
 
 import type {
   ConversationItem,
@@ -409,7 +410,7 @@ export class ConversationAdapter {
           sessionId,
           source: 'runtime',
           kind: 'warning',
-          message: `Stream fallback to sync (${reason})`,
+          message: `流式响应中断，已切换为同步获取（${reason}）`,
         };
         items = [...items, notice];
         changed = true;
@@ -497,7 +498,7 @@ export class ConversationAdapter {
             sessionId,
             source: 'runtime',
             kind: 'aborted',
-            message: 'Run aborted',
+            message: '已中止',
           };
           items = [...items, notice];
         }
@@ -511,6 +512,13 @@ export class ConversationAdapter {
       case 'model.call.error':
       case 'engine.error': {
         const error = String(event.data?.error ?? 'Unknown error');
+        // 人话化在写入侧（MINOR-6）：system 消息不甩 raw；raw 保在 assistant item.error 悬停。
+        // model.call.error 是模型服务错误（provider 域）；engine.error 是 Run 终态通用
+        // 通道（含非模型服务错误），走 app 口径避免一律「模型服务出错了」误报（评审 M7）
+        const domain = event.type === 'engine.error' ? 'app' : 'provider';
+        const classified = classifyError(error, domain);
+        // support 档文案承诺「复制诊断 ID」——消息里必须兑现（评审 M5）
+        const diag = classified.level === 'support' ? ` 诊断 ID：${makeDiagnosticId()}` : '';
         if (this.currentAssistantId) {
           items = items.map((it) =>
             it.id === this.currentAssistantId && it.role === 'assistant'
@@ -525,7 +533,7 @@ export class ConversationAdapter {
           sessionId,
           source: 'runtime',
           kind: 'error',
-          message: error,
+          message: `${classified.copy.title}——${classified.copy.detail}${diag}`,
         };
         items = [...items, notice];
         this.currentAssistantId = undefined;
@@ -542,6 +550,8 @@ export class ConversationAdapter {
       case 'security.blocked':
       case 'security.behavior_blocked': {
         const reason = String(event.data?.reason ?? 'blocked');
+        // 审计语不直接给用户：人话在前，reason 附注保留可诊断性
+        const blockedCopy = securityBlockedCopy(reason);
         const notice: SystemConversationItem = {
           id: ConversationAdapter.makeId('sys'),
           role: 'system',
@@ -549,7 +559,7 @@ export class ConversationAdapter {
           sessionId,
           source: 'runtime',
           kind: 'blocked',
-          message: reason,
+          message: `${blockedCopy.title}（${reason}）`,
         };
         items = [...items, notice];
         changed = true;
@@ -567,7 +577,7 @@ export class ConversationAdapter {
           sessionId,
           source: 'runtime',
           kind: 'truncated',
-          message: `Context truncated (${from} → ${to})`,
+          message: `上下文已截断（${from} → ${to}）`,
         };
         items = [...items, notice];
         changed = true;
@@ -603,15 +613,15 @@ export class ConversationAdapter {
           source: 'runtime',
           kind: 'truncated',
           message: parts.length
-            ? `Context compacted (${parts.join(', ')})`
-            : 'Context compacted',
+            ? `上下文已压缩（${parts.join(', ')}）`
+            : '上下文已压缩',
         };
         items = [...items, notice];
         changed = true;
         break;
       }
       case 'context.compact.error': {
-        const error = String(event.data?.error ?? 'Context compact failed');
+        const error = String(event.data?.error ?? '上下文压缩失败');
         const notice: SystemConversationItem = {
           id: ConversationAdapter.makeId('sys'),
           role: 'system',
@@ -619,7 +629,7 @@ export class ConversationAdapter {
           sessionId,
           source: 'runtime',
           kind: 'warning',
-          message: `Context compact failed, fell back to truncation: ${error}`,
+          message: `上下文压缩失败，已回退为截断：${error}`,
         };
         items = [...items, notice];
         changed = true;
@@ -629,7 +639,7 @@ export class ConversationAdapter {
       // ── Retry ──
       case 'empty_response_retry':
       case 'planning_only_retry': {
-        const label = event.type === 'empty_response_retry' ? 'Empty response, retrying' : 'Planning-only response, retrying';
+        const label = event.type === 'empty_response_retry' ? '模型未返回内容，正在重试' : '模型只返回了计划，正在重试';
         const notice: SystemConversationItem = {
           id: ConversationAdapter.makeId('sys'),
           role: 'system',
@@ -660,7 +670,7 @@ export class ConversationAdapter {
           // 引擎给出了用户可读原因就照用；否则退回 Budget <status>
           message:
             d?.userMessage ??
-            `Budget ${status}${d?.metric ? `（${d.metric}）` : ''}。可继续对话，让 agent 从当前状态接着做。`,
+            `预算超限（${status}${d?.metric ? `，${d.metric}` : ''}）。可继续对话，让 agent 从当前状态接着做。`,
         };
         items = [...items, notice];
         changed = true;

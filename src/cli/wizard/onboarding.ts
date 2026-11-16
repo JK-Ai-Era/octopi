@@ -23,7 +23,7 @@ import {
   providerChoices,
   validateStep,
 } from '@octopi-agent/engine/config-admin/onboarding.js';
-import { probeErrorCopy } from '@octopi-agent/engine/config-admin/error-copy.js';
+import { probeErrorCopy, PROBE_ERROR_KINDS, type ProbeErrorKind } from '@octopi-agent/engine/config-admin/error-copy.js';
 import type {
   DeploymentMode,
   OnboardingChoices,
@@ -91,21 +91,17 @@ function spawnCli(args: string[]): Promise<number> {
   });
 }
 
-interface ProbeLabels {
-  auth: string;
-  network: string;
-  model: string;
-  server: string;
-}
+type ProbeLabels = Record<ProbeErrorKind, string>;
 
 function probeLabels(zh: boolean): ProbeLabels {
-  // 文案单源在 engine error-copy（批 3-2 四份单源化）；CLI 单句 = 标题 + 详情
+  // 文案单源在 engine error-copy（批 3-2 四份单源化）；码表由 PROBE_ERROR_KINDS 派生
   const lang = zh ? 'zh' : 'en';
-  const one = (kind: 'auth' | 'network' | 'model' | 'server'): string => {
+  const labels = {} as Record<string, string>;
+  for (const kind of PROBE_ERROR_KINDS) {
     const copy = probeErrorCopy(kind, lang);
-    return `${copy.title} —— ${copy.detail}`;
-  };
-  return { auth: one('auth'), network: one('network'), model: one('model'), server: one('server') };
+    labels[kind] = `${copy.title} —— ${copy.detail}`;
+  }
+  return labels as ProbeLabels;
 }
 
 /** 交互向导主循环（状态机驱动——M2：步骤图真相在 engine nextStep） */

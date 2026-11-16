@@ -593,7 +593,7 @@ describe('ConversationAdapter', () => {
       expect(sys.kind).toBe('aborted');
     });
 
-    it('creates error notice on engine.error', () => {
+    it('creates error notice on engine.error（app 口径：通用通道不冒充模型服务错误）', () => {
       const r = adapter.applyEvent(
         { type: 'engine.error', data: { error: 'something broke' } },
         sid,
@@ -602,7 +602,24 @@ describe('ConversationAdapter', () => {
       const sys = r.items.find((i) => i.role === 'system') as SystemConversationItem;
       expect(sys).toBeDefined();
       expect(sys.kind).toBe('error');
-      expect(sys.message).toBe('something broke');
+      // M7：engine.error 是 Run 终态通用通道 → app 文案，不甩 raw 也不套 provider 文案
+      expect(sys.message).toContain('操作失败');
+      expect(sys.message).not.toContain('模型服务');
+      expect(sys.message).not.toContain('something broke');
+    });
+
+    it('creates error notice on model.call.error（provider 口径人话化）', () => {
+      const r = adapter.applyEvent(
+        { type: 'model.call.error', data: { error: 'something broke' } },
+        sid,
+        items,
+      );
+      const sys = r.items.find((i) => i.role === 'system') as SystemConversationItem;
+      expect(sys.kind).toBe('error');
+      // MINOR-6：system 消息是人话（provider server 兜底文案），不甩 raw
+      expect(sys.message).toContain('模型服务出错了');
+      expect(sys.message).toContain('诊断 ID'); // support 档兑现诊断 ID 承诺（评审 M5）
+      expect(sys.message).not.toContain('something broke');
     });
 
     it('marks streaming assistant as error on engine.error', () => {
@@ -614,7 +631,7 @@ describe('ConversationAdapter', () => {
       expect(ast.status).toBe('error');
     });
 
-    it('creates blocked notice', () => {
+    it('creates blocked notice（审计语人话化，reason 附注保留可诊断性）', () => {
       const r = adapter.applyEvent(
         { type: 'security.blocked', data: { reason: 'unsafe content' } },
         sid,
@@ -622,7 +639,8 @@ describe('ConversationAdapter', () => {
       );
       const sys = r.items.find((i) => i.role === 'system') as SystemConversationItem;
       expect(sys.kind).toBe('blocked');
-      expect(sys.message).toBe('unsafe content');
+      expect(sys.message).toContain('已拦截');
+      expect(sys.message).toContain('unsafe content');
     });
 
     it('creates tools_changed notice with delta', () => {

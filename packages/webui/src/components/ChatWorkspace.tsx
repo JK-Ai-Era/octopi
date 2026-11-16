@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { MarkdownMessage } from './MarkdownMessage';
-import { ErrorCard, classifyProviderError, type FlowErrorItem } from './ErrorCard';
+import { ErrorCard, classifyFlowError, type FlowErrorItem } from './ErrorCard';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
 import { RunObservatoryPanel } from './RunObservatoryPanel';
 import { RunServicesPanel } from './RunServicesPanel';
@@ -182,12 +182,19 @@ function ToolCard({ item }: { item: ToolConversationItem }) {
       )}
 
       {item.error && (() => {
-        // §5d 运行期人话化：provider 错误四类映射；raw 保 title（悬停可见，不默认甩）
-        const c = classifyProviderError(item.error);
+        // 域×档：工具错误不套 provider 文案——可自救（self-heal）低调一行不进卡，
+        // 仅内部异常（support）才出错误卡（带诊断 ID + raw 折叠，统一走 ErrorCard）
+        const c = classifyFlowError(item.error, 'tool');
+        if (c.level === 'self-heal') {
+          return (
+            <div className="small muted" style={{ marginTop: 4 }} title={item.error}>
+              ⚠ {c.title}——{c.detail}
+            </div>
+          );
+        }
         return (
-          <div className={`error-card error-card-${c.level}`} style={{ marginTop: 4 }} title={item.error}>
-            <div className="error-card-title">⚠ {c.title}</div>
-            {c.detail && <div className="error-card-detail">{c.detail}</div>}
+          <div style={{ marginTop: 4 }}>
+            <ErrorCard item={{ id: `tool-${item.id}`, at: Date.now(), ...c }} />
           </div>
         );
       })()}
@@ -377,7 +384,15 @@ function ConversationItemCard({
                 '(空)'
               )}
             </div>
-            {a.error && <div className="small status-error" style={{ marginTop: 6 }}>{a.error}</div>}
+            {a.error && (() => {
+              const c = classifyFlowError(a.error, 'provider');
+              return (
+                <div className="small status-error" style={{ marginTop: 6 }} title={a.error}>
+                  ⚠ {c.title}——{c.detail}
+                  {c.diagnosticId ? `（诊断 ID：${c.diagnosticId}）` : ''}
+                </div>
+              );
+            })()}
           </div>
         </div>
       );
@@ -1221,7 +1236,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       // MINOR-6：模型错误人话化在写入侧（raw 不进用户面）
       {
         const raw = error instanceof Error ? error.message : String(error);
-        const c = classifyProviderError(raw);
+        const c = classifyFlowError(raw, 'provider');
         setModelError(`${c.title}${c.detail ? `——${c.detail}` : ''}`);
       }
     }
@@ -1418,7 +1433,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       setRenamingSessionId(null);
       setRenameDraft('');
     } catch (e) {
-      pushFlowError(classifyProviderError(e instanceof Error ? e.message : String(e)));
+      pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
     }
   };
@@ -1469,7 +1484,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       await store.setSessionPinned(sessionId, pinned);
       setToast(pinned ? '已置顶会话' : '已取消置顶');
     } catch (e) {
-      pushFlowError(classifyProviderError(e instanceof Error ? e.message : String(e)));
+      pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
     }
   };
@@ -1521,7 +1536,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       if (sidebarSessionId === sessionId) setSidebarSessionId(null);
       setToast('会话已删除');
     } catch (e) {
-      pushFlowError(classifyProviderError(e instanceof Error ? e.message : String(e)));
+      pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
     }
   };
@@ -1568,7 +1583,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       const created = await store.createSession(agentId, modelToApply ? { model: modelToApply } : undefined);
       await activateCreatedSession(created);
     } catch (error) {
-      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
     } finally {
       setCreating(false);
@@ -1623,7 +1638,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       await activateCreatedSession(created);
       await sendMessage(demoKit.prompt);
     } catch (error) {
-      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError('演示启动失败，详情见对话流中的错误卡。');
     } finally {
       setDemoRunning(false);
@@ -1683,7 +1698,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     } catch (error) {
       // M5：切换失败必须退到空态并回滚 agentId——否则 UI 显示新 agent 而 store.chat 仍指
       // 旧会话，此时发送会静默串台（正是本 bug 的定义）
-      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
       store.closeCurrentSession();
       clearActiveSessionUi();
@@ -1721,7 +1736,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       setSessionModel(sm);
       if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
     } catch (error) {
-      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
     }
   };
@@ -1740,7 +1755,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       setApprovals(store.getApprovals());
       setClientToolCalls(store.getClientToolCalls());
     } catch (error) {
-      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
     }
   };
@@ -1754,7 +1769,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     try {
       await store.answerQuestion(questionId, answer);
     } catch (error) {
-      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
     } finally {
       setAnsweringQuestion(false);
@@ -1775,7 +1790,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       // web 暂无认证层，多用户认证落地后应替换为认证身份，勿升级为编造的实名
       await store.resolveApproval(approvalId, { action, scope, approver: 'owner' });
     } catch (error) {
-      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
     } finally {
       setDecidingApproval(false);
@@ -1813,7 +1828,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       setPendingAttachments([]);
     } catch (error) {
       // 发送失败：store 已退出 waiting；保留输入便于重试
-      pushFlowError(classifyProviderError(error instanceof Error ? error.message : String(error)));
+      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError('操作失败，详情见对话流中的错误卡。');
       const st = store.getState().chat.runStatus;
       setRunStatus(st === 'waiting' || st === 'sending' ? 'error' : st);

@@ -14,6 +14,8 @@ export default defineConfig({
       '@octopi-agent/gateway/web/conversation/types': resolve(here, '../gateway/src/web/conversation/types.ts'),
       '@octopi-agent/gateway': resolve(here, '../gateway/src'),
       '@octopi-agent/engine': resolve(here, '../engine/src'),
+      // core 子路径：loop/* 在 src/loop（不在 src/core 下），长前缀先匹配
+      '@octopi-agent/core/loop': resolve(here, '../core/src/loop'),
       '@octopi-agent/core': resolve(here, '../core/src/core'),
     },
   },

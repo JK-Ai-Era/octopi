@@ -14,14 +14,14 @@ import { join } from 'node:path';
 import { apiKeyEnvVar, assembleOnboarding } from './onboarding.js';
 import type { OnboardingChoices, OnboardingOutput } from './onboarding.js';
 import { expandEnvValues } from './env.js';
-import { classifyErrorKind } from './error-copy.js';
+import { classifyErrorKind, type ProbeErrorKind } from './error-copy.js';
 import { createProviderFromConfig } from '../config.js';
 
 /**
- * 探针错误四类归并（§5 映射）。
+ * 探针错误归并（§5 映射）。
  * 分类实现单源在 `error-copy.ts`（probe 语境无 'context'，出现时归 'server'）。
  */
-export function classifyProbeError(err: Error): 'network' | 'auth' | 'model' | 'server' {
+export function classifyProbeError(err: Error): ProbeErrorKind {
   const kind = classifyErrorKind(err.message);
   return kind === 'context' ? 'server' : kind;
 }
@@ -163,9 +163,9 @@ export async function seedDeploymentRegistry(
  * 探针（§5 测通内核）：expandEnvValues 展开后建 provider 做一次可用性检查（B1）。
  *
  * @param choices - 当前选择
- * @returns 'ok' 或错误四类归并
+ * @returns 'ok' 或错误归并（ProbeErrorKind 七类码）
  */
-export async function probeProvider(choices: OnboardingChoices): Promise<'ok' | 'network' | 'auth' | 'model' | 'server'> {
+export async function probeProvider(choices: OnboardingChoices): Promise<'ok' | ProbeErrorKind> {
   const envVar = apiKeyEnvVar(choices.providerId);
   const prevEnv = envVar ? process.env[envVar] : undefined;
   try {

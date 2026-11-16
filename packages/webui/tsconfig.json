@@ -22,6 +22,7 @@
       "@octopi-agent/gateway/web/conversation/types": ["../../packages/gateway/src/web/conversation/types.ts"],
       "@octopi-agent/gateway/*": ["../../packages/gateway/src/*"],
       "@octopi-agent/engine/*": ["../../packages/engine/src/*"],
+      "@octopi-agent/core/loop/*": ["../../packages/core/dist/loop/*"],
       "@octopi-agent/core/*": ["../../packages/core/src/core/*"]
     }
   },

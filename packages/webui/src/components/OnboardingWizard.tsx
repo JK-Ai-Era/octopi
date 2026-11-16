@@ -26,7 +26,7 @@ interface WizardRender {
     hasAdminPassword?: boolean;
   };
   notice?: 'back-at-first';
-  probeError?: { kind: 'auth' | 'network' | 'model' | 'server'; message: string };
+  probeError?: { kind: ProbeErrorKind; message: string };
   /** 演示任务包播种失败的非致命警告（主配置已保存） */
   demoWarning?: string;
   /** M-6 热应用结果（true=已即时生效；false=失败见 hotApplyError；undefined=未热应用需重启） */
