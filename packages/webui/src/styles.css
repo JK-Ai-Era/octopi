@@ -1703,9 +1703,21 @@ button.ctx-band {
 /* ═══════════════ UI 打磨批（八项） ═══════════════ */
 
 /* ── ① 左栏连接条（精简版：状态 + 操作 + 设置入口） ── */
-.connection-strip { display: grid; gap: 8px; }
-.connection-status { font-weight: 600; }
-.connection-settings-link { text-decoration: none; display: inline-flex; align-items: center; }
+.connection-strip { display: flex; align-items: center; gap: 8px; padding: 2px 4px 8px; }
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-muted);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.connection-dot-connected { background: var(--color-ok); }
+.connection-dot-connecting,
+.connection-dot-idle { background: var(--color-warn); }
+.connection-dot-error { background: var(--color-error); }
+.connection-strip-settings { text-decoration: none; margin-left: auto; }
+.connection-strip-settings:hover { color: var(--color-fg); }
 
 /* ── ⑦ 对话 ↔ 输入区分割条 ── */
 .composer-splitter {
@@ -1732,28 +1744,31 @@ button.ctx-band {
 .composer {
   display: flex;
   flex-direction: column;
-  min-height: 200px;
-  max-height: var(--composer-h, 60vh);
+  height: var(--composer-h, 240px);
+  min-height: 140px;
+  max-height: 70vh;
   overflow: visible;
   box-sizing: border-box;
+  /* 固定高度（手柄直接调它）：chips 区可独立滚动、textarea 弹性吸收剩余；
+     弹层不裁（overflow visible），附件 chips 在固定区内部滚动不外溢 */
 }
-.composer-input-wrap { position: relative; flex: 1; min-height: 60px; display: flex; flex-direction: column; }
-.composer-textarea { flex: 1; min-height: 60px; resize: none; }
-.composer-footer { flex-shrink: 0; }
-.composer-meta-right { flex: 1; padding: 0 10px; }
-
-/* ── ⑥ 输入区下方会话 meta 行（模型 / 上下文 / 压缩） ── */
-.composer-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--color-border);
-  flex-wrap: wrap;
-  flex-shrink: 0;
+.composer-input-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.composer-attachments { flex-shrink: 0; max-height: 72px; overflow-y: auto; }
+.composer-textarea { flex: 1; min-height: 56px; resize: none; }
+.composer-footer { flex-shrink: 0; display: grid; gap: 6px; }
+.composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.composer-bottom-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.composer-usage {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  background: var(--color-surface-2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
 }
-.composer-meta .model-select { max-width: 300px; }
+.composer-hint { white-space: nowrap; }
+.composer-tools .model-select { max-width: 240px; }
 
 /* ── ② 右栏概览重设计：图标 + 组卡 + 箭头 ── */
 .rail-overview { display: grid; gap: 12px; align-content: start; }

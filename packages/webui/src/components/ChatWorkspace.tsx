@@ -1904,9 +1904,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   // Derive lists from conversation items
   const toolItems = conversationItems.filter((i): i is ToolConversationItem => i.role === 'tool');
 
-  const connectionLabel = connection === 'connected' ? 'status-ok'
-    : connection === 'connecting' || connection === 'reconnecting' ? 'status-warn' : 'status-neutral';
-
   const agentSessions = sessions.filter(s => agentId ? s.agentId === agentId : true)
     .sort((a, b) => {
       // 置顶优先，组内按最近交互倒序
@@ -1957,20 +1954,17 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       >
         {/* ── 左栏：连接、Agent、会话 ── */}
         <aside className="left-sidebar">
-          <section className="panel sidebar-section connection-strip">
-            <div className="sidebar-title">连接 Gateway</div>
-            <div className="small connection-status">
-              <span className={connectionLabel}>{connection}</span>
-              <span className="muted" style={{ marginLeft: 8 }}><code>{baseUrl}</code></span>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button className="btn-secondary small" onClick={reconnect}>重连</button>
-              <button className="btn-secondary small" onClick={refresh}>刷新</button>
-              <a className="btn-ghost small connection-settings-link" href="#settings-services">
-                设置 →
-              </a>
-            </div>
-            {connectError && <div className="small status-error" style={{ marginTop: 4 }}>{connectError}</div>}
+          <section className="connection-strip">
+            <button
+              type="button"
+              className={`connection-dot connection-dot-${connection}`}
+              onClick={() => void reconnect()}
+              title={`Gateway ${connection} · ${baseUrl} · 点击重连（设置 → 服务 可改地址/密钥）`}
+              aria-label="重连 Gateway"
+            />
+            <span className="small muted">{connection}</span>
+            <a className="small muted connection-strip-settings" href="#settings-services" title="设置 → 服务">设置</a>
+            {connectError && <span className="small status-error" title={connectError}>⚠</span>}
           </section>
 
           <section className="panel sidebar-section">
@@ -2526,9 +2520,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               onKeyDown={handleComposerKeyDown}
               rows={4}
               placeholder="输入消息，或 / 打开命令列表；可拖拽/粘贴附件"
+              title={activeSessionId ? `发送到会话 ${activeSessionId}` : '请先打开一个会话'}
             />
             </div>
             <div className="composer-footer">
+              {/* 工具条：附件 / 语料 / 模型选择（会话控制与物料集中一行，不再底部单占一排） */}
               <div className="composer-tools">
                 <label className="btn-secondary small" style={{ cursor: 'pointer' }}>
                   {uploading ? '上传中…' : '附件'}
@@ -2547,18 +2543,66 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   sessionId={activeSessionId}
                   onToast={setToast}
                 />
-              </div>
-              <div className="small muted composer-meta-right">
-                {toast && <span className="corpus-toast">{toast}</span>}
-                {openIssues.length > 0 && (
-                  <span style={{ color: 'var(--color-warn)', marginRight: 8 }}>
-                    ⚠️ {openIssues.length} issue · /issues
-                  </span>
+                <select
+                  aria-label="会话模型"
+                  className="model-select"
+                  value={effectiveModelId}
+                  onChange={(e) => void applyModelChange(e.target.value)}
+                  disabled={connection !== 'connected' || !agentId}
+                  title="会话模型（会话级覆盖只影响本会话，不改 Agent 默认）"
+                >
+                  {!effectiveModelId && <option value="">（默认）</option>}
+                  {agentDefaultModelId && (
+                    <option value={agentDefaultModelId}>
+                      {agentDefaultModelId}（Agent 默认）
+                    </option>
+                  )}
+                  {modelOptions.items
+                    .filter(m => m.id !== agentDefaultModelId)
+                    .map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.id}
+                        {m.known && m.contextWindow != null
+                          ? ` · ${formatTokens(m.contextWindow)}`
+                          : ' · 窗口未知'}
+                      </option>
+                    ))}
+                  {modelOptions.levelItems.map(lv => (
+                    <option key={`level-${lv.levelName}`} value={lv.id}>
+                      [{lv.levelName}] → {lv.id}
+                    </option>
+                  ))}
+                </select>
+                {activeSessionId && sessionModel?.modelId && sessionModel.modelId !== sessionModel.defaultModelId && (
+                  <span className="small status-ok" title="会话模型覆盖生效中">覆盖</span>
                 )}
-                {activeSessionId ? `发送到 ${activeSessionId} · ` : ''}Enter 发送 · Shift+Enter 换行
+                {modelError && <span className="small status-error">{modelError}</span>}
               </div>
-              <div className="composer-actions">
-                <button className="btn-secondary" onClick={() => setInput('')}>清空</button>
+              {/* 底行：左=上下文用量 chip + 压缩（轻量文字钮）+ toast；右=发送（清空钮按裁决移除） */}
+              <div className="composer-bottom">
+                <div className="composer-bottom-left">
+                  <span
+                    className="composer-usage small"
+                    title={`上下文：上次实测 ${promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / 模型窗口 ${contextWindowLabel}`}
+                  >
+                    {promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / {contextWindowLabel}
+                  </span>
+                  <button
+                    className="btn-ghost small"
+                    onClick={() => void runManualCompact()}
+                    disabled={!activeSessionId || compacting}
+                    title="结构压缩：头尾保护 + 中间摘要；不依赖 contextWindow"
+                  >
+                    {compacting ? '压缩中…' : '压缩'}
+                  </button>
+                  {toast && <span className="corpus-toast">{toast}</span>}
+                  {openIssues.length > 0 && (
+                    <span className="small" style={{ color: 'var(--color-warn)' }}>
+                      ⚠️ {openIssues.length} issue · /issues
+                    </span>
+                  )}
+                  <span className="small muted composer-hint">Enter 发送 · Shift+Enter 换行</span>
+                </div>
                 <button
                   className="btn-primary"
                   onClick={() => void sendMessage()}
@@ -2567,56 +2611,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   发送
                 </button>
               </div>
-            </div>
-
-            {/* 会话 meta 行：模型选择 + 上下文用量 + 压缩（原对话头部信息下沉，输入区紧邻控制） */}
-            <div className="composer-meta small muted">
-              <select
-                aria-label="会话模型"
-                className="model-select"
-                value={effectiveModelId}
-                onChange={(e) => void applyModelChange(e.target.value)}
-                disabled={connection !== 'connected' || !agentId}
-              >
-                {!effectiveModelId && <option value="">（默认）</option>}
-                {agentDefaultModelId && (
-                  <option value={agentDefaultModelId}>
-                    {agentDefaultModelId}（Agent 默认）
-                  </option>
-                )}
-                {modelOptions.items
-                  .filter(m => m.id !== agentDefaultModelId)
-                  .map(m => (
-                    <option key={m.id} value={m.id}>
-                      {m.id}
-                      {m.known && m.contextWindow != null
-                        ? ` · ${formatTokens(m.contextWindow)}`
-                        : ' · 窗口未知'}
-                    </option>
-                  ))}
-                {modelOptions.levelItems.map(lv => (
-                  <option key={`level-${lv.levelName}`} value={lv.id}>
-                    [{lv.levelName}] → {lv.id}
-                  </option>
-                ))}
-              </select>
-              {activeSessionId && sessionModel?.modelId && sessionModel.modelId !== sessionModel.defaultModelId && (
-                <span className="small status-ok">会话覆盖</span>
-              )}
-              <span
-                title={`上次实测 ${promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / 模型窗口 ${contextWindowLabel}`}
-              >
-                上下文 {promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / {contextWindowLabel}
-              </span>
-              <button
-                className="btn-ghost small"
-                onClick={() => void runManualCompact()}
-                disabled={!activeSessionId || compacting}
-                title="结构压缩：头尾保护 + 中间摘要；不依赖 contextWindow"
-              >
-                {compacting ? '压缩中…' : '压缩'}
-              </button>
-              {modelError && <span className="small status-error">{modelError}</span>}
             </div>
           </div>
         </section>
