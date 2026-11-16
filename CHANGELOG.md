@@ -126,6 +126,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.116.6 (2026-11-17)
+
+### fix(delegation): 委派子会话初始标题落三键——修子会话一律「新会话」
+
+**根因**：子会话创建时标题只写进 `meta.title`（旧投影字段），而标题权威是 `metadata` 三键——`readTitleState(metadata)` 对空三键返回 `undefined` 并**刻意覆盖** `meta.title`（不做旧数据回退），投影链一路上来 UI 永远拿不到标题。
+
+**改法**：`newChildSession` 把委派任务文本写成标题三键（`titleSource: 'snippet'`，`titleUpdatedAt` 打创建时刻），`meta.title` 同步镜像；任务文本压单行、连同 `delegation: ` 前缀截 120。snippet 语义：后续自动标题可升级，用户重命名永不被覆盖（`shouldUpdateTitle` 既有规则）。
+
+**范围**：仅新委派生效；存量子会话的标题三键不存在（任务文本无处回溯），保持原状。
+
+**验证**：全量 **5145 绿**（新增 1 用例：真 Jsonl store 锁三键写入 + `list` 投影可见）/ lint 0。
+
 ## v0.116.5 (2026-11-17)
 
 ### feat(session): 委派子会话面板——右栏"子会话"归拢、历史隐藏、spawnBy 投影链路

@@ -254,6 +254,11 @@ export class RunnerChildRunPort implements ChildRunPort {
   /** 构造带 `spawnBy` 的 child session 骨架 */
   private newChildSession(sessionId: string, input: ChildRunInput): SessionData {
     const timestamp = Date.now();
+    // 委派任务作初始标题（snippet 三键）：子会话不再一律「新会话」。
+    // 权威在 metadata 三键（写端恒打三键）；meta.title 仅镜像——只写 meta.title
+    // 会被 readTitleState 投影覆盖为 undefined（正是「新会话」的根因）。
+    // snippet 语义：可被后续自动标题升级；user 重命名永不被覆盖（shouldUpdateTitle）
+    const title = delegationTaskTitle(input.task);
     return {
       id: sessionId,
       agentId: input.childAgentId,
@@ -262,16 +267,28 @@ export class RunnerChildRunPort implements ChildRunPort {
       spawnBy: { ...input.spawnBy },
       meta: {
         tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
-        title: `delegation: ${input.task}`.slice(0, 120),
+        title,
+        titleSource: 'snippet',
+        titleUpdatedAt: timestamp,
         createdAt: timestamp,
         updatedAt: timestamp,
         status: 'idle',
       } as SessionData['meta'],
       messages: [],
       steps: [],
-      metadata: { delegationId: input.delegationId },
+      metadata: {
+        delegationId: input.delegationId,
+        title,
+        titleSource: 'snippet',
+        titleUpdatedAt: timestamp,
+      },
     };
   }
+}
+
+/** 委派任务 → 子会话初始标题：压单行空白、连同前缀截 120 */
+function delegationTaskTitle(task: string): string {
+  return `delegation: ${task.replace(/\s+/g, ' ').trim()}`.slice(0, 120);
 }
 
 /**
