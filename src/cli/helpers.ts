@@ -108,6 +108,12 @@ export interface StartWebUiOptions {
   gatewayPort?: number;
   /** Git 页签轮询间隔（秒）：透传给 serve-webui 下发（缺省不下发，前端回落默认） */
   gitStatusPollSeconds?: number;
+  /** web.gatewayUrl：显式网关地址下发（§7b 跨域/反代形态；缺省不下发走同 hostname） */
+  gatewayBaseUrl?: string;
+  /** 控制台钥匙下发（§7b 三层①：仅 web.host=localhost 时传入；0.0.0.0 不注入防公网泄漏） */
+  consoleApiKey?: string;
+  /** 部署模式（②③模式 webui 需登录；personal 免登录） */
+  deploymentMode?: string;
 }
 
 /**
@@ -126,6 +132,9 @@ export function webUiServeArgs(distDir: string, options?: StartWebUiOptions): st
   if (options?.gitStatusPollSeconds !== undefined) {
     args.push('--git-status-poll-seconds', String(options.gitStatusPollSeconds));
   }
+  if (options?.gatewayBaseUrl) args.push('--gateway-base-url', options.gatewayBaseUrl);
+  // M-7：apiKey 不进 argv（ps 可见）——走 env，spawnDetached 注入
+  if (options?.deploymentMode) args.push('--deployment-mode', options.deploymentMode);
   return args;
 }
 
@@ -137,6 +146,10 @@ export function startWebUi(distDir: string, options?: StartWebUiOptions): number
   if (!existsSync(entry)) return null;
   return spawnDetached(process.execPath, [entry, ...webUiServeArgs(distDir, options)], {
     cwd: distDir,
+    // M-7：控制台钥匙经 env 传递（argv 对本机所有用户可见）
+    env: options?.consoleApiKey
+      ? { ...process.env, OCTOPI_CONSOLE_API_KEY: options.consoleApiKey }
+      : process.env,
   });
 }
 
@@ -145,17 +158,30 @@ export async function stopWebUi(pid: number): Promise<void> {
 }
 
 /**
- * `/octopi-config.js` 响应体：把网关端口运行时下发给前端。
+ * `/octopi-config.js` 响应体：把网关连接面运行时下发给前端（§7b）。
  *
  * 唯一真相源是 `octopi.json`——serve-webui 启动时读取，前端加载本脚本后
- * 优先使用其中的端口，构建期兜底仅作回退。
+ * 优先使用其中的值，构建期兜底仅作回退。`apiKey` 仅本机部署下发
+ * （web.host=localhost；绑 0.0.0.0 不注入，防公网泄漏）。
  *
- * @param port 网关端口；undefined 时下发 null（前端走默认）
+ * @param opts.port 网关端口；undefined 时前端走默认
+ * @param opts.baseUrl 显式网关地址（web.gatewayUrl；缺省同 hostname+port）
+ * @param opts.consoleApiKey 控制台钥匙（仅本机部署下发）
  * @returns JavaScript 赋值语句
  */
-export function gatewayConfigScript(port?: number): string {
-  return port !== undefined
-    ? `window.__OCTOPI_GATEWAY__=${JSON.stringify({ port })};\n`
+export function gatewayConfigScript(
+  opts: {
+    port?: number;
+    baseUrl?: string;
+    consoleApiKey?: string;
+  } = {},
+): string {
+  const payload: Record<string, unknown> = {};
+  if (opts.port !== undefined) payload.port = opts.port;
+  if (opts.baseUrl) payload.baseUrl = opts.baseUrl;
+  if (opts.consoleApiKey) payload.apiKey = opts.consoleApiKey;
+  return Object.keys(payload).length > 0
+    ? `window.__OCTOPI_GATEWAY__=${JSON.stringify(payload)};\n`
     : 'window.__OCTOPI_GATEWAY__=null;\n';
 }
 
@@ -169,7 +195,7 @@ export function gatewayConfigScript(port?: number): string {
  * @param web - UI 旋钮对象；undefined 时下发 null
  * @returns JavaScript 赋值语句
  */
-export function webConfigScript(web?: { gitStatusPollSeconds?: number }): string {
+export function webConfigScript(web?: { gitStatusPollSeconds?: number; deploymentMode?: string }): string {
   return web !== undefined
     ? `window.__OCTOPI_WEB__=${JSON.stringify(web)};\n`
     : 'window.__OCTOPI_WEB__=null;\n';

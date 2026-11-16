@@ -47,6 +47,9 @@ function readConfigWebSettings(configPath?: string): {
   port?: number;
   gatewayPort?: number;
   gitStatusPollSeconds?: number;
+  gatewayUrl?: string;
+  gatewayApiKey?: string;
+  deploymentMode?: string;
 } {
   try {
     let filePath: string;
@@ -59,7 +62,8 @@ function readConfigWebSettings(configPath?: string): {
     }
     if (!existsSync(filePath)) return {};
     const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as {
-      web?: { dir?: unknown; host?: unknown; port?: unknown; gitStatusPollSeconds?: unknown };
+      web?: { dir?: unknown; host?: unknown; port?: unknown; gitStatusPollSeconds?: unknown; gatewayUrl?: unknown };
+      deploymentMode?: unknown;
       channels?: unknown;
       gateway?: unknown;
     };
@@ -89,12 +93,25 @@ function readConfigWebSettings(configPath?: string): {
         : undefined;
     const gatewayPort =
       gatewayOverridePort ?? (typeof httpChannel?.port === 'number' ? httpChannel.port : undefined);
+    const gatewayUrl =
+      typeof raw.web?.gatewayUrl === 'string' && raw.web.gatewayUrl.trim()
+        ? raw.web.gatewayUrl.trim().replace(/\/$/, '')
+        : undefined;
+    // §7b 三层①：仅本机部署下发控制台钥匙（web.host localhost）；lan/0.0.0.0 不注入防公网泄漏
+    const webHostIsLocal = host === undefined || host === 'localhost' || host === 'local';
+    const gatewayApiKey =
+      webHostIsLocal && typeof httpChannel?.apiKey === 'string' && httpChannel.apiKey
+        ? httpChannel.apiKey
+        : undefined;
     return {
       dir,
       host,
       port: isValidPort(port) ? port : undefined,
       gatewayPort: isValidPort(gatewayPort) ? gatewayPort : undefined,
       gitStatusPollSeconds: isValidGitStatusPollSeconds(poll) ? poll : undefined,
+      gatewayUrl,
+      gatewayApiKey,
+      deploymentMode: typeof raw.deploymentMode === 'string' && raw.deploymentMode ? raw.deploymentMode : undefined,
     };
   } catch {
     return {};
@@ -282,6 +299,9 @@ export async function webuiStartCommand(
     port,
     gatewayPort: webSettings.gatewayPort,
     gitStatusPollSeconds: webSettings.gitStatusPollSeconds,
+    gatewayBaseUrl: webSettings.gatewayUrl,
+    consoleApiKey: webSettings.gatewayApiKey, // §7b：仅本机部署（readConfigWebSettings 已判 localhost）
+    deploymentMode: webSettings.deploymentMode,
   });
   if (!pid) {
     if (soft) {

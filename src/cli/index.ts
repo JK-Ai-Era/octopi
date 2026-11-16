@@ -9,7 +9,7 @@ import { parseArgs } from './args.js';
 import { serveCommand, serveStopCommand } from './daemon.js';
 import { webuiCommand } from './webui.js';
 import { showHelp, initCommand, chatCommand, healthCommand, pluginCommand, ensureInitialized } from './commands.js';
-import { getOctopiHome } from '../init.js';
+import { getOctopiHome, isInitialized } from '../init.js';
 import { resolve } from 'node:path';
 import { opsCommand } from './ops.js';
 import { llmDiffCommand } from './llm-diff.js';
@@ -25,6 +25,17 @@ async function main(): Promise<void> {
 
   if (args.command === 'help') {
     showHelp();
+    return;
+  }
+
+  // m11 拍板：裸 octopi = 未初始化→init 向导；已初始化→tui chat
+  if (args.command === undefined) {
+    const home = getOctopiHome();
+    if (isInitialized(home) || isInitialized(process.cwd())) {
+      await chatCommand({ ...args, command: 'tui' });
+    } else {
+      await initCommand(args);
+    }
     return;
   }
 

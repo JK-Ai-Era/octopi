@@ -18,7 +18,7 @@ import {
   type ConnectionState,
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
-import { getConsoleKey } from '../console-key';
+import { getConsoleKey, getRegistryToken } from '../console-key';
 
 type LifecycleKind =
   | 'exited'
@@ -114,7 +114,7 @@ export function KnowledgeServiceStatus({ client }: { client?: OctopiClient }) {
   const owned = useMemo(
     () =>
       client ??
-      new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+      new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [client],
   );
   const owns = useRef(!client);

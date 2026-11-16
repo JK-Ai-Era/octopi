@@ -92,7 +92,7 @@ Examples:
 `);
 }
 
-export async function initCommand(args: CliArgs): Promise<void> {
+export async function initCommand(args: CliArgs): Promise<string | undefined> {
   const homeDir = args.config ? resolve(args.config, '..') : undefined;
   const result = await initOctopi(homeDir);
 
@@ -116,6 +116,7 @@ export async function initCommand(args: CliArgs): Promise<void> {
   if (onboarding.launchChat) {
     await chatCommand(args);
   }
+  return result.configPath;
 }
 
 export async function ensureInitialized(args: CliArgs): Promise<string | undefined> {
@@ -129,12 +130,9 @@ export async function ensureInitialized(args: CliArgs): Promise<string | undefin
 
   if (isInitialized(process.cwd())) return undefined;
 
-  console.log('🐙 First run detected. Initializing Octopi...\n');
-  const result = await initOctopi();
-  console.log(formatInitReport(result));
-  console.log('');
-
-  return result.configPath;
+  // m11：干净机器引导进首启向导（不再静默 initOctopi——用户要的是旅程不是脚手架）
+  console.log('🐙 First run detected — 启动配置向导。\n');
+  return await initCommand(args);
 }
 
 /**

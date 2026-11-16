@@ -3376,6 +3376,10 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 3600
+        },
+        "gatewayUrl": {
+          "type": "string",
+          "format": "uri"
         }
       }
     }

@@ -4,6 +4,9 @@
   "language": "zh",
   "deploymentMode": "personal",
 
+  "language": "zh",
+  "deploymentMode": "personal",
+
   "models": {
     "level": {
       "mini": { "primary": "openai/gpt-5-mini" },

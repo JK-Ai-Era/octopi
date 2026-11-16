@@ -3,7 +3,8 @@
  */
 
 export interface CliArgs {
-  command: string;
+  /** 显式子命令；裸 octopi 时为 undefined（分派语义在 index.ts：未初始化→init、已初始化→tui chat） */
+  command?: string;
   subcommand?: string;
   /** 第三个位置参数（如 `octopi ops kill <agentId>` 的 agentId） */
   target?: string;
@@ -183,7 +184,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   }
 
   return {
-    command: positional[0] ?? 'help',
+    command: positional[0], // 不归一成 help——裸命令的分派语义见 index.ts（m11）
     subcommand: positional[1],
     target: positional[2],
     config,

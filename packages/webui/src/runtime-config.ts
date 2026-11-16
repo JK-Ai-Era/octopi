@@ -13,7 +13,7 @@
 /** serve-webui 启动时注入的 UI 配置（`window.__OCTOPI_WEB__`） */
 declare global {
   interface Window {
-    __OCTOPI_WEB__?: { gitStatusPollSeconds?: number } | null;
+    __OCTOPI_WEB__?: { gitStatusPollSeconds?: number; deploymentMode?: string } | null;
   }
 }
 
@@ -30,4 +30,23 @@ export function getGitStatusPollSeconds(): number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 3600
     ? v
     : DEFAULT_GIT_STATUS_POLL_SECONDS;
+}
+
+/**
+ * 部署模式（①personal 免登录 / ②organization / ③multi-organization 需登录）。
+ *
+ * @returns 部署模式；下发缺失时返回 undefined（按免登录处理）
+ */
+export function getDeploymentMode(): string | undefined {
+  return typeof window !== 'undefined' ? window.__OCTOPI_WEB__?.deploymentMode : undefined;
+}
+
+/**
+ * 是否需要 registry 登录（②③模式）。
+ *
+ * @returns true = 需要登录页
+ */
+export function requiresLogin(): boolean {
+  const mode = getDeploymentMode();
+  return mode === 'organization' || mode === 'multi-organization';
 }

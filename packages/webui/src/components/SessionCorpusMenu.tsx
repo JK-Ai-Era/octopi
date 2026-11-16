@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OctopiClient, type KnowledgeSessionVisibilityItemDto } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
-import { getConsoleKey } from '../console-key';
+import { getConsoleKey, getRegistryToken } from '../console-key';
 
 interface ProjectRow {
   projectKey: string;
@@ -24,7 +24,7 @@ export function SessionCorpusMenu({
   onToast?: (msg: string) => void;
 }) {
   const client = useMemo(
-    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [],
   );
   const [open, setOpen] = useState(false);

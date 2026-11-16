@@ -77,6 +77,8 @@ export interface GitStatusView {
 export interface OctopiClientOptions {
   baseUrl: string;
   apiKey?: string;
+  /** 租户身份（②③模式 /registry/login 签发）；随 X-Registry-Token 发送 */
+  registryToken?: string;
   wsPath?: string;
   restPath?: string;
   autoReconnect?: boolean;
@@ -2014,11 +2016,14 @@ export class OctopiClient {
   }
 
   /** Update connection options without recreating the client */
-  updateOptions(partial: { baseUrl?: string; apiKey?: string }): void {
+  updateOptions(partial: { baseUrl?: string; apiKey?: string; registryToken?: string }): void {
     if (partial.baseUrl) {
       this.baseUrl = normalizeBaseUrl(partial.baseUrl);
       this.options.baseUrl = this.baseUrl;
       this.restBase = `${this.baseUrl}${this.options.restPath}`;
+    }
+    if (partial.registryToken !== undefined) {
+      this.options.registryToken = partial.registryToken || undefined;
     }
     if (partial.apiKey !== undefined) {
       this.options.apiKey = partial.apiKey || undefined;
@@ -2490,6 +2495,32 @@ export class OctopiClient {
     if (this.options.apiKey) {
       headers.Authorization = `Bearer ${this.options.apiKey}`;
     }
+    // 租户身份独立头（apiKey 闸占用 Authorization；两层凭证各走各道）
+    if (this.options.registryToken) {
+      headers['X-Registry-Token'] = this.options.registryToken;
+    }
     return headers;
+  }
+
+  /**
+   * 登录 registry（②③模式）：(tenant?, name) + password → token。
+   *
+   * @param payload - name 或 {tenant, name} + password
+   * @returns 签发的 token
+   */
+  async registryLogin(payload: { name: string; password: string; tenant?: string }): Promise<string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    // M-12：apiKey 闸对 /api/v1 全量前置——登录请求也须带 Authorization
+    if (this.options.apiKey) headers.Authorization = `Bearer ${this.options.apiKey}`;
+    const res = await fetch(`${this.options.baseUrl}${this.options.restPath ?? '/api/v1'}/registry/login`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json()) as { ok: boolean; data?: { token?: string; expiresAt?: number; user?: unknown }; error?: string };
+    if (!res.ok || !body.ok || !body.data?.token) {
+      throw new Error(body.error ?? `login_failed_http_${res.status}`);
+    }
+    return body.data.token;
   }
 }

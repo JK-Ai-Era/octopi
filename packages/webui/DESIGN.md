@@ -18,6 +18,8 @@
 
 ### 3a. Color
 
+- **双主题**：语义变量双份（`:root` 浅色默认 / `:root[data-theme='dark']` 暗色，仪器底 `--n-950: #0b1220`）；`ThemeToggle` 三态（system 跟随 `prefers-color-scheme` / light / dark），持久化 localStorage。层色双主题需校对比度（批 3 打磨）。
+
 - **Neutral scale (workbench, chat-first):**
   - `--n-50: #f6f7f9`
   - `--n-100: #eef0f3`
@@ -84,7 +86,7 @@
 - **Token format:** CSS variables（现有 `web/src/styles.css` 扩展 `--layer-*`）。
 - **Component library convention:** bespoke（现有 React + class，不引入重型 UI 库）。
 - **Image treatment rules:** 无摄影/插画；可视化全部由数据编码（色条、进度、栈）。
-- **Grid system:** Playground 三栏（left / chat / inspector）；顶栏统一 Focus 开关：chat 弱化 + inspector 扩展（各页签共用，不 per-tab）。
+- **Grid system:** 三栏（left / chat / right rail）。右栏 = **概览 + 详情**（§5b 信息架构：「工作进度 / 会话物料 / 环境」分组 section 平铺、徽标标有事、点行进详情；专家模式追加「运行时透明」组：上下文 / Run / 服务）。顶栏「面板」开关 = **右栏显隐**（默认隐藏 = 产品面第一印象纯对话；旧「Focus = chat 弱化 + inspector 扩展」语义废止）。右缘 4px splitter 拖宽（280px–约视口 50%）、双击复位、localStorage 持久。
 - **Motion rules:** ease-out 120–200ms；token 条宽度变化用 transition；不做装饰性 parallax。
 - **数据源约定:** UI **只渲染** `AssembleManifest` / `ContextLayersSnapshot`，禁止前端臆造层状态。
 

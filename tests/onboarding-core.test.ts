@@ -17,8 +17,9 @@ import {
   pickLang,
   validateStep,
 } from '../packages/engine/src/config-admin/onboarding.js';
+import { initialOnboardingState, nextStep, mergeOnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 import type { OnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
-import { classifyProbeError, mergeConfigFragment, writeEnvLine } from '../src/cli/wizard/onboarding.js';
+import { classifyProbeError, mergeConfigFragment, writeEnvLine } from '../packages/engine/src/config-admin/onboarding-apply.js';
 
 function baseChoices(overrides: Partial<OnboardingChoices> = {}): OnboardingChoices {
   return {
@@ -141,7 +142,7 @@ describe('落盘动作', () => {
       'utf8',
     );
     const out = assembleOnboarding(baseChoices());
-    mergeConfigFragment(configPath, out);
+    mergeConfigFragment(configPath, out, () => {}); // 校验器由套件层注入（M2）；本用例测合并语义
     const merged = JSON.parse(readFileSync(configPath, 'utf8')) as {
       language: string;
       deploymentMode: string;
@@ -160,5 +161,32 @@ describe('落盘动作', () => {
     chmodSync(envPath, 0o644);
     writeEnvLine(home, 'K=v2');
     expect(statSync(envPath).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('评审回归锚（del-20f0cd79）', () => {
+  it('B-4：配置损坏（JSON 语法错）不得被空对象覆盖——mergeConfigFragment 必须抛', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'octopi-corrupt-'));
+    const configPath = join(dir, 'octopi.json');
+    writeFileSync(configPath, '{ broken json');
+    const out = { configFragment: {}, envLines: [] } as never;
+    expect(() => mergeConfigFragment(configPath, out, () => {})).toThrow();
+    expect(readFileSync(configPath, 'utf8')).toBe('{ broken json'); // 原文未被覆盖
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('MINOR-2：goto 非法目标忽略（状态不变）；goto 自身不压栈', () => {
+    let st = initialOnboardingState('welcome');
+    const bad = nextStep(st, { kind: 'goto', step: 'nope' as never });
+    expect(bad.state.current).toBe('welcome');
+    const self = nextStep(st, { kind: 'goto', step: 'welcome' });
+    expect(self.state.stack).toHaveLength(0); // 自身不压栈
+  });
+
+  it('MINOR-1：mergeOnboardingChoices 白名单——未知键不进 choices', () => {
+    const base = { lang: 'zh', initMode: 'web', deploymentMode: 'personal', providerId: 'x', modelId: 'm' } as never;
+    const merged = mergeOnboardingChoices(base, { evil: 1, providerId: 'y' } as never) as unknown as Record<string, unknown>;
+    expect(merged.evil).toBeUndefined();
+    expect(merged.providerId).toBe('y');
   });
 });

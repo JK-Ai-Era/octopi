@@ -149,8 +149,15 @@ export function validateStep(step: OnboardingStepId, choices: OnboardingChoices)
       return choices.lang ? '' : zh ? '请选择语言' : 'Pick a language';
     case 'init-mode':
       return choices.initMode ? '' : zh ? '请选择初始化方式' : 'Pick an init mode';
-    case 'deployment-mode':
-      return choices.deploymentMode ? '' : zh ? '请选择部署模式' : 'Pick a deployment mode';
+    case 'deployment-mode': {
+      const mode = choices.deploymentMode as string;
+      if (!mode) return zh ? '请选择部署模式' : 'Pick a deployment mode';
+      // M-4：③模式组织名必填（此前 Web 端漏校验 → seedDeploymentRegistry 退化 'default' 租户）
+      if (mode === 'multi-organization' && !String(choices.orgName ?? '').trim()) {
+        return zh ? '请填写组织名称' : 'Enter an organization name';
+      }
+      return '';
+    }
     case 'provider': {
       if (!getProviderPreset(choices.providerId)) return zh ? '请选择一个模型服务' : 'Pick a model provider';
       // custom（OpenAI 兼容）必须给 baseUrl（schema: min(1)；空值产出非法配置）
@@ -228,4 +235,135 @@ export function assembleOnboarding(choices: OnboardingChoices): OnboardingOutput
  */
 export function providerChoices(): readonly import('./model-presets.js').ProviderPreset[] {
   return listProviderPresets();
+}
+
+/**
+ * 步骤数据浅合并（白名单字段；Web/CLI 渲染器共用单源——M2）。
+ *
+ * @param base - 现有选择
+ * @param patch - 本步提交的部分字段（只认 OnboardingChoices 顶层键）
+ * @returns 合并后的新对象（不改入参）
+ */
+const ONBOARDING_CHOICE_FIELDS: ReadonlyArray<keyof OnboardingChoices> = [
+  'lang',
+  'initMode',
+  'deploymentMode',
+  'orgName',
+  'providerId',
+  'providerOverrides',
+  'adminPassword',
+  'apiKey',
+  'modelId',
+];
+
+export function mergeOnboardingChoices(base: OnboardingChoices, patch: Partial<OnboardingChoices>): OnboardingChoices {
+  const out = { ...base };
+  // MINOR-1：白名单合并（只认 OnboardingChoices 顶层字段；HTTP 层透传对象不能塞任意键）
+  for (const key of ONBOARDING_CHOICE_FIELDS) {
+    const v = patch[key];
+    if (v !== undefined) (out as Record<string, unknown>)[key] = v;
+  }
+  return out;
+}
+
+// ── 状态机（M2 抽取）：步骤图转移为纯函数，CLI/Web 渲染器共享同一真相 ──
+
+/** 向导状态机状态（渲染器逐步推进；纯数据可序列化——Web 侧可跨请求存放） */
+export interface OnboardingMachineState {
+  /** 当前步骤；null = 结束（completed / aborted / exit） */
+  current: OnboardingStepId | null;
+  /** 回退栈（已走过的步骤） */
+  stack: OnboardingStepId[];
+  /** 正常走完全部步骤 */
+  completed: boolean;
+  /** EOF/输入断流而中止（半截状态不组装——批 1 EOF 尾巴） */
+  aborted: boolean;
+  /** 用户选择「保存并退出」（m5：文案=行为） */
+  exitSave: boolean;
+}
+
+/** 状态机事件（渲染器把用户动作翻译成事件） */
+export type OnboardingEvent =
+  | { kind: 'next' }
+  | { kind: 'back' }
+  | { kind: 'goto'; step: OnboardingStepId }
+  | { kind: 'exit'; save: boolean }
+  | { kind: 'eof' };
+
+/**
+ * commit 时机标记（渲染器据此调 applyOnboarding）：
+ * - `after-probe`：测通通过、services 动作之前（B2——spawn 出的进程读盘才拿得到新配置）
+ * - `on-exit-save`：用户选「保存并退出」（m5）
+ * - `on-done`：正常走完（防御落盘，仅限完整状态）
+ */
+export type OnboardingCommit = 'none' | 'after-probe' | 'on-exit-save' | 'on-done';
+
+/** 转移结果 */
+export interface OnboardingTransition {
+  state: OnboardingMachineState;
+  commit: OnboardingCommit;
+  /** 提示类反馈（渲染器本地化呈现） */
+  notice?: 'back-at-first';
+}
+
+/**
+ * 初始状态
+ *
+ * @param start - 起始步骤（默认 welcome）
+ * @returns 全新状态机状态
+ */
+export function initialOnboardingState(start: OnboardingStepId = 'welcome'): OnboardingMachineState {
+  return { current: start, stack: [], completed: false, aborted: false, exitSave: false };
+}
+
+/**
+ * 纯转移函数（M2 核心）：无 IO、无渲染，Web/CLI 唯一步骤图真相。
+ *
+ * @param state - 当前状态
+ * @param event - 事件
+ * @returns 转移后状态 + commit 时机
+ */
+export function nextStep(state: OnboardingMachineState, event: OnboardingEvent): OnboardingTransition {
+  if (state.current === null) return { state, commit: 'none' }; // 终态吸收
+  const idx = ONBOARDING_STEPS.indexOf(state.current);
+  switch (event.kind) {
+    case 'next': {
+      const nextIdx = idx + 1;
+      const done = nextIdx >= ONBOARDING_STEPS.length;
+      return {
+        state: {
+          ...state,
+          current: done ? null : ONBOARDING_STEPS[nextIdx],
+          stack: [...state.stack, state.current],
+          completed: done,
+        },
+        // B2：测通通过即落盘（services 动作读盘拿新配置）；走完防御落盘（半截状态不组装）
+        commit: state.current === 'probe' ? 'after-probe' : done ? 'on-done' : 'none',
+      };
+    }
+    case 'back': {
+      const prev = state.stack[state.stack.length - 1];
+      if (prev === undefined) return { state, commit: 'none', notice: 'back-at-first' }; // m13：空栈回退给提示，不静默绕圈
+      return { state: { ...state, current: prev, stack: state.stack.slice(0, -1) }, commit: 'none' };
+    }
+    case 'goto': {
+      // M1：探针失败动作面的精确落点（rekey→api-key / reprovider→provider）；非法目标忽略（fail-safe 不坏状态）
+      if (!ONBOARDING_STEPS.includes(event.step)) {
+        return { state, commit: 'none' };
+      }
+      // 自身不压栈（否则重试循环把「上一步」变成原地踏步 + 栈无限增长）
+      const stack = event.step === state.current ? state.stack : [...state.stack, state.current];
+      return { state: { ...state, current: event.step, stack }, commit: 'none' };
+    }
+    case 'exit': {
+      // m5：save=true 落盘退出；save=false 半截状态不组装
+      return {
+        state: { ...state, current: null, exitSave: event.save },
+        commit: event.save ? 'on-exit-save' : 'none',
+      };
+    }
+    case 'eof': {
+      return { state: { ...state, current: null, aborted: true }, commit: 'none' };
+    }
+  }
 }

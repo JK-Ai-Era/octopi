@@ -27,6 +27,10 @@ export function getConsoleKey(): string {
   } catch {
     memoryKey = '';
   }
+  // §7b 三层①：本机部署由 serve-webui 自动下发（仅 web.host=localhost；判据在服务端，前端只消费）
+  if (!memoryKey && typeof window !== 'undefined') {
+    memoryKey = window.__OCTOPI_GATEWAY__?.apiKey ?? '';
+  }
   return memoryKey;
 }
 
@@ -46,5 +50,44 @@ export function setConsoleKey(key: string): void {
     }
   } catch {
     // 存储不可用：内存态兜底，刷新后需重填
+  }
+}
+
+// ── registry 租户身份（②③模式登录；X-Registry-Token 载体） ──
+
+const REGISTRY_TOKEN_KEY = 'octopi.console.registryToken';
+let memoryRegistryToken = '';
+
+/**
+ * 读 registry token（内存态优先，其次 localStorage）。
+ *
+ * @returns token 字符串；未登录时为空串
+ */
+export function getRegistryToken(): string {
+  if (memoryRegistryToken) return memoryRegistryToken;
+  try {
+    memoryRegistryToken = window.localStorage.getItem(REGISTRY_TOKEN_KEY) ?? '';
+  } catch {
+    memoryRegistryToken = '';
+  }
+  return memoryRegistryToken;
+}
+
+/**
+ * 写 registry token（内存 + localStorage）。空串 = 退出登录。
+ * 存储写失败时退化为内存态，不假装已持久化。
+ *
+ * @param token - /registry/login 签发的 token
+ */
+export function setRegistryToken(token: string): void {
+  memoryRegistryToken = token;
+  try {
+    if (token) {
+      window.localStorage.setItem(REGISTRY_TOKEN_KEY, token);
+    } else {
+      window.localStorage.removeItem(REGISTRY_TOKEN_KEY);
+    }
+  } catch {
+    // 存储不可用：内存态兜底，刷新后需重登
   }
 }

@@ -45,4 +45,6 @@ export const WebConfigSchema = z.object({
    * 每次轮询 spawn git 子进程，低值（1–2s）在大仓上开销可观。改后需 `octopi webui restart`。
    */
   gitStatusPollSeconds: z.number().int().min(0).max(GIT_STATUS_POLL_SECONDS_MAX).optional(),
+  /** 显式网关地址（§7b：跨域/反代形态用；缺省 = 同 hostname + 下发端口） */
+  gatewayUrl: z.string().url().optional(),
 });

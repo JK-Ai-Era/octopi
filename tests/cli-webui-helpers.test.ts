@@ -274,12 +274,19 @@ describe('probeWebUiIdentity / findUntrackedWebUiInstance（端口认领前的�
 
 describe('gatewayConfigScript（/octopi-config.js 运行时下发）', () => {
   test('serializes port for runtime injection', () => {
-    expect(gatewayConfigScript(18180)).toBe('window.__OCTOPI_GATEWAY__={"port":18180};\n');
-    expect(gatewayConfigScript(3000)).toContain('"port":3000');
+    expect(gatewayConfigScript({ port: 18180 })).toBe('window.__OCTOPI_GATEWAY__={"port":18180};\n');
+    expect(gatewayConfigScript({ port: 3000 })).toContain('"port":3000');
   });
 
-  test('emits null when port absent (frontend falls back to default)', () => {
-    expect(gatewayConfigScript(undefined)).toBe('window.__OCTOPI_GATEWAY__=null;\n');
+  test('emits null when nothing to inject (frontend falls back to default)', () => {
+    expect(gatewayConfigScript()).toBe('window.__OCTOPI_GATEWAY__=null;\n');
+    expect(gatewayConfigScript({})).toBe('window.__OCTOPI_GATEWAY__=null;\n');
+  });
+
+  test('serializes baseUrl（§7b web.gatewayUrl）and console apiKey（仅本机下发）', () => {
+    const out = gatewayConfigScript({ port: 18180, baseUrl: 'https://api.example.com', consoleApiKey: 'sk-console' });
+    expect(out).toContain('"baseUrl":"https://api.example.com"');
+    expect(out).toContain('"apiKey":"sk-console"');
   });
 });
 
@@ -382,5 +389,15 @@ describe('resolveGatewayApiKey（channels[type=http].apiKey 解析）', () => {
     expect(resolveGatewayApiKey({ channels: [{ type: 'http', apiKey: '' }] })).toBeUndefined();
     expect(resolveGatewayApiKey({ channels: [{ type: 'ws', apiKey: 'k-1' }] })).toBeUndefined();
     expect(resolveGatewayApiKey({})).toBeUndefined();
+  });
+});
+
+describe('m11 裸命令分派前提', () => {
+  it('bare-octopi dispatch：parseArgs 不把裸命令归一成 help（command 保持 undefined）', async () => {
+    const { parseArgs } = await import('../src/cli/args.js');
+    const a = parseArgs([]);
+    expect(a.command).toBeUndefined();
+    const h = parseArgs(['help']);
+    expect(h.command).toBe('help');
   });
 });

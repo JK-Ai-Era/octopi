@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { probeProvider } from '../src/cli/wizard/onboarding.js';
+import { probeProvider } from '../packages/engine/src/config-admin/onboarding-apply.js';
 import type { OnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 
 let server: Server | undefined;

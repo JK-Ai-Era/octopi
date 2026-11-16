@@ -1163,6 +1163,8 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   if (listenCfg.enabled) {
     const { HttpChannelAdapter } = await import('@octopi-agent/gateway/protocols/http.js');
     const { WebApiRouter } = await import('@octopi-agent/gateway/web/api/router.js');
+    const { OnboardingService } = await import('@octopi-agent/gateway/web/api/onboarding.js');
+    const { OctopiConfigSchema } = await import('../config-schema/index.js');
     const { resolveListenHost } = await import('@octopi-agent/engine/config.js');
     // 配置管理面（arch/config-hot-reload.md）：FileConfigService（IO）+ provider 工厂（带 wireDump）
     const { ConfigApplyService } = await import('@octopi-agent/gateway/gateway/config-apply.js');
@@ -1202,11 +1204,45 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     });
     // 署名归因：apiKey 闸已验明持钥方 → 审批 confirmedBy 记 credential-backed 身份；
     // 无认证部署退回客户端自报（可仿冒，KNOWN-ISSUES 已声明）
+    // ── Web 向导面（§7）：首启（providers 未配置）生成 setup token，URL 只打印终端 ──
+    const onboardingSvc = new OnboardingService({
+      configPath: configPath ?? join(getOctopiHome(), 'octopi.json'), // NIT-5：同函数权威来源（FileConfigService 同源）
+      octopiHome: getOctopiHome(),
+      validateConfig: (raw) => {
+        void OctopiConfigSchema.parse(raw); // fail-loud：合并后配置必须过 schema（未过则 zod 抛）
+      },
+    });
+    // 首启判据（冒烟修正）：脚手架自带占位 providers，「providers 空」永不成立——
+    // 真实首启 = 向导没跑过（deploymentMode 缺失，向导独有产物）且 providers 全是占位/无 key。
+    // 双条件：老用户（有真 key）不被骚扰；向导跑过的（有 deploymentMode）不再打印。
+    const providerEntries = Object.entries(
+      (config as { models?: { providers?: Record<string, { apiKey?: unknown }> } }).models?.providers ?? {},
+    );
+    // M-9：先展开 env 再判（${VAR} 占位但 .env 有值 = 已配置的「.env 派」老用户不误判）
+    const expandSimple = (v: unknown): string =>
+      String(v ?? '').replace(/\$\{([^}]+)\}/g, (_m, k: string) => process.env[k] ?? '');
+    const providersUnconfigured =
+      providerEntries.length === 0 ||
+      providerEntries.every(([, p]) => !expandSimple(p?.apiKey).trim());
+    const wizardRan = typeof (config as { deploymentMode?: unknown }).deploymentMode === 'string';
+    if (wizardRan) {
+      onboardingSvc.closeWizard(); // B-3：向导跑过的部署关闭写门（loopback 也不再放行）
+    }
+    if (!wizardRan && providersUnconfigured) {
+      const setupPath = onboardingSvc.issueSetupToken();
+      const webPort = (config as { web?: { port?: number } }).web?.port ?? 8180;
+      const webHost = config.web?.host ?? 'localhost';
+      // NetworkHostConfig 语义值：'local'/'localhost'→localhost；'lan'/'0.0.0.0'→占位（用浏览器所在机器的地址访问）
+      const hostHint = webHost === '0.0.0.0' || webHost === 'lan' ? '<本机IP>' : 'localhost';
+      console.log(`\n🧙 首启配置向导（Web）：http://${hostHint}:${webPort}${setupPath}`);
+      console.log('   （链接仅打印在此终端，30 分钟内有效；完成配置后自动失效）\n');
+    }
     const webApiRouter = new WebApiRouter({
       gateway,
       basePath: '/api/v1',
       configApply,
       approverIdentity: httpConfig?.apiKey ? 'owner' : undefined,
+      onboarding: onboardingSvc,
     });
     const listenHost = resolveListenHost(listenHostConfig);
     // SEC-7 边界显式化：无 apiKey 时 console/config API 不设防（checkAuth 放行），

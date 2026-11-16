@@ -21,6 +21,9 @@ const distDir = resolve(distArg);
 let host = '127.0.0.1';
 let port = 8180;
 let gatewayPort: number | undefined;
+let gatewayBaseUrl: string | undefined;
+let consoleApiKey: string | undefined = process.env.OCTOPI_CONSOLE_API_KEY || undefined; // M-7：env 传递（argv 泄漏）
+let deploymentMode: string | undefined;
 let gitStatusPollSeconds: number | undefined;
 for (let i = 3; i < process.argv.length; i++) {
   if (process.argv[i] === '--host' && process.argv[i + 1]) host = process.argv[++i];
@@ -32,6 +35,12 @@ for (let i = 3; i < process.argv.length; i++) {
   if (process.argv[i] === '--git-status-poll-seconds' && process.argv[i + 1]) {
     const n = Number(process.argv[++i]);
     if (isValidGitStatusPollSeconds(n)) gitStatusPollSeconds = n;
+  }
+  if (process.argv[i] === '--gateway-base-url' && process.argv[i + 1]) {
+    gatewayBaseUrl = process.argv[++i];
+  }
+  if (process.argv[i] === '--deployment-mode' && process.argv[i + 1]) {
+    deploymentMode = process.argv[++i];
   }
 }
 
@@ -71,10 +80,18 @@ const server = createServer(async (req, res) => {
         'Cache-Control': 'no-store',
       });
       res.end(
-        gatewayConfigScript(gatewayPort) +
-          webConfigScript(
-            gitStatusPollSeconds !== undefined ? { gitStatusPollSeconds } : undefined,
-          ),
+        // M-8：按请求来源注入 apiKey（配置 host=localhost 不等于请求来自本机；远程可访问本机端口）
+        gatewayConfigScript({
+          port: gatewayPort,
+          baseUrl: gatewayBaseUrl,
+          consoleApiKey: ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')
+            ? consoleApiKey
+            : undefined,
+        }) +
+          webConfigScript({
+            ...(gitStatusPollSeconds !== undefined ? { gitStatusPollSeconds } : {}),
+            ...(deploymentMode !== undefined ? { deploymentMode } : {}),
+          }),
       );
       return;
     }

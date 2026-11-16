@@ -168,7 +168,11 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       // CORS
       res.setHeader('Access-Control-Allow-Origin', this.corsOrigins);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        // X-Registry-Token：租户身份（T4）；X-Setup-Token：Web 向导闸（§7）——跨域预检必须放行
+        'Content-Type, Authorization, Accept, X-Registry-Token, X-Setup-Token',
+      );
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);

@@ -13,6 +13,7 @@ import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-gua
 import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
 import type { AgentId, BindingId, SessionPolicy, User } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
+import { OnboardingService, OnboardingStepInvalidError } from './onboarding.js';
 
 export interface WebApiRouterOptions {
   gateway: Gateway;
@@ -26,6 +27,8 @@ export interface WebApiRouterOptions {
    * 不信客户端自报。未配置 = 无认证部署，退回 body 自报（可仿冒）。
    */
   approverIdentity?: string;
+  /** Web 向导服务端（§7 setup token）；未注入时 /onboarding/* 返回 503 */
+  onboarding?: OnboardingService;
 }
 
 /**
@@ -39,6 +42,7 @@ export class WebApiRouter {
   private maxBodyBytes: number;
   private configApply?: ConfigApplyService;
   private approverIdentity?: string;
+  private onboarding?: OnboardingService;
 
   constructor(options: WebApiRouterOptions) {
     this.gateway = options.gateway;
@@ -46,6 +50,7 @@ export class WebApiRouter {
     this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
     this.configApply = options.configApply;
     this.approverIdentity = options.approverIdentity;
+    this.onboarding = options.onboarding;
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -81,6 +86,11 @@ export class WebApiRouter {
             privileged: await this.gateway.getPrivilegedStatus(),
           },
         });
+      }
+
+      // ── Web 向导面（arch/product-onboarding.md §1/§7）：状态机单源在 engine，此面只做 HTTP ──
+      if (relativePath.startsWith('/onboarding')) {
+        return await this.handleOnboarding(req, res, relativePath, method, url);
       }
 
       // ── 租户与定义面（arch/multi-tenancy.md T1b）：注册/登录 + registry CRUD ──
@@ -1953,6 +1963,68 @@ export class WebApiRouter {
    * （Bearer token 会话，register/login 签发）。MVP 鉴权=token 会话+名称直登
    * （演练级；口令/SSO 属 P3 替换）。跨租户边界由 RegistryService fail-loud。
    */
+  /** Web 向导路由（loopback 免闸；远程须 setup token——§7） */
+  private async handleOnboarding(
+    req: IncomingMessage,
+    res: ServerResponse,
+    relativePath: string,
+    method: string,
+    url: URL,
+  ): Promise<boolean> {
+    const svc = this.onboarding;
+    if (!svc) return this.json(res, 503, { ok: false, error: 'onboarding_unavailable: Web 向导未装配' });
+
+    const remote = req.socket.remoteAddress ?? '';
+    // B-3：同机反代时 remote 恒为 loopback——转发头在场一律视为远程（防代理后免闸写配置）
+    const forwarded = req.headers['x-forwarded-for'] ?? req.headers['forwarded'] ?? req.headers['x-forwarded-proto'];
+    const isLoopback = !forwarded && (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1');
+    const token = req.headers['x-setup-token'] ?? url.searchParams.get('setup') ?? undefined;
+    if (!svc.authorize(typeof token === 'string' ? token : undefined, isLoopback)) {
+      return this.json(res, 401, { ok: false, error: 'setup_token_invalid: 需要终端打印的 setup 链接（30 分钟内有效）' });
+    }
+
+    if (relativePath === '/onboarding/availability' && method === 'GET') {
+      return this.json(res, 200, { ok: true, data: { available: svc.isAvailable() } });
+    }
+    if (relativePath === '/onboarding/session' && method === 'POST') {
+      try {
+        return this.json(res, 200, { ok: true, data: svc.start() });
+      } catch (e) {
+        if (e instanceof OnboardingStepInvalidError) {
+          return this.json(res, 403, { ok: false, error: `onboarding_step_invalid: ${e.message}` });
+        }
+        throw e;
+      }
+    }
+    if (relativePath === '/onboarding/session' && method === 'GET') {
+      return this.json(res, 200, { ok: true, data: svc.render() });
+    }
+    if (relativePath === '/onboarding/session/event' && method === 'POST') {
+      const body = (await this.readBody(req)) as {
+        event?: unknown;
+        stepData?: Record<string, unknown>;
+      };
+      const ev = body.event as { kind?: unknown } | undefined;
+      if (!ev || typeof ev.kind !== 'string') {
+        return this.json(res, 400, { ok: false, error: 'onboarding_bad_event: event.kind 必填' });
+      }
+      try {
+        const render = await svc.submit(
+          ev as Parameters<OnboardingService['submit']>[0],
+          (body.stepData ?? undefined) as Parameters<OnboardingService['submit']>[1],
+        );
+        return this.json(res, 200, { ok: true, data: render });
+      } catch (e) {
+        if (e instanceof OnboardingStepInvalidError) {
+          const status = e.message.startsWith('wizard_closed') ? 403 : 400;
+          return this.json(res, status, { ok: false, error: `onboarding_step_invalid: ${e.message}` });
+        }
+        throw e; // 落盘/探针故障走统一 500 面（fail-loud，不吞）
+      }
+    }
+    return this.json(res, 404, { ok: false, error: 'not_found' });
+  }
+
   private async handleRegistry(
     req: IncomingMessage,
     res: ServerResponse,

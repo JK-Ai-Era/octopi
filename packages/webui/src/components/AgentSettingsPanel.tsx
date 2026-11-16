@@ -12,7 +12,7 @@ import {
   type ConfigAgentsViewDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
-import { getConsoleKey } from '../console-key';
+import { getConsoleKey, getRegistryToken } from '../console-key';
 
 type EffectMode = 'workspace' | 'project' | 'host' | 'untrusted';
 
@@ -90,7 +90,7 @@ function isConflictError(err: unknown): boolean {
 
 export function AgentSettingsPanel() {
   const client = useMemo(
-    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [],
   );
 

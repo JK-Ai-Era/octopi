@@ -12,7 +12,7 @@ import { DescriptionSourceBadge } from './DescriptionSourceBadge';
 import { AgentKnowledgeView } from './AgentKnowledgeView';
 import { OpFeedback, useOpFeedback } from './OpFeedback';
 import { resolveDefaultBase } from '../gateway-base';
-import { getConsoleKey } from '../console-key';
+import { getConsoleKey, getRegistryToken } from '../console-key';
 
 type Panel = 'global' | 'projects' | 'agents' | 'search';
 
@@ -334,7 +334,7 @@ function GlobalHideList({
 
 export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
   const client = useMemo(
-    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined }),
+    () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [],
   );
   const [panel, setPanel] = useState<Panel>('global');
