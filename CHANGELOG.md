@@ -128,6 +128,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.14 (2026-11-18)
+
+### docs: knowledge tenant-gate open items (review M5/m6/m7)
+
+`docs/KNOWN-ISSUES.md` 落三条评审开放项：M5「公共项目创建缺平台管理员角色闸」（待 registry 角色模型）、m6「项目行按源逐条查询热路径 N+1/缺索引」、m7「stats 全库口径与列表闸口径不一致」。修复批已处置项见 v0.118.11–13。
+
+---
+
 ## v0.118.13 (2026-11-18)
 
 ### feat(webui): knowledge admin — public project toggle

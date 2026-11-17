@@ -91,3 +91,24 @@ The top-level mapping guard checks section-level keys only; these **sub-keys** a
 ## Compact summary paths — known boundaries (2026-10, F8 review follow-up)
 
 - **`context.compact.summarize_fallback` has no web-UI consumer yet.** The event lands in the run timeline (observer `TIMELINE_TYPES`), but `web/runtime/store.ts` / `web/conversation/adapter.ts` have no case for it, so the conversation inspector does not render cache-miss fallbacks.
+
+## Knowledge tenant gates — open items (2026-11, MAJ-4 review follow-up)
+
+From the independent review of the knowledge tenant-gate landing (v0.118.11–13)
+(fixed there: B1 cross-domain removeProject, M1 public-project domain inheritance,
+M3 same-key cross-domain merge, M4 override-row domain isolation, m1–m5). Still
+open:
+
+- **M5 — no role gate on "public project" creation.** `visibility='public'`
+  asserts a platform claim (cross-tenant publish). The service enforces
+  "explicit claim only", but any console-API caller (i.e. anyone holding the
+  gateway apiKey) can make that call — there is no distinct platform-admin role
+  yet. Close together with the registry role model (multi-tenancy T1).
+- **m6 — per-source project-row lookup on the hot path.** `isProjectVisible`
+  queries `knowledge_projects` per project-scoped source (no `project_key`
+  index; PK is `(tenant_id, project_key)`). Cache per batch like `rowCache`
+  and/or add an index when corpus sizes make it matter.
+- **m7 — stats are DB-wide.** `principalStats.stats` returns unscoped
+  `db.stats()` (all tenants/domains) while lists are gated — the exact
+  "stats show data, lists are empty" confusion this batch fixed on the list
+  side. Scope the counts by the gate or label them as global in the UI/API.
