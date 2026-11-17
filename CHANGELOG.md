@@ -128,6 +128,25 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.11 (2026-11-18)
+
+### fix(engine): knowledge admin-plane tenant read gate single-source（MAJ-4 收口）
+
+**症状**：管理面板「统计有数（源 1/文件 1280…）、公共库与项目列表恒空」。**根因**：Knowledge token 域=platform（broker，v0.113.10 起）而写域无 claim 降级 DEFAULT，读路径硬等值 `tenant_id = ?` 对 platform 读身份零命中——即 T3b 遗留「控制面读口租户闸（MAJ-4）」的现场。
+
+**改法**：新增 `harness/knowledge/tenant-gate.ts` 单源四闸（内存判定与 SQL 谓词同源、等价性测试逐格锁定）：
+
+- `tenantGate` 资产域闸（platform=全量；本域 ∪ platform）
+- `tenantOwnGate` 写入物本域闸（挂载/覆盖/主体行按域隔离，**platform 行不自动扩散到租户**）
+- `ownerFunnel` 源归属漏斗（registered_by=己方 ∪ public，仅源）
+- `projectGate` 项目跨域闸（本域恒可见；platform 项目仅 `visibility='public'` 跨域可见）
+
+读路径全量换谓词；单行读取本域优先确定性排序（`.get()` 无序漂移消除）；`listProjects` 同 key 跨域按域优先去重、计数/挂载不混计；`removeProject` 三表删除收口调用方域（原跨域 DELETE=越权破坏+孤儿旁路）；`register/updateSource` 项目行按源域登记（原固定落 default=跨域幻影行；platform 隐式登记=共享库默认 public）；`listJobs` 补项目闸（job 行 path/last_error 不得旁路泄漏）。
+
+**行为变化**：platform 项目跨租户可见性从「恒可见」收紧为「须 `visibility='public'`」（该列此前只写不读）。**验证**：等价矩阵+隔离回归 `tests/harness/knowledge-tenant-gate.test.ts`；独立评审 1 BLOCKER+5 MAJOR 全处置（B1/M1/M3/M4/m1-m5 已修，m6/m7 记开放项）；全量 5241 用例绿。
+
+---
+
 ## v0.118.10 (2026-11-17)
 
 ### feat(cli): crash forensics for the gateway process

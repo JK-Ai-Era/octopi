@@ -134,6 +134,21 @@ export class KnowledgeClient {
     return this.request('POST', '/v1/sources', input, this.tenantHeaders(opts?.tenantId));
   }
 
+  /** 单项目登记行（含归属域/可见性；管理面域继承用）。未登记/不可见 → null */
+  async getProject(projectKey: string): Promise<Record<string, unknown> | null> {
+    try {
+      return await this.request(
+        'GET',
+        `/v1/projects/${encodeURIComponent(projectKey)}`,
+        undefined,
+        undefined,
+        { read: true },
+      );
+    } catch {
+      return null;
+    }
+  }
+
   patchSource(
     sourceId: string,
     patch: Record<string, unknown>,
@@ -254,12 +269,16 @@ export class KnowledgeClient {
     return this.request('GET', '/v1/projects');
   }
 
-  createProject(input: {
-    projectKey: string;
-    displayName?: string;
-    visibility?: string;
-  }): Promise<Record<string, unknown>> {
-    return this.request('POST', '/v1/projects', input);
+  createProject(
+    input: {
+      projectKey: string;
+      displayName?: string;
+      visibility?: string;
+    },
+    tenantId?: string,
+  ): Promise<Record<string, unknown>> {
+    // 显式 tenantId = 租户断言（如公共项目断言 'platform' 落共享面）；缺省走实例 provider
+    return this.request('POST', '/v1/projects', input, this.tenantHeaders(tenantId));
   }
 
   deleteProject(projectKey: string): Promise<unknown> {

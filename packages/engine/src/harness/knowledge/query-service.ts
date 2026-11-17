@@ -22,6 +22,7 @@ import {
   readJobControlState,
   type KnowledgeJobControlState,
 } from './job-control-state.js';
+import { ownerFunnelSql, projectGateSql, tenantGateSql, tenantOwnGateSql, tenantPrecedenceOrder } from './tenant-gate.js';
 import { KnowledgeHitLog, type PromotionCandidate } from './hit-log.js';
 import type {
   KnowledgeBootRetriever,
@@ -130,6 +131,8 @@ export interface KnowledgeQueryService {
   autoGround(query: AutoGroundQuery): Promise<AutoGroundDecision>;
   listSources(query: ListSourcesQuery): Promise<KnowledgeSource[]>;
   listProjects(identity?: QueryIdentity): Promise<Array<Record<string, unknown>>>;
+  /** 单项目登记行（含归属域/可见性）；未登记/不可见 = null（管理面域继承用） */
+  getProject(identity: QueryIdentity, projectKey: string): Promise<Record<string, unknown> | null>;
   getSource(
     sourceId: string,
     identity?: QueryIdentity,
@@ -268,6 +271,13 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
       tenantId: identity?.tenantId,
       gatewayId: identity?.gatewayId,
     }) as unknown as Array<Record<string, unknown>>;
+  }
+
+  async getProject(
+    identity: QueryIdentity,
+    projectKey: string,
+  ): Promise<Record<string, unknown> | null> {
+    return this.deps.sources.getProject(projectKey, identity) as Record<string, unknown> | null;
   }
 
   async getSource(
@@ -484,29 +494,31 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     identity: QueryIdentity,
     agentId: string,
   ): Promise<Record<string, unknown> | null> {
+    const gate = tenantOwnGateSql('tenant_id', identity);
+    const order = tenantPrecedenceOrder('tenant_id', identity);
     const row = this.deps.db.raw
       .prepare(
         `SELECT * FROM knowledge_principals
-         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ?`,
+         WHERE ${gate.sql} AND gateway_id = ? AND local_agent_id = ?
+         ORDER BY ${order.sql} LIMIT 1`,
       )
-      .get(identity.tenantId ?? 'default', identity.gatewayId ?? 'default', agentId) as
+      .get(...gate.params, identity.gatewayId ?? 'default', agentId, ...order.params) as
       | Record<string, unknown>
       | undefined;
     return row ?? null;
   }
 
   async isPrincipalForeign(identity: QueryIdentity, agentId: string): Promise<boolean> {
+    const gate = tenantOwnGateSql('tenant_id', identity);
     const row = this.deps.db.raw
       .prepare(
         `SELECT 1 AS ok FROM knowledge_principals
-         WHERE tenant_id = ? AND local_agent_id = ? AND gateway_id != ?
+         WHERE ${gate.sql} AND local_agent_id = ? AND gateway_id != ?
          LIMIT 1`,
       )
-      .get(
-        identity.tenantId ?? 'default',
-        agentId,
-        identity.gatewayId ?? 'default',
-      ) as { ok?: number } | undefined;
+      .get(...gate.params, agentId, identity.gatewayId ?? 'default') as
+      | { ok?: number }
+      | undefined;
     return Boolean(row);
   }
 
@@ -537,10 +549,24 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
   }
 
   async listJobs(query: ListJobsQuery): Promise<Array<Record<string, unknown>>> {
+    const tenantGate = tenantGateSql('s.tenant_id', query.identity);
+    const funnel = ownerFunnelSql('s.registered_by', 's.visibility', query.identity);
+    const projectGate = projectGateSql('p.tenant_id', 'p.visibility', query.identity);
+    // 源范围与读侧同口径（评审 m1）：租户闸 ⊕ 归属漏斗 ⊕ 项目跨域闸——job 行携带 path/last_error，
+    // 不得成为项目闸旁路的元数据泄漏面
     const where: string[] = [
-      `source_id IN (SELECT id FROM knowledge_sources WHERE tenant_id = ? AND (registered_by = ? OR visibility = 'public'))`,
+      `source_id IN (
+         SELECT s.id FROM knowledge_sources s
+         WHERE ${tenantGate.sql} AND ${funnel.sql}
+           AND (s.scope_level != 'project' OR EXISTS (
+             SELECT 1 FROM knowledge_projects p
+             WHERE p.project_key = s.scope_key
+               AND IFNULL(p.tenant_id, '') = IFNULL(s.tenant_id, '')
+               AND ${projectGate.sql}
+           ))
+       )`,
     ];
-    const args: unknown[] = [query.identity.tenantId ?? 'default', query.identity.gatewayId ?? 'default'];
+    const args: unknown[] = [...tenantGate.params, ...funnel.params, ...projectGate.params];
     if (query.sourceId) {
       where.push('source_id = ?');
       args.push(query.sourceId);
@@ -566,10 +592,16 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
   }
 
   /**
-   * 控制面读口域闸（T3b，评审 MAJ-4）：租户闸 ⊕ 网关漏斗，单源委托 source-store
+   * 控制面读口域闸（T3b，评审 MAJ-4）：租户闸 ⊕ 网关漏斗 ⊕ 项目跨域闸，单源委托 source-store
    * （原为本地第二套 gatewayVisible 实现——无租户检查，跨租户可读；且违反单源律）。
    */
-  private domainVisible(src: { id: string }, identity: QueryIdentity): boolean {
+  private domainVisible(src: KnowledgeSource, identity: QueryIdentity): boolean {
+    if (
+      src.scopeRef.level === 'project' &&
+      !this.deps.sources.isProjectVisible(src, src.scopeRef.key, identity)
+    ) {
+      return false;
+    }
     return (
       this.deps.sources.isTenantVisible(src, identity) &&
       this.deps.sources.isGatewayVisible(src, identity)

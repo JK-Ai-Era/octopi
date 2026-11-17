@@ -178,6 +178,16 @@ export class WorkerQueryService implements KnowledgeQueryService {
     >;
   }
 
+  async getProject(
+    identity: QueryIdentity,
+    projectKey: string,
+  ): Promise<Record<string, unknown> | null> {
+    return (await this.call({ method: 'getProject', identity, projectKey })) as Record<
+      string,
+      unknown
+    > | null;
+  }
+
   async getSource(
     sourceId: string,
     identity?: QueryIdentity,

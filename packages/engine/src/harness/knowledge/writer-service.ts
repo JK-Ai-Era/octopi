@@ -310,6 +310,17 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
         code: 'not_resource_owner',
       });
     }
+    // 评审 m3：visibility='public' 是跨租户共享面动作，只接受显式 claim 'platform' 的写——
+    // 租户/无断言写造出的 'public' 不产生共享语义，如实拒绝而非假成功
+    if (
+      input.visibility === 'public' &&
+      !(identity.claimed && identity.tenantId === PLATFORM_TENANT_ID)
+    ) {
+      throw Object.assign(
+        new Error("visibility 'public' requires an explicit platform claim"),
+        { code: 'visibility_requires_platform_claim' },
+      );
+    }
     this.sources.createProject(input.projectKey, input.displayName, {
       tenantId: identity.tenantId,
       registeredBy: identity.gatewayId,
@@ -376,7 +387,10 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
         `[Knowledge] registerSource without ownership claim stamped to "${DEFAULT_TENANT_ID}" domain; assert x-octopi-tenant to declare ownership`,
       );
     }
-    const src = this.sources.register(input as unknown as KnowledgeSourceInput);
+    const src = this.sources.register(input as unknown as KnowledgeSourceInput, {
+      tenantId: ownerTenant,
+      registeredBy: identity.gatewayId,
+    });
     this.db.raw
       .prepare(
         `UPDATE knowledge_sources SET registered_by = ?, visibility = ?, tenant_id = ?
@@ -611,6 +625,12 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     agentId: string,
     projectKey: string,
   ): Promise<void> {
+    // 写侧防绕过（收紧配套）：不可见项目的 key 不得经分配 grant 进入 agent 视图
+    if (!this.sources.isProjectVisibleTo(projectKey, identity)) {
+      throw Object.assign(new Error(`project not visible to writer: ${projectKey}`), {
+        code: 'project_not_visible',
+      });
+    }
     this.sources.assignProject(projectKey, agentId, identity);
   }
 
@@ -631,6 +651,25 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
   }
 
   async mountSource(identity: WriteIdentity, agentId: string, sourceId: string): Promise<void> {
+    // 写侧防绕过（收紧配套）：不可见源不得经挂载 grant 进入 agent 视图
+    // （与读侧同口径：租户闸 ⊕ 网关漏斗 ⊕ 项目跨域闸，fail-loud 而非写成无效挂载）
+    const src = this.sources.get(sourceId);
+    if (!src) {
+      // 评审 m4：未知源 fail-loud，不静默写 include 行
+      throw Object.assign(new Error(`source not found: ${sourceId}`), {
+        code: 'source_not_found',
+      });
+    }
+    const visible =
+      this.sources.isTenantVisible(src, identity) &&
+      this.sources.isGatewayVisible(src, identity) &&
+      (src.scopeRef.level !== 'project' ||
+        this.sources.isProjectVisible(src, src.scopeRef.key, identity));
+    if (!visible) {
+      throw Object.assign(new Error(`source not visible to writer: ${sourceId}`), {
+        code: 'source_not_visible',
+      });
+    }
     this.sources.mountSource(agentId, sourceId, identity);
   }
 

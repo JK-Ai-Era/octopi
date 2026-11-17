@@ -144,4 +144,98 @@ describe('knowledge 写归属护栏（broker token）', () => {
     expect(r.status).toBe(401);
     expect(rowTenant('knowledge_principals', 'local_agent_id', 'agent-w')).toBe('<absent>');
   });
+
+  it('写侧防绕过：platform 私有项目不得 assignProject；公共项目可（fail-loud）', async () => {
+    for (const [key, body, expectVisibility] of [
+      ['priv-lib', { projectKey: 'priv-lib' }, 'private'],
+      ['pub-lib', { projectKey: 'pub-lib', visibility: 'public' }, 'public'],
+    ] as const) {
+      const r = await call('POST', '/v1/projects', BROKER_TOKEN, {
+        claim: PLATFORM_TENANT_ID,
+        body,
+      });
+      expect(r.status).toBe(201);
+      expect(rowTenant('knowledge_projects', 'project_key', key)).toBe(PLATFORM_TENANT_ID);
+      const row = db.raw
+        .prepare('SELECT visibility FROM knowledge_projects WHERE project_key = ?')
+        .get(key) as { visibility?: string };
+      expect(row.visibility).toBe(expectVisibility);
+    }
+
+    const denied = await call('POST', '/v1/principals/agent-m/visibility', TENANT_TOKEN, {
+      body: { op: 'assignProject', projectKey: 'priv-lib' },
+    });
+    expect(denied.status).toBe(403);
+
+    const ok = await call('POST', '/v1/principals/agent-m/visibility', TENANT_TOKEN, {
+      body: { op: 'assignProject', projectKey: 'pub-lib' },
+    });
+    expect(ok.status).toBeLessThan(300);
+  });
+
+  it('写侧防绕过：他域源不得 mount（fail-loud）', async () => {
+    const r = await call('POST', '/v1/sources', BROKER_TOKEN, {
+      claim: 't-b',
+      body: {
+        kind: 'directory',
+        location: '/tmp/foreign',
+        scopeRef: { level: 'global', key: 'global' },
+        displayName: 'foreign',
+      },
+    });
+    expect(r.status).toBeLessThan(300);
+    const row = db.raw
+      .prepare("SELECT id FROM knowledge_sources WHERE tenant_id = 't-b'")
+      .get() as { id: string };
+
+    const denied = await call('POST', '/v1/principals/agent-m/visibility', TENANT_TOKEN, {
+      body: { op: 'mount', sourceId: row.id },
+    });
+    expect(denied.status).toBe(403);
+  });
+
+  it('写侧防绕过：platform 私有项目下的源不得 mount（项目闸与读侧同口径）', async () => {
+    await call('POST', '/v1/projects', BROKER_TOKEN, {
+      claim: PLATFORM_TENANT_ID,
+      body: { projectKey: 'priv-p' },
+    });
+    const r = await call('POST', '/v1/sources', BROKER_TOKEN, {
+      claim: PLATFORM_TENANT_ID,
+      body: {
+        kind: 'directory',
+        location: '/tmp/priv-p',
+        scopeRef: { level: 'project', key: 'priv-p' },
+        displayName: 'pp',
+      },
+    });
+    expect(r.status).toBeLessThan(300);
+    const row = db.raw
+      .prepare("SELECT id FROM knowledge_sources WHERE scope_key = 'priv-p'")
+      .get() as { id: string };
+
+    const denied = await call('POST', '/v1/principals/agent-m/visibility', TENANT_TOKEN, {
+      body: { op: 'mount', sourceId: row.id },
+    });
+    expect(denied.status).toBe(403);
+  });
+
+  it('m3：visibility=public 是 platform 共享面动作，租户/无断言写一律拒', async () => {
+    const deniedTenant = await call('POST', '/v1/projects', TENANT_TOKEN, {
+      body: { projectKey: 'want-public', visibility: 'public' },
+    });
+    expect(deniedTenant.status).toBe(403);
+    expect(rowTenant('knowledge_projects', 'project_key', 'want-public')).toBe('<absent>');
+
+    const deniedUnclaimed = await call('POST', '/v1/projects', BROKER_TOKEN, {
+      body: { projectKey: 'want-public', visibility: 'public' },
+    });
+    expect(deniedUnclaimed.status).toBe(403);
+  });
+
+  it('m4：mount 未知源 fail-loud（source_not_found），不静默写 include 行', async () => {
+    const r = await call('POST', '/v1/principals/agent-m/visibility', TENANT_TOKEN, {
+      body: { op: 'mount', sourceId: 'ks_nonexistent' },
+    });
+    expect(r.status).toBe(404);
+  });
 });

@@ -3,9 +3,18 @@
  */
 
 import { randomUUID, createHash } from 'node:crypto';
-import { PLATFORM_TENANT_ID, DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
+import { PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
 import { KnowledgeDatabase } from './db.js';
+import {
+  ownerFunnelAllows,
+  projectGateAllows,
+  projectGateSql,
+  tenantGateAllows,
+  tenantGateSql,
+  tenantOwnGateSql,
+  tenantPrecedenceOrder,
+} from './tenant-gate.js';
 import { deriveTopicsFromPaths } from './topics.js';
 import { asSourceId } from './types.js';
 import type {
@@ -158,7 +167,10 @@ export class KnowledgeSourceStore {
   /**
    * 注册知识源
    */
-  register(input: KnowledgeSourceInput): KnowledgeSource {
+  register(
+    input: KnowledgeSourceInput,
+    opts?: { tenantId?: string; registeredBy?: string; visibility?: string },
+  ): KnowledgeSource {
     const now = Date.now();
     const id = input.id ?? `ks_${randomUUID().slice(0, 12)}`;
     const displayName = input.displayName?.trim() || deriveDisplayName(input.location);
@@ -183,7 +195,12 @@ export class KnowledgeSourceStore {
       updatedAt: now,
     };
     if (scopeRef.level === 'project') {
-      this.createProject(scopeRef.key);
+      // 项目行必须与源同域登记（归属打标在写路径；同 key 可跨域各一行）。
+      // platform 域隐式登记 = 隐式共享库（评审 M2）：显式 createProject 才能造 private 平台项目
+      this.createProject(scopeRef.key, undefined, {
+        ...opts,
+        visibility: opts?.tenantId === PLATFORM_TENANT_ID ? 'public' : opts?.visibility,
+      });
     }
     this.upsertRow(source);
     return source;
@@ -238,7 +255,16 @@ export class KnowledgeSourceStore {
         ? {
             scopeRef: (() => {
               const scope = normalizeScope(patch.scopeRef!);
-              if (scope.level === 'project') this.createProject(scope.key);
+              if (scope.level === 'project') {
+                // 项目行与源同域登记（评审 m2：否则固定落 default 域成跨域幻影行）；
+                // platform 域隐式登记 = 隐式共享库（评审 M2），显式 createProject 才能造 private 平台项目
+                const row = this.sourceRow(id as string);
+                this.createProject(scope.key, undefined, {
+                  tenantId: row?.tenant_id,
+                  registeredBy: row?.registered_by,
+                  visibility: row?.tenant_id === PLATFORM_TENANT_ID ? 'public' : undefined,
+                });
+              }
               return scope;
             })(),
           }
@@ -343,13 +369,14 @@ export class KnowledgeSourceStore {
   }
 
   listProjectAgents(projectKey: string, opts?: { tenantId?: string; gatewayId?: string }): string[] {
+    const gate = tenantOwnGateSql('tenant_id', opts ?? {});
     const rows = this.db.raw
       .prepare(
         `SELECT local_agent_id AS agent_id FROM knowledge_project_agents
-         WHERE tenant_id = ? AND gateway_id = ? AND project_key = ?
+         WHERE ${gate.sql} AND gateway_id = ? AND project_key = ?
          ORDER BY local_agent_id`,
       )
-      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', projectKey) as Array<{
+      .all(...gate.params, opts?.gatewayId ?? 'default', projectKey) as Array<{
       agent_id: string;
     }>;
     return rows.map((r) => r.agent_id);
@@ -451,13 +478,14 @@ export class KnowledgeSourceStore {
     op: 'include' | 'exclude',
     opts?: { tenantId?: string; gatewayId?: string },
   ): string[] {
+    const gate = tenantOwnGateSql('tenant_id', opts ?? {});
     const rows = this.db.raw
       .prepare(
         `SELECT source_id FROM knowledge_agent_visibility
-         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND op = ?
+         WHERE ${gate.sql} AND gateway_id = ? AND local_agent_id = ? AND op = ?
          ORDER BY source_id`,
       )
-      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', agentId, op) as Array<{
+      .all(...gate.params, opts?.gatewayId ?? 'default', agentId, op) as Array<{
       source_id: string;
     }>;
     return rows.map((r) => r.source_id);
@@ -484,13 +512,14 @@ export class KnowledgeSourceStore {
     op: 'include' | 'exclude',
     opts?: { tenantId?: string; gatewayId?: string },
   ): string[] {
+    const gate = tenantOwnGateSql('tenant_id', opts ?? {});
     const rows = this.db.raw
       .prepare(
         `SELECT local_agent_id FROM knowledge_agent_visibility
-         WHERE tenant_id = ? AND gateway_id = ? AND source_id = ? AND op = ?
+         WHERE ${gate.sql} AND gateway_id = ? AND source_id = ? AND op = ?
          ORDER BY local_agent_id`,
       )
-      .all(opts?.tenantId ?? 'default', opts?.gatewayId ?? 'default', sourceId, op) as Array<{
+      .all(...gate.params, opts?.gatewayId ?? 'default', sourceId, op) as Array<{
       local_agent_id: string;
     }>;
     return rows.map((r) => r.local_agent_id);
@@ -576,15 +605,16 @@ export class KnowledgeSourceStore {
     sessionId: string,
     identity?: { tenantId?: string; gatewayId?: string },
   ): import('./types.js').KnowledgeSessionVisibilityItem[] {
+    const gate = tenantOwnGateSql('tenant_id', identity ?? {});
     const rows = this.db.raw
       .prepare(
         `SELECT local_session_id AS session_id, target_type, target_id, op, created_at
          FROM knowledge_session_visibility
-         WHERE tenant_id = ? AND gateway_id = ? AND local_session_id = ?
+         WHERE ${gate.sql} AND gateway_id = ? AND local_session_id = ?
          ORDER BY created_at`,
       )
       .all(
-        identity?.tenantId ?? 'default',
+        ...gate.params,
         identity?.gatewayId ?? 'default',
         sessionId,
       ) as Array<{
@@ -605,56 +635,100 @@ export class KnowledgeSourceStore {
 
   /** 项目登记视图（管理面：先建项目再挂源；**不**用孤儿源计数复活已删项目） */
   listProjects(opts?: { tenantId?: string; gatewayId?: string }): Array<{
+    tenantId: string;
     projectKey: string;
     displayName?: string;
     sourceCount: number;
     assignedAgentIds: string[];
   }> {
-    const tenant = opts?.tenantId ?? 'default';
+    // 读身份：无 opts / 字段缺省均按 DEFAULT 域（MAJ-2 fail-closed）；平台域=全量视图
+    const identity = opts ?? {};
+    const projectGate = projectGateSql('tenant_id', 'visibility', identity);
+    const tenantGate = tenantGateSql('tenant_id', identity);
+    const mountGate = tenantOwnGateSql('tenant_id', identity);
     const gateway = opts?.gatewayId ?? 'default';
+    const ownTenant = opts?.tenantId ?? 'default';
     const registered = this.db.raw
       .prepare(
-        `SELECT project_key, display_name FROM knowledge_projects
-         WHERE tenant_id = ? ORDER BY project_key`,
+        `SELECT tenant_id, project_key, display_name FROM knowledge_projects
+         WHERE ${projectGate.sql} ORDER BY project_key`,
       )
-      .all(tenant) as Array<{ project_key: string; display_name: string | null }>;
+      .all(...projectGate.params) as Array<{
+      tenant_id: string;
+      project_key: string;
+      display_name: string | null;
+    }>;
+    // 同 key 可跨域各登记一行（评审 M3）：按域优先级择一输出（本域 > platform > 其它，
+    // 同级按域名字典序），禁止重复 key 进 UI、禁止跨域混计
+    const rank = (t: string): number => (t === ownTenant ? 0 : t === PLATFORM_TENANT_ID ? 1 : 2);
+    const chosen = new Map<
+      string,
+      { tenant_id: string; project_key: string; display_name: string | null }
+    >();
+    for (const row of registered) {
+      const prev = chosen.get(row.project_key);
+      if (
+        !prev ||
+        rank(row.tenant_id) < rank(prev.tenant_id) ||
+        (rank(row.tenant_id) === rank(prev.tenant_id) && row.tenant_id < prev.tenant_id)
+      ) {
+        chosen.set(row.project_key, row);
+      }
+    }
     const counts = this.db.raw
       .prepare(
-        `SELECT scope_key AS project_key, COUNT(*) AS source_count
+        `SELECT tenant_id, scope_key AS project_key, COUNT(*) AS source_count
          FROM knowledge_sources
-         WHERE scope_level = 'project' AND status != 'removed' AND tenant_id = ?
-         GROUP BY scope_key`,
+         WHERE scope_level = 'project' AND status != 'removed' AND ${tenantGate.sql}
+         GROUP BY tenant_id, scope_key`,
       )
-      .all(tenant) as Array<{ project_key: string; source_count: number }>;
-    const countMap = new Map(counts.map((c) => [c.project_key, c.source_count]));
-    // 一次拉齐 project→agents，禁止每项目一条 N+1
+      .all(...tenantGate.params) as Array<{
+      tenant_id: string;
+      project_key: string;
+      source_count: number;
+    }>;
+    const countMap = new Map(
+      counts.map((c) => [`${c.tenant_id}\u0000${c.project_key}`, c.source_count]),
+    );
+    // 一次拉齐 project→agents，禁止每项目一条 N+1；挂载行=写入物，按本域闸不跨域扩散
     const agentRows = this.db.raw
       .prepare(
-        `SELECT project_key, local_agent_id FROM knowledge_project_agents
-         WHERE tenant_id = ? AND gateway_id = ?
+        `SELECT tenant_id, project_key, local_agent_id FROM knowledge_project_agents
+         WHERE ${mountGate.sql} AND gateway_id = ?
          ORDER BY project_key, local_agent_id`,
       )
-      .all(tenant, gateway) as Array<{ project_key: string; local_agent_id: string }>;
+      .all(...mountGate.params, gateway) as Array<{
+      tenant_id: string;
+      project_key: string;
+      local_agent_id: string;
+    }>;
     const agentsByProject = new Map<string, string[]>();
     for (const row of agentRows) {
+      // 挂载行 = 读方域的写入物（本域闸已过滤）：回答「我的哪些 agent 可见」，按 key 聚合
       const list = agentsByProject.get(row.project_key) ?? [];
       list.push(row.local_agent_id);
       agentsByProject.set(row.project_key, list);
     }
     // 只列已登记项目；孤儿源（项目已删）不再“复活”项目行
-    return registered.map((r) => ({
-      projectKey: r.project_key,
-      displayName: r.display_name ?? undefined,
-      sourceCount: countMap.get(r.project_key) ?? 0,
-      assignedAgentIds: agentsByProject.get(r.project_key) ?? [],
-    }));
+    return [...chosen.values()]
+      .map((r) => {
+        const domainKey = `${r.tenant_id}\u0000${r.project_key}`;
+        return {
+          tenantId: r.tenant_id,
+          projectKey: r.project_key,
+          displayName: r.display_name ?? undefined,
+          sourceCount: countMap.get(domainKey) ?? 0,
+          assignedAgentIds: agentsByProject.get(r.project_key) ?? [],
+        };
+      })
+      .sort((a, b) => (a.projectKey < b.projectKey ? -1 : a.projectKey > b.projectKey ? 1 : 0));
   }
 
   /** 登记空项目（先建项目再挂源） */
   createProject(
     projectKey: string,
     displayName?: string,
-    opts?: { tenantId?: string; registeredBy?: string },
+    opts?: { tenantId?: string; registeredBy?: string; visibility?: string },
   ): void {
     const key = projectKey.trim();
     if (!key) throw new Error('projectKey is required');
@@ -664,12 +738,20 @@ export class KnowledgeSourceStore {
       .prepare(
         `INSERT INTO knowledge_projects
            (tenant_id, project_key, display_name, registered_by, visibility, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'private', ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(tenant_id, project_key) DO UPDATE SET
            display_name = COALESCE(excluded.display_name, knowledge_projects.display_name),
            updated_at = excluded.updated_at`,
       )
-      .run(tenant, key, displayName ?? null, opts?.registeredBy ?? 'default', now, now);
+      .run(
+        tenant,
+        key,
+        displayName ?? null,
+        opts?.registeredBy ?? 'default',
+        opts?.visibility ?? 'private',
+        now,
+        now,
+      );
   }
 
   /**
@@ -690,17 +772,19 @@ export class KnowledgeSourceStore {
         `project "${projectKey}" still has ${sourceCount} source(s); remove or reassign them first`,
       );
     }
+    // 同 key 可跨域各登记一行（评审 B1）：删除只作用于调用方域内的行——跨域删除既是越权
+    // 破坏，又会把「无登记行=孤儿不设闸」变成跨域读旁路
     const res = this.db.raw
-      .prepare('DELETE FROM knowledge_projects WHERE project_key = ?')
-      .run(projectKey);
+      .prepare('DELETE FROM knowledge_projects WHERE project_key = ? AND tenant_id = ?')
+      .run(projectKey, tenant);
     this.db.raw
-      .prepare('DELETE FROM knowledge_project_agents WHERE project_key = ?')
-      .run(projectKey);
+      .prepare('DELETE FROM knowledge_project_agents WHERE project_key = ? AND tenant_id = ?')
+      .run(projectKey, tenant);
     this.db.raw
       .prepare(
-        "DELETE FROM knowledge_session_visibility WHERE target_type = 'project' AND target_id = ?",
+        "DELETE FROM knowledge_session_visibility WHERE target_type = 'project' AND target_id = ? AND tenant_id = ?",
       )
-      .run(projectKey);
+      .run(projectKey, tenant);
     return Number(res.changes ?? 0) > 0;
   }
 
@@ -716,6 +800,14 @@ export class KnowledgeSourceStore {
     if (source.status === 'removed' || source.status === 'disabled') return false;
     if (!this.isTenantVisible(source, identity)) return false;
     if (!this.isGatewayVisible(source, identity)) return false;
+    // 项目跨域闸（收紧）：project 域源还须其项目行对本身份可见（base 与 session overlay
+    // 两路 grant 都不得绕过；写侧另有 fail-loud 防线）
+    if (
+      source.scopeRef.level === 'project' &&
+      !this.isProjectVisible(source, source.scopeRef.key, identity)
+    ) {
+      return false;
+    }
     return this.applySessionOverlay(
       source,
       this.isBaseVisible(source, agentId, sessionId, identity),
@@ -733,12 +825,9 @@ export class KnowledgeSourceStore {
     source: { id: string },
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
-    const tenant = identity?.tenantId ?? DEFAULT_TENANT_ID;
-    if (tenant === PLATFORM_TENANT_ID) return true;
     const row = this.sourceRow(source.id);
-    if (!row?.tenant_id) return true;
-    if (row.tenant_id === PLATFORM_TENANT_ID) return true;
-    return row.tenant_id === tenant;
+    if (!row) return true;
+    return tenantGateAllows(row.tenant_id, identity ?? {});
   }
 
   /** 网关漏斗：registered_by=己方 ∪ public（租户闸已由 isTenantVisible 独立收口） */
@@ -746,14 +835,9 @@ export class KnowledgeSourceStore {
     source: { id: string },
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
-    const gw = identity?.gatewayId;
-    if (!gw) return true;
     const row = this.sourceRow(source.id);
     if (!row) return true;
-    if (row.registered_by && row.registered_by !== gw && row.visibility !== 'public') {
-      return false;
-    }
-    return true;
+    return ownerFunnelAllows(row.registered_by, row.visibility, identity ?? {});
   }
 
   /** Agent 级 base 可见（不含会话 overlay；排查用） */
@@ -764,9 +848,12 @@ export class KnowledgeSourceStore {
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
     if (source.status === 'removed' || source.status === 'disabled') return false;
+    const { level, key } = source.scopeRef;
+    // 项目跨域闸（收紧）：project 域源的任何 grant（挂载库/项目分配/session overlay）
+    // 都不得绕过项目行可见性
+    if (level === 'project' && !this.isProjectVisible(source, key, identity)) return false;
     // 挂载库（T3b，§6 并集）：显式挂载覆盖基础可见性（租户闸仍在其上）
     if (this.isMounted(agentId, source.id, identity)) return true;
-    const { level, key } = source.scopeRef;
     if (level === 'global') {
       return !this.isHidden(agentId, source.id, identity);
     }
@@ -800,18 +887,22 @@ export class KnowledgeSourceStore {
     targetId: string,
     identity?: { tenantId?: string; gatewayId?: string },
   ): import('./types.js').KnowledgeVisibilityOp | null {
+    const gate = tenantOwnGateSql('tenant_id', identity ?? {});
+    const order = tenantPrecedenceOrder('tenant_id', identity ?? {});
     const row = this.db.raw
       .prepare(
         `SELECT op FROM knowledge_session_visibility
-         WHERE tenant_id = ? AND gateway_id = ? AND local_session_id = ?
-           AND target_type = ? AND target_id = ?`,
+         WHERE ${gate.sql} AND gateway_id = ? AND local_session_id = ?
+           AND target_type = ? AND target_id = ?
+         ORDER BY ${order.sql} LIMIT 1`,
       )
       .get(
-        identity?.tenantId ?? 'default',
+        ...gate.params,
         identity?.gatewayId ?? 'default',
         sessionId,
         targetType,
         targetId,
+        ...order.params,
       ) as { op?: string } | undefined;
     return (row?.op as import('./types.js').KnowledgeVisibilityOp | undefined) ?? null;
   }
@@ -839,16 +930,20 @@ export class KnowledgeSourceStore {
     sourceId: string,
     identity?: { tenantId?: string; gatewayId?: string },
   ): 'include' | 'exclude' | null {
+    const gate = tenantOwnGateSql('tenant_id', identity ?? {});
+    const order = tenantPrecedenceOrder('tenant_id', identity ?? {});
     const row = this.db.raw
       .prepare(
         `SELECT op FROM knowledge_agent_visibility
-         WHERE tenant_id = ? AND gateway_id = ? AND local_agent_id = ? AND source_id = ?`,
+         WHERE ${gate.sql} AND gateway_id = ? AND local_agent_id = ? AND source_id = ?
+         ORDER BY ${order.sql} LIMIT 1`,
       )
       .get(
-        identity?.tenantId ?? 'default',
+        ...gate.params,
         identity?.gatewayId ?? 'default',
         agentId,
         sourceId,
+        ...order.params,
       ) as { op?: string } | undefined;
     return (row?.op as 'include' | 'exclude' | undefined) ?? null;
   }
@@ -858,12 +953,13 @@ export class KnowledgeSourceStore {
     agentId: string,
     identity?: { tenantId?: string; gatewayId?: string },
   ): boolean {
+    const gate = tenantOwnGateSql('tenant_id', identity ?? {});
     const row = this.db.raw
       .prepare(
-        'SELECT 1 AS ok FROM knowledge_project_agents WHERE tenant_id = ? AND gateway_id = ? AND project_key = ? AND local_agent_id = ?',
+        `SELECT 1 AS ok FROM knowledge_project_agents WHERE ${gate.sql} AND gateway_id = ? AND project_key = ? AND local_agent_id = ?`,
       )
       .get(
-        identity?.tenantId ?? 'default',
+        ...gate.params,
         identity?.gatewayId ?? 'default',
         projectKey,
         agentId,
@@ -1015,6 +1111,97 @@ export class KnowledgeSourceStore {
     return this.db.raw
       .prepare('SELECT tenant_id, registered_by, visibility FROM knowledge_sources WHERE id = ?')
       .get(id) as { tenant_id?: string; registered_by?: string; visibility?: string } | undefined;
+  }
+
+  /** 项目行按源归属域解析（同一 project_key 可在多个租户域各登记一行，必须按域取行） */
+  private projectRow(
+    projectKey: string,
+    sourceTenant?: string | null,
+  ): { tenant_id?: string; visibility?: string } | undefined {
+    const rows = this.db.raw
+      .prepare('SELECT tenant_id, visibility FROM knowledge_projects WHERE project_key = ?')
+      .all(projectKey) as Array<{ tenant_id?: string; visibility?: string }>;
+    const norm = (t: string | undefined | null): string | null => (t ? t : null);
+    return rows.find((r) => norm(r.tenant_id) === norm(sourceTenant ?? null));
+  }
+
+  /**
+   * 项目跨域闸（arch/multi-tenancy.md §6）：本域项目可见；platform 项目仅
+   * `visibility='public'` 才对租户可见（跨租户共享唯一合法形态 = platform 公共）；
+   * 项目行按**源自身归属域**解析；无登记行（孤儿挂载）= 无归属，不设闸。
+   */
+  isProjectVisible(
+    source: { id: string },
+    projectKey: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
+    const row = this.projectRow(projectKey, this.sourceRow(source.id)?.tenant_id);
+    if (!row) return true;
+    return projectGateAllows(row.tenant_id, row.visibility, identity ?? {});
+  }
+
+  /**
+   * 项目跨域闸（写侧防绕过用）：key 必须存在**对写者可见**的登记行（任一域命中即放行）；
+   * 完全无登记行 = 孤儿挂载，不设闸（既有语义）。
+   */
+  isProjectVisibleTo(
+    projectKey: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): boolean {
+    const count = (
+      this.db.raw
+        .prepare('SELECT COUNT(*) AS n FROM knowledge_projects WHERE project_key = ?')
+        .get(projectKey) as { n: number }
+    ).n;
+    // 完全无登记行 = 孤儿挂载，不设闸（既有语义）
+    if (count === 0) return true;
+    return this.resolveProjectRow(projectKey, identity) !== undefined;
+  }
+
+  /**
+   * 项目行解析（管理面域继承用）：返回对 identity 可见的项目行（同 key 跨域多行时
+   * 本域优先，其次 platform，再按域名字典序）；无可见行 = null。
+   */
+  getProject(
+    projectKey: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): {
+    tenantId: string;
+    projectKey: string;
+    displayName?: string;
+    visibility: 'public' | 'private';
+  } | null {
+    const row = this.resolveProjectRow(projectKey, identity);
+    if (!row) return null;
+    return {
+      tenantId: row.tenant_id ?? 'default',
+      projectKey,
+      displayName: row.display_name ?? undefined,
+      visibility: row.visibility === 'public' ? 'public' : 'private',
+    };
+  }
+
+  private resolveProjectRow(
+    projectKey: string,
+    identity?: { tenantId?: string; gatewayId?: string },
+  ): { tenant_id?: string; display_name?: string | null; visibility?: string } | undefined {
+    const rows = this.db.raw
+      .prepare(
+        'SELECT tenant_id, display_name, visibility FROM knowledge_projects WHERE project_key = ?',
+      )
+      .all(projectKey) as Array<{
+      tenant_id?: string;
+      display_name?: string | null;
+      visibility?: string;
+    }>;
+    const visible = rows.filter((r) => projectGateAllows(r.tenant_id, r.visibility, identity ?? {}));
+    if (visible.length === 0) return undefined;
+    const own = identity?.tenantId ?? 'default';
+    const rank = (t: string | undefined): number =>
+      t === own ? 0 : t === PLATFORM_TENANT_ID ? 1 : 2;
+    return [...visible].sort(
+      (a, b) => rank(a.tenant_id) - rank(b.tenant_id) || String(a.tenant_id).localeCompare(String(b.tenant_id)),
+    )[0];
   }
 
   /** Agent 级 base 可见源（不含会话 overlay） */

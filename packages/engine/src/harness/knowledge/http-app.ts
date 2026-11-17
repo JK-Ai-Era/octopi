@@ -89,6 +89,21 @@ function mapWriteError(res: ServerResponse, e: unknown): boolean {
     err(res, 403, 'not_principal_owner', msg);
     return true;
   }
+  if (
+    code === 'project_not_visible' ||
+    code === 'source_not_visible' ||
+    /not visible to writer/i.test(msg)
+  ) {
+    err(res, 403, code || 'not_visible', msg);
+    return true;
+  }
+  if (
+    code === 'visibility_requires_platform_claim' ||
+    /requires an explicit platform claim/i.test(msg)
+  ) {
+    err(res, 403, 'visibility_requires_platform_claim', msg);
+    return true;
+  }
   if (code === 'principal_not_registered' || /principal not registered/i.test(msg)) {
     err(res, 403, 'principal_not_registered', msg);
     return true;
@@ -224,6 +239,12 @@ export class KnowledgeHttpApp {
           err(res, 400, 'bad_request', e instanceof Error ? e.message : String(e));
         }
       }
+    });
+
+    this.route('GET', '/v1/projects/:projectKey', async (_req, res, ctx, params) => {
+      const row = await this.query().getProject(this.readIdentityOf(ctx), params.projectKey!);
+      if (!row) return err(res, 404, 'project_not_found', 'project not found');
+      json(res, 200, { ok: true, data: row });
     });
 
     this.route('DELETE', '/v1/projects/:projectKey', async (_req, res, ctx, params) => {

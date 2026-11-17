@@ -37,6 +37,7 @@ interface QueryBoot {
 /** meta：列表/控制面（UI 轮询必须稳）；search：检索/catalog（可慢） */
 const META_METHODS = new Set([
   'listProjects',
+  'getProject',
   'listSources',
   'getSource',
   'getSourceDetail',
@@ -70,6 +71,7 @@ type QueryCall =
   | { id: number; method: 'autoGround'; query: AutoGroundQuery }
   | { id: number; method: 'listSources'; query: ListSourcesQuery }
   | { id: number; method: 'listProjects'; identity?: QueryIdentity }
+  | { id: number; method: 'getProject'; identity: QueryIdentity; projectKey: string }
   | { id: number; method: 'getSource'; sourceId: string; identity?: QueryIdentity }
   | { id: number; method: 'listFiles'; sourceId: string; identity?: QueryIdentity }
   | {
@@ -203,6 +205,9 @@ async function main(): Promise<void> {
             break;
           case 'listProjects':
             data = await svc.listProjects(msg.identity);
+            break;
+          case 'getProject':
+            data = await svc.getProject(msg.identity, msg.projectKey);
             break;
           case 'getSource':
             data = await svc.getSource(msg.sourceId, msg.identity);
