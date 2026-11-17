@@ -9,7 +9,7 @@
  * 首个 next 即抛；闸门拒为流内 error entry。两者以错误消息/状态可辨，不静默吞。
  */
 
-import { fork, type ChildProcess } from 'node:child_process';
+import { fork, type ChildProcess, type ForkOptions } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -107,6 +107,33 @@ export interface RemoteRunBackendOptions {
   buildRef?: string;
 }
 
+/**
+ * run 实例子进程的 fork 选项：进程卫生（env 剥离）+ Windows 窗口隐藏的唯一出口。
+ *
+ * `windowsHide` 不可省：Gateway 守护进程本身是 detached 启动、无控制台，console 子系统
+ * 子进程不带 CREATE_NO_WINDOW 时 Windows 会为它新开一个可见的 node 控制台窗口，且随实例
+ * 存活不会自动消失（症状：启动时弹窗恰好在 knowledge 就绪→run ready 之间）。
+ * `@types/node` 的 `ForkOptions` 未声明该字段（运行时有效），故在此只豁免该字段的类型。
+ *
+ * env 剥离放在本函数内而非交给调用方承诺：父进程可能是 IPC 子进程（vitest worker /
+ * gateway 守护），继承的通道句柄带进孙进程会错绑通道；这与 Knowledge 子进程同一目的，
+ * 但剥离集合按本进程实际需要取（`NODE_CHANNEL_ID` 而非 knowledge 的
+ * `NODE_CHANNEL_SERIALIZATION`/`NODE_UNIQUE_ID`，且不涉 Electron 宿主）。
+ *
+ * @returns fork 选项
+ */
+export function runChildForkOptions(): ForkOptions & { windowsHide?: boolean } {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.NODE_CHANNEL_FD;
+  delete env.NODE_CHANNEL_ID;
+  return {
+    execArgv: [],
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    env,
+    windowsHide: true,
+  };
+}
+
 export class RemoteRunBackend {
   private constructor(
     private readonly child: ChildProcess,
@@ -148,17 +175,9 @@ export class RemoteRunBackend {
     const entry = options.buildRef
       ? join(options.buildRef, 'run-serve-child.js')
       : resolveWorkerUrl('./run-serve-child.js', import.meta.url);
-    const env = { ...process.env };
-    // 子进程自有 IPC 通道；剥掉继承的通道标识（knowledge fork 同规）
-    delete env.NODE_CHANNEL_FD;
-    delete env.NODE_CHANNEL_ID;
     let child: ChildProcess;
     try {
-      child = fork(entry, [bootPath], {
-        execArgv: [],
-        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-        env,
-      });
+      child = fork(entry, [bootPath], runChildForkOptions());
     } catch (err) {
       // fork 同步抛（F9）：boot 已写而子进程没机会读删——父进程兜底清 secret
       rmSync(bootPath, { force: true });

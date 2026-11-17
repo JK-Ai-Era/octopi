@@ -128,6 +128,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.3 (2026-11-17)
+
+### fix(gateway): hide the run instance console window on Windows
+
+**症状**：Windows 上 `octopi serve start` 时弹出一个不会自动隐藏的 node 控制台窗口，恰好出现在 knowledge 服务就绪到 run 实例就绪之间。
+
+**根因**：`RemoteRunBackend.start()` 的 `fork()` 选项只给了 `execArgv` / `stdio` / `env`，漏了 `windowsHide`。Gateway 守护进程本身由 `serve start` detached 启动、没有控制台，console 子系统的子进程不带 `CREATE_NO_WINDOW` 时 Windows 会为它新开一个可见控制台窗口，且随实例存活不消失。Knowledge 子进程（`start-service-process.ts`）带了该字段，所以只有 run 实例弹窗——一处不对称漏配。
+
+**定位证据**：现场取证 `MainWindowHandle` 显示 `run-serve-child`（run-0, pid=9324）持有可见窗口句柄（1836558），而 gateway 守护与 knowledge-serve-child 均为 0；对照实验证实「无控制台父进程 + `fork` 不带 `windowsHide`」必然产生可见控制台窗口，带则句柄为 0。
+
+**改法**：
+
+- `RemoteRunBackend.start()` 的 fork 选项收进 `runChildForkOptions()`：补 `windowsHide: true`，并把原本散在调用点的 `NODE_CHANNEL_*` 剥离一并接管——让「选项完整」成为函数保证，而不是新调用点自己记得（`ForkOptions` 未声明 `windowsHide`，故只豁免该字段：`ForkOptions & { windowsHide?: boolean }`）。fork 其余语义（stdio 三路、ipc、`execArgv: []`）不变。
+- 同类漏配顺手补齐：`packages/engine/.../execution-environment/workspace.ts` 的 `FileWorkspace` 调 `git` 时也无 `windowsHide`——当前无实例化（仅公开导出），属潜在缺陷而非现场缺陷，但同源同因，一并修。其余 `child_process` 调用点已逐个核对：带 `windowsHide`，或走 `detached`（Windows 下 `DETACHED_PROCESS` 本就不分配控制台），或位于 linux/darwin 平台分支。
+
+**验证**：新增 `tests/run-child-fork-opts.test.ts` —— mock `node:child_process` 边界后跑真实 `RemoteRunBackend.start()`，断言实际传给 `fork` 的实参含 `windowsHide`、`stdio`/`execArgv` 完整、`NODE_CHANNEL_*` 已剥离（只断 `windowsHide` 会放过改坏 ipc/日志继承的情形）；用真实 `dist` 选项从无控制台父进程 fork 子进程，实测 `MainWindowHandle = 0`。`run-remote-backend` 真 fork e2e 12/13 通过（唯一失败的 0600 权限位断言是 Windows 上既有问题，与本次无关）；`tsc`、测试 typecheck、eslint 全绿。
+
 ## v0.118.2 (2026-11-17)
 
 ### fix(webui): 顶栏导航词双语化（Playground/Knowledge/Settings ↔ 工作台/知识库/设置）

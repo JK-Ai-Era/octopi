@@ -173,7 +173,7 @@ export class FileWorkspace implements Workspace {
 
   private async execGit(args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
-      const proc = spawn('git', args, { cwd: this.root });
+      const proc = spawn('git', args, { cwd: this.root, windowsHide: true });
       let stdout = '';
       proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
       proc.on('close', (code) => {
