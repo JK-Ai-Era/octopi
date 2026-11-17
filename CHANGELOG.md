@@ -128,6 +128,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.13 (2026-11-18)
+
+### feat(webui): knowledge admin — public project toggle
+
+新建项目行增加「公共项目（platform 共享面，跨租户共享）」开关：勾选即 `visibility='public'` 并经网关断言 platform 域（服务端对非平台写拒绝 public，见 v0.118.12/11）。中英文案随附；不勾选保持私有项目语义不变。
+
+---
+
 ## v0.118.12 (2026-11-18)
 
 ### fix(gateway): knowledge project entry chain carries visibility and domain claim

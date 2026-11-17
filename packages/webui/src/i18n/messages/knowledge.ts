@@ -76,6 +76,7 @@ export const zh = {
   'knowledgeAdminPanel.projectsTitle': '项目',
   'knowledgeAdminPanel.projectsSubtitle': '先建项目，再挂源；挂载后 Agent 可见',
   'knowledgeAdminPanel.newProject': '新建项目',
+  'knowledgeAdminPanel.newProjectPublic': '公共项目（platform 共享面，跨租户共享）',
   'knowledgeAdminPanel.noProjects': '尚无项目。先建项目再挂源。',
   'knowledgeAdminPanel.projectRowSources': '{count} 源',
   'knowledgeAdminPanel.projectRowVisibleTo': '可见于 {agents}',
@@ -293,6 +294,7 @@ export const en: Record<keyof typeof zh, string> = {
   'knowledgeAdminPanel.projectsSubtitle':
     'Create a project, then add sources; agents see it once mounted',
   'knowledgeAdminPanel.newProject': 'New project',
+  'knowledgeAdminPanel.newProjectPublic': 'Public project (platform shared plane, cross-tenant)',
   'knowledgeAdminPanel.noProjects': 'No projects yet. Create a project before adding sources.',
   'knowledgeAdminPanel.projectRowSources': '{count} sources',
   'knowledgeAdminPanel.projectRowVisibleTo': 'visible to {agents}',
