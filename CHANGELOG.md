@@ -128,6 +128,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.23 (2026-11-18)
+
+### feat(gateway/webui): 压缩后顶栏上下文大小换显压缩后估算；移除「已结构压缩」toast
+
+**用户可感变更**：①手动结构压缩成功不再弹「已结构压缩 xxx → xxx（请求估算）」（失败/未压缩提示保留，fail-loud 不变）；②顶栏「上下文大小 xxx / xxx」前段在压缩后立即换显压缩后大小（原 toast after 值，报告尺 rawRequestViewTokens 全请求口径），下一次实测（step.end）到达自动让位回「上次实测」；tooltip 按来源标注「压缩后估算」/「上次实测」（R3 显示标注硬规则）。
+
+**设计取舍**：新增独立显示槽 `InspectorState.postCompactContextSize`（manual 压缩成功写入、新实测到达清除），不写 `promptTokensActual`（实测单源红线不破）也不写 `viewTokensEst`（两把尺不混，P0-C 同款理由）。auto 压缩（proactive/overflow）**不写**该槽——其 tokensAfter 是 messages 口径（M3 未统一），不得冒充全请求大小（测试钉死边界）；auto 场景由后续实测自愈。另：manual `compactSession` REST 返回路径补上 inspector dispatch（此前静默写入，UI 只能等引擎事件才刷新）。
+
+**独立评审（1 Major/1 Medium/9 minor，属实项同批修复）**：①跨会话写入守卫——压缩返回时若已切走，结果只写回发起会话缓存 inspector，不污染当前会话；②后台缓存同源维护 usage 显示槽（live/后台共用助手，切回不让位语义失效）；③auto 压缩完成作废旧压缩估算（manual 事件不误清，REST 单写者、双路径任意顺序一致）；④压缩成功但缺读数不静默（显式降级提示）；⑤About 面板文案同步「压缩后估算」。已知限制（记债，见 `arch/context-size-accounting.md` §10.20）：writer=stale 回填会触发让位、无「测量晚于压缩」时序判定、冷恢复回退压缩前实测——均待拍板。
+
+**验证**：`tests/web/runtime-compact-status.test.ts` 新增 7 用例（写入/让位 + 实测单源、未压缩不写、auto 不写 M3 边界、跨会话守卫、后台让位、manual 事件不误清）；全量 5274 passed / 9 skipped；lint + 测试类型检查 + webui tsc 三绿。
+
+---
+
 ## v0.118.22 (2026-11-18)
 
 ### docs: KNOWN-ISSUES 只留真问题（全文重写，双语同步）

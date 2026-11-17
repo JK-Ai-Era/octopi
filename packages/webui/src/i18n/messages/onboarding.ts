@@ -66,7 +66,7 @@ export const zh = {
   'aboutPanel.layoutServices': '设置 → 服务：远程部署手填 Gateway URL 与 API Key，可测试连接',
   'aboutPanel.conventionsTitle': '口径（速查）',
   'aboutPanel.convModelOverride': '会话级模型覆盖只影响该会话，不改 Agent 默认；新建会话时作为预选',
-  'aboutPanel.convContext': '上下文显示「上次实测 / 模型窗口」；窗口仅认配置，未配置显示「未知」',
+  'aboutPanel.convContext': '上下文显示「上次实测 / 模型窗口」（压缩后短暂显示「压缩后估算」）；窗口仅认配置，未配置显示「未知」',
   'aboutPanel.convAttachments':
     '附件默认仅本会话；卡片「…」可归入项目或删除；右栏「文件」= send_file 发送的文本，图片/音视频在对话中展示',
   'aboutPanel.convGitPrefix': '右栏「Git」按 ',
@@ -207,7 +207,7 @@ export const en: Record<keyof typeof zh, string> = {
   'aboutPanel.convModelOverride':
     'A session-level model override affects only that session and does not change the agent default; it is preselected for new sessions',
   'aboutPanel.convContext':
-    'Context shows "last measured / model window"; the window comes only from config, and shows "unknown" when not configured',
+    'Context shows "last measured / model window" ("post-compaction estimate" briefly after compaction); the window comes only from config, and shows "unknown" when not configured',
   'aboutPanel.convAttachments':
     'Attachments belong to this session only by default; the card "…" moves them into a project or deletes them; "Files" in the right column = text sent by send_file, while images/audio/video are shown in the conversation',
   'aboutPanel.convGitPrefix': '"Git" in the right column polls every ',

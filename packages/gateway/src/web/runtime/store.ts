@@ -185,6 +185,12 @@ export interface ModelRetryInfo {
 export interface InspectorState {
   /** provider 实测 prompt（usage/stale 单源；无实测不更新、不猜） */
   promptTokensActual?: number;
+  /**
+   * 压缩后上下文大小（报告尺 rawRequestViewTokens 估算，与 promptTokensActual 同为全请求量纲）。
+   * manual 压缩成功写入（顶栏上下文大小前段优先显示它）；下一次 step.end 实测到达即清除让位。
+   * 不写 promptTokensActual（实测槽）：估算冒充实测会污染「上次实测」语义（R3 标注硬规则）。
+   */
+  postCompactContextSize?: number;
   /** 请求视图估算（校准后，最近一次 assemble 口径；estimate 写入，压缩后清空待下轮重算） */
   viewTokensEst?: number;
   /** 视图估算来源：restore=重启恢复的旧快照（显示侧标「(旧)」防误读）；live=本轮实算 */
@@ -603,15 +609,27 @@ export class OctopiRuntimeStore extends EventTarget {
     const sessionId = this.chat.sessionId;
     if (!sessionId) throw new Error('No active session');
     const r = await this.client.compactSession(sessionId, this.chat.agentId);
-    // B2（2026-11-08 评审）：manual 压缩不发 context.compact.end，旧「视图估算」已知失效——
-    // 与 auto 同款清空（writer=compact 语义），防 toast 与顶栏并排时一新一旧。
+    // 会话守卫（评审 F1）：压缩可排队 run 锁 + 摘要 LLM（可达数十秒），返回时可能已切走——
+    // 结果只写回发起会话的 inspector，绝不落进当前会话（否则清别人的 viewTokensEst、盖别人的 compact 块）。
+    const live = this.chat.sessionId === sessionId;
+    const cachedEntry = live ? undefined : this.conversationCache.get(sessionId);
+    const prevInspector = live ? this.chat.inspector : cachedEntry?.inspector;
+    if (!prevInspector) return r;
+    // B2（2026-11-08 评审）：旧「视图估算」已知失效——与 auto 同款清空（writer=compact 语义）。
+    // manual 压缩在 llmPrefix 下**也会**发 context.compact.end（reason:'manual'）：事件路径不写
+    // postCompactContextSize（唯一写者是本 REST 返回），双路径任意顺序终值一致（评审 F6）。
     // 禁止把 r.tokensAfter 写进 viewTokensEst：该槽是校准后请求估算（pressure.estimatedTokens），
     // tokensAfter 是未校准报告尺，混写会搅乱两把尺（与 P0-C 口径守护同款理由）。
+    const tokensAfter = typeof r.tokensAfter === 'number' ? r.tokensAfter : undefined;
+    let nextInspector: InspectorState | undefined;
     if (r.ok && r.compacted) {
       console.log(`[ctx] session=${sessionId} writer=compact field=viewTokensEst value=cleared`);
-      this.chat.inspector = {
-        ...this.chat.inspector,
+      nextInspector = {
+        ...prevInspector,
         viewTokensEst: undefined,
+        // 顶栏上下文大小前段换显压缩后大小（报告尺 rawRequestViewTokens，与 compact.tokensAfter 同源）；
+        // 估算不进实测槽（见字段注释）
+        ...(tokensAfter !== undefined ? { postCompactContextSize: tokensAfter } : {}),
         compact: {
           active: false,
           reason: 'manual',
@@ -620,17 +638,29 @@ export class OctopiRuntimeStore extends EventTarget {
           tokensAfter: r.tokensAfter,
         },
       };
-    } else if (this.chat.inspector.compact?.active) {
+      if (tokensAfter !== undefined) {
+        console.log(`[ctx] session=${sessionId} writer=compact field=postCompactContextSize value=${tokensAfter}`);
+      }
+    } else if (prevInspector.compact?.active) {
       // M1（评审 del-e1ee43ef）：active 无条件收敛——progress 已置 active，失败/无需压缩若只
       // 在 compacted 时清理会永久悬挂「摘要进行中」。viewTokensEst 不动（视图未变，旧估算仍有效）。
-      this.chat.inspector = {
-        ...this.chat.inspector,
+      nextInspector = {
+        ...prevInspector,
         compact: {
-          ...this.chat.inspector.compact,
+          ...prevInspector.compact,
           active: false,
           ...(r.ok ? {} : { error: String((r as { error?: unknown }).error ?? 'compact failed') }),
         },
       };
+    }
+    if (nextInspector) {
+      if (live) {
+        this.chat.inspector = nextInspector;
+        // 写入点即广播：REST 返回路径此前不 dispatch，UI 只能等引擎事件才刷新（静默写入）
+        this.dispatch('inspector', new InspectorEvent('inspector', { inspector: nextInspector }));
+      } else if (cachedEntry) {
+        this.conversationCache.set(sessionId, { ...cachedEntry, inspector: nextInspector });
+      }
     }
     return r;
   }
@@ -2001,18 +2031,22 @@ export class OctopiRuntimeStore extends EventTarget {
         console.log(
           `[ctx] session=${event.sessionId ?? this.chat.sessionId} writer=compact field=viewTokensEst value=cleared`,
         );
-        this.chat.inspector = {
-          ...this.chat.inspector,
-          viewTokensEst: undefined,
-          compact: {
-            active: false,
-            reason: d?.reason,
-            cached: Boolean(d?.cached),
-            tokensBefore: typeof d?.tokensBefore === 'number' ? d.tokensBefore : undefined,
-            tokensAfter,
-            durationMs: typeof d?.durationMs === 'number' ? d.durationMs : undefined,
+        this.chat.inspector = OctopiRuntimeStore.clearedPostCompactAfterAuto(
+          event.sessionId ?? this.chat.sessionId,
+          {
+            ...this.chat.inspector,
+            viewTokensEst: undefined,
+            compact: {
+              active: false,
+              reason: d?.reason,
+              cached: Boolean(d?.cached),
+              tokensBefore: typeof d?.tokensBefore === 'number' ? d.tokensBefore : undefined,
+              tokensAfter,
+              durationMs: typeof d?.durationMs === 'number' ? d.durationMs : undefined,
+            },
           },
-        };
+          d?.reason,
+        );
         inspectorChanged = true;
         break;
       }
@@ -2195,26 +2229,13 @@ export class OctopiRuntimeStore extends EventTarget {
         break;
       }
       case 'step.end': {
-        const data = (event.data ?? {}) as Record<string, unknown>;
-        const promptTokensActual = typeof data.promptTokensActual === 'number' ? data.promptTokensActual : undefined;
-        const viewTokensEst = typeof data.viewTokensEst === 'number' ? data.viewTokensEst : undefined;
-        const rawTokens = typeof data.rawTokens === 'number' ? data.rawTokens : undefined;
-        const hasWindowKey = 'contextWindow' in data;
-        const contextWindow = typeof data.contextWindow === 'number' ? data.contextWindow : undefined;
-        if (
-          promptTokensActual !== undefined ||
-          viewTokensEst !== undefined ||
-          rawTokens !== undefined ||
-          hasWindowKey
-        ) {
-          this.chat.inspector = {
-            ...this.chat.inspector,
-            ...(promptTokensActual !== undefined ? { promptTokensActual } : {}),
-            ...(viewTokensEst !== undefined ? { viewTokensEst, viewTokensEstSource: 'live' as const } : {}),
-            ...(rawTokens !== undefined ? { rawTokens } : {}),
-            // 未知窗口时清掉上一模型的旧值，避免 UI 显示假预算
-            ...(hasWindowKey ? { contextWindow } : {}),
-          };
+        const nextInspector = OctopiRuntimeStore.applyStepUsageToInspector(
+          event.sessionId ?? this.chat.sessionId,
+          this.chat.inspector,
+          (event.data ?? {}) as Record<string, unknown>,
+        );
+        if (nextInspector !== this.chat.inspector) {
+          this.chat.inspector = nextInspector;
           inspectorChanged = true;
         }
         break;
@@ -2280,6 +2301,20 @@ export class OctopiRuntimeStore extends EventTarget {
           contextLayers: snapshot,
         };
       }
+    } else if (event.type === 'step.end') {
+      // 后台同样维护 usage 显示槽（评审 F2）：切回时让位语义与前台一致，不留过期压缩估算
+      inspector = OctopiRuntimeStore.applyStepUsageToInspector(
+        sessionId,
+        inspector,
+        (event.data ?? {}) as Record<string, unknown>,
+      );
+    } else if (event.type === 'context.compact.end') {
+      // 后台 auto 压缩同样作废旧压缩估算（评审 F2/F3，与 live 同源助手）
+      inspector = OctopiRuntimeStore.clearedPostCompactAfterAuto(
+        sessionId,
+        inspector,
+        (event.data as { reason?: string } | undefined)?.reason,
+      );
     }
 
     // 用临时 adapter 复原该会话的追踪状态后应用事件
@@ -2335,6 +2370,56 @@ export class OctopiRuntimeStore extends EventTarget {
       runStatus: nextStatus,
       modelRetry: nextRetry,
     });
+  }
+
+  /**
+   * step.end 的 usage → inspector 更新（live 与后台缓存共用，同一写点语义）。
+   * promptTokensActual 单源（无实测不更新、不猜）；新实测到达即清 postCompactContextSize（让位）。
+   */
+  private static applyStepUsageToInspector(
+    sessionId: string | undefined,
+    prev: InspectorState,
+    data: Record<string, unknown>,
+  ): InspectorState {
+    const promptTokensActual = typeof data.promptTokensActual === 'number' ? data.promptTokensActual : undefined;
+    const viewTokensEst = typeof data.viewTokensEst === 'number' ? data.viewTokensEst : undefined;
+    const rawTokens = typeof data.rawTokens === 'number' ? data.rawTokens : undefined;
+    const hasWindowKey = 'contextWindow' in data;
+    const contextWindow = typeof data.contextWindow === 'number' ? data.contextWindow : undefined;
+    if (
+      promptTokensActual === undefined &&
+      viewTokensEst === undefined &&
+      rawTokens === undefined &&
+      !hasWindowKey
+    ) {
+      return prev;
+    }
+    if (promptTokensActual !== undefined && prev.postCompactContextSize !== undefined) {
+      // 新实测到达即让位：压缩后估算只顶到下一次实测（同一显示槽 last-write-wins）
+      console.log(`[ctx] session=${sessionId} writer=usage field=postCompactContextSize value=cleared`);
+    }
+    return {
+      ...prev,
+      ...(promptTokensActual !== undefined ? { promptTokensActual, postCompactContextSize: undefined } : {}),
+      ...(viewTokensEst !== undefined ? { viewTokensEst, viewTokensEstSource: 'live' as const } : {}),
+      ...(rawTokens !== undefined ? { rawTokens } : {}),
+      // 未知窗口时清掉上一模型的旧值，避免 UI 显示假预算
+      ...(hasWindowKey ? { contextWindow } : {}),
+    };
+  }
+
+  /**
+   * auto（proactive/overflow）压缩完成 → 旧「压缩后估算」失效（内容又变了），清槽（评审 F3）。
+   * manual 的 tokensAfter 是全请求口径、由 compactSession REST 单写者写入——事件不清不写（顺序无关）。
+   */
+  private static clearedPostCompactAfterAuto(
+    sessionId: string | undefined,
+    prev: InspectorState,
+    reason: string | undefined,
+  ): InspectorState {
+    if (reason === 'manual' || prev.postCompactContextSize === undefined) return prev;
+    console.log(`[ctx] session=${sessionId} writer=compact field=postCompactContextSize value=cleared`);
+    return { ...prev, postCompactContextSize: undefined };
   }
 
   /**

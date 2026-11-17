@@ -2007,11 +2007,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         show(r.reason || t('chatWorkspace.compactUnavailable'));
       } else if (!r.compacted) {
         show(r.reason || t('chatWorkspace.notCompacted'));
-      } else {
-        const before = r.tokensBefore != null ? formatTokens(r.tokensBefore) : '?';
-        const after = r.tokensAfter != null ? formatTokens(r.tokensAfter) : '?';
-        show(t('chatWorkspace.compacted', { before, after }));
+      } else if (r.tokensAfter == null) {
+        // 降级显式（评审 F7）：压缩成功但没拿到压缩后大小——不静默成功，提示已压缩但无读数
+        show(t('chatWorkspace.compactedNoSize'));
       }
+      // 正常成功不弹「已结构压缩」提示（2026-11-18 产品变更）：顶栏上下文大小前段直接换显压缩后大小
     } catch (e) {
       show(e instanceof Error ? e.message : String(e));
     } finally {
@@ -2042,6 +2042,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   // 视图估算按产品裁决不再在对话面呈现（rawTokens 仍只在 Run 页签）。
   // 不用「已加载消息」估算——那只是末页 100 条，会把 400k 的会话显示成 21.6k 误导人。
   const promptTokensActual = typeof inspector.promptTokensActual === 'number' ? inspector.promptTokensActual : undefined;
+  // 压缩后大小覆盖（manual 压缩写入、下一次实测让位）：顶栏上下文大小前段优先显示它，
+  // tooltip 按来源标注（实测 vs 压缩后估算），不冒充「上次实测」（arch 口径 R3）。
+  const postCompactContextSize =
+    typeof inspector.postCompactContextSize === 'number' ? inspector.postCompactContextSize : undefined;
+  const contextSizeDisplay = postCompactContextSize ?? promptTokensActual;
   // 预算展示：只读引擎下发的 snapshot（catalog / sessionModel.resolved），UI 不做策略
   const selectedModelMeta =
     (sessionModel?.resolved?.id === effectiveModelId ? sessionModel.resolved : undefined)
@@ -2302,12 +2307,17 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   <span>{agentId ? t('chatWorkspace.agentLine', { id: agentId }) : t('chatWorkspace.selectAgentFirst')}</span>
                   <span
                     className="composer-usage small"
-                    title={t('chatWorkspace.contextUsageTitle', {
-                      actual: promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~',
-                      window: contextWindowLabel,
-                    })}
+                    title={t(
+                      postCompactContextSize !== undefined
+                        ? 'chatWorkspace.contextUsageTitlePostCompact'
+                        : 'chatWorkspace.contextUsageTitle',
+                      {
+                        actual: contextSizeDisplay !== undefined ? formatTokens(contextSizeDisplay) : '~',
+                        window: contextWindowLabel,
+                      },
+                    )}
                   >
-                    {promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / {contextWindowLabel}
+                    {contextSizeDisplay !== undefined ? formatTokens(contextSizeDisplay) : '~'} / {contextWindowLabel}
                   </span>
                 </div>
               </div>
