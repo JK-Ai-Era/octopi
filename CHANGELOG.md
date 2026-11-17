@@ -128,6 +128,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.22 (2026-11-18)
+
+### docs: KNOWN-ISSUES 只留真问题（全文重写，双语同步）
+
+按定案定位（「使用者/集成开发者实际会踩到的确定问题与陷阱」）全文重写并逐大项核查：行为契约/设计边界/路线图/已修史一律移除（契约归 `docs/`、史实归 `CHANGELOG`、内部开放项归 `arch/open-problems.md`）；对码清掉陈旧条目（`agents[].tools`「未强制」、`toolOutputMerge` 整组键、manifest 竞态、OAuth「机会式刷新」误述等 4 处实锤）；A/B 组修复后撤除对应条目（denyCapabilities / converter / 调参键 / sqlite-vec / VACUUM / 墓碑 / 审批仿冒 / 多租户 public）。终版 **11 条真问题**，EN/ZH 同内容；公开文档不再引用 `arch/` 内部路径（对内指向一律死链）。
+
+---
+
 ## v0.118.21 (2026-11-18)
 
 ### fix(gateway): 审批归因诚实化 + 无钥暴露面分级告警 + init 默认随机 apiKey（B-1 拍板）

@@ -1,98 +1,24 @@
 # 已知问题
 
 > **语言说明**：英文版见 [KNOWN-ISSUES.md](./KNOWN-ISSUES.md)。本文为中文对译，变更须双语同步。
-> 最后更新：2026-11-18（清理已解决条目——本文件仅保留**使用者/集成开发者须知的确定已知问题与边界**；已解决/已关闭问题见 `CHANGELOG` 与对应架构文档，内部开放项账本见 `arch/open-problems.md`）
+> 最后更新：2026-11-18。本文件只列**使用者/集成开发者实际会踩到的确定问题与陷阱**；工作原理归 `docs/`，变更史归 `CHANGELOG`。
 
-## Session / ACL 能力层
+## Session / ACL
 
-**运行时行为注记（v0.42.0+ / v0.43.0）：**
+- **Windows 上没有物理隔离兜底**：写入限制是 best-effort（ACL），且暂无 Job Object / 受限令牌 helper——不要把 `untrusted` / jail 配置当沙箱。
+- **工具输出评为 high/critical 直接拦、无确认路径**：输出扫描没有事前确认语义——即使调用本身已获批准，run 仍可能被工具输出打断。
+- **无分布式 Session Lease**：不要让多个网关进程指向同一个 `OCTOPI_HOME`——进程内锁不跨进程。
 
-- Gateway **默认**注入 `SessionAclService` + **进程内共享** `SessionLease` 到全部 Runner（**非 opt-in 兼容性变化**）。
-- `handle` 在 run 前 `authorizeRun`：primary 自动 owner；非 primary 无绑定 → `engine.error`；effective 交集含 `agents[].maxSessionRights`（E6 L1）。
-- handoff：`primaryAgentId` 迁移；旧 primary 的 `owner` **降级 specialist**。
-- `preferredOnly`（默认 true）：`switch(mode=handoff)` 需要 `intent=admin_handoff`。
-- `filterHistory` / `appendRunAudit` / 业务 grant 仍供宿主调用；guest/handoff 经 sessionId 一等存储可读同一 Session。
+## Knowledge 外源出站
 
-**仍开放：** 分布式 Session Lease 实现；角色 DB/控制台；Quota 经济层。
+- **内嵌凭证的源 URL 即能力**：skill 级 `sources[]` 应按不可信输入对待。
+- **`credential_bindings` 为空时默认放行**（兼容语义）：需要 fail-closed 请设 `credentials.requireBindings: true`（或以 `effectPolicy.mode=untrusted` 运行）。
+- **没有真·IP 钉扎**：network-guard 只在 connect/lookup 时再校验地址；极高威胁模型需自备钉扎（注入 `lookup` / `filterAddresses`）。
+- **出站 SSRF 防护只覆盖 `http_request` / Knowledge**：shell 里的 `curl` / `wget` 无出站门，除非 L4 jail 设 `network: deny`。
+- **无内建 OAuth 流程与续期**：`oauth2_client` 仅在已换取 access token 后按 bearer 发送——续期自理，token 过期即下次调用 401。
 
-**Session ACL per-tool（SEC-2，v0.78.0）：** `SessionRights.toolRights`（`allow` / `deny` / `denyCapabilities`）与 `agents[].tools`、`toolSurface` **求交**（只收窄；deny 优先）。工具列表与 `beforeToolCall` 双闸强制。`agents[].maxSessionRights.toolRights` 为 L1 天花板，grant 拒绝非法拓宽。出厂角色工具面不限；guest/只读等用自定义角色表达。
+## Knowledge 索引 / 向量
 
-**L4 process 牢笼（v0.75.0–0.76.0）：** 能力契约 + supervised spawn + bwrap/Seatbelt，且 **shell 已统一走 ProcessSandbox**（`docs/process-isolation.zh.md`）。仍开放：自带 Windows Job Object / 受限令牌 helper。**暂无计划**：container 后端（2026-11-01 拍板）——opt-in 槽位结构上保留但未排期（见 `docs/process-isolation.zh.md`）。无 L4 时 `untrusted` 经 `untrustedAdmission` 拒绝或降级。声明 `boundary.security: sandboxed` 的子系统无 L4 时在加载期拒载（SEC-6 fail-closed，v0.90.9）——无牢笼后端的宿主（如今日 Windows）需显式声明 `trusted`/`privileged`；第一方内置子系统即如此声明。
-
-**EffectPolicy 缺省（v0.75.0）：** 省略 `mode` 即 `workspace`（secure-by-default）。脚手架显式 `"mode": "host"`。原先依赖「未写 mode=host」的部署需补 `"effectPolicy": { "mode": "host" }`。
-
-**HITL 单模型（SEC-7，v0.79.0）：** 唯一确认面是 `confirmHighRisk` 与 `confirmEffect`，均返回 `HitlDecision`（`deny` / `approve` / `approve_session` / `approve_always`）。session/always 由引擎 `HitlDecisionCache` 记账，宿主只表达决策。`approve_session` 按 `sessionId` 分桶；`approve_always` 按 `agentId` 分桶（信任级不同的 agent 不共享 always）。缺 scope id 降级 one-shot。已删除 `ApprovalManager` / `ApprovalProvider`。Gateway 确认走 `pendingApprovals`（Web `/approvals`）；`askUser` 只留给 `ask_user` 工具。无人值守 / 无钩子 / 超时仍 fail-closed。确认意图携带 `timeoutMs`（引擎确认窗）供宿主对齐审批卡生命周期；拒绝如实记录来源（超时 / 人工拒绝 / 通道故障 / 取消），只有真实拒绝才标注人工拒绝。工具**输出**侧 high/critical 仍直接拦、无确认语义。缓存 key 粒度：high_risk 按工具名；效应确认自 v0.94.2 起按「效应类型 **+ 目标**」（path / command / operation / domain）——一次 `approve_session` 只覆盖同一目标，不再整类放行（旧「有意粗粒度」已于 2026-10-26 翻案）。
-
-审批归因可信度：配置 `channels.http.apiKey` 后 web 面凭钥准入，`confirmedBy` 记持钥方（credential-backed）；未配置时控制台对 LAN 敞开、署名为客户端自报（可仿冒）——**LAN 部署建议启用 `apiKey`**。完整多用户认证留产品化阶段。
-
-**运维特权通道（ops P3/P4）：** `priv_exec`（allowlist 全等 / `full` 全量档 + `privilegedAck` + 常驻 `PRIVILEGED` 标记 + root/elevated 声明闸）与危险命令减速带。**Windows 边界**：win-job 助手服务（OP-ISO-1）落地之前，Windows 上**没有物理隔离兜底**——那里的 P3/P4 本质是「elevated 进程 + 常驻标记 + 各级闸门」，**不得对外表述为沙箱**。`runas /savecred` 与计划任务提权旁路属有意不做（无人值守提权绝不依赖存储的同意）。
-
-## Knowledge 外源出站 — 已知限制
-
-**状态：** OP-14 主线已落地；下列为有意保留的边界
-
-- **connect 时再校验，非真·IP 钉扎**（SEC-3，v0.77）：`network-guard` 在 connect `lookup` 再校验地址（Knowledge + `http_request`）。真钉扎 / hostname allowlist 需注入自定义 `lookup`/`filterAddresses` 或嵌入方 dispatcher；极高威胁模型请自备钉扎。
-- **`credential_bindings` 有绑定则强制**（SEC-3，v0.77）：绑定为空默认可解析（兼容）；绑定非空须命中 `consumer_kind`+`consumer_id`。`credentials.requireBindings: true`（或 `effectPolicy.mode=untrusted`）下无绑定即拒。
-- **`http_request` 已有 SSRF 门**（SEC-3，v0.77）：默认拒私网/环回/链路本地/metadata；内网目标需 `security.network.allowPrivateNetwork`，且 **metadata/链路本地（含 IPv4-mapped、`fe80::/10`）始终拒绝**。shell `curl`/`wget` 仍无出站门，除非 L4 jail `network: deny`。
-- **OAuth**：`oauth2_client` 仅当已换成 access token 时按 bearer。
-
-## 会话附件（OP-15）— 已知限制
-
-**状态：** 主链已落地（v0.54.x）；规格为内部文档（含 as-built 与遗留清单，不对外）
-
-- **大文件局部召回**：超出 `inject.fullTextMaxChars` 时，局部问题按 `inject.recallTopK` 注入带行号的关键词片段；索引缺失/陈旧、零命中或查询失败回退结构开头（约 `headChars`）+ `file_read`。
-- **文档抽取**：会话附件与 Knowledge ingest 共用 `harness/capabilities/document`（`documents.*`）；未启用抽取/无后端时仍只落盘不进召回。
-- **本地召回不等于注册 Knowledge**：上传默认建 Session 私有、可重建的关键词投影，不建 Knowledge source，也不在发送路径做 embedding。`knowledge_search` / 源管理仍需显式「升为可检索」；持久化到项目需 promote。
-- **manifest 无跨请求锁**：并发上传同会话可能互相覆盖登记（单用户 Web 场景低发）。
-- **上传 API 为 JSON+base64**：超大文件宜后续 multipart。
-- **FileBlock 经 convertToLlm 变为文字指针**：非 provider 原生 file 附件格式。
-
-## Knowledge 索引 / 向量 — 开放边界（2026-10 as-built）
-
-**状态：** Phase A/B、watch、abort/resume（**跨重启**）、supersede reindex、BLOB 向量、FTS5、代码不嵌入、embed secret 策略、**Knowledge Service 拆分（唯一写者 + File identity）** 已落地（见 `docs/knowledge.zh.md` §8.1）。
-
-**v0.59.1–v0.60.0 已修**（摘要）：鉴权闸门、路径归属、凭证跨域、SSRF/body 超时、`.html` 归属、parse 可取消超时、向量闸门看 KNN 结果、强制 hybrid、FTS5、中止落库、poll 不 supersede、embed 硬超时、ANN-lite 桶、ingest 模块拆分、prune/LIKE/FTS 清扫；**注册即 ingest、Document worker 路由、Document 能力迁 `harness/capabilities/document` + 单一工厂、停机 SSE 死锁、worker 错误序列化、walk 不 supersede**。
-
-**仍开放：**
-
-- **Office 超大表**：worker+可取消超时；仍可能 `parse_timeout` skip，不无限重试。
-- **sqlite-vec 生产必选——部署注意**：启动后即核验 `stats.sqliteVec=1`；未加载时大库（>5 万向量）**禁止 JS 全扫**，走邻桶 + 强制关键词；百万级部署依赖 sqlite-vec 已加载。HNSW 可选后端待立项。
-- **DROP 后文件体积**：SQLite 不自动缩容，需 `VACUUM`。
-- **watch 可能漏事件**：reconcile parse 缺口扫描（约 60s）兜底，非零延迟。
-- **`running` 槽**：UI「任务」= job 数；embed 并行是 job 内 lanes。
-- **catalog topics 抽样**：每源最多 128 条 path。
-- **embed secret skip 墓碑**：`dimensions=0` 不自动重嵌；改策略后需 reprocess。
-- **仅 connect 时再校验**：无真·IP 钉扎；极高威胁模型需 custom dispatcher / lookup 注入。
-- **`ingest.ts` 体量**：已拆 job-control/queue/embed-runner/fts/vector-ann；watch/poll/parse 仍在主文件。
-
-## 配置键已声明但尚未接线（2026-10）
-
-**状态**：schema 接受这些键，但目前**没有任何消费方**——配置了也不生效。记录在此以免被误当作已接线的行为。顶层映射守卫（`tests/config-gateway-top-level-mapping.test.ts`）分类的是**顶层**键（其 `CLASSIFICATION` 表）；子键缺口以下方清单为准，并由 `src/config-schema/unwired-keys.ts` 检测。自 v0.98.8 起 `loadConfig` 在启动时对这些键**显式告警**——仍不生效，但不再静默。
-
-当前无**顶层**条目（v0.98.21 起——`compact` 能力缺省段已移除，见下方「键已删除」清单）。
-
-以下不是缺陷——宿主层直接消费、刻意不经 `GatewayConfig` 的键：`channels`、`web`、`webSearch`、`summary`、`defaults`（由 `src/cli/daemon.ts` / `src/config.ts` 消费）。
-
-### mapped 段内部的子键缺口（2026-10，review 跟进）
-
-顶层映射守卫只查段级键；以下**子键** schema 接受但暂无消费方（配置了不生效）：
-
-- **`models.mode` — 键已删除（v0.98.16）**：provider/模型合并行为固定；该键不再被接受（按未知键告警，`octopi doctor --fix` 会把它搬进 `_legacy`）。
-- **`compact`（顶层段）/ `contextEngine.summaryModel` — 键已删除（v0.98.21，BREAKING）**：`compact`（`defaultProtectHead` / `defaultProtectTail` / `defaultTargetTokens` / `defaultMode`）从未有消费方——会话压缩读 `contextEngine` 键（`protectFirstN` / `protectLastN` / `targetTokens`），compact 能力自带引擎缺省；`contextEngine.summaryModel` 是 v0.44.1 期兼容键、缺省 `models.level.mini` 档先命中使其几乎从不生效——换摘要模型请用 `summary.model`（显式）或 `summary.modelLevel`（档位）。两键均按未知键告警，`octopi doctor --fix` 移入 `_legacy`（CFG011）。
-- **`session.reset` / `session.maintenance` — 键已删除（v0.98.16）**：从无消费方（v0.86.37 已从 `GatewayConfig` 作为死面移除），且日重置/存储清理功能已决定不做。`SessionConfigSchema` 不再是 `.passthrough()`——`session` 只接受 `dmScope` / `idleExpiryMs`，其他子键现按未知键报告。
-- **Wisdom/cognition steward 调参 — 键已删除（v0.98.11，BREAKING）**：原未接线键 `wisdom.formation` / `wisdom.evaluation` / `wisdom.govern` / `wisdom.capacity.softCap` / `wisdom.injection.coreMaxTokens` 与 `cognition.conceptualize` / `cognition.plasticity` / `cognition.consolidation` / `cognition.retrieval` / `cognition.capacity.{warnNodes,warnEdges}` / `cognition.identity.candidateBandLo` / `cognition.relations.{requireCue,allowCooccurEscalation}` **不再被 `octopi.json` 接受**（此前在该处也从不生效）；steward 调参写在各子系统 `config.yaml` 的 `metadata.config`。`octopi.json` 侧消费的是：`*.enabled`、`wisdom.capacity.hardCap`、`wisdom.injection.{coreMaxItems,scenarioMaxItems,trialMaxItems,trialVisible}`（core/scenario/trialVisible 自 v0.97.25；trialMaxItems 自 v0.98.5）、`cognition.identity.{mergeThreshold,candidateBandHi}`、`cognition.relations.causesMinIndependentMemories`、`cognition.capacity.{stopNodes,stopEdges}`（消费粒度已按 `wire-agent-builder.ts` 核实，2026-11-01）。
-- **`gateway.debugRest` — 键已删除（v0.98.16）**：`gateway.port` / `gateway.host` 自 v0.98.8 起已接线（`src/cli/listen-config.ts`，daemon / WebUI / TUI 共用——优先级 CLI `--port` > `gateway.*` > `channels[type=http]` > 缺省）。语义：任一端口来源（`--port` / `gateway.port` / `channels[]`）存在即启动监听；`apiKey` / `path` / `corsOrigins` 仍只取 `channels[type=http]`；`gateway.host` 只改变绑定地址（自身不启动监听）；监听启动时未配置 `apiKey` 会打印无鉴权告警。`debugRest` 从无消费方——`/debug/*` 路由实际由 `observer.webPanel` 门控——故删除该键。
-- **`documents.legacy.converter: 'remote'`（枚举值——前瞻性预留）**：`converter` 键本身已接线（`createLegacyConverterFromConfig` 认 `'none'`＝关闭 / `'soffice'`）；`'remote'` 值（MinerU / WPS / 云转换）是前瞻性预留、暂无实现——配置它会返回 `null`（不做 legacy 转换），抽取静默退回 T0-only。属值级缺口：无法用 `unwired-keys.ts` 的路径规则表达，仅在此记录。
-- **§1c 收口删除的配置键（v0.98.12，BREAKING）**：`contextEngine.enableLLMSummary`、`summary.cache.{backend,dir}`、`agents[].model.temperature`（含 `fallbackModels[].temperature`）——从无消费方；迁移见 CHANGELOG v0.98.12（LLM 摘要有自动回退；memory 缓存经 `maxEntries`/`ttlMs` 保留；采样温度在 `models.providers[].models[].temperature`）。现按未知键启动告警。
-- **Knowledge Service 调参键仅 `manageLocal` 生效**（`embed.*` / `load.*` / `index.*` / `keywordWeight` / `autoInject.{minScore,minCoverage}` / `hint.minScore` / `catalog.autoDescribe` / `promotion.*` / `service.connectTimeoutMs`）：远程（`baseUrl`）Service 由其自身部署配置——远程模式下这些键被静默忽略。
-- **`documents.extract.backend: 't0-only'` 属前瞻项**：档位钉死已接线（probe / hasBackendFor / extract 共用同一档位决策），但当前全部后端都是 t0 档——T1/T2 后端落地前 `auto` 与 `t0-only` 可观测行为相同。
-- **LLM 描述依赖 `models.level`**（v0.98.13）：`generatedDescription` 仅在 `models.level.mini`/`standard` 解析到 provider 时升级为 LLM 版（与后台任务共用选型面）；未配置则保持启发式（绝不偷用主模型）。素材在 Service 内过密钥形态扫描，命中即封锁（`blocked_secret`）、素材不出 Service。
-
-
-## 压缩摘要路径 — 已知边界（2026-10，F8 review 跟进）
-
-- **`context.compact.summarize_fallback` 暂无 WebUI 消费端。** 事件已进 run timeline（observer `TIMELINE_TYPES`），但 `web/runtime/store.ts` / `web/conversation/adapter.ts` 无对应 case，会话 inspector 不渲染 cache-miss 旁路。
-
-## Knowledge 多租户共享 — 部署须知（2026-11）
-
-- **暂无平台管理员角色**：创建 `visibility='public'` 项目（跨租户共享资产）目前只凭显式 platform claim 放行——任何 console API 调用方（即持有网关 `apiKey` 的人）都能发起该调用。在 registry 角色模型（multi-tenancy T1）落地前，多租户部署应把 console `apiKey` 视作平台管理员凭据对待。（管理面统计条为「本视图」口径——只数当前 agent 可见源集；全库口径见 `octopi doctor`。）
+- **Office 超大表可能被跳过**：抽取带可取消超时——超大表格可能以 `parse_timeout` 跳过（有意为之，不无限重试）。
+- **file-watch 可能漏事件**：reconcile 扫描（约 60s）兜底补缺口——新文件可能延迟约一分钟才进索引。
+- **因密钥跳过的 embed 留墓碑**：`dimensions=0` 的分块不会自动重嵌——`octopi doctor` 会报告（KN009）；修复 embed 凭证/策略后对受影响源跑 reprocess。
