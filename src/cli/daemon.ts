@@ -15,6 +15,7 @@ import {
   writeSync,
 } from 'node:fs';
 import type { CliArgs } from './args.js';
+import { installCrashForensics } from './crash-forensics.js';
 import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
 import { setupWizardUrl, readSetupToken } from './helpers.js';
 import { loadConfig, toGatewayConfig, resolveConfigFilePath } from '../config.js';
@@ -938,6 +939,7 @@ export async function serveCommand(args: CliArgs): Promise<void> {
 }
 
 async function startGatewayBlocking(configPath: string | undefined, args: CliArgs): Promise<void> {
+  installCrashForensics();
   const config = loadConfig(configPath);
   // ops P3 §4.1/拍板 #5：声明了提权就必须真的拿得到——启动期探测，失败拒绝启动，
   // 禁止降级静默运行（allowlist 二进制 TOCTOU 护栏一并在此兜底）。

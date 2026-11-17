@@ -128,6 +128,47 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.10 (2026-11-17)
+
+### feat(cli): crash forensics for the gateway process
+
+**症状**：gateway 进程两次"无声消失"，**无法回答它为什么死的**。日志停在 `[Runner] run end ... reason=completed`（我方回合刚结束），随后：
+
+- 没有崩溃栈（`gateway.log` 该行之后直接是下一次 `serve start` 标记）
+- 没有 Windows WER 报告、没有 crash dump
+- Application / System 事件日志在死亡窗口内为空（含 Windows Defender）
+- pid 文件残留 → 没走正常退出路径
+- `octopi serve status` 只能报 `PID file is stale`
+
+时间点上两次都紧跟回合结束（t17 结束→死；t18 结束→死），但**查不出机制**，因为进程死时不留任何证据。
+
+**根因（可观测性缺口，不是某个具体 bug）**：
+
+- 全仓（gateway + 根 `src`）**没有任何 `uncaughtException` / `unhandledRejection` handler**。Node 15+ 的默认行为是让未捕获的 rejection **终止进程**——那是个"死得合理但不留痕"的出口。
+- 没有心跳，所以连"最后存活时刻"都无从确定。
+- 没有 `exit` 记录，于是**无法区分**「主动退出」与「被 `TerminateProcess` 硬杀」：后者（`taskkill /F`、Job Object 关闭、安全软件终止）不给进程任何执行机会，正是"日志干净地断掉"的形态。
+
+**改法**：新增 `src/cli/crash-forensics.ts`，在 `startGatewayBlocking` 最前面安装。三样证据：
+
+1. `uncaughtException` / `unhandledRejection` → `[FATAL]` + 完整栈，然后 `exit(1)`。**必须显式退出**——注册 handler 会覆盖 Node 默认的"直接终止"，只记日志会把它悄悄变成"带病继续跑"，比崩溃更糟。
+2. `exit` / `SIGINT` / `SIGTERM` / `SIGBREAK` → `[EXIT]` / `[SIGNAL]` 行。**缺 `[EXIT]` 本身就是硬证据**（被硬杀）。
+3. 每分钟 `[heartbeat] uptime=.. rss=..MB`。心跳停在哪里死亡就在哪里；RSS 单调上升即内存问题。
+
+写入用 `writeSync(2)`（daemon 把 fd 1/2 都指向 `gateway.log`）：进程退出时 stream 缓冲会丢，取证不能走 `console.*`。
+
+**验证**：`tests/crash-forensics.test.ts`（4 例，注入 `writeLine` 捕获，不污染测试进程）覆盖异常/rejection/exit/信号，且断言异常路径**请求 `exit(1)`**；另有真实进程探针（加载 dist 版制造未处理 rejection）：输出
+
+```
+[FATAL] unhandledRejection after 0s
+Error: probe-unhandled-rejection
+    at Timeout._onTimeout (...)
+[EXIT] code=1 uptime=0s
+```
+
+并 `exit code: 1`。CLI 相关测试 21 通过；`tsc`、测试 typecheck、eslint 全绿。
+
+**说明**：本提交**不**声称找到了那两次死亡的机制——它让下一次死亡可以被定因。若下次日志里出现 `[FATAL]`，就是进程内部未捕获错误（有栈可查）；若日志停在某条 `[heartbeat]` 之后且**没有** `[EXIT]`，就是被外部硬杀（`taskkill /F` / Job Object / 安全软件），应转查系统侧。
+
 ## v0.118.9 (2026-11-17)
 
 ### fix(gateway): knowledge SSE subscriptions must not be killed by undici's body timeout
