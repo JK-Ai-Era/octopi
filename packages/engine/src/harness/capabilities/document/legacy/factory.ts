@@ -28,6 +28,9 @@ export function createLegacyConverterFromConfig(options: {
       maxInputBytes: options.maxInputBytes,
     });
   }
-  // remote（MinerU/WPS/云转换）后续接入
-  return null;
+  // 'remote'（MinerU/WPS/云转换）为前瞻性枚举值，尚无实现——fail-loud，
+  // 禁止静默退回「不做转换」（那会让抽取悄悄降级为 T0-only）。
+  throw new Error(
+    'not_implemented: documents.legacy.converter="remote" (MinerU/WPS/cloud) — use "soffice" or "none"',
+  );
 }

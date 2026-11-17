@@ -62,3 +62,50 @@ export function detectUnwiredConfigKeys(raw: unknown): string[] {
   }
   return out;
 }
+
+/**
+ * 仅本地托管 Knowledge Service（manageLocal）消费的调参路径——经
+ * `knowledgeTuningFromConfig` 进本地 Service boot；`manageLocal=false` 时无消费方，
+ * 远程 Service 由其自身部署配置。注意：`promotion.*`、`query.*`、`autoInject` 的
+ * 预算/条数键、`catalog` 展示键均为网关侧消费，不在此列。
+ */
+const MANAGED_SERVICE_ONLY_KNOWLEDGE_PREFIXES: readonly string[] = [
+  'knowledge.embed',
+  'knowledge.load',
+  'knowledge.index',
+  'knowledge.keywordWeight',
+  'knowledge.autoInject.minScore',
+  'knowledge.autoInject.minCoverage',
+  'knowledge.hint.minScore',
+  'knowledge.catalog.autoDescribe',
+  'knowledge.service.connectTimeoutMs',
+];
+
+/**
+ * 条件性未接线检测：`knowledge.service.manageLocal === false` 时无消费方的调参键（配了不生效；
+ * 与 unwired 键一样经 loadConfig 启动告警，不再静默）。
+ * 与 `detectUnwiredConfigKeys` 同机制（路径前缀规则、每条至多报告一次）。
+ *
+ * @param raw - raw 配置对象（未过 Zod；形状与 octopi.json 一致）
+ * @returns 命中的调参路径数组；非「非本地托管」形态返回 []
+ */
+export function detectRemoteIgnoredKnowledgeKeys(raw: unknown): string[] {
+  if (raw === null || typeof raw !== 'object') return [];
+  const kn = (raw as Record<string, unknown>).knowledge;
+  if (kn === null || typeof kn !== 'object') return [];
+  const service = (kn as Record<string, unknown>).service;
+  const manageLocal =
+    service !== null && typeof service === 'object'
+      ? (service as Record<string, unknown>).manageLocal
+      : undefined;
+  if (manageLocal !== false) return [];
+  const paths = new Set<string>();
+  collectPaths(kn, 'knowledge', paths);
+  const out: string[] = [];
+  for (const prefix of MANAGED_SERVICE_ONLY_KNOWLEDGE_PREFIXES) {
+    if (paths.has(prefix) || [...paths].some((p) => p.startsWith(`${prefix}.`))) {
+      out.push(prefix);
+    }
+  }
+  return out;
+}

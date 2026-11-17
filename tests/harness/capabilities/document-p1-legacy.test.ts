@@ -18,6 +18,10 @@ describe('soffice legacy converter', () => {
     expect(c?.id).toBe('soffice');
   });
 
+  it('factory: remote fail-loud（not_implemented，不再静默退回 T0-only）', () => {
+    expect(() => createLegacyConverterFromConfig({ converter: 'remote' })).toThrow(/not_implemented/);
+  });
+
   it('probe missing binary returns false (no throw)', async () => {
     expect(await probeSoffice('octopi-soffice-not-exist-binary')).toBe(false);
     const conv = createSofficeLegacyConverter({ sofficePath: 'octopi-soffice-not-exist-binary' });

@@ -128,6 +128,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.18 (2026-11-18)
+
+### fix(engine): documents.legacy.converter='remote' fail-loud
+
+`'remote'`（MinerU/WPS/云转换）是前瞻枚举值、无实现，此前静默返回 null（抽取悄悄降级 T0-only）。现抛 `not_implemented`（repo 约定），配置即显式失败。**行为变更**：配置过 `'remote'` 的部署将从静默降级改为显式报错（用 `'soffice'` 或 `'none'`）。
+
+### fix(config): 非本地托管 Knowledge Service 的调参键启动告警
+
+`manageLocal=false` 时 `embed.*` / `load.*` / `index.*` / `keywordWeight` / `autoInject.{minScore,minCoverage}` / `hint.minScore` / `catalog.autoDescribe` / `service.connectTimeoutMs` 无消费方（远程 Service 由其自身部署配置），此前静默忽略。现 `loadConfig` 启动显式告警（`detectRemoteIgnoredKnowledgeKeys`，与 unwired 键同机制、条件性判定）。注意 `promotion.*`、`query.*`、`autoInject` 预算/条数键为网关侧消费，不在告警清单（旧审计口径有误，已纠）。
+
+---
+
 ## v0.118.17 (2026-11-18)
 
 ### fix(engine): agents[].tools.denyCapabilities 接线（曾被 zod 静默剥离）

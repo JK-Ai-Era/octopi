@@ -16,7 +16,7 @@ import { flattenModels, resolveModelConfig } from '@octopi-agent/engine/config.j
 import { validateConfigOrThrow } from './config-schema.js';
 import { applyLegacyBudget, applyLegacyPluginConfigs, applyRemovedAttachmentKeys, applyRemovedKeys, detectConfigMigrations } from './config-migrations.js';
 import { detectUnknownConfigKeys } from './config-schema/unknown-keys.js';
-import { detectUnwiredConfigKeys } from './config-schema/unwired-keys.js';
+import { detectRemoteIgnoredKnowledgeKeys, detectUnwiredConfigKeys } from './config-schema/unwired-keys.js';
 import { expandEnvPlaceholders as expandEnvPlaceholdersShared, loadOctopiEnvFile } from '@octopi-agent/engine/config-admin/env.js';
 import { getOctopiHome } from './init.js';
 import { readFileSync, existsSync } from 'node:fs';
@@ -118,6 +118,13 @@ export function loadConfig(configPath?: string): NormalizedHarnessConfig {
   if (unwiredKeys.length > 0) {
     console.warn(
       `[config] 以下配置键暂不生效（已声明但无消费方；session.* 附加键可能是拼写错误）：${unwiredKeys.join(', ')} —— 详见 docs/KNOWN-ISSUES.md`,
+    );
+  }
+  // 条件性未接线：非本地托管 Knowledge Service 时调参键无消费方——同样不得静默
+  const remoteIgnoredKnowledge = detectRemoteIgnoredKnowledgeKeys(raw);
+  if (remoteIgnoredKnowledge.length > 0) {
+    console.warn(
+      `[config] Knowledge Service 非本地托管（manageLocal=false），以下调参键不生效（远程 Service 由其自身部署配置）：${remoteIgnoredKnowledge.join(', ')}`,
     );
   }
 
