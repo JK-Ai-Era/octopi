@@ -9,12 +9,16 @@
  * 不能在开发者主平台上零验证。这里锁**意图**：`writeRunServeBoot` 必须真的把
  * `mode: 0o600` 交给 `writeFileSync`。有人删掉 mode 时，Windows 上也会红。
  *
+ * 注意路径：写入走 staging（`<target>.staging` → 收紧 → rename），目的是收紧失败时不
+ * 毁掉上一份仍然有效的秘密。所以断言的是「写的是这个目标的 staging」+「结束后目标存在」，
+ * 而不是「写的恰好是目标路径」。
+ *
  * 这条不替代真实权限校验：POSIX 上仍由 run-remote-backend.test.ts 的 stat 断言覆盖；
  * Windows 上的真实保护面是用户目录 ACL，本测不覆盖（见 CHANGELOG 已知限制）。
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -46,9 +50,13 @@ describe('writeRunServeBoot 的 0600 意图', () => {
       writeRunServeBoot(p, '{"secret":true}');
       const write = captured.writes[before];
       if (!write) throw new Error('writeFileSync 未被调用（未走真实连线）');
-      expect(write.path).toBe(p);
+      // 写的是 staging（收紧后再 rename 到目标）
+      expect(write.path).toBe(`${p}.staging`);
       expect(write.options?.mode).toBe(0o600);
       expect(write.options?.encoding).toBe('utf8');
+      // rename 已把它落到目标路径，且没有残留 staging
+      expect(existsSync(p)).toBe(true);
+      expect(existsSync(`${p}.staging`)).toBe(false);
     } finally {
       // rmSync 来自 mock 的 ...actual 展开，是真实实现
       rmSync(p, { force: true });

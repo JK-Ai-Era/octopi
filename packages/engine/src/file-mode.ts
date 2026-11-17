@@ -40,6 +40,8 @@ import { join } from 'node:path';
 export const POSIX_FILE_MODE: boolean = process.platform !== 'win32';
 
 /** `icacls` 收紧要授予的主体（授权目标）。 */
+let cachedPrincipal: OwnerPrincipal | null | undefined;
+
 type OwnerPrincipal = { form: 'sid' | 'name'; value: string };
 
 /**
@@ -56,6 +58,19 @@ type OwnerPrincipal = { form: 'sid' | 'name'; value: string };
  * @returns 可交给 icacls 的主体；无法确定时返回 null（由调用方决定降级策略）
  */
 function currentOwnerPrincipal(): OwnerPrincipal | null {
+  // 进程内缓存：一个进程的令牌主体不会变，而每次 restrictToOwner 起一个 whoami.exe
+  // 是纯浪费（credentials 打开一次最多 4 次调用）。
+  if (cachedPrincipal !== undefined) return cachedPrincipal;
+  cachedPrincipal = resolveOwnerPrincipal();
+  return cachedPrincipal;
+}
+
+/**
+ * 解析当前令牌主体（不做缓存）。
+ *
+ * @returns 可交给 icacls 的主体；无法确定时返回 null（由调用方决定降级策略）
+ */
+function resolveOwnerPrincipal(): OwnerPrincipal | null {
   const whoami = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe');
   try {
     const raw = execFileSync(whoami, ['/user', '/fo', 'csv', '/nh'], {
@@ -95,6 +110,15 @@ export function restrictToOwner(target: string, kind: 'file' | 'dir'): void {
   }
   // icacls 的输出是本地化的，只可信 exit code（非 0 时 execFileSync 会抛）。
   // windowsHide 不可省：否则在无控制台的宿主里又会长出一个控制台窗口。
+  // `/inheritance:r /grant:r` 只处理**继承**来的 ACE 与"同一主体"的显式 ACE：目标上若有
+  // 别人显式授予的条目（老版本留下的宽松权限正是如此），它会原地留着。实测对
+  // `icacls <dir> /grant *S-1-5-32-545:(OI)(CI)R` 造宽过的目录，直接用本函数收紧后
+  // `BUILTIN\Users` 仍留在 DACL 上；先 `/reset`（重置为从父继承）再收紧才彻底。
+  try {
+    execFileSync('icacls', [target, '/reset'], { stdio: 'ignore', windowsHide: true });
+  } catch {
+    /* 无法 reset（非 NTFS / 权限不足）时仍尝试下面的收紧；成败由它决定 */
+  }
   // `*S-1-5-…` 是「按 SID 授权」的形式（icacls 语法）；名字形式不能带 `*`。
   const grantee = owner.form === 'sid' ? `*${owner.value}` : owner.value;
   execFileSync(

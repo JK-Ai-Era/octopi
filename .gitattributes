@@ -20,3 +20,16 @@
 #   longer blow up file-wide. Use `eol=lf` only if you deliberately want LF in
 #   every working tree.
 * text=auto
+
+# Generated artifacts: pin the working tree to LF as well.
+#
+# `* text=auto` alone leaves the worktree EOL to each clone's core.autocrlf, so on
+# Windows (autocrlf=true) checkout smudges these files back to CRLF while their
+# generator writes LF. The content is identical after normalization, but git keeps
+# reporting them as modified with an empty `git diff` — a permanent phantom diff
+# that hides real changes in `git status` and makes agents re-read/re-verify files
+# that never actually changed.
+#
+# These files are machine-written with a hardcoded '\n' (see
+# scripts/generate-octopi-schema.mjs), so LF in the worktree is the honest form.
+octopi.schema.json text eol=lf

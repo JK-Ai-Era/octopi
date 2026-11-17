@@ -62,6 +62,7 @@ export class CredentialStore {
   static async open(options?: {
     dbPath?: string;
     requireBindings?: boolean;
+    hardenDir?: boolean;
   }): Promise<CredentialStore> {
     const db = await CredentialDatabase.create(options);
     return new CredentialStore(db, { requireBindings: options?.requireBindings });
@@ -78,6 +79,8 @@ export class CredentialStore {
     return CredentialStore.open({
       dbPath: paths.dbPath,
       requireBindings: options?.requireBindings,
+      // 这是产品自有的数据面目录（resolveCredentialPaths 产出），可以安全收紧
+      hardenDir: true,
     });
   }
 

@@ -4,14 +4,25 @@
  * 与 knowledge.db / octopi.json 分离：资源级访问凭证，规模可随集成增长。
  */
 
+import { statSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { restrictToOwner } from '../../../file-mode.js';
 
 export interface CredentialDatabaseOptions {
   dbPath?: string;
   wal?: boolean;
   busyTimeoutMs?: number;
+  /**
+   * 把 `dbPath` 所在目录收紧到当前用户（POSIX 0700 / Windows ACL）。
+   *
+   * 默认 `false`：`dbPath` 是公开选项，调用方可能指向共享目录（`/var/lib/foo/app.db`），
+   * 不打招呼就 `chmod 700` 会把别人的服务状态一起锁掉。产品路径经
+   * {@link resolveCredentialPaths} 产出的专用目录，由 `CredentialStore.openDefault`
+   * 显式打开该开关；嵌入方指定自己的路径时自行负责目录权限。
+   */
+  hardenDir?: boolean;
 }
 
 export interface CredentialPaths {
@@ -27,6 +38,48 @@ export interface CredentialPaths {
 export function resolveCredentialPaths(octopiHome: string): CredentialPaths {
   const root = join(octopiHome, 'credentials');
   return { root, dbPath: join(root, 'credentials.db') };
+}
+
+/**
+ * 把 Credential 数据面目录收紧到当前用户，并回溯收紧已存在的库文件。
+ *
+ * 为什么要做：`credentials.db` 与其边车（`-wal` / `-shm` / `-journal`）都生在这个目录里，
+ * 目录不收紧要等于库不收紧。此前是裸 `mkdir` —— POSIX 上按 umask 落成 0755（group/other
+ * 可读），Windows 上完全继承 OCTOPI_HOME 所在位置的 ACL（指到共享卷即他人可读）。
+ *
+ * 顺序要点：**先收紧目录、再 open 数据库**。SQLite 在打开期间创建/重建的边车会继承目录
+ * 的 ACE（Windows `(OI)(CI)` / POSIX 0700），因此不存在"新边车更宽"的窗口。
+ *
+ * 目录收紧失败即抛：宁可拒绝打开数据面，也不在已知可见的位置建库。已存在的文件回溯失败
+ * 只告警——库里是密文与引用，为它中断服务不划算，但绝不能假装已保护。
+ *
+ * @param root - Credential 数据面目录
+ * @param dbPath - 库文件路径（用于回溯收紧自身与边车）
+ * @throws 当目录无法收紧到当前用户时（错误带 `cause`）
+ */
+function hardenCredentialDir(root: string, dbPath: string): void {
+  try {
+    restrictToOwner(root, 'dir');
+  } catch (err) {
+    throw new Error(`[credentials] cannot restrict ${root} to the current user`, { cause: err });
+  }
+  // 目录收紧不会回溯改写已存在文件的 ACE —— 老库是在旧权限下建出来的。
+  // `-journal` 也要管：`wal: false` 或回滚日志模式下用它，升级前遗留的会保留旧 ACL。
+  for (const sibling of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
+    try {
+      // 用 statSync 而不是 existsSync：少一次 TOCTOU 形状
+      statSync(sibling);
+    } catch {
+      continue; // 不存在（正常路径：干净关闭后边车会被 SQLite 删掉）
+    }
+    try {
+      restrictToOwner(sibling, 'file');
+    } catch (err) {
+      console.warn(
+        `[credentials] could not restrict existing ${sibling} (${String(err)}); it stays readable per its current ACL`,
+      );
+    }
+  }
 }
 
 export class CredentialDatabase {
@@ -52,7 +105,9 @@ export class CredentialDatabase {
 
     const dbPath = options?.dbPath ?? ':memory:';
     if (dbPath !== ':memory:') {
-      await mkdir(dirname(dbPath), { recursive: true });
+      const root = dirname(dbPath);
+      await mkdir(root, { recursive: true });
+      if (options?.hardenDir) hardenCredentialDir(root, dbPath);
     }
 
     const db = new DatabaseSyncCtor(dbPath, {

@@ -5,13 +5,20 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { CredentialStore } from '@octopi-agent/engine/harness/governance/credentials/store.js';
 import { CredentialDatabase } from '@octopi-agent/engine/harness/governance/credentials/db.js';
 import type { CredentialScopeRef } from '@octopi-agent/engine/harness/governance/credentials/types.js';
+import {
+  POSIX_FILE_MODE,
+  accessSnapshot,
+  expectNotOwnerOnly,
+  expectRestrictedToOwner,
+  loosenForTest,
+} from './helpers/file-mode.js';
 
 const ENV_A = 'TEST_CRED_DOMAIN_A';
 const ENV_B = 'TEST_CRED_DOMAIN_B';
@@ -234,6 +241,73 @@ describe('credentials domain separation', () => {
       expect(idx?.name).toBe('credentials_domain_name');
     } finally {
       db.close();
+    }
+  });
+
+  it('hardenDir creates the credentials directory owner-only on both platforms', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cred-perm-'));
+    // umask 077 下裸 mkdir 本来就会得到 0700 —— 那样这条用例即使没有硬化也绿（假绿）。
+    const prevUmask = process.umask(POSIX_FILE_MODE ? 0o022 : (process.umask() as number));
+    try {
+      const root = join(home, 'credentials');
+      const db = await CredentialDatabase.create({
+        dbPath: join(root, 'credentials.db'),
+        hardenDir: true,
+      });
+      try {
+        // 目录里会长出 credentials.db 与边车：目录不收紧等于库不收紧。
+        expectRestrictedToOwner(root, 'dir');
+      } finally {
+        db.close();
+      }
+    } finally {
+      process.umask(prevUmask);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('hardenDir tightens a pre-existing loose directory AND an old db file', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cred-perm-legacy-'));
+    try {
+      const root = join(home, 'credentials');
+      const dbPath = join(root, 'credentials.db');
+      mkdirSync(root, { recursive: true });
+      // 造出"旧版本留下的宽松状态"：目录 + 已存在的库文件都要宽
+      loosenForTest(root, 'dir');
+      writeFileSync(dbPath, '');
+      loosenForTest(dbPath, 'file');
+
+      const db = await CredentialDatabase.create({ dbPath, hardenDir: true });
+      try {
+        // 回溯分支：目录收紧不会改写已存在文件的 ACE，所以这两条必须分别成立
+        expectRestrictedToOwner(root, 'dir');
+        expectRestrictedToOwner(dbPath, 'file');
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('create() without hardenDir does not touch the caller-provided directory', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cred-noharden-'));
+    try {
+      const root = join(home, 'shared');
+      mkdirSync(root, { recursive: true });
+      loosenForTest(root, 'dir');
+      const before = accessSnapshot(root);
+
+      const db = await CredentialDatabase.create({ dbPath: join(root, 'credentials.db') });
+      try {
+        // dbPath 是公开选项：不打招呼就收紧会破坏共享目录里的其它服务状态
+        expect(accessSnapshot(root)).toBe(before);
+        expectNotOwnerOnly(root);
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

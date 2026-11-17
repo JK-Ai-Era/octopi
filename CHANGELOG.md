@@ -128,6 +128,44 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.7 (2026-11-17)
+
+### fix(security): restrict the credential database directory to its owner
+
+`CredentialDatabase.create` did a bare `mkdir(dirname(dbPath), { recursive: true })`. The DB and its sidecars (`-wal`/`-shm`/`-journal`) are born in that directory, so an unrestricted directory means an unrestricted credential store:
+
+- POSIX: created at the umask default (usually `0755`) — group and other can read it;
+- Windows: inherits whatever ACL `OCTOPI_HOME` lives under, so pointing it at a shared volume makes it readable to everyone who can reach that volume.
+
+Hardening is opt-in via `hardenDir`, which `CredentialStore.openDefault` sets: `dbPath` is a public option, and silently `chmod 700`-ing a caller-supplied shared directory (`/var/lib/foo/app.db` → `/var/lib/foo`) would break whatever else lives there. Embedders that pass their own path own that decision.
+
+The directory is restricted before the DB is opened (so sidecars created during open inherit a safe ACL — verified: they carry `(I)(F)`, and are recreated safely after a clean close), and pre-existing `credentials.db`/`-wal`/`-shm`/`-journal` are retrofitted. Failure to restrict the directory throws (refuse the data plane rather than create it somewhere known-visible); retrofit failures warn — the store holds ciphertext and references, not worth an outage, but silence would be.
+
+`resolveOwnerPrincipal()` is now cached per process: one credential open made up to four `restrictToOwner` calls, each spawning `whoami.exe`.
+
+### fix(security): clear foreign explicit ACEs when restricting on Windows
+
+`restrictToOwner` used `icacls /inheritance:r /grant:r *<sid>`, which only rewrites *inherited* ACEs and those of the same principal. A target carrying an explicit grant for another principal keeps it — measured: after loosening a directory with `icacls <dir> /grant *S-1-5-32-545:(OI)(CI)R`, restricting it with the old implementation left `BUILTIN\Users:(OI)(CI)(R)` on the DACL. That is exactly the "old loose directory / old DB file" case the retrofit exists for, so the old code did not actually harden anything it was handed. A `/reset` (restore inheritance) now precedes the restriction; verified to drop the leftover ACE, and a test fails if `/reset` is removed.
+
+### test: make the permission assertions falsifiable
+
+- `hardenDir` cases now control `umask` (a bare `mkdir` under `umask 077` already yields 0700, which made the POSIX branch pass for the wrong reason), build the loose state explicitly (`chmod` on POSIX, an `icacls /grant` for `BUILTIN\Users` on Windows — `mkdirSync{mode}` is a no-op there), and cover the retrofit branch (pre-existing loose directory **and** pre-existing loose db file).
+- `run-serve-boot-mode.test.ts` follows the staging write (`<target>.staging` → restrict → rename) and asserts no staging residue, instead of assuming the write lands directly on the target.
+
+**未收口（同源，另行处理）**：`src/init.ts:406` 用裸 `writeFileSync` 建 `octopi.json`（AGENTS.md 明确它承载系统级密钥/LLM provider key）；`ensureDir` 建 `sessions/`（完整对话）、`knowledge/`、`audit/` 同样不带 mode。属同一类缺口，涉及多用户共享 OCTOPI_HOME 的部署取舍，未在本次擅自动。
+
+### fix(build): stop the generated schema from reporting a phantom diff
+
+`octopi.schema.json` is machine-written by `scripts/generate-octopi-schema.mjs` with a hardcoded `'\n'`, and the blob in git is LF. But `.gitattributes` only declared `* text=auto`, which leaves the *working tree* EOL to each clone's `core.autocrlf`; on this Windows machine that is `true`, so checkout smudged the file to CRLF. The content is identical after normalization, so `git status` reported the file as modified while `git diff` was empty — a change that never existed and could never be committed.
+
+`octopi.schema.json text eol=lf` pins the worktree to LF as well. Verified: forcing the file to CRLF and running `git checkout --` now yields LF (previously CRLF), and regenerating leaves the file byte-identical (`md5` unchanged, `git status` clean).
+
+**范围限定**：这条规则只钉住这一个机器产出物。phantom 的根因是「工作区 EOL 交给各 clone 的 `core.autocrlf`」，本 clone 有 1446/1480 个跟踪文件是 `w/crlf`——任何以 LF 重写它们的工具/agent 都会复现同样的 `M + 空 diff`。彻底根治属环境决策（clone 级 `core.eol=lf` + 一次性重检出），不在本提交。
+
+**为什么不是全局 `eol=lf` 或 `-text`**：全局改成 `eol=lf` 会让本 clone 一次性把上千文件的工作区翻成 LF（全仓 churn），收益只是"都不再 phantom"；`-text` 会关掉归一化，agent 那些 `GIT_CONFIG_GLOBAL=NUL` 的提交就会把 CRLF 写进 blob——正是 `.gitattributes` 顶部记录过的历史事故。
+
+**未收口（同源，另行处理）**：`src/init.ts` 的 `ensureDir` 建 `OCTOPI_HOME` 骨架（`sessions/` 含完整对话）同样不带 mode，POSIX 上按 umask 落成 0755。属同一类"目录权限交给 umask"的缺口，但它涉及多用户共享 OCTOPI_HOME 的部署取舍，未在本次擅自动。
+
 ## v0.118.6 (2026-11-17)
 
 ### fix(security): enforce secret-file permissions for real on Windows

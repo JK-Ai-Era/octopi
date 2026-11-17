@@ -15,7 +15,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { chmodSync, statSync } from 'node:fs';
 import { expect } from 'vitest';
 
 import { POSIX_FILE_MODE } from '../../packages/engine/src/file-mode.js';
@@ -75,6 +75,36 @@ export function expectRestrictedToOwner(target: string, kind: 'file' | 'dir'): v
     `存在非本人的授予型 ACE：${foreign.join(' | ')}（全部：${granted.join(' | ')}）`,
   ).toEqual([]);
   expect(granted.length, `应至少有一条本人 ACE：${granted.join(' | ')}`).toBeGreaterThan(0);
+}
+
+/**
+ * 把目标**做宽**，用于构造「旧版本留下的宽松状态」这一测试前提。
+ *
+ * POSIX 上 `chmod 0755/0644` 真的生效；Windows 上必须改 ACL（`chmod` 只切只读位且不报错，
+ * 用它造宽会得到一条永远"已经够宽"的假前提）——这里显式授予 `Users` 组读取。
+ *
+ * @param target - 文件或目录
+ * @param kind - `dir` 用 `(OI)(CI)R` 让子项也读得到，`file` 用 `R`
+ */
+export function loosenForTest(target: string, kind: 'file' | 'dir'): void {
+  if (POSIX_FILE_MODE) {
+    chmodSync(target, kind === 'dir' ? 0o755 : 0o644);
+    return;
+  }
+  // S-1-5-32-545 = BUILTIN\Users；用 SID 避免本地化组名（中文系统上 "Users" 不成立）
+  const grant = kind === 'dir' ? '*S-1-5-32-545:(OI)(CI)R' : '*S-1-5-32-545:R';
+  execFileSync('icacls', [target, '/grant', grant], { stdio: 'ignore', windowsHide: true });
+}
+
+/**
+ * 给目标当前的访问控制拍个快照，用于断言「没有被动过」。
+ *
+ * @param target - 文件或目录
+ * @returns 可比较的字符串（POSIX 是权限位，Windows 是排序后的 ACE 列表）
+ */
+export function accessSnapshot(target: string): string {
+  if (POSIX_FILE_MODE) return (statSync(target).mode & 0o777).toString(8);
+  return readWindowsAces(target).slice().sort().join('|');
 }
 
 /**
