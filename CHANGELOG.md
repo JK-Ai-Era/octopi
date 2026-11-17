@@ -128,6 +128,30 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.8 (2026-11-17)
+
+### fix(gateway): run event streams must not be killed by undici's body timeout
+
+**症状**：`timer_wait` 超过约 5 分钟必失败，报 `[Gateway Error] terminated`；同时该工具在前端**永远停在 running**（收不到 `tool.end`）。
+
+**根因**：`RemoteRunBackend.startRun()` 用裸 `fetch` 读 run 的 NDJSON 流。Node 内置 fetch（undici）有硬编码的 `bodyTimeout`——`node_modules/undici/lib/dispatcher/client.js`：`this[kBodyTimeout] = bodyTimeout != null ? bodyTimeout : 300e3`（即 **300s**）。它只认 dispatcher 配置，**不传 `AbortSignal` 并不会解除它**（原注释「/runs 长流不传，不加限制」只做到了后者）。
+
+而 run 流在工具执行期间**合法静默**：`timer_wait` 的硬顶是 30 分钟，这期间流上零字节。300s 一到 undici 抛 `TypeError: terminated` → run 失败 → `dispatchResult.status='failed'` → 界面显示 `[Gateway Error] terminated`；由于流已断，前端永远等不到 `tool.end`。
+
+这也解释了阈值落在 5~7 分钟：300s 是边界，420s 必死（这些是**所有**长工具的通病，`timer_wait` 只是最典型）。
+
+**改法**：复用仓库已有的 transport 对齐机制（`integration/providers/fetch-timeout.ts`，它本来就是为「undici 默认 300s 掐死正常长响应」而建的）：新增 `createStreamDispatcher(headersTimeoutMs)` —— `bodyTimeout: 0`（禁用，静默由业务层决定）+ 保留 `headersTimeout`（首字节/连接才是真该有上限的）+ `allowH2: false`（同 provider 侧，规避 h2 发送路径的历史事故）。`startRun` 改用 `providerFetch` + 该 dispatcher。传输层抽成导出的 `openRunEventStream()`，因为 `RemoteRunBackend` 构造私有、这条语义必须能单独测。
+
+**验证（双向）**：
+
+- 纯 Node 脚本实证机制：静默 5s + `bodyTimeout=2s` → `TypeError: terminated`（2533ms 后）；`bodyTimeout=300s` → 正常读完。
+- 新增 `tests/run-stream-idle-silence.test.ts`：假 run 服务先发一条事件、静默 1.5s 再发终态，断言 `openRunEventStream` + `decodeRunStream` 能跨过静默拿到 `['step_start','step_end']`。
+- 对照组：把 `createStreamDispatcher` 的 `bodyTimeout` 改回 200ms（等价于恢复旧上限的缩小版）→ 该用例**精确复现 `TypeError: terminated`**，守卫用例同时变红；恢复后转绿。
+- 守卫锁定修复本身：`startRun` 必须走 `openRunEventStream`，传输必须用 `providerFetch`，工厂必须 `bodyTimeout: 0` 且保留 `headersTimeout`。
+- 协议 e2e（真实 fork）30 例全绿，且 `run-remote-backend` 从 6.7s 降到 4.7s。
+
+**已知限制（同源，未在本提交处理）**：engine 的 `modelCallIdleTimeoutMs` 默认也是 300_000ms（`packages/core/src/loop/agent-loop.ts`），与 undici 的 `bodyTimeout` 默认值相等——模型流静默到 300s 时两者竞争，可能报出 transport 的 `terminated` 而非 engine 分类好的错误。provider 侧已用 `createTimeoutDispatcher(providerTimeoutMs)` 把 transport 抬高到 provider 预算，但若某 provider 的 `timeoutSeconds` 配置小于 300s 且流式静默超过它，仍是同样形态。这属于「transport 预算 vs 业务预算」的统一问题，需要单独定口径。
+
 ## v0.118.7 (2026-11-17)
 
 ### fix(security): restrict the credential database directory to its owner

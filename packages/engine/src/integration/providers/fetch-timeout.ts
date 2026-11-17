@@ -52,3 +52,28 @@ export function createTimeoutDispatcher(timeoutMs: number): Agent {
     // 而不是把连接建立也拖到 provider 超时量级
   });
 }
+
+/**
+ * 创建「响应体静默合法」的 dispatcher（用于长事件流，如 run 的 NDJSON 流）。
+ *
+ * 与 {@link createTimeoutDispatcher} 的差别只在 `bodyTimeout`：这里**禁用**它。
+ *
+ * 为什么必须禁用：长流在工具执行期间**合法静默**——`timer_wait` 可以等 30 分钟，期间流上
+ * 零字节。而 undici 的 `bodyTimeout` 默认 300_000ms（`lib/dispatcher/client.js`：
+ * `this[kBodyTimeout] = bodyTimeout != null ? bodyTimeout : 300e3`），静默到点即抛
+ * `TypeError: terminated`，且**与是否传 AbortSignal 无关**。后果是把「工具还在跑」报成
+ * 网关故障，前端也永远收不到 `tool.end`（表现为 timer 一直 running）。
+ *
+ * 需要上限的是**首字节**，由 `headersTimeout` 覆盖——那才是「对端没接上/没响应」的信号。
+ *
+ * @param headersTimeoutMs - 连接 + 响应头预算（毫秒）
+ * @returns undici Agent，作为 `providerFetch` 的 `dispatcher` 传入
+ */
+export function createStreamDispatcher(headersTimeoutMs: number): Agent {
+  return new Agent({
+    headersTimeout: headersTimeoutMs,
+    // 0 = 禁用：流上的静默由业务层（工具预算 / run 生命周期）决定，不由 transport 猜
+    bodyTimeout: 0,
+    allowH2: false,
+  });
+}

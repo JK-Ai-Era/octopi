@@ -11,6 +11,7 @@
  */
 
 import { fork, type ChildProcess } from 'node:child_process';
+
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { rmSync } from 'node:fs';
@@ -18,6 +19,10 @@ import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { forkChildNodeOptions, stopForkedChild } from '@octopi-agent/engine/fork-child.js';
 import { createPrivateTempDir, writeSecretFileSync } from '@octopi-agent/engine/file-mode.js';
 import { resolveWorkerUrl } from '@octopi-agent/engine/worker-path.js';
+import {
+  createStreamDispatcher,
+  providerFetch,
+} from '@octopi-agent/engine/integration/providers/fetch-timeout.js';
 import type {
   RunBackendHealth,
 } from '@octopi-agent/engine/harness/activation/run-backend.js';
@@ -56,6 +61,14 @@ export function writeRunServeBoot(bootPath: string, payload: string): void {
  * @param ctxLabel - 错误文案上下文（如 `session x, run y`）
  * @returns 协议事件流
  */
+/**
+ * run 事件流的「首字节」预算（毫秒）：连接 + 响应头。
+ *
+ * 拿到 2xx 之后流上的静默是正常业务态（工具执行中），不设上限——见
+ * {@link RemoteRunBackend.startRun}。
+ */
+const RUN_STREAM_HEADERS_TIMEOUT_MS = 30_000;
+
 export async function* decodeRunStream(
   chunks: AsyncIterable<Uint8Array>,
   ctxLabel: string,
@@ -111,7 +124,52 @@ export interface RemoteRunBackendOptions {
   buildRef?: string;
 }
 
+/**
+ * 打开 run 事件流（协议 startRun 的传输层）。
+ *
+ * 抽成导出函数是为了可测：`RemoteRunBackend` 的构造函数是私有的（只能由 `start()`
+ * 造出来），而这条传输的「合法静默」语义必须能单独验证。
+ *
+ * 必须用 `providerFetch` + 关闭 `bodyTimeout` 的 dispatcher，**不能裸用 `fetch`**：
+ * Node 内置 fetch（undici）的 `bodyTimeout` 默认 300_000ms
+ * （`undici/lib/dispatcher/client.js`：`bodyTimeout != null ? bodyTimeout : 300e3`），
+ * 它只认 dispatcher 配置——不传 `AbortSignal` 并不会解除它。run 流在工具执行期间
+ * **合法静默**（`timer_wait` 可等 30 分钟），静默到 300s 就抛 `TypeError: terminated`，
+ * 把「工具还在跑」报成网关故障，前端也永远收不到 `tool.end`。
+ *
+ * @param port - run 子进程的 loopback 端口
+ * @param token - 握手拿到的承载令牌（缺省不加头）
+ * @param req - run 请求（纯数据）
+ * @param dispatcher - 关闭了 bodyTimeout 的 undici Agent（见 `createStreamDispatcher`）
+ * @returns 2xx 的响应（其 `body` 是 NDJSON 流）
+ * @throws 传输失败或非 2xx 时抛错
+ */
+export async function openRunEventStream(
+  port: number,
+  token: string | undefined,
+  req: RunRequest,
+  dispatcher: unknown,
+): Promise<Response> {
+  const res = await providerFetch(`http://127.0.0.1:${port}/runs`, {
+    method: 'POST',
+    headers: {
+      ...(token === undefined ? {} : { 'x-run-serve-token': token }),
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(req),
+    dispatcher,
+  } as Parameters<typeof providerFetch>[1]);
+  return res;
+}
+
 export class RemoteRunBackend {
+  /**
+   * run 事件流专用 transport：关掉 `bodyTimeout`（静默合法），只留首字节预算。
+   *
+   * 懒建：实例可能只被用于 health/control，没必要为此占一个连接池。
+   */
+  private streamDispatcher: ReturnType<typeof createStreamDispatcher> | undefined;
+
   private constructor(
     private readonly child: ChildProcess,
     private readonly port: number,
@@ -248,17 +306,41 @@ export class RemoteRunBackend {
   /**
    * 执行 run（契约 startRun）。NDJSON 流逐条还原为 AgentEvent。
    *
+   * 传输必须用 `providerFetch` + `createStreamDispatcher`，**不能裸用 `fetch`**：
+   * Node 内置 fetch（undici）的 `bodyTimeout` 默认 300_000ms
+   * （`undici/lib/dispatcher/client.js`：`bodyTimeout != null ? bodyTimeout : 300e3`），
+   * 它只认 dispatcher 配置——不传 `AbortSignal` 并不会解除它。而 run 流在工具执行期间
+   * **合法静默**：`timer_wait` 可以等 30 分钟，期间流上零字节。于是 300s 一到 undici
+   * 抛 `TypeError: terminated`，把「工具还在跑」报成网关故障，前端也永远收不到
+   * `tool.end`（表现为 timer 一直 running）。
+   *
+   * `createStreamDispatcher` 关掉 `bodyTimeout`、只保留首字节预算——与 provider 侧
+   * 长响应用的是同一套 transport 对齐机制（`fetch-timeout.ts`）。
+   *
    * @param req - run 请求（纯数据）
    * @returns 协议事件流
    */
   startRun(req: RunRequest): AsyncIterable<AgentEvent> {
     const self = this;
     return (async function* () {
-      const res = await self.fetchJson('POST', '/runs', req);
+      let res: Response;
+      try {
+        res = await openRunEventStream(self.port, self.token, req, self.getStreamDispatcher());
+      } catch (err) {
+        throw new Error(
+          `run_remote: startRun transport failed (${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
       if (!res.ok || !res.body) {
         throw new Error(`run_remote: startRun failed (HTTP ${res.status}): ${await self.errorText(res)}`);
       }
-      yield* decodeRunStream(res.body, `session ${req.sessionId}, run ${req.requestId}`);
+      try {
+        yield* decodeRunStream(res.body, `session ${req.sessionId}, run ${req.requestId}`);
+      } finally {
+        // 正常吞到 `done` 时响应已 EOF，cancel 是 no-op；坏行/提前 return 时它负责
+        // 放掉这条连接，避免拿不到终态的请求长期占着 socket。
+        await res.body.cancel().catch(() => undefined);
+      }
     })();
   }
 
@@ -347,6 +429,10 @@ export class RemoteRunBackend {
       } catch (err) {
         console.warn(`[RunRemote] boot dir cleanup failed (${String(err)}): ${this.bootDir}`);
       }
+      // 释放 keep-alive 连接池（与 provider 的 dispose 同口径）
+      const dispatcher = this.streamDispatcher;
+      this.streamDispatcher = undefined;
+      await dispatcher?.close().catch(() => undefined);
     }
   }
 
@@ -366,6 +452,16 @@ export class RemoteRunBackend {
       // MIN-8：探针类请求带超时（/runs 长流不传，不加限制）
       ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
     });
+  }
+
+  /**
+   * 取（必要时创建）run 事件流 dispatcher。
+   *
+   * @returns 关闭了 `bodyTimeout` 的 undici Agent
+   */
+  private getStreamDispatcher(): ReturnType<typeof createStreamDispatcher> {
+    this.streamDispatcher ??= createStreamDispatcher(RUN_STREAM_HEADERS_TIMEOUT_MS);
+    return this.streamDispatcher;
   }
 
   private async errorText(res: Response): Promise<string> {
