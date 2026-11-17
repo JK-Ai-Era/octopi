@@ -128,6 +128,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.9 (2026-11-17)
+
+### fix(gateway): knowledge SSE subscriptions must not be killed by undici's body timeout
+
+与 v0.118.8 同一个根因，第二处落点：`GatewayKnowledgeRuntime.subscribeProgress()` 用裸 `fetch` 读 Knowledge Service 的 `/v1/events` SSE。
+
+订阅是**长连接**：没有 ingest 任务时，事件之间的空档可以任意长。静默满 undici 的默认 `bodyTimeout`（300_000ms）就抛 `TypeError: terminated`，而这里有个 `catch` 把一切吞掉（注释「断线：调用方可退 stats 轮询」）——于是订阅**无声死掉、静默降级成轮询**。这条降级路径不会留下任何痕迹。
+
+**改法**：改用 `providerFetch` + `createStreamDispatcher(30_000)`（`bodyTimeout: 0`，只留首字节预算），与 v0.118.8 的 run 事件流同一套机制。顺带两件事：
+
+- 每次订阅独占一个 dispatcher，在 `finally` 里 `close()`，不跨订阅复用连接池。
+- `catch` 改为区分主动取消：`ac.signal.aborted` 时不告警（正常 dispose/停机），真断线时 `console.warn` 留痕——否则这条降级路径永远不可观测。
+
+**验证**：`tests/knowledge-sse-idle-silence.test.ts` —— 假 SSE 服务发一帧、静默 1.2s、再发一帧，断言两帧都收到；另有一条守卫锁住「必须用 providerFetch + dispatcher + 区分主动取消」。对照组（纯 Node 脚本，同一服务、同一静默）：`bodyTimeout=200ms` → `FAILED after stages=["first"] -> TypeError: terminated`；`bodyTimeout=0` → `OK stages=["first","after-silence"]`。knowledge 相关测试 26 通过 / 1 跳过，`tsc` / typecheck / eslint 全绿。
+
+**范围说明**：`knowledge/client.ts` 是普通请求/响应客户端且已有显式超时，不受影响；`memory/sqlite/embedding.ts`、`integration/web-search/http.ts`、`integration/observability/exporters.ts` 都是短请求（有各自超时），保留裸 fetch。
+
 ## v0.118.8 (2026-11-17)
 
 ### fix(gateway): run event streams must not be killed by undici's body timeout

@@ -11,6 +11,7 @@
  * 不进 agent 级 ops 账本（「拒 run 的每一次」由准入闸门记 ops.knowledge.run_refused）。
  */
 
+import { createStreamDispatcher, providerFetch } from '@octopi-agent/engine/integration/providers/fetch-timeout.js';
 import type { KnowledgeClient } from '@octopi-agent/engine/harness/knowledge/client.js';
 import type {
   KnowledgeBootEmbed,
@@ -72,6 +73,14 @@ export interface KnowledgeStartOpts {
   restartBackoff?: { initialMs?: number; maxMs?: number };
   sqliteVecExtensionPath?: string;
 }
+
+/**
+ * Knowledge SSE 订阅的「首字节」预算（毫秒）：连接 + 响应头。
+ *
+ * 拿到 2xx 之后的静默是正常业务态（没有 ingest 任务时事件之间无数据），不设上限——
+ * 见 {@link GatewayKnowledgeRuntime.subscribeProgress}。
+ */
+const KNOWLEDGE_SSE_HEADERS_TIMEOUT_MS = 30_000;
 
 export class GatewayKnowledgeRuntime {
   private client: KnowledgeClient | null = null;
@@ -353,6 +362,17 @@ export class GatewayKnowledgeRuntime {
 
   /**
    * 订阅 Knowledge Service SSE 进度；回调失败不影响 ingest。
+   *
+   * 传输必须用 `providerFetch` + `createStreamDispatcher`，**不能裸用 `fetch`**：
+   * Node 内置 fetch（undici）的 `bodyTimeout` 默认 300_000ms
+   * （`undici/lib/dispatcher/client.js`：`bodyTimeout != null ? bodyTimeout : 300e3`），
+   * 只认 dispatcher 配置，传 `AbortSignal` 并不能解除它。本订阅是**长连接 SSE**：
+   * 没有 ingest 任务时，事件之间有任意长的空档。静默满 300s，undici 抛
+   * `TypeError: terminated` —— 被下面的 catch 吞掉后，订阅会无声死掉、静默退化成
+   * stats 轮询。那不是真断线，是我们自己设的阈值（run 事件流踩过同一个坑）。
+   *
+   * @param onEvent - 进度事件回调
+   * @returns 取消订阅函数（同时释放连接池）
    */
   async subscribeProgress(
     onEvent: (evt: { type: string; data: unknown }) => void,
@@ -361,11 +381,14 @@ export class GatewayKnowledgeRuntime {
     const baseUrl = this.client.baseUrl;
     const token = this.client.token;
     const ac = new AbortController();
+    // 每次订阅独占一个 dispatcher：它在 dispose 时随连接池一起关闭，不跨订阅复用
+    const dispatcher = createStreamDispatcher(KNOWLEDGE_SSE_HEADERS_TIMEOUT_MS);
     void (async () => {
       try {
-        const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/events`, {
+        const res = await providerFetch(`${baseUrl.replace(/\/+$/, '')}/v1/events`, {
           headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream' },
           signal: ac.signal,
+          dispatcher,
         });
         if (!res.ok || !res.body) return;
         const reader = res.body.getReader();
@@ -390,8 +413,17 @@ export class GatewayKnowledgeRuntime {
             }
           }
         }
-      } catch {
-        // 断线：调用方可退 stats 轮询
+      } catch (err) {
+        // 主动取消（dispose / 停机）不算异常；真断线要留痕，否则「订阅悄悄死掉、
+        // 退化成轮询」这条降级路径永远看不见。
+        if (!ac.signal.aborted) {
+          console.warn(
+            `[Knowledge] progress subscription ended: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      } finally {
+        // 释放本次订阅独占的连接池（与 provider 的 dispose 同口径）
+        await dispatcher.close().catch(() => undefined);
       }
     })();
     return () => ac.abort();
