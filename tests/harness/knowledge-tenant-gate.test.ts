@@ -402,3 +402,81 @@ describe('评审修复批（B1/M1/M3/M4）', () => {
     expect(store.listVisible('agent-a', undefined, broker)).toHaveLength(0);
   });
 });
+
+describe('m6/m7：项目行缓存等价 + 统计本视图口径（拍板 B）', () => {
+  const openStack = async () => {
+    const store = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
+    const db = store.database;
+    const write = new LocalKnowledgeWriteService({ db });
+    const index = new KnowledgeIndexStore(db);
+    const retriever = new KnowledgeRetriever({ sourceStore: store, indexStore: index });
+    const query = new LocalKnowledgeQueryService({
+      db,
+      sources: store,
+      index,
+      retriever,
+      embeddingEnabled: false,
+    });
+    return { store, db, write, query };
+  };
+
+  it('m6：项目行批处理缓存与单查逐格一致；idx_knowledge_projects_key 已建', async () => {
+    const stack = await openStack();
+    await stack.write.createProject(brokerClaimed, {
+      projectKey: 'pub',
+      displayName: 'Pub',
+      visibility: 'public',
+    });
+    await stack.write.createProject(brokerClaimed, { projectKey: 'priv', displayName: 'Priv' });
+    const identities: Array<WriteIdentity> = [gwLocal, broker, { tenantId: 't-b', gatewayId: 'gw-local' }];
+    for (const identity of identities) {
+      const uncached = ['pub', 'priv'].map((k) => stack.store.isProjectVisibleTo(k, identity));
+      const cached = stack.store.withProjectRowCache(() =>
+        ['pub', 'priv'].map((k) => stack.store.isProjectVisibleTo(k, identity)),
+      );
+      expect(cached, `m6 cache equivalence identity=${JSON.stringify(identity)}`).toEqual(uncached);
+    }
+    const idx = stack.db.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_knowledge_projects_key'",
+      )
+      .get();
+    expect(idx, 'idx_knowledge_projects_key must exist').toBeTruthy();
+    stack.db.close();
+  });
+
+  it('m7：principalStats 只数可见源（隐藏/他域不计入），可见性计数器同口径', async () => {
+    const stack = await openStack();
+    const s1 = await stack.write.registerSource(gwLocal, {
+      kind: 'directory',
+      location: '/data/m7-a',
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'm7-a',
+      visibility: 'public',
+      sync: { enabled: false, strategy: 'manual' },
+    });
+    const s2 = await stack.write.registerSource(gwLocal, {
+      kind: 'directory',
+      location: '/data/m7-b',
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'm7-b',
+      visibility: 'public',
+      sync: { enabled: false, strategy: 'manual' },
+    });
+    stack.store.hideSource('agent-a', s2.id, gwLocal);
+
+    const stats = await stack.query.principalStats('agent-a', gwLocal);
+    expect(stats.stats.sources).toBe(1);
+    expect(stats.visibleSources).toBe(1);
+    expect(stats.stats.agentHidden).toBe(1);
+
+    const foreign = await stack.query.principalStats('agent-a', {
+      tenantId: 't-b',
+      gatewayId: 'gw-local',
+    });
+    expect(foreign.stats.sources).toBe(0);
+    expect(foreign.visibleSources).toBe(0);
+    void s1;
+    stack.db.close();
+  });
+});

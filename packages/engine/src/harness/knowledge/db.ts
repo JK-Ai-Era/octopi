@@ -114,6 +114,9 @@ export class KnowledgeDatabase {
         updated_at    INTEGER NOT NULL,
         PRIMARY KEY (tenant_id, project_key)
       );
+      -- 跨域闸按 project_key 单列解析项目行；主键前缀用不上（评审 m6）
+      CREATE INDEX IF NOT EXISTS idx_knowledge_projects_key
+        ON knowledge_projects(project_key);
 
       CREATE TABLE IF NOT EXISTS knowledge_project_agents (
         tenant_id      TEXT NOT NULL DEFAULT 'default',
@@ -674,6 +677,74 @@ export class KnowledgeDatabase {
     }
     // 0=无 ANN（仅桶/FTS）；1=sqlite-vec KNN —— 百万级部署必须为 1
     result.sqliteVec = this._sqliteVec ? 1 : 0;
+    return result;
+  }
+
+  /**
+   * 本视图口径统计（principalStats，评审 m7 拍板 B）：只对给定的可见源集合计数。
+   * 与 {@link stats} 的全库口径有意区分——全库口径属运维面（doctor/ops），等运维功能
+   * 落地后再回接；现阶段 UI 一律本视图，避免「统计有数、列表为空」式误读。
+   *
+   * @param ids 可见源 id 集合（空集 = 全 0）
+   */
+  statsForSourceIds(ids: string[]): Record<string, number> {
+    const result: Record<string, number> = {
+      sources: ids.length,
+      memberships: 0,
+      files: 0,
+      chunks: 0,
+      ftsChunks: 0,
+      embeddableChunks: 0,
+      embeddings: 0,
+      hits: 0,
+      jobsQueued: 0,
+      jobsRunning: 0,
+      sqliteVec: this._sqliteVec ? 1 : 0,
+    };
+    if (ids.length === 0) return result;
+    // 可见源数远低于 SQLite 变量上限（32766）；超限 = fail-loud（禁静默截断计数）
+    const ph = ids.map(() => '?').join(',');
+    const run = (sql: string): number => {
+      const row = this.db.prepare(sql).get(...(ids as never[])) as { count: number };
+      return row.count;
+    };
+    result.memberships = run(
+      `SELECT COUNT(*) AS count FROM knowledge_memberships WHERE source_id IN (${ph})`,
+    );
+    // File 本位（v2.1）：文件无 source 归属列，经 membership 逻辑认领；同一文件被多源认领时按 distinct 计
+    result.files = run(
+      `SELECT COUNT(DISTINCT f.id) AS count FROM knowledge_files f
+       JOIN knowledge_memberships m ON m.file_id = f.id WHERE m.source_id IN (${ph})`,
+    );
+    result.chunks = run(
+      `SELECT COUNT(DISTINCT c.id) AS count FROM knowledge_chunks c
+       JOIN knowledge_memberships m ON m.file_id = c.file_id WHERE m.source_id IN (${ph})`,
+    );
+    result.ftsChunks = run(
+      `SELECT COUNT(DISTINCT t.chunk_id) AS count FROM knowledge_chunks_fts t
+       JOIN knowledge_chunks c ON c.id = t.chunk_id
+       JOIN knowledge_memberships m ON m.file_id = c.file_id WHERE m.source_id IN (${ph})`,
+    );
+    result.embeddableChunks = run(
+      `SELECT COUNT(DISTINCT c.id) AS count FROM knowledge_chunks c
+       JOIN knowledge_files f ON f.id = c.file_id
+       JOIN knowledge_memberships m ON m.file_id = c.file_id
+       WHERE m.source_id IN (${ph}) AND (f.adapter_id IS NULL OR f.adapter_id NOT IN ('code-tree'))`,
+    );
+    result.embeddings = run(
+      `SELECT COUNT(DISTINCT e.chunk_id) AS count FROM knowledge_chunk_embeddings e
+       JOIN knowledge_chunks c ON c.id = e.chunk_id
+       JOIN knowledge_memberships m ON m.file_id = c.file_id WHERE m.source_id IN (${ph})`,
+    );
+    result.hits = run(
+      `SELECT COUNT(*) AS count FROM knowledge_hits WHERE source_id IN (${ph})`,
+    );
+    result.jobsQueued = run(
+      `SELECT COUNT(*) AS count FROM knowledge_jobs WHERE status = 'queued' AND source_id IN (${ph})`,
+    );
+    result.jobsRunning = run(
+      `SELECT COUNT(*) AS count FROM knowledge_jobs WHERE status = 'running' AND source_id IN (${ph})`,
+    );
     return result;
   }
 }

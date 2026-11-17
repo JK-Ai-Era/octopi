@@ -249,7 +249,9 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
     const { sources } = this.deps;
     let list = sources.list();
     if (query.identity) {
-      list = list.filter((s) => this.domainVisible(s, query.identity!));
+      list = sources.withProjectRowCache(() =>
+        list.filter((s) => this.domainVisible(s, query.identity!)),
+      );
     }
     if (query.scopeLevel === 'global' || query.scopeLevel === 'project' || query.scopeLevel === 'session') {
       list = list.filter((s) => s.scopeRef.level === query.scopeLevel);
@@ -334,23 +336,43 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
 
   async principalStats(agentId: string, identity?: QueryIdentity): Promise<PrincipalStats> {
     const { sources, db } = this.deps;
-    const visible = sources.listVisible(agentId, undefined, identity).filter((s) => {
-      return !identity || this.domainVisible(s, identity);
-    });
-    const stats = db.stats();
+    const visible = sources.withProjectRowCache(() =>
+      sources.listVisible(agentId, undefined, identity).filter((s) => {
+        return !identity || this.domainVisible(s, identity);
+      }),
+    );
+    // 评审 m7（拍板 B）：面板统计=本视图口径（只数可见源）；全库口径属运维面
+    // （doctor/ops），等运维功能落地后再回接，避免「统计有数、列表为空」式误读
+    const stats = db.statsForSourceIds(visible.map((s) => s.id));
+    const assignedProjects = sources.withProjectRowCache(() =>
+      sources
+        .list()
+        .filter(
+          (s) =>
+            s.scopeRef.level === 'project' &&
+            sources.isVisible(s, agentId, undefined, identity) &&
+            (!identity || this.domainVisible(s, identity)),
+        )
+        .map((s) => s.scopeRef.key),
+    );
+    const hiddenSourceIds = sources.listHidden(agentId, identity ?? {});
+    // 可见性计数器同口径：报本 agent/本身份自己的行，不报全库注册表规模
+    stats.projectAgents = assignedProjects.length;
+    stats.agentHidden = hiddenSourceIds.length;
+    stats.agentMounted = sources.listMounted(agentId, identity ?? {}).length;
+    const sessionGate = tenantOwnGateSql('tenant_id', identity ?? {});
+    stats.sessionVisibility = (
+      db.raw
+        .prepare(
+          `SELECT COUNT(*) AS count FROM knowledge_session_visibility WHERE ${sessionGate.sql}`,
+        )
+        .get(...sessionGate.params) as { count: number }
+    ).count;
     return {
       stats,
       visibility: {
-        assignedProjects: sources
-          .list()
-          .filter(
-            (s) =>
-              s.scopeRef.level === 'project' &&
-              sources.isVisible(s, agentId, undefined, identity) &&
-              (!identity || this.domainVisible(s, identity)),
-          )
-          .map((s) => s.scopeRef.key),
-        hiddenSourceIds: sources.listHidden(agentId, identity ?? {}),
+        assignedProjects,
+        hiddenSourceIds,
       },
       visibleSources: visible.length,
     };
@@ -359,10 +381,12 @@ export class LocalKnowledgeQueryService implements KnowledgeQueryService {
   async catalog(agentId: string, identity?: QueryIdentity): Promise<KnowledgeCatalogItem[]> {
     const items = this.deps.sources.catalogFor(agentId, { identity });
     if (!identity) return items;
-    return items.filter((item) => {
-      const src = this.deps.sources.get(item.id as KnowledgeSourceId);
-      return !src || this.domainVisible(src, identity);
-    });
+    return this.deps.sources.withProjectRowCache(() =>
+      items.filter((item) => {
+        const src = this.deps.sources.get(item.id as KnowledgeSourceId);
+        return !src || this.domainVisible(src, identity);
+      }),
+    );
   }
 
   async listChunks(

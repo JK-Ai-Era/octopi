@@ -147,6 +147,11 @@ export class KnowledgeSourceStore {
   private db: KnowledgeDatabase;
   /** listVisible 批处理期的 source 行同步缓存（filter 无 await，无并发窗口；平时为 null） */
   private rowCache: Map<string, { tenant_id?: string; registered_by?: string; visibility?: string }> | null = null;
+  /** 项目行批处理缓存（评审 m6：防逐源 N+1；与 rowCache 同模式，批次内同步读） */
+  private projectRowCache: Map<
+    string,
+    Array<{ tenant_id?: string; display_name?: string | null; visibility?: string }>
+  > | null = null;
 
   constructor(db: KnowledgeDatabase) {
     this.db = db;
@@ -1097,9 +1102,42 @@ export class KnowledgeSourceStore {
       .all() as Array<{ id: string; tenant_id?: string; registered_by?: string; visibility?: string }>;
     this.rowCache = new Map(rows.map((r) => [r.id, r]));
     try {
-      return this.list().filter((s) => this.isVisible(s, agentId, sessionId, identity));
+      return this.withProjectRowCache(() =>
+        this.list().filter((s) => this.isVisible(s, agentId, sessionId, identity)),
+      );
     } finally {
       this.rowCache = null;
+    }
+  }
+
+  /**
+   * 批量判定期的项目行缓存（评审 m6）：一次装载全部项目行，批次内逐源判定走缓存；
+   * 可嵌套（外层已开则复用），finally 必须还原（防缓存外泄到批次外的读路径）。
+   */
+  withProjectRowCache<T>(fn: () => T): T {
+    if (this.projectRowCache) return fn();
+    const rows = this.db.raw
+      .prepare('SELECT tenant_id, project_key, display_name, visibility FROM knowledge_projects')
+      .all() as Array<{
+      tenant_id?: string;
+      project_key: string;
+      display_name?: string | null;
+      visibility?: string;
+    }>;
+    const map = new Map<
+      string,
+      Array<{ tenant_id?: string; display_name?: string | null; visibility?: string }>
+    >();
+    for (const r of rows) {
+      const list = map.get(r.project_key) ?? [];
+      list.push({ tenant_id: r.tenant_id, display_name: r.display_name, visibility: r.visibility });
+      map.set(r.project_key, list);
+    }
+    this.projectRowCache = map;
+    try {
+      return fn();
+    } finally {
+      this.projectRowCache = null;
     }
   }
 
@@ -1113,16 +1151,33 @@ export class KnowledgeSourceStore {
       .get(id) as { tenant_id?: string; registered_by?: string; visibility?: string } | undefined;
   }
 
+  /** 项目行按 key 批量缓存读取（缓存期一次装载；否则按 key 单查——idx_knowledge_projects_key） */
+  private projectRowsByKey(projectKey: string): Array<{
+    tenant_id?: string;
+    display_name?: string | null;
+    visibility?: string;
+  }> {
+    if (this.projectRowCache) return this.projectRowCache.get(projectKey) ?? [];
+    return this.db.raw
+      .prepare(
+        'SELECT tenant_id, display_name, visibility FROM knowledge_projects WHERE project_key = ?',
+      )
+      .all(projectKey) as Array<{
+      tenant_id?: string;
+      display_name?: string | null;
+      visibility?: string;
+    }>;
+  }
+
   /** 项目行按源归属域解析（同一 project_key 可在多个租户域各登记一行，必须按域取行） */
   private projectRow(
     projectKey: string,
     sourceTenant?: string | null,
   ): { tenant_id?: string; visibility?: string } | undefined {
-    const rows = this.db.raw
-      .prepare('SELECT tenant_id, visibility FROM knowledge_projects WHERE project_key = ?')
-      .all(projectKey) as Array<{ tenant_id?: string; visibility?: string }>;
     const norm = (t: string | undefined | null): string | null => (t ? t : null);
-    return rows.find((r) => norm(r.tenant_id) === norm(sourceTenant ?? null));
+    return this.projectRowsByKey(projectKey).find(
+      (r) => norm(r.tenant_id) === norm(sourceTenant ?? null),
+    );
   }
 
   /**
@@ -1185,15 +1240,7 @@ export class KnowledgeSourceStore {
     projectKey: string,
     identity?: { tenantId?: string; gatewayId?: string },
   ): { tenant_id?: string; display_name?: string | null; visibility?: string } | undefined {
-    const rows = this.db.raw
-      .prepare(
-        'SELECT tenant_id, display_name, visibility FROM knowledge_projects WHERE project_key = ?',
-      )
-      .all(projectKey) as Array<{
-      tenant_id?: string;
-      display_name?: string | null;
-      visibility?: string;
-    }>;
+    const rows = this.projectRowsByKey(projectKey);
     const visible = rows.filter((r) => projectGateAllows(r.tenant_id, r.visibility, identity ?? {}));
     if (visible.length === 0) return undefined;
     const own = identity?.tenantId ?? 'default';

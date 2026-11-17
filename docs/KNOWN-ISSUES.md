@@ -96,7 +96,9 @@ The top-level mapping guard checks section-level keys only; these **sub-keys** a
 
 From the independent review of the knowledge tenant-gate landing (v0.118.11–13)
 (fixed there: B1 cross-domain removeProject, M1 public-project domain inheritance,
-M3 same-key cross-domain merge, M4 override-row domain isolation, m1–m5). Still
+M3 same-key cross-domain merge, M4 override-row domain isolation, m1–m5; closed
+later in v0.118.15/16: m6 project-row N+1 → batch cache + `idx_knowledge_projects_key`,
+m7 stats scope → `statsForSourceIds` 本视图口径 + UI「本视图」标注). Still
 open:
 
 - **M5 — no role gate on "public project" creation.** `visibility='public'`
@@ -104,11 +106,6 @@ open:
   "explicit claim only", but any console-API caller (i.e. anyone holding the
   gateway apiKey) can make that call — there is no distinct platform-admin role
   yet. Close together with the registry role model (multi-tenancy T1).
-- **m6 — per-source project-row lookup on the hot path.** `isProjectVisible`
-  queries `knowledge_projects` per project-scoped source (no `project_key`
-  index; PK is `(tenant_id, project_key)`). Cache per batch like `rowCache`
-  and/or add an index when corpus sizes make it matter.
-- **m7 — stats are DB-wide.** `principalStats.stats` returns unscoped
-  `db.stats()` (all tenants/domains) while lists are gated — the exact
-  "stats show data, lists are empty" confusion this batch fixed on the list
-  side. Scope the counts by the gate or label them as global in the UI/API.
+- **全库口径回接（原 m7 的另一半）**：`db.stats()` 全库计数现只服务 doctor/ops；
+  等运维功能（平台管理员/ops 面）落地时，把「全库口径」作为运维视图接回 UI
+  （届时统计条=双口径：全库 N · 本视图 M）。

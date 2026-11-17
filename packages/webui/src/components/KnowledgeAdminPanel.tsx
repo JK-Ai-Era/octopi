@@ -623,6 +623,10 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
           <span>{t('knowledgeAdminPanel.fetchFailedShort')}</span>
         ) : (
           <>
+            <span title={t('knowledgeAdminPanel.statsScopeHint')}>
+              {t('knowledgeAdminPanel.statsScopeLabel')}
+            </span>
+            {' · '}
             {t('knowledgeAdminPanel.statsSources', { count: stats.sources ?? 0 })}
             {' · '}
             {t('knowledgeAdminPanel.statsFiles', { count: stats.files ?? 0 })}

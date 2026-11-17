@@ -128,6 +128,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.15 (2026-11-18)
+
+### perf(engine): knowledge project-row lookups — batch cache + project_key index（评审 m6）
+
+项目跨域闸按 `project_key` 解析项目行原为逐源单查且主键前缀用不上（全表扫）：新增 `idx_knowledge_projects_key`（幂等建于 open）与 `withProjectRowCache` 批处理缓存（`rowCache` 同模式，批次一次装载、finally 还源），覆盖 `listVisible`/`listSources`/`catalog`/`principalStats` 判定路径。缓存与单查逐格等价有测试锁定。
+
+### fix(engine): knowledge stats = 本视图口径（评审 m7，拍板 B）
+
+`principalStats.stats` 原返回 `db.stats()` 全库裸计数（不过任何闸），与闸后列表口径不一致——即「统计有数、列表为空」误读的另一半。现改为 `db.statsForSourceIds(可见源集)`：文件/分块/可嵌入/向量/jobs 全部按可见源计（File 本位经 membership 认领、多源认领 distinct 计），可见性计数器报本 agent/本身份自己的行；WebUI 统计条加「本视图」标注（tooltip 注明全库口径见 `octopi doctor`）。**口径拍板**：现阶段无运维面，全库口径只留 doctor/ops；等运维功能落地再回接双口径（见 KNOWN-ISSUES）。
+
+---
+
 ## v0.118.14 (2026-11-18)
 
 ### docs: knowledge tenant-gate open items (review M5/m6/m7)
