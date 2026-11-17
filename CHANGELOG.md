@@ -128,6 +128,31 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.4 (2026-11-17)
+
+### refactor(engine): single exit for fork options and guard Windows console-less hosts
+
+**动机**：v0.118.3 证明 `windowsHide` 这类字段漏写不会有任何测试变红，只会在 Windows 用户眼前弹出控制台窗口。两处手抄的 fork 选项构造器（knowledge / run 实例）还会各自漂移——实测它们清洗的通道变量集合已经不一致。
+
+**改法**：
+
+- 新增 `packages/engine/src/fork-child.ts` → `forkChildNodeOptions({ stdio })`：`windowsHide: true` + `execArgv: []` + 清洗通道变量 + Electron 宿主补 `ELECTRON_RUN_AS_NODE=1`；返回 `ForkOptions & { windowsHide?: boolean }`（只豁免 `@types/node` 未声明的那一个字段，其余仍受类型检查）。`stdio` 由调用方给前三路，**`ipc` 末位由 helper 追加**——漏配变成类型错误而不是运行时 `ERR_CHILD_PROCESS_IPC_REQUIRED`。
+- knowledge 与 run 实例子进程统一走该 helper，删掉各自的本地实现。两者的 stdio 差异（run 实例 `inherit` 让日志落 `logs/gateway.log`；knowledge 全 `ignore` 避免 Windows 管道句柄继承干扰 IPC）作为显式参数保留，并在各自调用点注明理由。
+- `tests/fork-child-usage-guard.test.ts`：静态守卫。判据覆盖 5 种取 `fork` 的写法（命名/默认/命名空间导入、`require`、动态 `import`）、带与不带 `node:` 前缀；「用了 helper」判据是**调用** `forkChildNodeOptions(`，注释里提名字不算；匹配前剥离注释，避免 docblock 示例误判。判据本身有 inline 自测；另做了两组对照组（命名空间导入绕过、只写注释不调用），均被精确点名。
+- `tests/run-remote-backend.test.ts` 的 boot 0600 断言改为 `skipIf(win32)`：Windows 无 POSIX 权限位语义（`writeFileSync` 的 `mode` 不映射，`statSync` 一律报 0666 形态），原断言必然红；改成断言 0666 则等于把不安全现状反锁为期望值。**补** `tests/run-serve-boot-mode.test.ts` 锁平台无关的意图（`writeFileSync` 必须收到 `mode: 0o600`），使 Windows 上删掉 mode 仍会红。
+
+**验证**：`fork-child-options`（6）+ `fork-child-usage-guard`（15）+ `run-serve-boot-mode`（1）+ `knowledge-parse-isolation`（5）+ `run-remote-backend` 真 fork e2e（10 绿 / 1 平台跳过）共 37 绿 1 跳过；`tsc`、测试 typecheck、eslint 全绿；`arch/check-sync.sh` 无新增红灯（3 条 `src/cli/wizard/*` 为既有）。
+
+**已知限制**（均为改动前既有，未在此处理）：
+
+- Windows 上 boot 文件的真实保护面是用户目录 ACL，无断言覆盖；POSIX 权限位仅在 Linux/macOS 验证。
+- `tests/onboarding-core.test.ts:134,163` 与 `tests/plugin-weixin-channel.test.ts:527` 仍是裸 `mode & 0o777 === 0o600`，在 Windows 上当前为红（同类问题，需单独收口）。
+- `tests/knowledge-lock-forensics.test.ts` 在 Windows 上 `afterAll` 清理临时目录报 `EPERM`（SQLite 句柄释放晚于清理）；已在改动前代码上复跑确认同样失败。
+- `execArgv: []` 不覆盖 `NODE_OPTIONS`（环境变量，实测仍生效）；若需该保证需显式删除，属独立决策。
+- 合并后 gateway 路径在 Electron 宿主下也会注入 `ELECTRON_RUN_AS_NODE=1`（此前只有 knowledge 有）。方向上补齐了「Electron 下 run child 起不来」，但未在真实 Electron/MiMo 宿主上验证，仅有伪造 `execPath` 的单元断言。
+
+**Breaking**：`@octopi-agent/gateway/gateway/remote-run-backend` 不再导出 `runChildForkOptions`（v0.118.3 引入，仓内零引用，属测试缝）。改用 `@octopi-agent/engine/fork-child` 的 `forkChildNodeOptions`。
+
 ## v0.118.3 (2026-11-17)
 
 ### fix(gateway): hide the run instance console window on Windows

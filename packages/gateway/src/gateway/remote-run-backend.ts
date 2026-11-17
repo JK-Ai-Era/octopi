@@ -1,7 +1,8 @@
 /**
  * RemoteRunBackend — RunBackend 的进程间唯一实现（arch/service-topology.md §4 P0b）。
  *
- * 生命周期：fork run-serve-child（resolveWorkerUrl 映射 dist；NODE_CHANNEL_* 剥离）→
+ * 生命周期：fork run-serve-child（resolveWorkerUrl 映射 dist；fork 选项见
+ * `forkChildNodeOptions`——env 剥离与 `windowsHide` 都在那里）→
  * boot 文件纯数据交接 → ready 握手拿端口 → loopback HTTP 契约通道。
  * 传输可换（loopback → 跨机），协议不变（run-protocol 纯数据）。
  *
@@ -9,12 +10,13 @@
  * 首个 next 即抛；闸门拒为流内 error entry。两者以错误消息/状态可辨，不静默吞。
  */
 
-import { fork, type ChildProcess, type ForkOptions } from 'node:child_process';
+import { fork, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
+import { forkChildNodeOptions } from '@octopi-agent/engine/fork-child.js';
 import { resolveWorkerUrl } from '@octopi-agent/engine/worker-path.js';
 import type {
   RunBackendHealth,
@@ -107,33 +109,6 @@ export interface RemoteRunBackendOptions {
   buildRef?: string;
 }
 
-/**
- * run 实例子进程的 fork 选项：进程卫生（env 剥离）+ Windows 窗口隐藏的唯一出口。
- *
- * `windowsHide` 不可省：Gateway 守护进程本身是 detached 启动、无控制台，console 子系统
- * 子进程不带 CREATE_NO_WINDOW 时 Windows 会为它新开一个可见的 node 控制台窗口，且随实例
- * 存活不会自动消失（症状：启动时弹窗恰好在 knowledge 就绪→run ready 之间）。
- * `@types/node` 的 `ForkOptions` 未声明该字段（运行时有效），故在此只豁免该字段的类型。
- *
- * env 剥离放在本函数内而非交给调用方承诺：父进程可能是 IPC 子进程（vitest worker /
- * gateway 守护），继承的通道句柄带进孙进程会错绑通道；这与 Knowledge 子进程同一目的，
- * 但剥离集合按本进程实际需要取（`NODE_CHANNEL_ID` 而非 knowledge 的
- * `NODE_CHANNEL_SERIALIZATION`/`NODE_UNIQUE_ID`，且不涉 Electron 宿主）。
- *
- * @returns fork 选项
- */
-export function runChildForkOptions(): ForkOptions & { windowsHide?: boolean } {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.NODE_CHANNEL_FD;
-  delete env.NODE_CHANNEL_ID;
-  return {
-    execArgv: [],
-    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-    env,
-    windowsHide: true,
-  };
-}
-
 export class RemoteRunBackend {
   private constructor(
     private readonly child: ChildProcess,
@@ -177,7 +152,12 @@ export class RemoteRunBackend {
       : resolveWorkerUrl('./run-serve-child.js', import.meta.url);
     let child: ChildProcess;
     try {
-      child = fork(entry, [bootPath], runChildForkOptions());
+      child = fork(
+        entry,
+        [bootPath],
+        // 日志经继承的 stdout/stderr fd 落 logs/gateway.log（daemon 起子进程时已重定向）
+        forkChildNodeOptions({ stdio: ['ignore', 'inherit', 'inherit'] }),
+      );
     } catch (err) {
       // fork 同步抛（F9）：boot 已写而子进程没机会读删——父进程兜底清 secret
       rmSync(bootPath, { force: true });

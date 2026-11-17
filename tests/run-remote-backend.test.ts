@@ -192,7 +192,9 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
     if (!late.ok) expect(late.error.message).toMatch(/unknown approvalId/);
   });
 
-  it('m6：boot 文件 0600 创建（同机多用户不可读）', () => {
+  // Windows：writeFileSync 的 mode 不映射 POSIX 权限位（NTFS 走 ACL，statSync 报 0666 形态），
+  // 秘密文件的保护面在用户目录 ACL，本测无从验证；故仅在 POSIX 断言，不用 0666 反锁现状。
+  it.skipIf(process.platform === 'win32')('m6：boot 文件 0600 创建（同机多用户不可读）', () => {
     const p = join(tmpdir(), `boot-mode-${randomUUID()}.json`);
     writeRunServeBoot(p, '{"secret":true}');
     try {

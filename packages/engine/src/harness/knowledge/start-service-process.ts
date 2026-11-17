@@ -4,18 +4,18 @@
  * 为什么是进程而不是 Worker：知识索引重且稳定不可控，不得与 Gateway 共命运。
  * Worker 仍共享堆/OOM 与进程生命周期，只是把 event loop 挪开，不是故障隔离。
  *
- * fork 根因约束（与 `octopi serve` daemon 同款）：
- * - `execArgv: []`：禁止继承父进程 loader/inspect/NODE_OPTIONS 钩子
- * - 剥离 `NODE_CHANNEL_*`：父进程若是 IPC 子进程（vitest / daemon），继承会错绑通道
- * - `stdio` 不用 `inherit`：Windows 管道句柄继承会干扰 IPC
- * - Electron 宿主：`ELECTRON_RUN_AS_NODE=1` + **保持** `process.execPath`。
- *   换成捆绑 node.exe 当 execPath 会切断 Windows 上的 fork IPC。
+ * fork 根因约束见 `forkChildNodeOptions`（`execArgv: []` / 剥离 `NODE_CHANNEL_*` /
+ * `windowsHide` / Electron 宿主）。本处只保留两点知识专属取舍：
+ * - `stdio` 全 `ignore` 而非 `inherit`：Windows 管道句柄继承会干扰 IPC
+ *   （run 实例相反——它的日志要靠继承的 fd 落 `logs/gateway.log`）。
+ * - **保持** `process.execPath`：Electron 下换成捆绑 node.exe 会切断 Windows 上的 fork IPC。
  */
 import { fork, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { forkChildNodeOptions } from '../../fork-child.js';
 import { resolveWorkerUrl } from '../../worker-path.js';
 import type { KnowledgeServiceToken } from './http-app.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
@@ -47,25 +47,6 @@ export interface KnowledgeServiceProcessHandle {
   port: number;
   /** 发 close 并等待退出；超时 SIGTERM */
   stop(): Promise<void>;
-}
-
-function isElectronHost(): boolean {
-  return (
-    Boolean((process.versions as { electron?: string }).electron) ||
-    /electron|MiMo\.exe/i.test(process.execPath)
-  );
-}
-
-function childNodeEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  // 父进程可能是 IPC 子进程（vitest worker / octopi serve daemon）：不得把通道句柄带进孙进程
-  delete env.NODE_CHANNEL_FD;
-  delete env.NODE_CHANNEL_SERIALIZATION;
-  delete env.NODE_UNIQUE_ID;
-  if (isElectronHost()) {
-    env.ELECTRON_RUN_AS_NODE = '1';
-  }
-  return env;
 }
 
 /**
@@ -106,15 +87,10 @@ export async function startKnowledgeServiceProcess(
   const bootPath = join(bootDir, 'boot.json');
   await writeFile(bootPath, JSON.stringify(buildKnowledgeServiceBootFile(opts)), 'utf8');
 
-  // @types/node 的 ForkOptions 未声明 windowsHide 等字段，运行时有效
-  // execPath 必须保持 process.execPath：Electron 下换捆绑 node 会切断 IPC
-  const forkOpts: Parameters<typeof fork>[2] = {
-    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-    windowsHide: true,
-    execArgv: [],
-    env: childNodeEnv(),
-  } as Parameters<typeof fork>[2];
-  const child = fork(entry, [bootPath], forkOpts);
+  // execPath 保持 process.execPath：Electron 下换捆绑 node 会切断 IPC
+  const child = fork(entry, [bootPath], forkChildNodeOptions({
+    stdio: ['ignore', 'ignore', 'ignore'],
+  }));
 
   const startTimeoutMs = opts.startTimeoutMs ?? 30_000;
   try {
