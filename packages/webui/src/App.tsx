@@ -99,21 +99,21 @@ export default function App() {
               className={surface === 'playground' ? 'btn-tab btn-tab-active' : 'btn-ghost'}
               onClick={() => setSurface('playground')}
             >
-              Playground
+              {t('app.navPlayground')}
             </button>
             <button
               type="button"
               className={surface === 'knowledge' ? 'btn-tab btn-tab-active' : 'btn-ghost'}
               onClick={() => setSurface('knowledge')}
             >
-              Knowledge
+              {t('app.navKnowledge')}
             </button>
             <button
               type="button"
               className={surface === 'settings' ? 'btn-tab btn-tab-active' : 'btn-ghost'}
               onClick={() => setSurface('settings')}
             >
-              Settings
+              {t('app.navSettings')}
             </button>
           </nav>
         </div>

@@ -128,6 +128,12 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.2 (2026-11-17)
+
+### fix(webui): 顶栏导航词双语化（Playground/Knowledge/Settings ↔ 工作台/知识库/设置）
+
+顶栏三个导航按钮此前是硬编码英文（抽取契约曾按产品名保留原文），按大哥要求提供中文：Playground→工作台、Knowledge→知识库、Settings→设置；英文保持原文。新增 `app.nav*` 三键（zh/en），按钮改 `t()` 查表。**验证**：webui build ✓、webui 测试 28 绿（含字典键全集断言）。
+
 ## v0.118.1 (2026-11-17)
 
 ### fix(webui): 右栏专家组名「运行时透明」→「运行透视」
