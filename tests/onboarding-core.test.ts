@@ -20,7 +20,7 @@ import {
 import { initialOnboardingState, nextStep, mergeOnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 import type { OnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 import { classifyProbeError, mergeConfigFragment, writeEnvLine } from '../packages/engine/src/config-admin/onboarding-apply.js';
-import { POSIX_FILE_MODE, expectFileMode0600 } from './helpers/file-mode.js';
+import { expectRestrictedToOwner } from './helpers/file-mode.js';
 
 function baseChoices(overrides: Partial<OnboardingChoices> = {}): OnboardingChoices {
   return {
@@ -133,9 +133,9 @@ describe('落盘动作', () => {
     expect(text).not.toContain('A_KEY=one');
   });
 
-  it.skipIf(!POSIX_FILE_MODE)('writeEnvLine：文件权限收紧到 0600（umask 不影响显式 mode）', () => {
+  it('writeEnvLine：.env 收紧到仅当前用户可读（两平台真跑：POSIX 断位、Windows 断 ACL）', () => {
     writeEnvLine(home, 'A_KEY=one');
-    expectFileMode0600(join(home, '.env'));
+    expectRestrictedToOwner(join(home, '.env'), 'file');
   });
 
   it('mergeConfigFragment：providers 合并不覆盖既有、language/deploymentMode 落顶层', () => {
@@ -159,12 +159,12 @@ describe('落盘动作', () => {
     expect(merged.agents).toHaveLength(1); // 既有 agents 不动
   });
 
-  it.skipIf(!POSIX_FILE_MODE)('writeEnvLine：已存在宽松权限文件会被收紧到 0600', () => {
+  it('writeEnvLine：已存在宽松权限的 .env 会被收紧到仅当前用户可读', () => {
     const envPath = join(home, '.env');
     writeFileSync(envPath, 'K=v\n', { mode: 0o644 });
     chmodSync(envPath, 0o644);
     writeEnvLine(home, 'K=v2');
-    expectFileMode0600(envPath);
+    expectRestrictedToOwner(envPath, 'file');
   });
 });
 

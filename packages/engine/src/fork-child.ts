@@ -24,7 +24,19 @@
  * `@types/node` 的 `ForkOptions` 未声明 `windowsHide`（运行时有效），此处只豁免该字段，
  * 其余字段仍受类型检查。
  */
-import type { ForkOptions } from 'node:child_process';
+import type { ChildProcess, ForkOptions } from 'node:child_process';
+
+/** {@link stopForkedChild} 的三段等待预算（毫秒） */
+export interface StopForkedChildOptions {
+  /** 发 close 消息后等子进程自行收摊的宽限 */
+  graceMs: number;
+  /** SIGTERM 后等它退出的宽限 */
+  termMs: number;
+  /** SIGKILL 后仍观察 exit 的时长，超时则放行并告警 */
+  reapFallbackMs: number;
+  /** 告警里的调用方标识（如 `knowledge` / `run`）：兜底放行时排障要知道是谁 */
+  label: string;
+}
 
 /** 调用方可选的三路 stdio 策略（取值收窄：本函数只支持这三者） */
 export type ChildStdio = 'ignore' | 'inherit' | 'pipe';
@@ -74,4 +86,92 @@ export function forkChildNodeOptions(
     env,
     windowsHide: true,
   };
+}
+
+/**
+ * 停止一个由 {@link forkChildNodeOptions} 拉起的本地 node 子进程。
+ *
+ * 与「发个信号就返回」的区别：**完成条件必须是观察到 `exit`**。调用方依赖这个语义
+ * （释放文件句柄后才能删目录；Windows 上删被打开的文件直接 EPERM）。
+ *
+ * 阶梯：`close` 消息（通道在）→ graceMs → SIGTERM → termMs → SIGKILL → reapFallbackMs
+ * 兜底放行（并 warn）。兜底是为了不让不可观测的僵尸把调用方永久挂住；它牺牲了
+ * 「绝对已退出」，因此必须留痕而不是静默。
+ *
+ * 集中在这里的原因：两处调用方（knowledge 子进程 / run 实例）曾各自实现，阶梯与兜底
+ * 已经漂移——run 侧是 5s/3s 且 SIGKILL 后 `await exited` 无兜底，理论上可永久挂起。
+ *
+ * @param child - 目标子进程
+ * @param options - 三段等待预算（毫秒）
+ * @returns 子进程已退出（或兜底放行）时 resolve
+ */
+export async function stopForkedChild(
+  child: ChildProcess,
+  options: StopForkedChildOptions,
+): Promise<void> {
+  if (child.exitCode != null || child.signalCode != null) return;
+  await new Promise<void>((resolve) => {
+    let graceTimer: NodeJS.Timeout | undefined;
+    let termTimer: NodeJS.Timeout | undefined;
+    let reapFallbackTimer: NodeJS.Timeout | undefined;
+    let settled = false;
+    let escalated = false;
+
+    const finish = (): void => {
+      settled = true;
+      if (graceTimer) clearTimeout(graceTimer);
+      if (termTimer) clearTimeout(termTimer);
+      if (reapFallbackTimer) clearTimeout(reapFallbackTimer);
+      child.off('exit', finish);
+      resolve();
+    };
+
+    child.once('exit', finish);
+
+    /** SIGTERM → termMs → SIGKILL → reapFallbackMs 兜底。单发。 */
+    const escalate = (): void => {
+      // settled 也要查：exit 先到之后迟到的 send 错误仍可能进来，此时再武装定时器
+      // 会在 promise 已 resolve 后打出假的 unobservable 告警。
+      if (settled || escalated) return;
+      escalated = true;
+      if (graceTimer) clearTimeout(graceTimer);
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* 已经退出：exit 事件会/已把 promise 收掉 */
+      }
+      termTimer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* 已经退出（同上） */
+        }
+        reapFallbackTimer = setTimeout(() => {
+          console.warn(
+            `[child-process:${options.label}] pid=${String(child.pid)} unobservable after SIGKILL; releasing stop() without exit`,
+          );
+          finish();
+        }, options.reapFallbackMs);
+        reapFallbackTimer.unref?.();
+      }, options.termMs);
+      termTimer.unref?.();
+    };
+
+    if (!child.connected) {
+      // 通道已断（等价宿主硬死）：没有优雅关闭通道可走，直接升级
+      escalate();
+      return;
+    }
+    graceTimer = setTimeout(escalate, options.graceMs);
+    graceTimer.unref?.();
+    try {
+      // 通道刚断时 send 不抛异常，错误只进回调——必须由回调转入升级，
+      // 否则会白等满 graceMs。无回调形式会 emit 'error'，可致未捕获异常。
+      child.send({ type: 'close' }, (err?: Error | null) => {
+        if (err) escalate();
+      });
+    } catch {
+      escalate();
+    }
+  });
 }

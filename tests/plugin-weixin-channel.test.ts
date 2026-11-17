@@ -24,7 +24,7 @@ import {
   parseOptions,
   toChannelMessage,
 } from '../examples/plugins/weixin-clawbot/index.mjs';
-import { POSIX_FILE_MODE, expectFileMode0600 } from './helpers/file-mode.js';
+import { expectRestrictedToOwner } from './helpers/file-mode.js';
 
 const EXAMPLE_PLUGINS_DIR = fileURLToPath(new URL('../examples/plugins', import.meta.url));
 
@@ -530,13 +530,14 @@ describe('weixin plugin — login QR state machine via pair()', () => {
     await adapter.stop();
   });
 
-  it.skipIf(!POSIX_FILE_MODE)('persists the pairing state with mode 0600 (POSIX)', async () => {
+  // 两平台都真跑：POSIX 断 0600，Windows 断 NTFS ACL（示例插件已用 icacls 真实收紧）
+  it('persists the pairing state with owner-only access', async () => {
     const t = pairDrive([{ status: 'wait' }, { status: 'scaned' }, { status: 'confirmed', bot_token: 'tok-1', baseurl: 'https://im-bot.weixin.qq.com', ilink_bot_id: 'b1', ilink_user_id: 'u1' }]);
     const adapter = createWeixinChannelAdapter(ctxFor(statePath()), fastDeps(t)) as ReturnType<typeof createWeixinChannelAdapter> & { pairingPromise: Promise<void> | null };
     await adapter.start(async () => {});
     await adapter.pair();
     await adapter.pairingPromise;
-    expectFileMode0600(statePath());
+    expectRestrictedToOwner(statePath(), 'file');
     await adapter.stop();
   });
 

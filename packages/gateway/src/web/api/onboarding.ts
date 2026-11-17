@@ -10,7 +10,8 @@
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { rmSync, writeFileSync } from 'node:fs';
+import { rmSync } from 'node:fs';
+import { writeSecretFileSync } from '@octopi-agent/engine/file-mode.js';
 import { join } from 'node:path';
 import {
   DEPLOYMENT_MODES,
@@ -139,10 +140,11 @@ export class OnboardingService {
     this.setupToken = { token, expiresAt: this.now() + SETUP_TOKEN_TTL_MS };
     // 落盘（0600）：`octopi init --web` 读它拼浏览器 URL；写失败不挡签发（终端打印是主渠道）
     try {
-      writeFileSync(
+      // setup token 是秘密：`mode` 在 Windows 上不生效，用真实权限收紧；
+      // 收紧失败时 writeSecretFileSync 已删除文件，签发不受影响（终端打印是主渠道）。
+      writeSecretFileSync(
         join(this.deps.octopiHome, 'setup-token.json'),
         JSON.stringify({ token, expiresAt: this.setupToken.expiresAt }),
-        { mode: 0o600 },
       );
     } catch {
       // 磁盘不可写时向导仍可用（终端链接 + loopback 免闸），文件只是 init --web 便利

@@ -12,7 +12,7 @@ import { PluginApi } from '../packages/engine/src/harness/extension/plugin-ecosy
 import { CredentialStore } from '../packages/engine/src/harness/governance/credentials/store.js';
 import { redactProvider, resolveEchoPlaceholders, type RedactedSecret } from '../packages/engine/src/config-admin/redact.js';
 import { validateManifest } from '../packages/engine/src/harness/extension/plugin-ecosystem/plugins/manifest.js';
-import { POSIX_FILE_MODE } from '../packages/engine/src/file-mode.js';
+import { expectRestrictedToOwner } from './helpers/file-mode.js';
 
 let root: string;
 let savedKey: string | undefined;
@@ -53,22 +53,22 @@ describe('api.stateDir (P6-4)', () => {
     expect(existsSync(api.stateDir)).toBe(true);
   });
 
-  // 权限位只在 POSIX 有意义：Windows 上 statSync().mode 恒报 0666 形态（NTFS 走 ACL），
-  // 断言真位必然红；改成断言 0666 等于把不安全现状反锁成期望值。
-  it.skipIf(!POSIX_FILE_MODE)('creates the state directory with mode 0700 (POSIX)', async () => {
+  // 两个平台都真跑：POSIX 断权限位，Windows 断 NTFS ACL（见 helpers/file-mode）。
+  // 不能在 Windows 上跳过——那里的真实保护面恰恰是 ACL，而非 stat 的 mode。
+  it('creates the state directory with owner-only access', async () => {
     const api = makeApi();
     await api.ensureStateDir();
-    expect(statSync(api.stateDir).mode & 0o777).toBe(0o700);
+    expectRestrictedToOwner(api.stateDir, 'dir');
   });
 
-  it.skipIf(!POSIX_FILE_MODE)('tightens an already-existing looser directory to 0700 (POSIX)', async () => {
+  it('tightens an already-existing looser directory to owner-only', async () => {
     const api = makeApi();
     const { mkdirSync, chmodSync } = await import('node:fs');
     mkdirSync(api.stateDir, { recursive: true, mode: 0o755 });
     chmodSync(api.stateDir, 0o755);
 
     await api.ensureStateDir();
-    expect(statSync(api.stateDir).mode & 0o777).toBe(0o700);
+    expectRestrictedToOwner(api.stateDir, 'dir');
   });
 });
 

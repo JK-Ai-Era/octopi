@@ -9,7 +9,8 @@
  * @module
  */
 
-import { readFileSync, writeFileSync, chmodSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { restrictToOwner } from '../file-mode.js';
 import { join } from 'node:path';
 import { apiKeyEnvVar, assembleOnboarding } from './onboarding.js';
 import type { OnboardingChoices, OnboardingOutput } from './onboarding.js';
@@ -47,6 +48,18 @@ export function writeEnvLine(octopiHome: string, line: string): void {
   // 先写临时文件再 rename：避免半截 .env + 避免 umask 窗口暴露明文 key
   const tmp = `${envPath}.tmp`;
   writeFileSync(tmp, lines.join('\n') + '\n', { mode: 0o600 });
+  // `.env` 含 provider apiKey：`mode` 在 Windows 上不生效，必须真实收紧 ACL；
+  // 收紧失败则删掉临时文件并抛错（不把明文 key 留在已知不安全的权限下）。
+  try {
+    restrictToOwner(tmp, 'file');
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* 删不掉时仍抛出收紧失败：调用方不能误以为 key 已安全落盘 */
+    }
+    throw err;
+  }
   renameSync(tmp, envPath);
   // 同步进程 env（评审 B3）：热应用 applyFromDisk 经 expandEnvValues 读 process.env——
   // 只写盘不进进程会用空/旧 key 重建 provider。向导显式写入的值即用户意图，立即生效。

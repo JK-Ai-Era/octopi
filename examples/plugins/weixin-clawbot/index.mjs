@@ -20,6 +20,7 @@
  * file. Nothing sensitive is logged.
  */
 
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -29,6 +30,37 @@ const CHANNEL_VERSION = '2.4.6';
 const BOT_AGENT = 'octopi-plugin-weixin/0.1.0';
 const LOGIN_HOST = 'https://ilinkai.weixin.qq.com';
 const DEFAULT_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * 秘密状态文件（bot_token / cursor）必须只有当前用户可读。
+ *
+ * POSIX 上 `chmod 0600` 就是真实收紧。Windows 上 `chmod` 既不生效也不抛错（只切换
+ * 只读位），所以必须改 ACL：`icacls /inheritance:r /grant:r <user>` —— 移除继承并只
+ * 授予当前用户。示例里内联实现（不依赖 engine 内部模块），插件作者可以直接照抄。
+ *
+ * @param {string} filePath - 目标文件
+ */
+function restrictSecretFile(filePath) {
+  try {
+    chmodSync(filePath, 0o600);
+  } catch {
+    /* 非常规文件系统可能不支持 chmod；Windows 分支下面用 ACL 兜住 */
+  }
+  if (process.platform !== 'win32') return;
+  // 分隔符用 charCode 构造：写成模板字符串里的反斜杠转义会被当作 `\$`，
+  // 结果是字面量 `${process.env.USERNAME}` 传给 icacls（报 status 1332）。
+  const sep = String.fromCharCode(92);
+  const name = process.env.USERNAME;
+  const domain = process.env.USERDOMAIN;
+  const user = domain && name ? [domain, name].join(sep) : name;
+  if (!user) {
+    throw new Error(`cannot determine current user to restrict ${filePath} (USERNAME unset)`);
+  }
+  execFileSync('icacls', [filePath, '/inheritance:r', '/grant:r', `${user}:F`], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+}
 
 /** Encode "2.4.6" → 132102 (iLink client version encoding). */
 export function encodeClientVersion(version) {
@@ -279,11 +311,7 @@ export function createWeixinChannelAdapter(ctx, deps) {
       `${JSON.stringify(vaulted ? runtime : session, null, 2)}\n`,
       { mode: 0o600 },
     );
-    try {
-      chmodSync(options.statePath, 0o600);
-    } catch {
-      /* best effort on platforms without POSIX modes */
-    }
+    restrictSecretFile(options.statePath);
   }
 
   // ── HTTP plumbing ──
@@ -705,11 +733,7 @@ export function migrateLegacyState(targetStatePath) {
   }
   mkdirSync(dirname(targetStatePath), { recursive: true, mode: 0o700 });
   writeFileSync(targetStatePath, raw, { mode: 0o600 });
-  try {
-    chmodSync(targetStatePath, 0o600);
-  } catch {
-    /* best effort on platforms without POSIX modes */
-  }
+  restrictSecretFile(targetStatePath);
   unlinkSync(legacyPath);
   return true;
 }

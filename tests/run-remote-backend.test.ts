@@ -7,7 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -433,9 +433,10 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
   }, 15_000);
 
   it('m6/m8：boot 读毕即删 + IPC 断连子进程自收摊（孤儿防护）', async () => {
-    const before = new Set(
-      readdirSync(tmpdir()).filter((f) => f.startsWith('run-serve-boot-')),
-    );
+    // boot 现在位于本次 spawn 独占的私有目录（octopi-run-boot-*/boot.json）。
+    // 注意：不能靠"扫 tmpdir 找 boot 内容"来判泄漏 —— 子进程读毕即删，所以正常路径下
+    // 那里本来就没有 boot.json，断言会恒真（上一版就踩了这个坑）。下面锚定本次 spawn
+    // 的真实目录，分两条断言：内容不残留、目录本身被回收。
     const soloHome = mkdtempSync(join(tmpdir(), 'run-serve-solo-'));
     mkdirSync(join(soloHome, 'sessions'), { recursive: true });
     mkdirSync(join(soloHome, 'workspace'), { recursive: true });
@@ -455,19 +456,10 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
       },
       agentDefinitions: [],
     });
-    // m6：boot 在 ready 握手前已删（暴露窗口=启动一瞬）——本次 spawn 无残留。
-    // 并行测试文件也在 tmpdir 留 boot：按内容锚定本次 spawn 的 octopiHome，只查自己的文件。
-    // 读毕即删设计下，并行 boot 可能在 readdir 后消失——ENOENT 是正常竞态，跳过不计泄漏。
-    const leaked = readdirSync(tmpdir())
-      .filter((f) => f.startsWith('run-serve-boot-') && !before.has(f))
-      .filter((f) => {
-        try {
-          return readFileSync(join(tmpdir(), f), 'utf8').includes(soloHome);
-        } catch {
-          return false;
-        }
-      });
-    expect(leaked).toEqual([]);
+    const spawnedBootDir = (solo as unknown as { bootDir: string }).bootDir;
+    // m6-①：boot 文件（含 provider apiKey + loopback token）在 ready 握手前已被子进程删除。
+    const leakedBootFile = join(spawnedBootDir, 'boot.json');
+    expect(existsSync(leakedBootFile), `boot 文件应已删除：${leakedBootFile}`).toBe(false);
 
     // m8：gateway 侧消失（IPC 断连）→ 子进程自收摊退出，不孤儿、不硬等 stop 兜底
     const child = (solo as unknown as { child: ChildProcess }).child;
@@ -479,6 +471,8 @@ describe('RemoteRunBackend ↔ run-serve-child（协议 e2e）', () => {
     ]);
     expect(code).not.toBe('timeout');
     expect(code).toBe(0); // 优雅收摊（disposeAll + dispose schedules + server.close）
+    // m6-②：子进程自退后，父进程必须回收私有 boot 目录（否则 tmpdir 会累积空目录）。
+    expect(existsSync(spawnedBootDir), `空 boot 目录未被回收：${spawnedBootDir}`).toBe(false);
     rmSync(soloHome, { recursive: true, force: true });
   }, 30_000);
 });

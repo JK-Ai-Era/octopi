@@ -1,7 +1,8 @@
 /** Public author API. Runtime ownership lives in PluginContributionRegistry. */
 
 import { resolve, join } from 'node:path';
-import { mkdir, chmod } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
+import { restrictToOwner } from '../../../../file-mode.js';
 import { getOctopiHome } from '../../../../paths.js';
 import { CredentialStore } from '../../../governance/credentials/store.js';
 import type { CredentialConsumerRef } from '../../../governance/credentials/types.js';
@@ -334,8 +335,12 @@ export class PluginApi {
   async ensureStateDir(): Promise<string> {
     await mkdir(this.stateDirPath, { recursive: true, mode: 0o700 });
     // mkdir's mode is masked by umask and does not tighten existing dirs.
+    // On Windows `chmod` neither takes effect nor throws (it only toggles the
+    // read-only flag), so the old `chmod` + catch below could never report a
+    // downgrade — the warning was dead code. Use the real restriction: POSIX
+    // chmod, Windows ACL (`icacls /inheritance:r /grant:r <user>`).
     try {
-      await chmod(this.stateDirPath, 0o700);
+      restrictToOwner(this.stateDirPath, 'dir');
     } catch (error) {
       // Degraded, explicit: a state dir that cannot be tightened is a real
       // security downgrade, never a silent one.

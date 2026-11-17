@@ -12,11 +12,11 @@
 
 import { fork, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
-import { forkChildNodeOptions } from '@octopi-agent/engine/fork-child.js';
+import { forkChildNodeOptions, stopForkedChild } from '@octopi-agent/engine/fork-child.js';
+import { createPrivateTempDir, writeSecretFileSync } from '@octopi-agent/engine/file-mode.js';
 import { resolveWorkerUrl } from '@octopi-agent/engine/worker-path.js';
 import type {
   RunBackendHealth,
@@ -34,12 +34,14 @@ import type { RunServeBoot } from './run-serve-child.js';
 /**
  * boot 文件写入（0600：内容含 provider apiKey + loopback token，同机多用户不可读）。
  *
- * @param bootPath - 目标路径（随机名，创建态写入）
+ * @param bootPath - 目标路径（位于本次 spawn 独占的私有目录内）
  * @param payload - boot JSON 文本
  * @returns void
  */
 export function writeRunServeBoot(bootPath: string, payload: string): void {
-  writeFileSync(bootPath, payload, { encoding: 'utf8', mode: 0o600 });
+  // boot 含 provider apiKey + loopback token：`mode` 在 Windows 上不生效，必须真实收紧
+  // ACL；收紧失败时该函数会删掉文件并抛错（不留"写成功但不安全"的状态）。
+  writeSecretFileSync(bootPath, payload);
 }
 
 /**
@@ -114,7 +116,8 @@ export class RemoteRunBackend {
     private readonly child: ChildProcess,
     private readonly port: number,
     private readonly token: string | undefined,
-    private readonly bootPath: string,
+    /** 本次 spawn 独占的私有 boot 目录（持有它，而不是从 bootPath 反推 dirname） */
+    private readonly bootDir: string,
     private readonly options: RemoteRunBackendOptions,
   ) {}
 
@@ -130,21 +133,34 @@ export class RemoteRunBackend {
     options: RemoteRunBackendOptions = {},
   ): Promise<RemoteRunBackend> {
     const token = randomUUID();
-    const bootPath = join(tmpdir(), `run-serve-boot-${randomUUID()}.json`);
+    // 私有临时目录：目录先收紧，boot 文件在其中自动继承仅当前用户的 ACL。
+    // 目录是本次 spawn 独占的，任何失败路径都必须连目录一起回收（否则 tmpdir 会累积
+    // 空的 octopi-run-boot-* 目录）。
+    const bootDir = createPrivateTempDir('octopi-run-boot-');
+    const bootPath = join(bootDir, 'boot.json');
+    const discardBootDir = (): void => {
+      rmSync(bootDir, { recursive: true, force: true });
+    };
     // boot 是纯数据交接面：securityIntegrity 活对象（recheck/reattest 方法）经
     // JSON 会被剥成只剩 fingerprint 的残壳，子进程调用即 TypeError。剥离后由
     // run-serve-child 按 configPath 自建守卫（service-topology §7.3 每实例锚定）。
     // 有守卫却无 configPath = 子进程将静默失去漂移闸——fail-loud 拒启动。
     if (boot.config.securityIntegrity && !boot.config.configPath) {
+      discardBootDir();
       throw new Error(
         'run_remote: securityIntegrity requires configPath in boot (live guard cannot cross JSON; child rebuilds from configPath)',
       );
     }
     const { securityIntegrity: _liveGuard, ...bootConfig } = boot.config;
-    writeRunServeBoot(
-      bootPath,
-      JSON.stringify({ ...boot, config: bootConfig, token }),
-    );
+    try {
+      writeRunServeBoot(
+        bootPath,
+        JSON.stringify({ ...boot, config: bootConfig, token }),
+      );
+    } catch (err) {
+      discardBootDir();
+      throw err;
+    }
 
     // 版本化 spawn（§4.4）：buildRef 直指该版本构建入口；缺省同构建自举
     const entry = options.buildRef
@@ -160,7 +176,7 @@ export class RemoteRunBackend {
       );
     } catch (err) {
       // fork 同步抛（F9）：boot 已写而子进程没机会读删——父进程兜底清 secret
-      rmSync(bootPath, { force: true });
+      discardBootDir();
       throw err;
     }
 
@@ -176,7 +192,7 @@ export class RemoteRunBackend {
       const fail = (err: Error): void =>
         settle(() => {
           child.kill('SIGKILL');
-          rmSync(bootPath, { force: true });
+          discardBootDir();
           reject(err);
         });
       const timeout = setTimeout(() => {
@@ -201,10 +217,17 @@ export class RemoteRunBackend {
       });
     });
 
-    const backend = new RemoteRunBackend(child, ready.port, token, bootPath, options);
+    const backend = new RemoteRunBackend(child, ready.port, token, bootDir, options);
     child.removeAllListeners('exit');
     child.on('exit', (code) => {
       console.warn(`[RunRemote] run instance exited (code ${String(code)})`);
+      // 子进程自退（未经 stop()）时也要回收私有目录：boot 由子进程读毕即删，但目录
+      // 只有父进程知道，不在这里删就会在 tmpdir 累积空目录。
+      try {
+        discardBootDir();
+      } catch {
+        /* 删不掉只是残留一个空目录；不掩盖 exit 语义 */
+      }
       options.onExit?.(code);
     });
     child.on('message', (msg: unknown) => {
@@ -303,41 +326,28 @@ export class RemoteRunBackend {
     };
   }
 
-  /**
-   * 停止 run 实例（优雅关闭 → 超时 SIGTERM → SIGKILL），并清理 boot 文件。
+    /**
+   * 停止 run 实例并清理私有 boot 目录。
    *
-   * @returns 关闭完成
+   * 阶梯与告警行为统一由 `stopForkedChild` 决定（5s 优雅宽限 → SIGTERM → 3s →
+   * SIGKILL → 1s 兜底放行）。此前这里是独立实现：`send` 无回调（通道已断时会 emit
+   * 'error'，可致未捕获异常），且 SIGKILL 后 `await exited` 无兜底，理论上可永久挂起。
+   *
+   * @returns 关闭完成（子进程已退出或兜底放行）
    */
   async stop(): Promise<void> {
-    const child = this.child;
-    if (child.exitCode !== null || child.signalCode !== null) {
-      rmSync(this.bootPath, { force: true });
-      return;
-    }
-    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-    child.send({ type: 'close' });
-    const graceful = await Promise.race([
-      exited.then(() => true),
-      new Promise<boolean>((resolve) => {
-        const t = setTimeout(() => resolve(false), 5_000);
-        t.unref();
-      }),
-    ]);
-    if (!graceful) {
-      child.kill('SIGTERM');
-      const hard = await Promise.race([
-        exited.then(() => true),
-        new Promise<boolean>((resolve) => {
-          const t = setTimeout(() => resolve(false), 3_000);
-          t.unref();
-        }),
-      ]);
-      if (!hard) {
-        child.kill('SIGKILL');
-        await exited;
+    try {
+      await stopForkedChild(this.child, { graceMs: 5_000, termMs: 3_000, reapFallbackMs: 1_000, label: 'run' });
+    } finally {
+      // 无论子进程以何种方式结束，boot 目录（含 token）都必须清掉。
+      // 兜底放行后子进程理论上可能仍存活（fork-child 的 reapFallbackMs），此时递归删
+      // 可能 EPERM——清理失败不能让 stop() 从成功变拒绝（与 knowledge 侧同口径）。
+      try {
+        rmSync(this.bootDir, { recursive: true, force: true });
+      } catch (err) {
+        console.warn(`[RunRemote] boot dir cleanup failed (${String(err)}): ${this.bootDir}`);
       }
     }
-    rmSync(this.bootPath, { force: true });
   }
 
   private async fetchJson(

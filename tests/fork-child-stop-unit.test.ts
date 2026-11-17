@@ -15,10 +15,11 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import type { ChildProcess } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { stopChild } from '../packages/engine/src/harness/knowledge/start-service-process.js';
+import { stopForkedChild } from '../packages/engine/src/fork-child.js';
 
 /** 假子进程：只实现 stopChild 用到的面 */
 class FakeChild extends EventEmitter {
@@ -61,6 +62,27 @@ class FakeChild extends EventEmitter {
 
 const asChild = (fake: FakeChild): ChildProcess => fake as unknown as ChildProcess;
 
+/** knowledge 侧的历史预算：3s 宽限 / 2s SIGTERM / 1s 兜底（与 start-service-process 一致） */
+const stop = (child: ChildProcess): Promise<void> =>
+  stopForkedChild(child, { graceMs: 3_000, termMs: 2_000, reapFallbackMs: 1_000, label: 'test' });
+
+it('调用方预算被真实装配：run 侧是 5s/3s，knowledge 侧是 3s/2s', () => {
+  // 两个调用点的预算写反/写成同一个值都不会影响其余用例（它们自带 options），
+  // 所以在这里直接读源码装配结果，锁住"谁用哪一档"。
+  const runSrc = readFileSync(
+    new URL('../packages/gateway/src/gateway/remote-run-backend.ts', import.meta.url),
+    'utf8',
+  );
+  const knSrc = readFileSync(
+    new URL('../packages/engine/src/harness/knowledge/start-service-process.ts', import.meta.url),
+    'utf8',
+  );
+  expect(runSrc).toMatch(/graceMs:\s*5_000[^)]*termMs:\s*3_000[^)]*reapFallbackMs:\s*1_000/s);
+  expect(knSrc).toMatch(/graceMs:\s*3_000[^)]*termMs:\s*2_000[^)]*reapFallbackMs:\s*1_000/s);
+  expect(runSrc).toContain("label: 'run'");
+  expect(knSrc).toContain("label: 'knowledge'");
+});
+
 describe('stopChild 升级链', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -72,7 +94,7 @@ describe('stopChild 升级链', () => {
 
   it('connected + 子进程自行退出：不发任何信号', async () => {
     const fake = new FakeChild();
-    const p = stopChild(asChild(fake));
+    const p = stop(asChild(fake));
     fake.exitCode = 0;
     fake.emit('exit', 0, null);
     await p;
@@ -82,7 +104,7 @@ describe('stopChild 升级链', () => {
   it('初始 disconnected（宿主硬死）：立即升级并等 exit，不干等 close 宽限', async () => {
     const fake = new FakeChild();
     fake.connected = false;
-    const p = stopChild(asChild(fake));
+    const p = stop(asChild(fake));
     await vi.advanceTimersByTimeAsync(0);
     expect(fake.kills).toEqual(['SIGTERM']); // 未到 3s 就已发信号
     await vi.advanceTimersByTimeAsync(0); // 让 nextTick 的 exit 落地
@@ -94,7 +116,7 @@ describe('stopChild 升级链', () => {
     const fake = new FakeChild();
     fake.exitsOnSignal = false;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const p = stopChild(asChild(fake));
+    const p = stop(asChild(fake));
 
     await vi.advanceTimersByTimeAsync(2_999);
     expect(fake.kills).toEqual([]); // 宽限期内不动手
@@ -115,7 +137,7 @@ describe('stopChild 升级链', () => {
     const fake = new FakeChild();
     fake.exitsOnSignal = false;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const p = stopChild(asChild(fake));
+    const p = stop(asChild(fake));
 
     await vi.advanceTimersByTimeAsync(3_000); // SIGTERM
     await vi.advanceTimersByTimeAsync(2_000); // SIGKILL
@@ -130,7 +152,7 @@ describe('stopChild 升级链', () => {
   it('send 回调报错（通道刚断，不抛异常）：立即升级，不干等 3s 宽限', async () => {
     const fake = new FakeChild();
     fake.sendBehavior = Object.assign(new Error('channel closed'), { code: 'ERR_IPC_CHANNEL_CLOSED' });
-    const p = stopChild(asChild(fake));
+    const p = stop(asChild(fake));
     await vi.advanceTimersByTimeAsync(0); // 只放行微任务
     expect(fake.kills).toEqual(['SIGTERM']); // 未到 3s 就已经发信号
     await vi.advanceTimersByTimeAsync(0);
@@ -140,7 +162,7 @@ describe('stopChild 升级链', () => {
   it('send 同步抛：同样立即升级', async () => {
     const fake = new FakeChild();
     fake.sendBehavior = 'throw';
-    const p = stopChild(asChild(fake));
+    const p = stop(asChild(fake));
     await vi.advanceTimersByTimeAsync(0);
     expect(fake.kills).toEqual(['SIGTERM']);
     await vi.advanceTimersByTimeAsync(0);
@@ -151,7 +173,7 @@ describe('stopChild 升级链', () => {
     const fake = new FakeChild();
     fake.exitsOnSignal = false;
     fake.sendBehavior = 'hang'; // 回调挂起，稍后模拟迟到错误
-    const p = stopChild(asChild(fake));
+    const p = stop(asChild(fake));
 
     await vi.advanceTimersByTimeAsync(3_000); // grace 到期 → escalate #1
     expect(fake.kills).toEqual(['SIGTERM']);
@@ -168,7 +190,7 @@ describe('stopChild 升级链', () => {
     const fake = new FakeChild();
     fake.sendBehavior = 'hang';
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const p = stopChild(asChild(fake));
+    const p = stop(asChild(fake));
 
     fake.exitCode = 0;
     fake.emit('exit', 0, null); // 先退出
@@ -186,7 +208,7 @@ describe('stopChild 升级链', () => {
   it('已退出的 child 直接返回，不注册任何定时器', async () => {
     const fake = new FakeChild();
     fake.exitCode = 1;
-    await stopChild(asChild(fake));
+    await stop(asChild(fake));
     expect(fake.kills).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });

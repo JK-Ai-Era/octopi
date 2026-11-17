@@ -12,10 +12,10 @@
  */
 import { fork, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { forkChildNodeOptions } from '../../fork-child.js';
+import { forkChildNodeOptions, stopForkedChild } from '../../fork-child.js';
+import { createPrivateTempDir, writeSecretFileSync } from '../../file-mode.js';
 import { resolveWorkerUrl } from '../../worker-path.js';
 import type { KnowledgeServiceToken } from './http-app.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
@@ -88,14 +88,29 @@ export async function startKnowledgeServiceProcess(
   opts: KnowledgeServiceProcessOptions,
 ): Promise<KnowledgeServiceProcessHandle> {
   const entry = fileURLToPath(resolveWorkerUrl('./knowledge-serve-child.js', import.meta.url));
-  const bootDir = await mkdtemp(join(tmpdir(), 'octopi-kn-boot-'));
+  // 私有目录 + 真实权限收紧：boot 含 loopback token，Windows 上 `mode` 不生效。
+  // 建目录之后的每一步都可能抛（写 secret、fork），而 `finally` 在 try 之外不生效——
+  // 所以把它们全部纳入 try，失败时连目录（含 token）一起回收。
+  const bootDir = createPrivateTempDir('octopi-kn-boot-');
   const bootPath = join(bootDir, 'boot.json');
-  await writeFile(bootPath, JSON.stringify(buildKnowledgeServiceBootFile(opts)), 'utf8');
+  let child: ChildProcess;
+  try {
+    writeSecretFileSync(bootPath, JSON.stringify(buildKnowledgeServiceBootFile(opts)));
+  } catch (err) {
+    await rm(bootDir, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
 
-  // execPath 保持 process.execPath：Electron 下换捆绑 node 会切断 IPC
-  const child = fork(entry, [bootPath], forkChildNodeOptions({
-    stdio: ['ignore', 'ignore', 'ignore'],
-  }));
+  try {
+    // execPath 保持 process.execPath：Electron 下换捆绑 node 会切断 IPC
+    child = fork(entry, [bootPath], forkChildNodeOptions({
+      stdio: ['ignore', 'ignore', 'ignore'],
+    }));
+  } catch (err) {
+    // fork 同步抛：boot 已写而子进程没机会读删——父进程兜底清 secret
+    await rm(bootDir, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
 
   const startTimeoutMs = opts.startTimeoutMs ?? 30_000;
   try {
@@ -142,83 +157,23 @@ export async function startKnowledgeServiceProcess(
       },
     };
   } finally {
-    await rm(bootDir, { recursive: true, force: true }).catch(() => undefined);
+    // 清理失败不改变启动结果，但必须留痕：这类 EPERM 正是"句柄未释放就删目录"的症状，
+    // 静默吞掉会让下一轮排障从零开始。
+    await rm(bootDir, { recursive: true, force: true }).catch((err: unknown) => {
+      console.warn(`[knowledge] boot dir cleanup failed (${String(err)}): ${bootDir}`);
+    });
   }
 }
 
 /**
- * 停止子进程并**等到它真的退出**（导出为测试缝：升级链要能用假 child 单测）。
+ * 停止 knowledge 子进程并等待它退出（转调共享实现，预算为本服务的历史取值）。
  *
- * 完成条件：观察到 `exit`，或 SIGKILL 后 1s 兜底放行。调用方依赖这个语义——例如
- * 释放 SQLite 句柄后才能删临时目录（Windows 上删被打开的文件直接 EPERM）。
+ * 语义与告警行为见 `stopForkedChild`：3s 优雅宽限 → SIGTERM → 2s → SIGKILL →
+ * 1s 兜底放行。
  *
- * @param child - 目标子进程
+ * @param child - knowledge 子进程
+ * @returns 子进程已退出（或兜底放行）时 resolve
  */
-export async function stopChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode != null || child.signalCode != null) return;
-  await new Promise<void>((resolve) => {
-    let graceTimer: NodeJS.Timeout | undefined;
-    let killTimer: NodeJS.Timeout | undefined;
-    let reapFallbackTimer: NodeJS.Timeout | undefined;
-    let settled = false;
-    let escalated = false;
-
-    const finish = (): void => {
-      settled = true;
-      if (graceTimer) clearTimeout(graceTimer);
-      if (killTimer) clearTimeout(killTimer);
-      if (reapFallbackTimer) clearTimeout(reapFallbackTimer);
-      child.off('exit', finish);
-      resolve();
-    };
-
-    child.once('exit', finish);
-
-    /** 先礼后兵：SIGTERM 给 2s 自收摊，再 SIGKILL；SIGKILL 后仍等一拍 exit。单发。 */
-    const escalate = (): void => {
-      // settled 也要查：exit 先到之后，迟到的 send 错误回调仍可能进来
-      // （通道写挂起 → 子进程退出 → 回调报错）。此时再武装定时器会在 stop() 已 resolve
-      // 后打出假的 unobservable after SIGKILL 告警。
-      if (settled || escalated) return;
-      escalated = true;
-      if (graceTimer) clearTimeout(graceTimer);
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* 已经退出：exit 事件会/已把 promise 收掉 */
-      }
-      killTimer = setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          /* 已经退出（同上） */
-        }
-        // 兜底：SIGKILL 后若仍拿不到 exit（不可观测的僵尸），不让调用方永久挂起
-        reapFallbackTimer = setTimeout(() => {
-          console.warn(
-            `[knowledge] child pid=${String(child.pid)} unobservable after SIGKILL; releasing stop() without exit`,
-          );
-          finish();
-        }, 1_000);
-        reapFallbackTimer.unref?.();
-      }, 2_000);
-      killTimer.unref?.();
-    };
-
-    if (child.connected) {
-      graceTimer = setTimeout(escalate, 3_000);
-      graceTimer.unref?.();
-      try {
-        // 通道刚断时 send 不抛异常，错误只进回调——必须由回调转入升级。
-        child.send({ type: 'close' }, (err?: Error | null) => {
-          if (err) escalate();
-        });
-      } catch {
-        escalate();
-      }
-    } else {
-      // 通道已断（等价于宿主硬死）：没有优雅关闭通道可走，直接终止并**等 exit**。
-      escalate();
-    }
-  });
+export function stopChild(child: ChildProcess): Promise<void> {
+  return stopForkedChild(child, { graceMs: 3_000, termMs: 2_000, reapFallbackMs: 1_000, label: 'knowledge' });
 }

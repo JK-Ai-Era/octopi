@@ -128,6 +128,55 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.6 (2026-11-17)
+
+### fix(security): enforce secret-file permissions for real on Windows
+
+**症状（生产缺陷，不是测试问题）**：`writeFileSync(p, secret, { mode: 0o600 })` 在 Windows 上**完全不收紧权限**。实测一个这样写出的文件带着 7 条继承来的 ACE——含一个可修改的用户组（`…SandboxUsers:(M)`）、多个可读写 SID、AppContainer 完全控制。秘密（provider apiKey、loopback token、setup token、`bot_token`）的暴露面完全由它落在哪个目录决定，而代码里的 `mode: 0o600` 只给了"已保护"的错觉。
+
+**根因**：`mode` 只在 POSIX 生效；Windows 的 `chmod` 只切换只读位且不抛错，所以「写 mode 0600 + `try { chmod } catch { warn }`」这种写法在 Windows 上既无效也不告警——`plugins/api.ts` 的「degraded explicit」告警因此是死代码。
+
+**改法**：
+
+- `packages/engine/src/file-mode.ts` 从"平台能力常量"扩展为**真实收紧**的唯一出口：`restrictToOwner`（POSIX `chmod` 0700/0600；Windows `icacls <target> /inheritance:r /grant:r *<sid>`）、`createPrivateTempDir`（先建目录再收紧，使其中新建文件自动继承安全 ACL）、`writeSecretFileSync`（**写 tmp → 收紧 tmp → rename**：失败时删 tmp、目标文件保持原状，避免把上一轮仍然有效的旧 token 一起毁掉）。
+- 四个秘密落点全部接入：run 实例 boot（并从共享 `tmpdir` 平铺改为私有目录）、knowledge 子进程 boot、`.env`（先收紧临时文件再 rename）、`setup-token.json`。
+- 授权主体取**当前令牌 SID**（`%SystemRoot%\System32\whoami.exe /user /fo csv /nh`，必须绝对路径——Windows 上 Git Bash 的 coreutils `whoami` 常排在 WINPATH 前且不认识这些参数），而不是 `USERDOMAIN\USERNAME`：后者在服务/计划任务下可能缺失、在 Azure AD 加入的机器上是计算机名（icacls 报 status 1332）、同名/改名账户下可能授权给他人。名字形式只作兜底。
+- 私有目录的**生命周期**与目录创建同批处理：run 侧在子进程自退（未经 `stop()`）时也回收目录，且 `securityIntegrity` 前置校验、boot 写入、`fork` 三条早失败路径都回收；knowledge 侧把写 secret 与 `fork` 纳入同一 `try`。此前它们会在 `tmpdir` 累积空目录（实测一次测试跑留下 8 个）。
+- `plugins/api.ts` 的 `ensureStateDir` 改用真实收紧：其 catch 现在才可能真的触发。
+- 示例插件 `examples/plugins/weixin-clawbot` 同步修正（它是插件作者照抄的模板）：`bot_token` 状态文件在 Windows 上也必须收紧，内联实现不依赖 engine 内部模块。
+
+**实测证据**（同一台机器，同一 tmpdir）：
+
+| 写法 | 落盘后的 ACL |
+|---|---|
+| `writeFileSync(..., {mode:0o600})` | `…SandboxUsers:(I)(M)`、`S-1-5-21-…:(I)(M)`、`S-1-5-21-…:(I)(RX,W)`、AppContainer `(I)(F)`、`James:(I)(F)`、`SYSTEM`、`Administrators` — **7 条** |
+| `writeSecretFileSync(...)` | `JK-PC\James:(F)` — **1 条** |
+
+### refactor(engine): one implementation for stopping forked children
+
+`stopForkedChild(child, { graceMs, termMs, reapFallbackMs })` in `fork-child.ts` replaces two drifted copies:
+
+- run 实例：5s/3s 阶梯，SIGKILL 后 `await exited` **无兜底**（不可观测的僵尸会把调用方永久挂住），且 `child.send()` 无回调——通道已断时 Node 会 emit `'error'`，可致未捕获异常。
+- knowledge 子进程：3s/2s + 1s 兜底。
+
+统一后两者都有兜底（放行时 `console.warn`）、都把 `send` 的通道错误转入升级。实测僵尸场景（kill 一律无效、永不 emit exit）：旧 run 侧会挂住，共享实现 326ms 后放行并告警。
+
+### test: assert real permissions on both platforms instead of skipping
+
+上一版把 `mode & 0o777 === 0o600` 的断言在 Windows 上 `skipIf` 掉，等于在唯一实际执行环境里让这些安全属性零验证。现在两平台都真断：
+
+- 新增 `tests/helpers/file-mode.ts` 的 `expectRestrictedToOwner` / `expectNotOwnerOnly`：POSIX 断权限位，Windows 断 `icacls` 的 ACE（ACE 本身不随系统语言变化，只有尾部状态行会）。
+- `tests/secret-file-permissions.test.ts`：真实产物断言 + 对照组（裸 `mode:0o600` 必须**不**是 owner-only——若哪天变了，说明平台行为变了，修复前提要重估）。
+- `plugin-storage-secrets`、`onboarding-core`、`plugin-weixin-channel` 的权限断言取消 `skipIf`，改为跨平台真断（跳过数从 9 降到 4，剩余为 PLG005 的 POSIX-only warn 判定与 boot 的 POSIX 真位，两者都有等价的意图断言）。
+
+**验证**：13 个相关测试文件 **163 通过 / 4 跳过**；`tsc`、测试 typecheck、eslint 全绿。对照组（每组都确认能变红后恢复）：`restrictToOwner` 改空操作 → 3 条真实权限断言红；`run-serve-child` 不再删 boot → m6-① 红；去掉 exit 钩子的目录回收 → m6-② 红（曾是恒真空断言：旧前缀过滤 + 子进程读毕即删，两者叠加使它永远看到空集）；`weixin` 示例若不修，其状态文件断言在 Windows 上红。
+
+**已知限制**：
+
+- `reapFallbackMs` 兜底放行时进程可能尚未完全退出（已 `console.warn` 留痕，带调用方 label）。后果是调用方随后删目录仍可能 `EPERM`——这正是 v0.118.5 修的那类症状，故该路径必须可观测。
+- Windows 上 ACL 收紧依赖 `icacls`（系统自带）。SID 取不到时退到名字形式，两者都失败才抛错——此时调用方应按"无法安全落盘"处理（run boot 会拒绝启动、`.env` 会整步失败），这是有意为之：不交付不安全的秘密文件。
+- 停机预算是串行遍历副本的：N 个 run 副本最坏 N×9s。属既有结构，未在本次改动内并行化。
+
 ## v0.118.5 (2026-11-17)
 
 ### fix(engine): make knowledge child stop() wait for actual exit
