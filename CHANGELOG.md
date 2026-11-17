@@ -128,6 +128,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.12 (2026-11-18)
+
+### fix(gateway): knowledge project entry chain carries visibility and domain claim
+
+`POST /agents/:id/knowledge/projects` 透传 `visibility`（此前网关只传 projectKey/displayName，服务端的 visibility 能力从未被接通）；`visibility='public'` 的建项目请求**显式断言** `x-octopi-tenant: platform` 落共享面（符合 v0.113.10「永不静默放大成 platform 共享」——放大只经显式 claim）；`createKnowledgeSource` 对 project 域源继承其项目登记行的归属域（否则公共项目下的源落 DEFAULT 域，跨租户永远够不到共享语料）。新增服务读口 `GET /v1/projects/:key`（含 worker 门面透传）供域解析。
+
+**开放项（评审 M5）**：「公共项目创建」目前等价于平台管理员动作但无独立角色闸（持有 console apiKey 即可），待 registry 角色模型（多租户 T1）落地后收口。
+
+---
+
 ## v0.118.11 (2026-11-18)
 
 ### fix(engine): knowledge admin-plane tenant read gate single-source（MAJ-4 收口）

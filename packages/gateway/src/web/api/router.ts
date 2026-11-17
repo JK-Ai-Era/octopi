@@ -880,6 +880,9 @@ export class WebApiRouter {
         await this.gateway.createKnowledgeProject(
           projectKey,
           typeof body?.displayName === 'string' ? body.displayName : undefined,
+          body?.visibility === 'public' || body?.visibility === 'private'
+            ? body.visibility
+            : undefined,
         );
         return this.json(res, 201, { ok: true, data: { projectKey } });
       }

@@ -1567,8 +1567,13 @@ export class OctopiClient {
     agentId: string,
     projectKey: string,
     displayName?: string,
+    visibility?: 'public' | 'private',
   ): Promise<void> {
-    await this.postJson(`/agents/${agentId}/knowledge/projects`, { projectKey, displayName });
+    await this.postJson(`/agents/${agentId}/knowledge/projects`, {
+      projectKey,
+      displayName,
+      visibility,
+    });
   }
 
   async removeKnowledgeProject(agentId: string, projectKey: string): Promise<void> {

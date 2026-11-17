@@ -4497,7 +4497,19 @@ export class Gateway {
       throw new Error(`invalid scopeRef.level: ${input.scopeRef?.level}`);
     }
     const client = await this.getKnowledgeClient();
-    const src = await client.createSource(input as unknown as Record<string, unknown>);
+    // 评审 M1：project 域源继承其项目登记行的归属域（显式 claim，非静默放大）——否则公共
+    // 项目下的源落 DEFAULT 域，项目跨域闸按源域解析时永远够不到 platform 共享面
+    let claim: string | undefined;
+    if (input.scopeRef.level === 'project') {
+      const project = (await client
+        .getProject(input.scopeRef.key)
+        .catch(() => null)) as { tenantId?: string } | null;
+      if (project?.tenantId) claim = project.tenantId;
+    }
+    const src = await client.createSource(
+      input as unknown as Record<string, unknown>,
+      claim ? { tenantId: claim } : undefined,
+    );
     return src as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource;
   }
 
@@ -4569,9 +4581,19 @@ export class Gateway {
     }>;
   }
 
-  async createKnowledgeProject(projectKey: string, displayName?: string): Promise<void> {
+  async createKnowledgeProject(
+    projectKey: string,
+    displayName?: string,
+    visibility?: 'public' | 'private',
+  ): Promise<void> {
     const client = await this.getKnowledgeClient();
-    await client.createProject({ projectKey, displayName });
+    // 公共项目 = platform 共享面资产：显式断言 claim 'platform' 落 platform 域
+    // （arch/multi-tenancy.md §6「跨租户共享唯一合法形态」；无断言的写会降级 DEFAULT 域，
+    //  永不放大成 platform 共享）
+    await client.createProject(
+      { projectKey, displayName, visibility },
+      visibility === 'public' ? PLATFORM_TENANT_ID : undefined,
+    );
   }
 
   async removeKnowledgeProject(projectKey: string): Promise<boolean> {
