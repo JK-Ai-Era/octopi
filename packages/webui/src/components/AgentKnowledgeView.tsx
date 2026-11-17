@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { OctopiClient, type KnowledgeSourceDto } from '@octopi-agent/gateway/web/sdk/client';
+import { useT } from '../i18n/react';
 
 interface Visibility {
   hiddenSourceIds: string[];
@@ -39,6 +40,7 @@ export function AgentKnowledgeView({
 }) {
   const [vis, setVis] = useState<Visibility | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const t = useT();
 
   const load = useCallback(async () => {
     try {
@@ -57,8 +59,8 @@ export function AgentKnowledgeView({
   return (
     <section className="panel kn-panel">
       <header className="kn-panel-header">
-        <h2>Agent 知识视野</h2>
-        <span className="small muted">只读 · base（不含本会话 overlay）· 改挂载请到项目详情</span>
+        <h2>{t('agentKnowledgeView.title')}</h2>
+        <span className="small muted">{t('agentKnowledgeView.subtitle')}</span>
       </header>
 
       <div className="kn-form-row">
@@ -75,26 +77,28 @@ export function AgentKnowledgeView({
           {agents.length === 0 && <option value={selectedAgentId}>{selectedAgentId}</option>}
         </select>
         <button type="button" className="btn-ghost small" onClick={() => void load()}>
-          刷新
+          {t('agentKnowledgeView.refresh')}
         </button>
       </div>
 
       {error && <div className="kn-error small">{error}</div>}
-      {!vis && !error && <div className="small muted">加载中…</div>}
+      {!vis && !error && <div className="small muted">{t('agentKnowledgeView.loading')}</div>}
 
       {vis && (
         <>
           <div className="kn-visibility-block">
             <div className="small" style={{ fontWeight: 600 }}>
-              公共知识库
+              {t('agentKnowledgeView.globalTitle')}
               <span className="muted">
-                {' '}
-                · 可见 {vis.globalSources.filter((s) => !s.hiddenForAgent).length} /{' '}
-                {vis.globalSources.length}
+                {' · '}
+                {t('agentKnowledgeView.globalVisible', {
+                  visible: vis.globalSources.filter((s) => !s.hiddenForAgent).length,
+                  total: vis.globalSources.length,
+                })}
               </span>
             </div>
             {vis.globalSources.length === 0 && (
-              <div className="small muted">无公共源</div>
+              <div className="small muted">{t('agentKnowledgeView.noGlobalSources')}</div>
             )}
             <div className="kn-list">
               {vis.globalSources.map((s) => (
@@ -106,7 +110,10 @@ export function AgentKnowledgeView({
                   <strong className="small">{s.displayName}</strong>
                   <span className="small muted mono">{s.kind}</span>
                   <span className="small muted">
-                    {s.hiddenForAgent ? '已隐藏' : '可见'} · {s.status}
+                    {s.hiddenForAgent
+                      ? t('agentKnowledgeView.hidden')
+                      : t('agentKnowledgeView.visible')}{' '}
+                    · {s.status}
                   </span>
                 </div>
               ))}
@@ -115,13 +122,11 @@ export function AgentKnowledgeView({
 
           <div className="kn-visibility-block">
             <div className="small" style={{ fontWeight: 600 }}>
-              项目（已挂载）
+              {t('agentKnowledgeView.projectsMounted')}
               <span className="muted"> · {vis.assignedProjects.length}</span>
             </div>
             {vis.assignedProjects.length === 0 && (
-              <div className="kn-warn small">
-                未挂载任何项目。到「项目」详情勾选挂载后，这里会显示。
-              </div>
+              <div className="kn-warn small">{t('agentKnowledgeView.noMountedProjects')}</div>
             )}
             <div className="kn-list">
               {vis.assignedProjects.map((p) => (
@@ -130,14 +135,16 @@ export function AgentKnowledgeView({
                     <span className="corpus-dot corpus-dot-on" />
                     <strong className="small">{p.displayName || p.projectKey}</strong>
                     <span className="small muted mono">{p.projectKey}</span>
-                    <span className="small muted">{p.sourceCount} 源</span>
+                    <span className="small muted">
+                      {t('agentKnowledgeView.sourceCount', { count: p.sourceCount })}
+                    </span>
                     {onOpenProject && (
                       <button
                         type="button"
                         className="btn-ghost small"
                         onClick={() => onOpenProject(p.projectKey)}
                       >
-                        去项目详情
+                        {t('agentKnowledgeView.openProject')}
                       </button>
                     )}
                   </div>
@@ -155,10 +162,10 @@ export function AgentKnowledgeView({
 
           <div className="kn-visibility-block">
             <div className="small muted" style={{ fontWeight: 600 }}>
-              项目（未挂载 · 本 Agent 不可见）
+              {t('agentKnowledgeView.projectsUnmounted')}
             </div>
             {vis.unassignedProjects.length === 0 && (
-              <div className="small muted">无</div>
+              <div className="small muted">{t('agentKnowledgeView.none')}</div>
             )}
             <div className="kn-list">
               {vis.unassignedProjects.map((p) => (
@@ -167,10 +174,12 @@ export function AgentKnowledgeView({
                   <span className="small">{p.displayName || p.projectKey}</span>
                   <span className="small muted mono">{p.projectKey}</span>
                   <span className="small muted">
-                    {p.sourceCount} 源
+                    {t('agentKnowledgeView.sourceCount', { count: p.sourceCount })}
                     {p.assignedAgentIds.length > 0
-                      ? ` · 已挂 ${p.assignedAgentIds.join(', ')}`
-                      : ' · 全局未挂载'}
+                      ? ` · ${t('agentKnowledgeView.mountedTo', {
+                          agents: p.assignedAgentIds.join(', '),
+                        })}`
+                      : ` · ${t('agentKnowledgeView.notMountedAnywhere')}`}
                   </span>
                   {onOpenProject && (
                     <button
@@ -178,7 +187,7 @@ export function AgentKnowledgeView({
                       className="btn-ghost small"
                       onClick={() => onOpenProject(p.projectKey)}
                     >
-                      去项目详情
+                      {t('agentKnowledgeView.openProject')}
                     </button>
                   )}
                 </div>
@@ -186,9 +195,7 @@ export function AgentKnowledgeView({
             </div>
           </div>
 
-          <div className="small muted">
-            会话内附加/排除请用 composer「语料」；此处仅展示 Agent 级 base。
-          </div>
+          <div className="small muted">{t('agentKnowledgeView.footerHint')}</div>
         </>
       )}
     </section>

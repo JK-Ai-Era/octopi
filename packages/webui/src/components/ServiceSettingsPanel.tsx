@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, setConsoleKey } from '../console-key';
+import { useT } from '../i18n/react';
 
 const GATEWAY_URL_STORAGE_KEY = 'octopi.console.gatewayUrl';
 
@@ -33,6 +34,7 @@ export function setConsoleGatewayUrlOverride(url: string): void {
 }
 
 export function ServiceSettingsPanel(): JSX.Element {
+  const t = useT();
   const [gatewayUrl, setGatewayUrl] = useState(getConsoleGatewayUrlOverride());
   const [apiKey, setApiKey] = useState(getConsoleKey());
   const [testState, setTestState] = useState<{ status: 'idle' | 'busy' | 'ok' | 'fail'; detail?: string }>({ status: 'idle' });
@@ -47,23 +49,26 @@ export function ServiceSettingsPanel(): JSX.Element {
       const body = (await res.json()) as { ok?: boolean; data?: { agents?: unknown[] } };
       if (res.ok && body.ok) {
         const agents = Array.isArray(body.data?.agents) ? body.data!.agents!.length : 0;
-        setTestState({ status: 'ok', detail: `已连接 ${base}（agents: ${agents}）` });
+        setTestState({ status: 'ok', detail: t('serviceSettings.connected', { base, count: agents }) });
       } else {
-        setTestState({ status: 'fail', detail: `连接被拒（HTTP ${res.status}）——请检查 API Key。` });
+        setTestState({ status: 'fail', detail: t('serviceSettings.rejected', { status: res.status }) });
       }
     } catch (e) {
-      setTestState({ status: 'fail', detail: `连不上：${e instanceof Error ? e.message : String(e)}` });
+      setTestState({
+        status: 'fail',
+        detail: t('serviceSettings.unreachable', { error: e instanceof Error ? e.message : String(e) }),
+      });
     }
   };
 
   return (
     <div className="panel" style={{ display: 'grid', gap: 12 }}>
-      <h3 style={{ margin: 0 }}>连接</h3>
+      <h3 style={{ margin: 0 }}>{t('serviceSettings.title')}</h3>
       <p className="small muted" style={{ margin: 0 }}>
-        本机部署已自动接入，无需修改。远程 / 跨域部署才需要手填（存在浏览器本机，换浏览器需重填）。
+        {t('serviceSettings.hint')}
       </p>
       <label className="small" style={{ display: 'grid', gap: 4, maxWidth: 420 }}>
-        Gateway URL（留空 = 自动）
+        {t('serviceSettings.gatewayUrlLabel')}
         <input
           value={gatewayUrl}
           placeholder="http://&lt;host&gt;:18180"
@@ -71,11 +76,11 @@ export function ServiceSettingsPanel(): JSX.Element {
         />
       </label>
       <label className="small" style={{ display: 'grid', gap: 4, maxWidth: 420 }}>
-        API Key（本机自动注入时留空）
+        {t('serviceSettings.apiKeyLabel')}
         <input
           type="password"
           value={apiKey}
-          placeholder="本机部署已自动注入"
+          placeholder={t('serviceSettings.apiKeyPlaceholder')}
           onChange={(e) => setApiKey(e.target.value)}
         />
       </label>
@@ -88,9 +93,9 @@ export function ServiceSettingsPanel(): JSX.Element {
             void testConnection();
           }}
         >
-          保存并测试连接
+          {t('serviceSettings.saveAndTest')}
         </button>
-        {testState.status === 'busy' && <span className="small muted">测试中…</span>}
+        {testState.status === 'busy' && <span className="small muted">{t('serviceSettings.testing')}</span>}
         {testState.status === 'ok' && <span className="small status-ok">{testState.detail}</span>}
         {testState.status === 'fail' && <span className="small status-error">{testState.detail}</span>}
       </div>

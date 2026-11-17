@@ -2,9 +2,12 @@
  * 主题切换（批 2-2 / §5d 暗色模式）：三态 system / light / dark，
  * system 跟随 prefers-color-scheme（matchMedia 变化实时同步到 data-theme），
  * 选择持久化 localStorage（UI 偏好）。CSS 只认 html[data-theme='dark'] 一处定义。
+ * 文案走 i18n（useT），标签键见 messages/shell。
  */
 
 import { useEffect, useState } from 'react';
+import { useT } from '../i18n/react';
+import type { MessageKey } from '../i18n/core';
 
 type ThemePref = 'system' | 'light' | 'dark';
 
@@ -26,12 +29,17 @@ export function initTheme(): void {
   applyTheme(readPref());
 }
 
-const LABELS: Record<ThemePref, string> = { system: '跟随系统', light: '浅色', dark: '深色' };
+const LABEL_KEYS: Record<ThemePref, MessageKey> = {
+  system: 'theme.followSystem',
+  light: 'theme.light',
+  dark: 'theme.dark',
+};
 const NEXT: Record<ThemePref, ThemePref> = { system: 'light', light: 'dark', dark: 'system' };
 
 /** 顶栏主题切换按钮（三态循环；title 显示当前语义） */
 export function ThemeToggle(): JSX.Element {
   const [pref, setPref] = useState<ThemePref>(readPref);
+  const t = useT();
 
   useEffect(() => {
     applyTheme(pref);
@@ -45,15 +53,16 @@ export function ThemeToggle(): JSX.Element {
   }, [pref]);
 
   const icon = pref === 'system' ? '◐' : pref === 'dark' ? '●' : '○';
+  const mode = t(LABEL_KEYS[pref]);
   return (
     <button
       type="button"
       className="btn-ghost small"
       onClick={() => setPref((p) => NEXT[p])}
-      title={`主题：${LABELS[pref]}（点击切换）`}
-      aria-label={`主题：${LABELS[pref]}`}
+      title={t('theme.toggleTitle', { mode })}
+      aria-label={t('theme.ariaLabel', { mode })}
     >
-      {icon} {LABELS[pref]}
+      {icon} {mode}
     </button>
   );
 }

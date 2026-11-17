@@ -13,6 +13,7 @@ import { AgentKnowledgeView } from './AgentKnowledgeView';
 import { OpFeedback, useOpFeedback } from './OpFeedback';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
+import { useT } from '../i18n/react';
 
 type Panel = 'global' | 'projects' | 'agents' | 'search';
 
@@ -61,6 +62,7 @@ function SourceRow({
     canResume: boolean;
   } | null>(null);
   const { op, busy, show, run } = useOpFeedback();
+  const t = useT();
   useEffect(() => setDesc(source.description ?? ''), [source.description]);
 
   // 中止/继续 互斥：按任务读数刷新（与全局工具栏同一语义）
@@ -81,10 +83,10 @@ function SourceRow({
     };
     void load();
     // 放宽轮询，降低索引期对 Knowledge Engine 的请求压力
-    const t = setInterval(() => void load(), 8000);
+    const timer = setInterval(() => void load(), 8000);
     return () => {
       stop = true;
-      clearInterval(t);
+      clearInterval(timer);
     };
   }, [agentId, busy, client, source.id]);
 
@@ -119,10 +121,14 @@ function SourceRow({
           <span className={`small ${statusClass(source.status)}`}>{source.status}</span>
           <span className="small muted mono">{source.kind}</span>
           {source.status === 'discovering' || source.status === 'indexing' ? (
-            <span className="small muted kn-coverage">覆盖 扫描中…</span>
+            <span className="small muted kn-coverage">
+              {t('knowledgeAdminPanel.coverageScanning')}
+            </span>
           ) : source.coverage != null ? (
             <span className="small muted kn-coverage">
-              覆盖 {Math.round(source.coverage * 100)}%
+              {t('knowledgeAdminPanel.coveragePercent', {
+                percent: Math.round(source.coverage * 100),
+              })}
             </span>
           ) : null}
         </div>
@@ -131,7 +137,7 @@ function SourceRow({
           <div className="kn-source-desc-row">
             <input
               value={desc}
-              placeholder="用途/何时搜（权威，覆盖自动描述）：例如「架构与协议设计决策，含 docs/ 与 arch/」"
+              placeholder={t('knowledgeAdminPanel.descPlaceholder')}
               onChange={(e) => setDesc(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -147,20 +153,18 @@ function SourceRow({
               disabled={!dirty || saving}
               onClick={() => void saveDesc()}
             >
-              {saving ? '保存中…' : '保存'}
+              {saving ? t('knowledgeAdminPanel.saving') : t('knowledgeAdminPanel.save')}
             </button>
           </div>
           {source.generatedDescription && (
             <div className="small muted">
-              自动：
+              {t('knowledgeAdminPanel.generatedLabel')}
               <DescriptionSourceBadge source={source.generatedDescriptionSource} />
               {source.generatedDescription.slice(0, 120)}
             </div>
           )}
           {!source.description && !source.generatedDescription && (
-            <div className="small muted">
-              重建索引后生成自动用途；人工填写后以人工为准（并列展示）。
-            </div>
+            <div className="small muted">{t('knowledgeAdminPanel.descHint')}</div>
           )}
         </div>
         {isGlobal && (
@@ -170,7 +174,9 @@ function SourceRow({
               className="btn-ghost small"
               onClick={() => setHideOpen((v) => !v)}
             >
-              {hideOpen ? '收起隐藏名单' : '对 Agent 隐藏…'}
+              {hideOpen
+                ? t('knowledgeAdminPanel.hideListCollapse')
+                : t('knowledgeAdminPanel.hideListOpen')}
             </button>
             {hideOpen && (
               <GlobalHideList
@@ -205,13 +211,13 @@ function SourceRow({
                 return null;
               },
               () => {
-                show('已开始重建索引…（后台解析，可继续用关键词搜）', 'info');
+                show(t('knowledgeAdminPanel.reindexStarted'), 'info');
                 onChanged?.();
               },
             )
           }
         >
-          {busy === 'reindex' ? '重建中…' : '重建索引'}
+          {busy === 'reindex' ? t('knowledgeAdminPanel.reindexing') : t('knowledgeAdminPanel.reindex')}
         </button>
         {jobControl?.canAbort && (
           <button
@@ -226,8 +232,11 @@ function SourceRow({
                   const tail = r.runningJobs ?? 0;
                   show(
                     tail > 0
-                      ? `已中止：清队列 ${r.cancelledQueued} 条 · 仍有 ${tail} 个任务在收尾（当前 embedding 批次返回后停）`
-                      : `已中止：清队列 ${r.cancelledQueued} 条`,
+                      ? t('knowledgeAdminPanel.abortDoneTail', {
+                          queued: r.cancelledQueued,
+                          tail,
+                        })
+                      : t('knowledgeAdminPanel.abortDone', { queued: r.cancelledQueued }),
                     'warn',
                   );
                   onChanged?.();
@@ -235,7 +244,7 @@ function SourceRow({
               )
             }
           >
-            {busy === 'abort' ? '中止中…' : '中止'}
+            {busy === 'abort' ? t('knowledgeAdminPanel.aborting') : t('knowledgeAdminPanel.abort')}
           </button>
         )}
         {!jobControl?.canAbort && jobControl?.canResume && (
@@ -248,17 +257,23 @@ function SourceRow({
                 'resume',
                 () => client.resumeKnowledgeSourceJobs(agentId, source.id),
                 (r) => {
-                  show(`已继续：恢复 ${r.restoredCancelled} 条 · 补向量 ${r.embedQueued} 条`, 'ok');
+                  show(
+                    t('knowledgeAdminPanel.resumeDone', {
+                      restored: r.restoredCancelled,
+                      embed: r.embedQueued,
+                    }),
+                    'ok',
+                  );
                   onChanged?.();
                 },
               )
             }
           >
-            {busy === 'resume' ? '继续中…' : '继续'}
+            {busy === 'resume' ? t('knowledgeAdminPanel.resuming') : t('knowledgeAdminPanel.resume')}
           </button>
         )}
         <button type="button" className="btn-ghost small" onClick={onDelete}>
-          卸载
+          {t('knowledgeAdminPanel.uninstall')}
         </button>
       </div>
       <OpFeedback op={op} />
@@ -280,6 +295,7 @@ function GlobalHideList({
 }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [err, setErr] = useState<string | null>(null);
+  const t = useT();
 
   const load = useCallback(async () => {
     try {
@@ -323,11 +339,15 @@ function GlobalHideList({
               onChange={() => void toggle(a, isHidden)}
             />
             <span className="mono">{a}</span>
-            <span className="small muted">{isHidden ? '已隐藏' : '可见'}</span>
+            <span className="small muted">
+              {isHidden ? t('knowledgeAdminPanel.hidden') : t('knowledgeAdminPanel.visible')}
+            </span>
           </label>
         );
       })}
-      {agents.length === 0 && <div className="small muted">无已注册 Agent</div>}
+      {agents.length === 0 && (
+        <div className="small muted">{t('knowledgeAdminPanel.noAgents')}</div>
+      )}
     </div>
   );
 }
@@ -346,6 +366,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { op: globalOp, busy: opBusy, show: showOp, run: runOp } = useOpFeedback();
+  const t = useT();
 
   const [newProjectKey, setNewProjectKey] = useState('');
   const [newSource, setNewSource] = useState({
@@ -436,7 +457,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
       }
       if (softBusy) {
         setFetchFailed(true);
-        setError('知识服务繁忙，拉取失败，稍后自动重试');
+        setError(t('knowledgeAdminPanel.busyError'));
       }
     } catch (err) {
       setFetchFailed(true);
@@ -448,7 +469,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
         void refresh();
       }
     }
-  }, [agentId, client, selectedProject]);
+  }, [agentId, client, selectedProject, t]);
 
   useEffect(() => {
     refreshRef.current = refresh;
@@ -512,8 +533,8 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
 
   useEffect(() => {
     if (!hasActiveIndexing) return;
-    const t = setInterval(() => void refresh(), 8000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => void refresh(), 8000);
+    return () => clearInterval(timer);
   }, [hasActiveIndexing, refresh]);
 
   const registerSource = async (scope: { level: 'global' | 'project'; key: string }) => {
@@ -567,28 +588,28 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
           className={panel === 'global' ? 'btn-tab btn-tab-active' : 'btn-tab'}
           onClick={() => setPanel('global')}
         >
-          公共知识库
+          {t('knowledgeAdminPanel.tabGlobal')}
         </button>
         <button
           type="button"
           className={panel === 'projects' ? 'btn-tab btn-tab-active' : 'btn-tab'}
           onClick={() => setPanel('projects')}
         >
-          项目
+          {t('knowledgeAdminPanel.tabProjects')}
         </button>
         <button
           type="button"
           className={panel === 'agents' ? 'btn-tab btn-tab-active' : 'btn-tab'}
           onClick={() => setPanel('agents')}
         >
-          Agent 视野
+          {t('knowledgeAdminPanel.tabAgents')}
         </button>
         <button
           type="button"
           className={panel === 'search' ? 'btn-tab btn-tab-active' : 'btn-tab'}
           onClick={() => setPanel('search')}
         >
-          试搜
+          {t('knowledgeAdminPanel.tabSearch')}
         </button>
       </div>
 
@@ -596,41 +617,52 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
 
       <div className="kn-stats small muted mono">
         {!booted && !fetchFailed ? (
-          <span>加载中…</span>
+          <span>{t('knowledgeAdminPanel.loading')}</span>
         ) : fetchFailed && !booted ? (
-          <span>拉取失败，稍后重试…</span>
+          <span>{t('knowledgeAdminPanel.fetchFailedShort')}</span>
         ) : (
           <>
-            源 {stats.sources ?? 0} · 文件 {stats.files ?? 0} · 分块 {stats.chunks ?? 0}
+            {t('knowledgeAdminPanel.statsSources', { count: stats.sources ?? 0 })}
             {' · '}
-            可嵌入 {stats.embeddableChunks ?? 0}
+            {t('knowledgeAdminPanel.statsFiles', { count: stats.files ?? 0 })}
             {' · '}
-            向量 {stats.embeddings ?? 0}
+            {t('knowledgeAdminPanel.statsChunks', { count: stats.chunks ?? 0 })}
+            {' · '}
+            {t('knowledgeAdminPanel.statsEmbeddable', { count: stats.embeddableChunks ?? 0 })}
+            {' · '}
+            {t('knowledgeAdminPanel.statsEmbeddings', { count: stats.embeddings ?? 0 })}
             {(stats.embeddableChunks ?? 0) > 0 && `/${stats.embeddableChunks}`}
             {' · '}
-            待检查 {stats.jobsQueued ?? 0} / 任务 {stats.jobsRunning ?? 0}
+            {t('knowledgeAdminPanel.statsJobs', {
+              queued: stats.jobsQueued ?? 0,
+              running: stats.jobsRunning ?? 0,
+            })}
           </>
         )}
         {booted && hasActiveIndexing && (
           <span className="status-warn">
-            {' '}
-            · 索引中…（解析/分块优先，完成后可关键词搜索；向量后台补）
+            {' · '}
+            {t('knowledgeAdminPanel.indexingHint')}
           </span>
         )}
         {booted &&
           !hasActiveIndexing &&
           (stats.embeddings ?? 0) < (stats.embeddableChunks ?? 0) &&
-          (stats.embeddableChunks ?? 0) > 0 && <span className="status-warn"> · 向量待补</span>}
+          (stats.embeddableChunks ?? 0) > 0 && (
+            <span className="status-warn"> · {t('knowledgeAdminPanel.vectorsPending')}</span>
+          )}
         {booted &&
           !hasActiveIndexing &&
           (stats.embeddableChunks ?? 0) > 0 &&
           (stats.embeddings ?? 0) >= (stats.embeddableChunks ?? 0) && (
-            <span className="status-ok"> · 就绪</span>
+            <span className="status-ok"> · {t('knowledgeAdminPanel.ready')}</span>
           )}
         {booted &&
           !hasActiveIndexing &&
           (stats.embeddableChunks ?? 0) === 0 &&
-          (stats.chunks ?? 0) > 0 && <span className="status-ok"> · 就绪（代码无需向量）</span>}
+          (stats.chunks ?? 0) > 0 && (
+            <span className="status-ok"> · {t('knowledgeAdminPanel.readyNoVectors')}</span>
+          )}
         {hasActiveIndexing ? (
           <button
             type="button"
@@ -645,8 +677,11 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                   const tail = r.runningJobs ?? 0;
                   showOp(
                     tail > 0
-                      ? `已中止全部：清队列 ${r.cancelledQueued} 条 · ${tail} 个任务收尾中（embedding 批次返回后停）`
-                      : `已中止全部：清队列 ${r.cancelledQueued} 条`,
+                      ? t('knowledgeAdminPanel.abortAllDoneTail', {
+                          queued: r.cancelledQueued,
+                          tail,
+                        })
+                      : t('knowledgeAdminPanel.abortAllDone', { queued: r.cancelledQueued }),
                     'warn',
                   );
                   void refresh();
@@ -654,7 +689,9 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
               )
             }
           >
-            {opBusy === 'abortAll' ? '中止中…' : '中止索引'}
+            {opBusy === 'abortAll'
+              ? t('knowledgeAdminPanel.aborting')
+              : t('knowledgeAdminPanel.abortAll')}
           </button>
         ) : (
           (stats.embeddableChunks ?? 0) > (stats.embeddings ?? 0) ||
@@ -670,13 +707,21 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                   'resumeAll',
                   () => client.resumeAllKnowledgeJobs(agentId),
                   (r) => {
-                    showOp(`已继续索引：恢复 ${r.restoredCancelled} 条 · 补向量 ${r.embedQueued} 条`, 'ok');
+                    showOp(
+                      t('knowledgeAdminPanel.resumeAllDone', {
+                        restored: r.restoredCancelled,
+                        embed: r.embedQueued,
+                      }),
+                      'ok',
+                    );
                     void refresh();
                   },
                 )
               }
             >
-              {opBusy === 'resumeAll' ? '继续中…' : '继续索引'}
+              {opBusy === 'resumeAll'
+                ? t('knowledgeAdminPanel.resuming')
+                : t('knowledgeAdminPanel.resumeAll')}
             </button>
           ) : null
         )}
@@ -685,13 +730,13 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
 
       {progress && (
         <div className="kn-progress small" title={progress.path ?? undefined}>
-          <span className="status-warn">索引</span>
+          <span className="status-warn">{t('knowledgeAdminPanel.progressLabel')}</span>
           <span className="mono">{progress.sourceId}</span>
           {progress.path && <span className="mono muted kn-progress-path">{progress.path}</span>}
           <span>{progress.status}</span>
           {progress.detail && <span className="muted">{progress.detail}</span>}
           <button type="button" className="btn-ghost small" onClick={() => setProgress(null)}>
-            清除
+            {t('knowledgeAdminPanel.progressClear')}
           </button>
         </div>
       )}
@@ -699,12 +744,12 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
       {panel === 'global' && (
         <section className="panel kn-panel">
           <header className="kn-panel-header">
-            <h2>公共知识库</h2>
-            <span className="small muted">全局源 · 默认全员可见 · 可对 Agent 隐藏</span>
+            <h2>{t('knowledgeAdminPanel.globalTitle')}</h2>
+            <span className="small muted">{t('knowledgeAdminPanel.globalSubtitle')}</span>
           </header>
 
           <div className="kn-register">
-            <strong className="small">注册公共源</strong>
+            <strong className="small">{t('knowledgeAdminPanel.registerGlobalTitle')}</strong>
             <div className="kn-form-row">
               <select
                 value={newSource.kind}
@@ -717,7 +762,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                 <option value="connector">connector</option>
               </select>
               <input
-                placeholder="location（路径 / URL）"
+                placeholder={t('knowledgeAdminPanel.locationPlaceholder')}
                 value={newSource.location}
                 onChange={(e) => setNewSource((s) => ({ ...s, location: e.target.value }))}
               />
@@ -732,20 +777,20 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                 disabled={busy || !newSource.location.trim()}
                 onClick={() => registerSource({ level: 'global', key: 'global' })}
               >
-                注册
+                {t('knowledgeAdminPanel.register')}
               </button>
             </div>
           </div>
 
           <div className="kn-list">
             {!booted && !fetchFailed && globalSources.length === 0 && (
-              <div className="small muted">加载中…</div>
+              <div className="small muted">{t('knowledgeAdminPanel.loading')}</div>
             )}
             {fetchFailed && globalSources.length === 0 && (
-              <div className="small muted">拉取失败，稍后重试。</div>
+              <div className="small muted">{t('knowledgeAdminPanel.fetchFailedRetry')}</div>
             )}
             {booted && !fetchFailed && globalSources.length === 0 && (
-              <div className="small muted">尚无公共源。注册后 agent 默认可见。</div>
+              <div className="small muted">{t('knowledgeAdminPanel.noGlobalSources')}</div>
             )}
             {globalSources.map((s) => (
               <SourceRow
@@ -758,7 +803,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                   client.reindexKnowledgeSource(agentId, s.id).then(() => refresh())
                 }
                 onDelete={() => {
-                  if (confirm(`卸载「${s.displayName}」？会清索引与使用痕迹。`)) {
+                  if (confirm(t('knowledgeAdminPanel.uninstallConfirm', { name: s.displayName }))) {
                     void client.deleteKnowledgeSource(agentId, s.id).then(refresh);
                   }
                 }}
@@ -774,8 +819,8 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
         <div className="kn-projects-layout">
           <section className="panel kn-panel kn-project-list">
             <header className="kn-panel-header">
-              <h2>项目</h2>
-              <span className="small muted">先建项目，再挂源；挂载后 Agent 可见</span>
+              <h2>{t('knowledgeAdminPanel.projectsTitle')}</h2>
+              <span className="small muted">{t('knowledgeAdminPanel.projectsSubtitle')}</span>
             </header>
             <div className="kn-form-row">
               <input
@@ -799,12 +844,12 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                     .catch((err) => setError(err instanceof Error ? err.message : String(err)));
                 }}
               >
-                新建项目
+                {t('knowledgeAdminPanel.newProject')}
               </button>
             </div>
             <div className="kn-list">
               {projects.length === 0 && (
-                <div className="small muted">尚无项目。先建项目再挂源。</div>
+                <div className="small muted">{t('knowledgeAdminPanel.noProjects')}</div>
               )}
               {projects.map((p) => (
                 <button
@@ -822,7 +867,13 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                     <div className="small muted mono">{p.projectKey}</div>
                   </div>
                   <div className="small muted">
-                    {p.sourceCount} 源 · {p.assignedAgentIds.length > 0 ? `可见于 ${p.assignedAgentIds.join(', ')}` : '未挂载'}
+                    {t('knowledgeAdminPanel.projectRowSources', { count: p.sourceCount })}
+                    {' · '}
+                    {p.assignedAgentIds.length > 0
+                      ? t('knowledgeAdminPanel.projectRowVisibleTo', {
+                          agents: p.assignedAgentIds.join(', '),
+                        })
+                      : t('knowledgeAdminPanel.notMounted')}
                   </div>
                 </button>
               ))}
@@ -831,7 +882,9 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
 
           <section className="panel kn-panel">
             {!selected && (
-              <div className="kn-empty small muted">选择左侧项目，查看源与挂载。</div>
+              <div className="kn-empty small muted">
+                {t('knowledgeAdminPanel.selectProjectHint')}
+              </div>
             )}
             {selected && (
               <>
@@ -841,11 +894,9 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                 </header>
 
                 <div className="kn-mount">
-                  <strong className="small">挂载给 Agent</strong>
+                  <strong className="small">{t('knowledgeAdminPanel.mountTitle')}</strong>
                   {selected.assignedAgentIds.length === 0 && (
-                    <div className="kn-warn small">
-                      尚未挂载给任何 Agent，当前无人可见。只挂给一个 Agent = 该 Agent 独享。
-                    </div>
+                    <div className="kn-warn small">{t('knowledgeAdminPanel.mountWarn')}</div>
                   )}
                   <div className="kn-mount-list">
                     {agents.map((a) => {
@@ -858,16 +909,22 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                             onChange={() => void toggleMount(selected.projectKey, mounted)}
                           />
                           <span className="mono">{a}</span>
-                          <span className="small muted">{mounted ? '已挂载' : '未挂载'}</span>
+                          <span className="small muted">
+                            {mounted
+                              ? t('knowledgeAdminPanel.mounted')
+                              : t('knowledgeAdminPanel.notMounted')}
+                          </span>
                         </label>
                       );
                     })}
-                    {agents.length === 0 && <div className="small muted">无已注册 Agent</div>}
+                    {agents.length === 0 && (
+                      <div className="small muted">{t('knowledgeAdminPanel.noAgents')}</div>
+                    )}
                   </div>
                 </div>
 
                 <div className="kn-register">
-                  <strong className="small">项目源</strong>
+                  <strong className="small">{t('knowledgeAdminPanel.projectSourcesTitle')}</strong>
                   <div className="kn-form-row">
                     <select
                       value={newSource.kind}
@@ -892,20 +949,20 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                         registerSource({ level: 'project', key: selected.projectKey })
                       }
                     >
-                      注册到本项目
+                      {t('knowledgeAdminPanel.registerToProject')}
                     </button>
                   </div>
                 </div>
 
                 <div className="kn-list">
                   {projectSourcesLoading && projectSources.length === 0 && !fetchFailed && (
-                    <div className="small muted">加载中…</div>
+                    <div className="small muted">{t('knowledgeAdminPanel.loading')}</div>
                   )}
                   {fetchFailed && projectSources.length === 0 && !projectSourcesLoading && (
-                    <div className="small muted">拉取失败，稍后重试。</div>
+                    <div className="small muted">{t('knowledgeAdminPanel.fetchFailedRetry')}</div>
                   )}
                   {!projectSourcesLoading && !fetchFailed && projectSources.length === 0 && (
-                    <div className="small muted">本项目尚无源。</div>
+                    <div className="small muted">{t('knowledgeAdminPanel.noProjectSources')}</div>
                   )}
                   {projectSources.map((s) => (
                     <SourceRow
@@ -918,7 +975,11 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                         client.reindexKnowledgeSource(agentId, s.id).then(() => refresh())
                       }
                       onDelete={() => {
-                        if (confirm(`卸载「${s.displayName}」？会清索引与使用痕迹。`)) {
+                        if (
+                          confirm(
+                            t('knowledgeAdminPanel.uninstallConfirm', { name: s.displayName }),
+                          )
+                        ) {
                           void client.deleteKnowledgeSource(agentId, s.id).then(refresh);
                         }
                       }}
@@ -950,12 +1011,12 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
       {panel === 'search' && (
         <section className="panel kn-panel">
           <header className="kn-panel-header">
-            <h2>试搜</h2>
-            <span className="small muted">宿主直搜 · effective view · 命中带溯源</span>
+            <h2>{t('knowledgeAdminPanel.searchTitle')}</h2>
+            <span className="small muted">{t('knowledgeAdminPanel.searchSubtitle')}</span>
           </header>
           <div className="kn-form-row">
             <input
-              placeholder="查询关键词"
+              placeholder={t('knowledgeAdminPanel.searchPlaceholder')}
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}
               onKeyDown={(e) => {
@@ -965,7 +1026,13 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                     .then((r) => {
                       setSearchHits(r.hits);
                       setSearchMeta(
-                        `命中 ${r.hits.length} · 向量 ${r.usedVector ? '开' : '关'} · 覆盖 ${Math.round((r.coverage ?? 0) * 100)}%`,
+                        t('knowledgeAdminPanel.searchMeta', {
+                          hits: r.hits.length,
+                          vector: r.usedVector
+                            ? t('knowledgeAdminPanel.toggleOn')
+                            : t('knowledgeAdminPanel.toggleOff'),
+                          coverage: Math.round((r.coverage ?? 0) * 100),
+                        }),
                       );
                     })
                     .catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -981,13 +1048,19 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                   .then((r) => {
                     setSearchHits(r.hits);
                     setSearchMeta(
-                      `命中 ${r.hits.length} · 向量 ${r.usedVector ? '开' : '关'} · 覆盖 ${Math.round((r.coverage ?? 0) * 100)}%`,
+                      t('knowledgeAdminPanel.searchMeta', {
+                        hits: r.hits.length,
+                        vector: r.usedVector
+                          ? t('knowledgeAdminPanel.toggleOn')
+                          : t('knowledgeAdminPanel.toggleOff'),
+                        coverage: Math.round((r.coverage ?? 0) * 100),
+                      }),
                     );
                   })
                   .catch((err) => setError(err instanceof Error ? err.message : String(err)));
               }}
             >
-              搜索
+              {t('knowledgeAdminPanel.search')}
             </button>
           </div>
           {searchMeta && <div className="small muted mono">{searchMeta}</div>}

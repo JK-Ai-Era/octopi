@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useT } from '../i18n/react';
 
 /**
  * RunServicesPanel — run serve 实例页签（服务拓扑）。
@@ -45,6 +46,7 @@ function formatState(state: string): string {
 }
 
 export function RunServicesPanel({ client }: RunServicesPanelProps) {
+  const t = useT();
   const [fleet, setFleet] = useState<FleetStatusDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -69,29 +71,29 @@ export function RunServicesPanel({ client }: RunServicesPanelProps) {
     <div className="ctx-runtime">
       <section className="panel sidebar-section">
         <div className="sidebar-title">
-          Run 服务实例
+          {t('runServices.title')}
           <button
             className="btn-tab"
             style={{ marginLeft: 'auto', fontSize: '11px' }}
             onClick={() => void refresh()}
             disabled={loading}
           >
-            {loading ? '刷新中…' : '刷新'}
+            {loading ? t('runServices.refreshing') : t('runServices.refresh')}
           </button>
         </div>
-        {error && <div className="small muted">加载失败：{error}</div>}
-        {loading && !fleet && <div className="small muted">加载中…</div>}
+        {error && <div className="small muted">{t('runServices.loadFailed', { error })}</div>}
+        {loading && !fleet && <div className="small muted">{t('runServices.loading')}</div>}
         {!error && !loading && !fleet && (
-          <div className="small muted">服务未返回实例数据（/fleet 空响应）</div>
+          <div className="small muted">{t('runServices.empty')}</div>
         )}
         {fleet && (
           <>
             <div className="inspector-kv">
-              <span className="small muted">副本期望（replicasPerVersion）</span>
+              <span className="small muted">{t('runServices.replicasExpected')}</span>
               <span className="small">{fleet.route.replicasPerVersion}</span>
-              <span className="small muted">版本指针</span>
+              <span className="small muted">{t('runServices.versionPointer')}</span>
               <span className="small">{fleet.route.versionPointer}</span>
-              <span className="small muted">权重</span>
+              <span className="small muted">{t('runServices.weights')}</span>
               <span className="small">
                 {Object.keys(fleet.route.weights).length === 0
                   ? '—'
@@ -101,17 +103,17 @@ export function RunServicesPanel({ client }: RunServicesPanelProps) {
               </span>
             </div>
             {fleet.instances.length === 0 ? (
-              <div className="small muted">无运行中的 run serve 实例</div>
+              <div className="small muted">{t('runServices.noInstances')}</div>
             ) : (
               <table className="small" style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ textAlign: 'left', opacity: 0.7 }}>
-                    <th style={{ padding: '2px 6px 2px 0' }}>实例</th>
-                    <th style={{ padding: '2px 6px 2px 0' }}>状态</th>
-                    <th style={{ padding: '2px 6px 2px 0' }}>版本</th>
+                    <th style={{ padding: '2px 6px 2px 0' }}>{t('runServices.colInstance')}</th>
+                    <th style={{ padding: '2px 6px 2px 0' }}>{t('runServices.colState')}</th>
+                    <th style={{ padding: '2px 6px 2px 0' }}>{t('runServices.colVersion')}</th>
                     <th style={{ padding: '2px 6px 2px 0' }}>PID</th>
-                    <th style={{ padding: '2px 6px 2px 0' }}>端口</th>
-                    <th style={{ padding: '2px 6px 2px 0' }}>负载</th>
+                    <th style={{ padding: '2px 6px 2px 0' }}>{t('runServices.colPort')}</th>
+                    <th style={{ padding: '2px 6px 2px 0' }}>{t('runServices.colLoad')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -125,16 +127,17 @@ export function RunServicesPanel({ client }: RunServicesPanelProps) {
                       <td style={{ padding: '2px 6px 2px 0' }}>{i.pid}</td>
                       <td style={{ padding: '2px 6px 2px 0' }}>{i.port}</td>
                       <td style={{ padding: '2px 6px 2px 0' }}>
-                        {i.load.inFlightRuns} 在跑{i.load.queued > 0 ? ` / ${i.load.queued} 排队` : ''}
+                        {t('runServices.loadInFlight', { count: i.load.inFlightRuns })}
+                        {i.load.queued > 0
+                          ? ` / ${t('runServices.loadQueued', { count: i.load.queued })}`
+                          : ''}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-            <div className="small muted">
-              版本列悬停可见 buildRef（构建产物根）；热换走 fleet spawn/promote/drain（运维面）。
-            </div>
+            <div className="small muted">{t('runServices.buildRefHint')}</div>
           </>
         )}
       </section>

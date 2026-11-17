@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { OctopiClient } from '@octopi-agent/gateway/web/sdk/client';
+import { useT } from '../i18n/react';
 
 export function SessionEffectRootsPanel({
   client,
@@ -22,6 +23,7 @@ export function SessionEffectRootsPanel({
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const t = useT();
 
   const refresh = useCallback(async () => {
     if (!client || !sessionId) {
@@ -49,7 +51,7 @@ export function SessionEffectRootsPanel({
     const path = draft.trim();
     if (!client || !sessionId || !path) return;
     if (!path.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(path)) {
-      setError('必须是绝对路径（如 /data/scratch 或 C:\\data\\scratch）');
+      setError(t('sessionEffectRoots.absolutePathRequired'));
       return;
     }
     setBusy(true);
@@ -57,7 +59,7 @@ export function SessionEffectRootsPanel({
       setError(null);
       await client.addSessionEffectRoot(sessionId, path);
       setDraft('');
-      onToast?.('已添加会话临时目录');
+      onToast?.(t('sessionEffectRoots.addedToast'));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -72,7 +74,7 @@ export function SessionEffectRootsPanel({
     try {
       setError(null);
       await client.removeSessionEffectRoot(sessionId, path);
-      onToast?.('已移除会话临时目录');
+      onToast?.(t('sessionEffectRoots.removedToast'));
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -82,20 +84,21 @@ export function SessionEffectRootsPanel({
   };
 
   if (!sessionId) {
-    return <div className="small muted">请先打开会话。</div>;
+    return <div className="small muted">{t('sessionEffectRoots.noSession')}</div>;
   }
 
   return (
     <section className="panel sidebar-section">
       <div className="sidebar-title" style={{ marginBottom: 0 }}>
-        允许目录 · 仅本会话
+        {t('sessionEffectRoots.title')}
         <button type="button" className="btn-ghost small" onClick={() => void refresh()}>
-          刷新
+          {t('sessionEffectRoots.refresh')}
         </button>
       </div>
       <div className="small muted" style={{ margin: '6px 0 10px' }}>
-        临时追加可写/可撤销根（absolute path）。不放宽安全模式
-        {mode ? `（当前 mode=${mode}）` : ''}；会话结束后失效。
+        {t('sessionEffectRoots.hintLead')}
+        {mode ? t('sessionEffectRoots.hintMode', { mode }) : ''}
+        {t('sessionEffectRoots.hintTail')}
       </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
@@ -120,18 +123,18 @@ export function SessionEffectRootsPanel({
           disabled={busy || !draft.trim()}
           onClick={() => void addRoot()}
         >
-          添加
+          {t('sessionEffectRoots.add')}
         </button>
       </div>
 
       {error && <div className="small status-error" style={{ marginBottom: 8 }}>{error}</div>}
 
       <div className="small muted" style={{ marginBottom: 4 }}>
-        会话临时（可移除）
+        {t('sessionEffectRoots.temporarySection')}
       </div>
       {temporaryRoots.length === 0 ? (
         <div className="small muted" style={{ marginBottom: 12 }}>
-          （无）
+          {t('sessionEffectRoots.none')}
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
@@ -159,7 +162,7 @@ export function SessionEffectRootsPanel({
                 disabled={busy}
                 onClick={() => void removeRoot(p)}
               >
-                移除
+                {t('sessionEffectRoots.remove')}
               </button>
             </div>
           ))}
@@ -167,10 +170,10 @@ export function SessionEffectRootsPanel({
       )}
 
       <div className="small muted" style={{ marginBottom: 4 }}>
-        配置中的根（只读）
+        {t('sessionEffectRoots.configuredSection')}
       </div>
       {configuredRoots.length === 0 ? (
-        <div className="small muted">（未配置 workspace / transactionRoots）</div>
+        <div className="small muted">{t('sessionEffectRoots.configuredEmpty')}</div>
       ) : (
         <div style={{ display: 'grid', gap: 4 }}>
           {configuredRoots.map((p) => (

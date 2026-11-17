@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
+import { useT } from '../i18n/react';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -23,6 +24,7 @@ interface PrivilegedStatus {
 
 /** 常驻 PRIVILEGED 标记（app header 用） */
 export function PrivilegedBadge() {
+  const t = useT();
   const client = useMemo(
     () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [],
@@ -52,7 +54,7 @@ export function PrivilegedBadge() {
   if (!status?.active) return null;
   return (
     <span
-      title={`特权部署运行中（授权无笼 / 全量提权 / 高权限进程）：${status.reasons.join('；')}`}
+      title={t('privilegedBadge.title', { reasons: status.reasons.join(t('privilegedBadge.reasonSeparator')) })}
       style={{
         display: 'inline-flex',
         alignItems: 'center',

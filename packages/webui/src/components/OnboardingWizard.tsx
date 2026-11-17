@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { resolveDefaultBase } from '../gateway-base';
 import { probeErrorCopy, type ProbeErrorKind } from '@octopi-agent/engine/config-admin/error-copy.js';
+import { useT } from '../i18n/react';
 
 interface WizardRender {
   /** 步骤进度（服务端 ONBOARDING_STEPS 派生——前端不自维护步骤序） */
@@ -62,6 +63,7 @@ function probeCopy(kind: ProbeErrorKind): { title: string; detail: string } {
 }
 
 export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Element {
+  const t = useT();
   const [render, setRender] = useState<WizardRender | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +80,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
   const submit = async (event: { kind: string; save?: boolean }, extra?: Record<string, unknown>): Promise<void> => {
     // M-4：密码二次确认是硬校验（此前收集了但不比对，形同装饰）
     if (event.kind === 'next' && draft.adminPassword !== undefined && draft.adminPassword !== adminPassword2) {
-      setError('两次输入的密码不一致');
+      setError(t('onboardingWizard.passwordMismatch'));
       return;
     }
     setBusy(true);
@@ -101,7 +103,9 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
   if (!render) {
     return (
       <div className="panel" style={{ margin: 48, maxWidth: 560 }}>
-        <div className="small muted">{error ? `无法启动向导：${error}` : '正在启动配置向导…'}</div>
+        <div className="small muted">
+          {error ? t('onboardingWizard.startFailed', { error }) : t('onboardingWizard.starting')}
+        </div>
       </div>
     );
   }
@@ -113,8 +117,8 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
       case 'welcome':
         return (
           <div className="wizard-step">
-            <h2>三分钟让你的助手跑起来 🐙</h2>
-            <p className="small muted">先选一个界面语言（之后可在设置中修改）。</p>
+            <h2>{t('onboardingWizard.welcomeTitle')}</h2>
+            <p className="small muted">{t('onboardingWizard.welcomeHint')}</p>
             <div className="wizard-cards">
               {render.options.languages.map((o) => (
                 <button
@@ -131,14 +135,14 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
       case 'init-mode':
         return (
           <div className="wizard-step">
-            <h2>选一种初始化方式</h2>
-            <p className="small muted">你现在在 Web 向导中；也可以全程用命令行（octopi init）。</p>
+            <h2>{t('onboardingWizard.initModeTitle')}</h2>
+            <p className="small muted">{t('onboardingWizard.initModeHint')}</p>
             <div className="wizard-cards">
               <button className="btn-primary wizard-card" onClick={() => void submit({ kind: 'next' }, { initMode: 'web' })}>
-                就在这里配置（Web）
+                {t('onboardingWizard.initModeWeb')}
               </button>
               <button className="btn-secondary wizard-card" onClick={() => void submit({ kind: 'next' }, { initMode: 'cli' })}>
-                去命令行配置
+                {t('onboardingWizard.initModeCli')}
               </button>
             </div>
           </div>
@@ -146,7 +150,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
       case 'deployment-mode':
         return (
           <div className="wizard-step">
-            <h2>你打算怎么用？</h2>
+            <h2>{t('onboardingWizard.deploymentTitle')}</h2>
             <div className="wizard-cards">
               {render.options.deploymentModes.map((o) => (
                 <button
@@ -163,22 +167,22 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
               <div className="wizard-form">
                 {mode === 'multi-organization' && (
                   <label className="small">
-                    组织名称
+                    {t('onboardingWizard.orgNameLabel')}
                     <input value={String(draft.orgName ?? render.choices.orgName ?? '')} onChange={(e) => setDraft((d) => ({ ...d, orgName: e.target.value }))} />
                   </label>
                 )}
                 <label className="small">
-                  管理员密码
+                  {t('onboardingWizard.adminPasswordLabel')}
                   <input type="password" onChange={(e) => setDraft((d) => ({ ...d, adminPassword: e.target.value }))} />
                 </label>
                 <label className="small">
-                  再输一遍
+                  {t('onboardingWizard.adminPasswordConfirmLabel')}
                   <input type="password" value={adminPassword2} onChange={(e) => setAdminPassword2(e.target.value)} />
                 </label>
               </div>
             )}
             <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
-              下一步
+              {t('onboardingWizard.next')}
             </button>
           </div>
         );
@@ -186,7 +190,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
         const isCustom = draft.providerId === 'custom' || render.choices.providerId === 'custom';
         return (
           <div className="wizard-step">
-            <h2>选择模型服务</h2>
+            <h2>{t('onboardingWizard.providerTitle')}</h2>
             <div className="wizard-cards">
               {render.options.providers.map((o) => (
                 <button
@@ -208,7 +212,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
             {isCustom && (
               <>
                 <label className="small">
-                  Base URL（OpenAI 兼容接口地址）
+                  {t('onboardingWizard.baseUrlLabel')}
                   <input
                     type="text"
                     placeholder="http://localhost:11434/v1"
@@ -224,7 +228,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
                     void submit({ kind: 'next' }, { providerId: 'custom', providerOverrides: draft.providerOverrides })
                   }
                 >
-                  下一步
+                  {t('onboardingWizard.next')}
                 </button>
               </>
             )}
@@ -234,43 +238,43 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
       case 'api-key':
         return (
           <div className="wizard-step">
-            <h2>录入 API Key</h2>
+            <h2>{t('onboardingWizard.apiKeyTitle')}</h2>
             <p className="small muted">
-              {render.options.providers.find((p) => p.id === render.choices.providerId)?.keyHint ?? '在模型服务官网获取 API Key。'}
-              {' '}Key 只保存在本机（.env，0600），不会明文进配置。
+              {render.options.providers.find((p) => p.id === render.choices.providerId)?.keyHint ?? t('onboardingWizard.apiKeyHintFallback')}
+              {' '}{t('onboardingWizard.apiKeyHintSuffix')}
             </p>
             <div className="wizard-form">
               <label className="small">
                 API Key
-                <input type="password" onChange={(e) => setDraft((d) => ({ ...d, apiKey: e.target.value }))} placeholder={render.choices.hasApiKey ? '已录入（留空保持不变）' : 'sk-…'} />
+                <input type="password" onChange={(e) => setDraft((d) => ({ ...d, apiKey: e.target.value }))} placeholder={render.choices.hasApiKey ? t('onboardingWizard.apiKeyPlaceholderSet') : 'sk-…'} />
               </label>
             </div>
             <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
-              下一步
+              {t('onboardingWizard.next')}
             </button>
           </div>
         );
       case 'model':
         return (
           <div className="wizard-step">
-            <h2>选择模型</h2>
-            <p className="small muted">填一个模型 id（如 deepseek-chat）；不确定就用服务默认。</p>
+            <h2>{t('onboardingWizard.modelTitle')}</h2>
+            <p className="small muted">{t('onboardingWizard.modelHint')}</p>
             <div className="wizard-form">
               <label className="small">
-                模型 id
+                {t('onboardingWizard.modelIdLabel')}
                 <input value={String(draft.modelId ?? render.choices.modelId ?? '')} onChange={(e) => setDraft((d) => ({ ...d, modelId: e.target.value }))} />
               </label>
             </div>
             <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
-              下一步
+              {t('onboardingWizard.next')}
             </button>
           </div>
         );
       case 'probe':
         return (
           <div className="wizard-step">
-            <h2>测通</h2>
-            <p className="small muted">用你填的配置真发一次请求验证。</p>
+            <h2>{t('onboardingWizard.probeTitle')}</h2>
+            <p className="small muted">{t('onboardingWizard.probeHint')}</p>
             {render.probeError && (() => {
               const c = probeCopy(render.probeError!.kind);
               return (
@@ -281,37 +285,39 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
               );
             })()}
             <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
-              {render.probeError ? '重试测通' : '开始测通'}
+              {render.probeError ? t('onboardingWizard.probeRetry') : t('onboardingWizard.probeStart')}
             </button>
           </div>
         );
       case 'services':
         return (
           <div className="wizard-step">
-            <h2>准备起服务</h2>
-            <p className="small muted">配置已保存。下一步完成后即可开始第一句话。</p>
+            <h2>{t('onboardingWizard.servicesTitle')}</h2>
+            <p className="small muted">{t('onboardingWizard.servicesHint')}</p>
             <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
-              下一步
+              {t('onboardingWizard.next')}
             </button>
           </div>
         );
       case 'first-chat':
         return (
           <div className="wizard-step">
-            <h2>完成 🎉</h2>
-            <p className="small muted">一切就绪——现在就可以和你的助手开始第一句话。</p>
+            <h2>{t('onboardingWizard.doneTitle')}</h2>
+            <p className="small muted">{t('onboardingWizard.doneHint')}</p>
             <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
-              开始第一句话
+              {t('onboardingWizard.startChat')}
             </button>
           </div>
         );
       default:
         return (
           <div className="wizard-step">
-            <h2>向导已结束</h2>
-            <p className="small muted">{render.completed ? '配置完成。' : '向导中止，配置未改。'}</p>
+            <h2>{t('onboardingWizard.finishedTitle')}</h2>
+            <p className="small muted">
+              {render.completed ? t('onboardingWizard.finishedCompleted') : t('onboardingWizard.finishedAborted')}
+            </p>
             <button className="btn-primary" onClick={onDone}>
-              进入对话
+              {t('onboardingWizard.enterChat')}
             </button>
           </div>
         );
@@ -322,50 +328,54 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
     <div className="panel wizard-panel">
       {render.completed && render.hotApplied === true && (
         <div className="status-card" role="status">
-          <div className="status-card-title">配置已保存并即时生效</div>
+          <div className="status-card-title">{t('onboardingWizard.hotAppliedTitle')}</div>
           <div className="status-card-detail">
-            新会话即用新配置，无需重启。现在就可以点「进入对话」开始使用。
+            {t('onboardingWizard.hotAppliedDetail')}
           </div>
         </div>
       )}
       {render.completed && render.hotApplied === false && (
         <div className="error-card error-card-user-action" role="status">
-          <div className="error-card-title">配置已保存（热应用失败，需重启）</div>
+          <div className="error-card-title">{t('onboardingWizard.hotApplyFailedTitle')}</div>
           <div className="error-card-detail">
-            {render.hotApplyError} —— 请运行 <code>octopi serve restart</code> 使新配置生效。
+            {render.hotApplyError}{t('onboardingWizard.hotApplyFailedSeparator')}
+            <code>octopi serve restart</code>{t('onboardingWizard.hotApplyFailedAfter')}
           </div>
         </div>
       )}
       {render.completed && render.hotApplied === undefined && (
         <div className="error-card error-card-user-action" role="status">
-          <div className="error-card-title">配置已保存</div>
+          <div className="error-card-title">{t('onboardingWizard.savedTitle')}</div>
           <div className="error-card-detail">
-            重启服务后生效：<code>octopi serve restart</code>。在此之前，对话所用的仍是旧配置。
+            {t('onboardingWizard.restartRequiredPrefix')}<code>octopi serve restart</code>
+            {t('onboardingWizard.restartRequiredSuffix')}
           </div>
         </div>
       )}
       {render.completed && render.demoWarning && (
         <div className="error-card error-card-user-action" role="status">
-          <div className="error-card-title">示例任务包未播种</div>
+          <div className="error-card-title">{t('onboardingWizard.demoWarningTitle')}</div>
           <div className="error-card-detail">
-            {render.demoWarning} —— 主配置已保存，不受影响；示例助手与样例资料未就绪，「试试这个示例」暂不可用。
+            {t('onboardingWizard.demoWarningDetail', { warning: render.demoWarning })}
           </div>
         </div>
       )}
       <div className="small muted">
-        首启配置向导
-        {step && render.stepCount > 0 && <span> · 第 {render.stepIndex}/{render.stepCount} 步</span>}
+        {t('onboardingWizard.footerTitle')}
+        {step && render.stepCount > 0 && (
+          <span>{t('onboardingWizard.stepProgress', { index: render.stepIndex, count: render.stepCount })}</span>
+        )}
       </div>
       {body}
       {error && <div className="small status-error" style={{ marginTop: 8 }}>{error}</div>}
-      {render.notice === 'back-at-first' && <div className="small muted">已经是第一步了。</div>}
+      {render.notice === 'back-at-first' && <div className="small muted">{t('onboardingWizard.backAtFirst')}</div>}
       {step !== null && step !== 'welcome' && step !== 'provider' && (
         <div className="wizard-nav">
           <button className="btn-ghost small" onClick={() => void submit({ kind: 'back' })} disabled={busy}>
-            ← 上一步
+            {t('onboardingWizard.back')}
           </button>
           <button className="btn-ghost small" onClick={() => void submit({ kind: 'exit', save: false })} disabled={busy}>
-            退出（不保存）
+            {t('onboardingWizard.exitNoSave')}
           </button>
         </div>
       )}

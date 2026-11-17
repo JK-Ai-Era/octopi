@@ -7,25 +7,29 @@
  * 归因缺失（旧库）按启发式显示；blocked_secret 是启发式兜底 + 密钥封锁特例
  * （抽样含密钥形态，素材未外发）。
  */
+
+import type { MessageKey } from '../i18n/core';
+import { useT } from '../i18n/react';
+
 const TIERS: Record<
   'heuristic' | 'llm' | 'blocked_secret',
-  { label: string; title: string; bg: string; color: string }
+  { labelKey: MessageKey; titleKey: MessageKey; bg: string; color: string }
 > = {
   llm: {
-    label: 'LLM 生成',
-    title: '此描述由 LLM 生成（gateway 代生成，素材经密钥扫描）；人工描述优先于它',
+    labelKey: 'descriptionSourceBadge.llmLabel',
+    titleKey: 'descriptionSourceBadge.llmTitle',
     bg: '#eaf2fb',
     color: '#2c6fbb',
   },
   heuristic: {
-    label: '启发式',
-    title: '此描述由启发式规则（名称/路径推断）生成；人工描述优先于它',
+    labelKey: 'descriptionSourceBadge.heuristicLabel',
+    titleKey: 'descriptionSourceBadge.heuristicTitle',
     bg: '#f0f0f0',
     color: '#666',
   },
   blocked_secret: {
-    label: '启发式 · 密钥封锁',
-    title: '抽样含密钥形态，素材未外发（fail-safe）；描述为启发式兜底',
+    labelKey: 'descriptionSourceBadge.blockedSecretLabel',
+    titleKey: 'descriptionSourceBadge.blockedSecretTitle',
     bg: '#fdf3e7',
     color: '#b9770e',
   },
@@ -36,10 +40,11 @@ export function DescriptionSourceBadge({
 }: {
   source?: 'heuristic' | 'llm' | 'blocked_secret';
 }) {
+  const t = useT();
   const tier = TIERS[source ?? 'heuristic'] ?? TIERS.heuristic;
   return (
     <span
-      title={tier.title}
+      title={t(tier.titleKey)}
       style={{
         display: 'inline-block',
         padding: '1px 6px',
@@ -53,7 +58,7 @@ export function DescriptionSourceBadge({
         verticalAlign: '1px',
       }}
     >
-      {tier.label}
+      {t(tier.labelKey)}
     </span>
   );
 }

@@ -10,6 +10,7 @@
  */
 
 import { classifyError, makeDiagnosticId, type ErrorDomain } from '@octopi-agent/engine/config-admin/error-copy.js';
+import { t } from '../i18n/core';
 
 // 诊断 ID 生成单源在 engine error-copy（gateway 写入侧同源）
 export { makeDiagnosticId };
@@ -69,6 +70,9 @@ export function classifyFlowError(
     title: copy.title,
     detail: copy.detail,
     raw,
-    action: hasSettingsAction && onOpenSettings ? { label: '去设置', run: onOpenSettings } : undefined,
+    action:
+      hasSettingsAction && onOpenSettings
+        ? { label: t('errorClassify.openSettings'), run: onOpenSettings }
+        : undefined,
   };
 }

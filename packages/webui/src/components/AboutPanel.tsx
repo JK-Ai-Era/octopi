@@ -7,6 +7,8 @@
  */
 
 import { getProductVersion } from '../runtime-config';
+import { useT } from '../i18n/react';
+import type { MessageKey } from '../i18n/core';
 
 /** 文档与源码链接（产品页文案；仓库搬家时随 package.json homepage 同步改） */
 const LINKS = {
@@ -15,16 +17,18 @@ const LINKS = {
   changelog: 'https://github.com/JK-Ai-Era/octopi/blob/main/CHANGELOG.md',
 } as const;
 
-const SHORTCUTS: Array<[string, string]> = [
-  ['Enter', '发送消息'],
-  ['Shift+Enter', '换行'],
-  ['/stop', '停止当前运行（「中止」按钮同效）'],
-  ['/', '打开命令补全'],
-  ['Esc', '关闭详情浮层'],
-  ['拖拽 / 粘贴', '上传附件（「附件」按钮同效）'],
+/** 快捷键表：`keys` 为键面原文（技术标识不译），`keysKey` 为需要本地化的键面文字 */
+const SHORTCUTS: Array<{ keys?: string; keysKey?: MessageKey; desc: MessageKey }> = [
+  { keys: 'Enter', desc: 'aboutPanel.shortcutEnter' },
+  { keys: 'Shift+Enter', desc: 'aboutPanel.shortcutNewline' },
+  { keys: '/stop', desc: 'aboutPanel.shortcutStop' },
+  { keys: '/', desc: 'aboutPanel.shortcutSlash' },
+  { keys: 'Esc', desc: 'aboutPanel.shortcutEsc' },
+  { keysKey: 'aboutPanel.shortcutAttachKeys', desc: 'aboutPanel.shortcutAttach' },
 ];
 
 export function AboutPanel(): JSX.Element {
+  const t = useT();
   const version = getProductVersion();
   return (
     <div className="about-page">
@@ -32,22 +36,23 @@ export function AboutPanel(): JSX.Element {
         <div className="about-hero-mark" aria-hidden>🐙</div>
         <div>
           <h3 className="about-hero-title">Octopi Web</h3>
-          <div className="small muted">Embeddable agent engine · 你的 AI 工作台</div>
+          <div className="small muted">{t('aboutPanel.tagline')}</div>
           <div className="small" style={{ marginTop: 6 }}>
-            版本 <code>{version ? `v${version}` : '未知（服务端未下发）'}</code>
+            {t('aboutPanel.versionLabel')}{' '}
+            <code>{version ? `v${version}` : t('aboutPanel.versionUnknown')}</code>
           </div>
         </div>
       </div>
 
       <div className="about-grid">
         <div className="panel about-card">
-          <h4 className="about-card-title">快捷键</h4>
+          <h4 className="about-card-title">{t('aboutPanel.shortcutsTitle')}</h4>
           <table className="about-shortcuts">
             <tbody>
-              {SHORTCUTS.map(([key, desc]) => (
-                <tr key={key}>
-                  <td><kbd>{key}</kbd></td>
-                  <td>{desc}</td>
+              {SHORTCUTS.map((s) => (
+                <tr key={s.keys ?? s.keysKey}>
+                  <td><kbd>{s.keysKey ? t(s.keysKey) : s.keys}</kbd></td>
+                  <td>{t(s.desc)}</td>
                 </tr>
               ))}
             </tbody>
@@ -55,34 +60,40 @@ export function AboutPanel(): JSX.Element {
         </div>
 
         <div className="panel about-card">
-          <h4 className="about-card-title">布局导览</h4>
+          <h4 className="about-card-title">{t('aboutPanel.layoutTitle')}</h4>
           <ul className="small about-list">
-            <li><b>左栏</b>：连接状态、选 Agent、开/开会话</li>
-            <li><b>中栏</b>：主对话；输入框下方切模型、看上下文、手动压缩</li>
-            <li><b>右栏</b>：工作进度 / 会话物料 / 环境，点行进详情浮层；专家模式加「运行时透明」组</li>
-            <li>右栏与输入区都可<b>拖拽手柄</b>调整大小，<b>双击复位</b></li>
-            <li>顶栏「面板」：显示/隐藏右栏</li>
-            <li>设置 → 服务：远程部署手填 Gateway URL 与 API Key，可测试连接</li>
+            <li><b>{t('aboutPanel.layoutLeftLabel')}</b>{t('aboutPanel.layoutLeftDesc')}</li>
+            <li><b>{t('aboutPanel.layoutCenterLabel')}</b>{t('aboutPanel.layoutCenterDesc')}</li>
+            <li><b>{t('aboutPanel.layoutRightLabel')}</b>{t('aboutPanel.layoutRightDesc')}</li>
+            <li>
+              {t('aboutPanel.layoutResizePrefix')}<b>{t('aboutPanel.layoutResizeDrag')}</b>
+              {t('aboutPanel.layoutResizeMiddle')}<b>{t('aboutPanel.layoutResizeReset')}</b>
+            </li>
+            <li>{t('aboutPanel.layoutPanelToggle')}</li>
+            <li>{t('aboutPanel.layoutServices')}</li>
           </ul>
         </div>
 
         <div className="panel about-card about-card-wide">
-          <h4 className="about-card-title">口径（速查）</h4>
+          <h4 className="about-card-title">{t('aboutPanel.conventionsTitle')}</h4>
           <ul className="small about-list">
-            <li>会话级模型覆盖只影响该会话，不改 Agent 默认；新建会话时作为预选</li>
-            <li>上下文显示「上次实测 / 模型窗口」；窗口仅认配置，未配置显示「未知」</li>
-            <li>附件默认仅本会话；卡片「…」可归入项目或删除；右栏「文件」= send_file 发送的文本，图片/音视频在对话中展示</li>
-            <li>右栏「Git」按 <code>web.gitStatusPollSeconds</code> 轮询（默认 5s，0=不自动轮询），切换目录即刷新</li>
-            <li>右栏「上下文」八层口径：System 契约层 L1–L7（含 Runtime）+ Information L8（消息窗口，不进 System 装配栈）</li>
+            <li>{t('aboutPanel.convModelOverride')}</li>
+            <li>{t('aboutPanel.convContext')}</li>
+            <li>{t('aboutPanel.convAttachments')}</li>
+            <li>
+              {t('aboutPanel.convGitPrefix')}<code>web.gitStatusPollSeconds</code>
+              {t('aboutPanel.convGitSuffix')}
+            </li>
+            <li>{t('aboutPanel.convContextLayers')}</li>
           </ul>
         </div>
 
         <div className="panel about-card about-card-wide">
-          <h4 className="about-card-title">链接</h4>
+          <h4 className="about-card-title">{t('aboutPanel.linksTitle')}</h4>
           <div className="about-links">
-            <a href={LINKS.docs} target="_blank" rel="noreferrer">📖 文档</a>
-            <a href={LINKS.changelog} target="_blank" rel="noreferrer">📜 更新日志</a>
-            <a href={LINKS.repo} target="_blank" rel="noreferrer">🐙 源码</a>
+            <a href={LINKS.docs} target="_blank" rel="noreferrer">{t('aboutPanel.linkDocs')}</a>
+            <a href={LINKS.changelog} target="_blank" rel="noreferrer">{t('aboutPanel.linkChangelog')}</a>
+            <a href={LINKS.repo} target="_blank" rel="noreferrer">{t('aboutPanel.linkSource')}</a>
           </div>
         </div>
       </div>

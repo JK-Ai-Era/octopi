@@ -8,8 +8,10 @@ import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client.js';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, setRegistryToken, getRegistryToken } from '../console-key';
 import { getDeploymentMode } from '../runtime-config';
+import { useT } from '../i18n/react';
 
 export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }): JSX.Element {
+  const t = useT();
   const mode = getDeploymentMode();
   const [tenant, setTenant] = useState('');
   const [name, setName] = useState('');
@@ -33,9 +35,9 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }): JSX.Eleme
       // MINOR-7：网络/服务端故障不冒充密码错（同形防枚举只对 401 维持）
       const msg = String(e instanceof Error ? e.message : e);
       if (msg.includes('invalid_credentials') || msg.includes('401')) {
-        setError('用户名或密码不正确');
+        setError(t('loginPage.errorInvalidCredentials'));
       } else {
-        setError('无法连接登录服务，请检查服务状态后重试');
+        setError(t('loginPage.errorUnreachable'));
       }
     } finally {
       setBusy(false);
@@ -44,23 +46,23 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }): JSX.Eleme
 
   return (
     <div className="panel wizard-panel">
-      <h2>登录</h2>
+      <h2>{t('loginPage.title')}</h2>
       <p className="small muted">
-        {mode === 'multi-organization' ? '多组织部署——请输入组织、用户名与密码。' : '组织部署——请输入用户名与密码。'}
+        {mode === 'multi-organization' ? t('loginPage.hintMultiOrg') : t('loginPage.hintOrg')}
       </p>
       <div className="wizard-form">
         {mode === 'multi-organization' && (
           <label className="small">
-            组织
-            <input value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder="组织名" />
+            {t('loginPage.org')}
+            <input value={tenant} onChange={(e) => setTenant(e.target.value)} placeholder={t('loginPage.orgPlaceholder')} />
           </label>
         )}
         <label className="small">
-          用户名
+          {t('loginPage.username')}
           <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="username" />
         </label>
         <label className="small">
-          密码
+          {t('loginPage.password')}
           <input
             type="password"
             value={password}
@@ -74,7 +76,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }): JSX.Eleme
       </div>
       {error && <div className="small status-error">{error}</div>}
       <button className="btn-primary" onClick={() => void login()} disabled={busy || !name.trim() || !password}>
-        {busy ? '登录中…' : '登录'}
+        {busy ? t('loginPage.busy') : t('loginPage.submit')}
       </button>
     </div>
   );

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useT } from './i18n/react';
 import ChatWorkspace from './components/ChatWorkspace';
 import { KnowledgeAdminPanel } from './components/KnowledgeAdminPanel';
 import { PrivilegedBadge } from './components/PrivilegedBadge';
 import { KnowledgeServiceStatus } from './components/KnowledgeServiceStatus';
 import { SettingsWorkspace, type SettingsTab } from './components/SettingsWorkspace';
 import { ThemeToggle, initTheme } from './components/ThemeToggle';
+import { LanguageToggle } from './components/LanguageToggle';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { resolveDefaultBase } from './gateway-base';
 import { LoginPage } from './components/LoginPage';
@@ -16,6 +18,7 @@ initTheme(); // 恢复持久化主题偏好（§5d：prefers-color-scheme 跟随
 type Surface = 'playground' | 'knowledge' | 'settings';
 
 export default function App() {
+  const t = useT();
   // §5b：Focus = 右边栏显隐（默认隐藏 = 产品面第一印象纯对话）
   const [rightPanelVisible, setRightPanelVisible] = useState(() => {
     try {
@@ -27,7 +30,7 @@ export default function App() {
   const [surface, setSurface] = useState<Surface>('playground');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('models');
   // 设置深链（#settings / #settings-services）：左栏连接条「设置 →」入口。
-  // hashchange 监听 + 消费后清 hash——已加载页点击即跳；点回 Playground 后刷新不回跳（打磨批 B2/NIT-9）。
+  // hashchange 监听 + 消费后清 hash——已加载页点击即跳；点回 Playground 后刷新不回跳（收敛批 B2/NIT-9）。
   useEffect(() => {
     const apply = (): void => {
       const h = window.location.hash;
@@ -119,16 +122,17 @@ export default function App() {
           <PrivilegedBadge />
           {/* 自愈可见性（v0.98.14）：知识服务生命周期常驻标记，正常时零占位 */}
           <KnowledgeServiceStatus />
+          <LanguageToggle />
           <ThemeToggle />
           {surface === 'playground' && (
             <button
               type="button"
               className={rightPanelVisible ? 'btn-secondary small btn-focus-active' : 'btn-ghost small'}
               onClick={toggleRightPanel}
-              title="显示/隐藏右侧面板（会话物料 · 工作进度 · 环境；专家模式含运行时透明）"
+              title={t('app.panelToggleTitle')}
               aria-pressed={rightPanelVisible}
             >
-              面板
+              {t('app.panelToggle')}
             </button>
           )}
         </div>

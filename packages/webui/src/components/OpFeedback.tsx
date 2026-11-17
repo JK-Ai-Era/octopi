@@ -2,6 +2,7 @@
  * 索引操作反馈条 — 点击后立刻回执，避免「有没有生效」黑盒
  */
 import { useCallback, useState } from 'react';
+import { useT } from '../i18n/react';
 
 export type OpTone = 'info' | 'ok' | 'warn';
 
@@ -24,6 +25,7 @@ export function OpFeedback({ op }: { op: OpFeedbackState | null }) {
 export function useOpFeedback() {
   const [op, setOp] = useState<OpFeedbackState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const t = useT();
 
   const show = useCallback((text: string, tone: OpTone = 'ok') => {
     setOp({ tone, text, at: Date.now() });
@@ -38,7 +40,7 @@ export function useOpFeedback() {
     ): Promise<void> => {
       if (busy) return;
       setBusy(key);
-      show('处理中…', 'info');
+      show(t('opFeedback.processing'), 'info');
       try {
         const result = await Promise.race([
           fn(),
@@ -48,8 +50,8 @@ export function useOpFeedback() {
                 reject(
                   new Error(
                     timeoutMs >= 1000
-                      ? `请求超时（${Math.round(timeoutMs / 1000)}s）：服务可能正忙于解析/向量回填，请稍后看统计条是否变化`
-                      : '请求超时',
+                      ? t('opFeedback.timeoutWithSeconds', { seconds: Math.round(timeoutMs / 1000) })
+                      : t('opFeedback.timeout'),
                   ),
                 ),
               timeoutMs,
@@ -63,7 +65,7 @@ export function useOpFeedback() {
         setBusy(null);
       }
     },
-    [busy, show],
+    [busy, show, t],
   );
 
   return { op, busy, show, run, clearOp: () => setOp(null) };

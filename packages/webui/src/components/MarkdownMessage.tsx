@@ -3,8 +3,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import type { Components } from 'react-markdown';
+import { useT } from '../i18n/react';
 
 function CopyButton({ text }: { text: string }) {
+  const t = useT();
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -18,10 +20,10 @@ function CopyButton({ text }: { text: string }) {
       type="button"
       className="md-copy-btn"
       onClick={handleCopy}
-      aria-label="复制代码"
-      title="复制代码"
+      aria-label={t('markdownMessage.copyCode')}
+      title={t('markdownMessage.copyCode')}
     >
-      复制
+      {t('markdownMessage.copy')}
     </button>
   );
 }

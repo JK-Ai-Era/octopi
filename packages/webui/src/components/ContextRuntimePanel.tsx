@@ -3,41 +3,54 @@ import type {
   LayerRuntimeViewDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import type { InspectorState } from '@octopi-agent/gateway/web/runtime/store';
+import { useT } from '../i18n/react';
+import { t as tNow, type MessageKey } from '../i18n/core';
 
 /**
  * 产品八层之 1–7（System ContextLayer）。
  * 第 8 层 Information 不在此栈，单独 strip（消息窗口）。
  */
-const LAYER_META: Record<LayerRuntimeViewDto['id'], { label: string; hue: string; n: number; note?: string }> = {
-  wisdom: { label: '智慧', hue: '#c9a227', n: 1 },
-  persona: { label: '人格', hue: '#4f46e5', n: 2 },
-  skill: { label: '技能', hue: '#0d9488', n: 3 },
-  knowledge: { label: '知识', hue: '#2563eb', n: 4 },
-  cognition: { label: '认知', hue: '#7c3aed', n: 5 },
-  memory: { label: '记忆', hue: '#059669', n: 6 },
-  runtime: { label: '运行时', hue: '#64748b', n: 7, note: 'Run 活态' },
+const LAYER_META: Record<
+  LayerRuntimeViewDto['id'],
+  { labelKey: MessageKey; hue: string; n: number; noteKey?: MessageKey }
+> = {
+  wisdom: { labelKey: 'contextRuntime.layerWisdom', hue: '#c9a227', n: 1 },
+  persona: { labelKey: 'contextRuntime.layerPersona', hue: '#4f46e5', n: 2 },
+  skill: { labelKey: 'contextRuntime.layerSkill', hue: '#0d9488', n: 3 },
+  knowledge: { labelKey: 'contextRuntime.layerKnowledge', hue: '#2563eb', n: 4 },
+  cognition: { labelKey: 'contextRuntime.layerCognition', hue: '#7c3aed', n: 5 },
+  memory: { labelKey: 'contextRuntime.layerMemory', hue: '#059669', n: 6 },
+  runtime: {
+    labelKey: 'contextRuntime.layerRuntime',
+    hue: '#64748b',
+    n: 7,
+    noteKey: 'contextRuntime.layerRuntimeNote',
+  },
 };
 
-const STATUS_META: Record<LayerRuntimeViewDto['status'], { label: string; cls: string }> = {
-  included: { label: '纳入', cls: 'badge-included' },
-  empty: { label: '空', cls: 'badge-empty' },
-  dropped: { label: '丢弃', cls: 'badge-dropped' },
-  error: { label: '失败', cls: 'badge-error' },
-  unregistered: { label: '未注册', cls: 'badge-unregistered' },
-  idle: { label: '待装配', cls: 'badge-idle' },
+const STATUS_META: Record<LayerRuntimeViewDto['status'], { labelKey: MessageKey; cls: string }> = {
+  included: { labelKey: 'contextRuntime.statusIncluded', cls: 'badge-included' },
+  empty: { labelKey: 'contextRuntime.statusEmpty', cls: 'badge-empty' },
+  dropped: { labelKey: 'contextRuntime.statusDropped', cls: 'badge-dropped' },
+  error: { labelKey: 'contextRuntime.statusError', cls: 'badge-error' },
+  unregistered: { labelKey: 'contextRuntime.statusUnregistered', cls: 'badge-unregistered' },
+  idle: { labelKey: 'contextRuntime.statusIdle', cls: 'badge-idle' },
 };
 
 /** E8 装配位置语义标注（缓存卖点对用户可见） */
-const PLACEMENT_META: Record<'system' | 'snapshot', { label: string; cls: string; hint: string }> = {
+const PLACEMENT_META: Record<
+  'system' | 'snapshot',
+  { labelKey: MessageKey; cls: string; hintKey: MessageKey }
+> = {
   system: {
-    label: '稳定 · system',
+    labelKey: 'contextRuntime.placementSystemLabel',
     cls: 'ctx-placement-system',
-    hint: '缓存稳定前缀：跨轮逐字节稳定，前缀缓存命中（延迟与成本双赢）',
+    hintKey: 'contextRuntime.placementSystemHint',
   },
   snapshot: {
-    label: '易变 · snapshot',
+    labelKey: 'contextRuntime.placementSnapshotLabel',
     cls: 'ctx-placement-snapshot',
-    hint: '本轮易变快照：每轮重建，装配在消息尾部 turn_context，不进 system prompt',
+    hintKey: 'contextRuntime.placementSnapshotHint',
   },
 };
 
@@ -57,14 +70,14 @@ function formatRequestSize(requestTokens?: number, requestChars?: number): strin
   if (typeof requestChars === 'number' && Number.isFinite(requestChars) && requestChars > 0) {
     // 降级：后端未上报 token 估算（旧事件形态），仍如实标注字符单位
     return requestChars < 1024
-      ? `${requestChars} 字符`
-      : `${(requestChars / 1024).toFixed(0)}K 字符`;
+      ? tNow('contextRuntime.requestChars', { n: requestChars })
+      : tNow('contextRuntime.requestKChars', { n: (requestChars / 1024).toFixed(0) });
   }
   return undefined;
 }
 
 function formatTokens(n: number | undefined | null): string {
-  if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '未知';
+  if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return tNow('contextRuntime.unknown');
   const value = n;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
@@ -82,7 +95,9 @@ function rowPlacement(layer: LayerRow): 'system' | 'snapshot' {
 /** 双 runtime 行的份标注（主行=锚点份，附加行=易变份） */
 function rowRoleLabel(layer: LayerRow): string | undefined {
   if (layer.id !== 'runtime') return undefined;
-  return rowPlacement(layer) === 'snapshot' ? '易变份' : '锚点份';
+  return rowPlacement(layer) === 'snapshot'
+    ? tNow('contextRuntime.rowRoleSnapshot')
+    : tNow('contextRuntime.rowRoleAnchor');
 }
 
 export interface ContextRuntimePanelProps {
@@ -117,6 +132,7 @@ export function ContextRuntimePanel({
   onRefreshLayers,
 }: ContextRuntimePanelProps) {
   const snapshot = inspector.contextLayers;
+  const t = useT();
   /** 展开中的层（单开手风琴）：null = 全部收起 */
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
@@ -163,20 +179,40 @@ export function ContextRuntimePanel({
     compact?.active && compact.startedAt
       ? Math.max(0, Math.round((nowTick - compact.startedAt) / 1000))
       : undefined;
+  const compactReasonLabel =
+    compact?.reason === 'proactive'
+      ? t('contextRuntime.compactReasonProactive')
+      : compact?.reason === 'overflow'
+        ? t('contextRuntime.compactReasonOverflow')
+        : t('contextRuntime.compactReasonSummary');
   const compactText = compact?.active
-    ? `进行中（${compact.reason === 'proactive' ? '主动摘要' : compact.reason === 'overflow' ? '溢出' : '摘要'}）` +
+    ? t('contextRuntime.compactActive', { reason: compactReasonLabel }) +
       (compact.phase === 'summarize'
-        ? `：摘要请求已发出${(() => { const size = formatRequestSize(compact.requestTokens, compact.requestChars); return size ? ` ${size}` : ''; })()}` +
-          (compactElapsedS !== undefined ? `，已等待 ${compactElapsedS}s` : '') +
-          (compact.timeoutMs ? ` / 预算 ${Math.round(compact.timeoutMs / 1000)}s` : '')
+        ? t('contextRuntime.compactRequestSent') +
+          (() => {
+            const size = formatRequestSize(compact.requestTokens, compact.requestChars);
+            return size ? ` ${size}` : '';
+          })() +
+          (compactElapsedS !== undefined
+            ? t('contextRuntime.compactElapsed', { s: compactElapsedS })
+            : '') +
+          (compact.timeoutMs
+            ? t('contextRuntime.compactBudget', { s: Math.round(compact.timeoutMs / 1000) })
+            : '')
         : '')
     : compact?.error
-      ? `失败：${compact.error}`
+      ? t('contextRuntime.compactFailed', { error: compact.error })
       : compact?.cached
-        ? '缓存重建'
+        ? t('contextRuntime.compactCacheRebuilt')
         : compact?.tokensAfter !== undefined
-          ? `完成${compact.tokensBefore !== undefined ? `（${formatTokens(compact.tokensBefore)}→${formatTokens(compact.tokensAfter)}）` : ''}`
-          : '无';
+          ? t('contextRuntime.compactDone') +
+            (compact.tokensBefore !== undefined
+              ? t('contextRuntime.compactDonePair', {
+                  before: formatTokens(compact.tokensBefore),
+                  after: formatTokens(compact.tokensAfter),
+                })
+              : '')
+          : t('contextRuntime.compactNone');
 
   const renderBand = (layer: LayerRow) => {
     const isOpen = expandedKey === rowKey(layer);
@@ -184,7 +220,9 @@ export function ContextRuntimePanel({
     const status = STATUS_META[layer.status] ?? STATUS_META.idle;
     const placement = PLACEMENT_META[rowPlacement(layer)];
     const badgeCls = isWarnIncluded(layer) ? 'badge-warn' : status.cls;
-    const badgeLabel = isWarnIncluded(layer) ? '纳入·告警' : status.label;
+    const badgeLabel = isWarnIncluded(layer)
+      ? t('contextRuntime.badgeIncludedWarn')
+      : t(status.labelKey);
     const hasCap = layer.budgetTokens != null && layer.budgetTokens > 0;
     const denom = rowPlacement(layer) === 'snapshot'
       ? Math.max(snapshotUsed, 1)
@@ -207,9 +245,11 @@ export function ContextRuntimePanel({
           <div className="ctx-band-top">
             <div className="ctx-band-name">
               <span className="ctx-layer-n">L{meta.n}</span>
-              {meta.label} <span className="ctx-band-id">{layer.id}</span>
+              {t(meta.labelKey)} <span className="ctx-band-id">{layer.id}</span>
               {rowRoleLabel(layer) && (
-                <span className="ctx-layer-note">运行时 · {rowRoleLabel(layer)}</span>
+                <span className="ctx-layer-note">
+                  {t('contextRuntime.runtimeRowNote', { role: rowRoleLabel(layer) ?? '' })}
+                </span>
               )}
             </div>
             <div className="ctx-band-top-right">
@@ -218,11 +258,11 @@ export function ContextRuntimePanel({
             </div>
           </div>
           <div className="ctx-band-meta">
-            <span className={`ctx-placement ${placement.cls}`}>{placement.label}</span>
+            <span className={`ctx-placement ${placement.cls}`}>{t(placement.labelKey)}</span>
             <span>order {layer.order}</span>
             <span>prio {layer.priority}</span>
             <span>
-              {hasCap ? `cap ${formatTokens(layer.budgetTokens)}` : '无单层上限'}
+              {hasCap ? `cap ${formatTokens(layer.budgetTokens)}` : t('contextRuntime.noLayerCap')}
             </span>
             <span>tokens {formatTokens(layer.tokens)}</span>
             <span>{layer.droppable ? 'droppable' : 'keep'}</span>
@@ -255,7 +295,7 @@ export function ContextRuntimePanel({
           <span className="k">id</span>
           <span className="v">{layer.id}</span>
           <span className="k">placement</span>
-          <span className={`v ${placement.cls}`}>{placement.label}</span>
+          <span className={`v ${placement.cls}`}>{t(placement.labelKey)}</span>
           <span className="k">priority</span>
           <span className="v">{layer.priority}</span>
           <span className="k">order</span>
@@ -265,12 +305,14 @@ export function ContextRuntimePanel({
           <span className="k">budget</span>
           <span className="v">
             {layer.budgetTokens != null && layer.budgetTokens > 0
-              ? `${formatTokens(layer.budgetTokens)}（硬顶）`
+              ? `${formatTokens(layer.budgetTokens)}${t('contextRuntime.hardCap')}`
               : rowPlacement(layer) === 'snapshot'
-                ? '无硬顶 · 计入快照组'
+                ? t('contextRuntime.noHardCapSnapshot')
                 : snapshot?.structureReserve != null
-                  ? `无硬顶 · 共享 contentBudget ${formatTokens(Math.max(0, snapshot.systemBudget - snapshot.structureReserve))}`
-                  : '无硬顶 · contentBudget 未随快照下发'}
+                  ? t('contextRuntime.noHardCapShared', {
+                      budget: formatTokens(Math.max(0, snapshot.systemBudget - snapshot.structureReserve)),
+                    })
+                  : t('contextRuntime.noHardCapUnknown')}
           </span>
           <span className="k">tokens</span>
           <span className="v">{formatTokens(layer.tokens)}</span>
@@ -287,9 +329,13 @@ export function ContextRuntimePanel({
           </div>
         )}
 
-        <div className="ctx-section-title" style={{ marginTop: 10 }}>层内容</div>
+        <div className="ctx-section-title" style={{ marginTop: 10 }}>
+          {t('contextRuntime.layerContentTitle')}
+        </div>
         {loadingContent ? (
-          <div className="small muted" style={{ marginTop: 6 }}>正在加载层内容…</div>
+          <div className="small muted" style={{ marginTop: 6 }}>
+            {t('contextRuntime.loadingLayerContent')}
+          </div>
         ) : layer.content ? (
           <div className="ctx-layer-content">
             <div className="ctx-layer-content-meta">
@@ -302,15 +348,15 @@ export function ContextRuntimePanel({
         ) : layer.preview ? (
           <div className="ctx-layer-content">
             <div className="ctx-layer-content-meta">
-              <span className="mono muted">preview（未含全文）</span>
+              <span className="mono muted">{t('contextRuntime.previewNoFullText')}</span>
             </div>
             <pre className="ctx-layer-content-body">{layer.preview}</pre>
           </div>
         ) : (
           <div className="small muted" style={{ marginTop: 6 }}>
             {layer.status === 'empty' || layer.status === 'unregistered' || layer.status === 'idle'
-              ? '本层本轮无正文。'
-              : '无层内容。请确认 context.contextAssembler.includeLayerContent=true 并重新装配一轮。'}
+              ? t('contextRuntime.noLayerBody')
+              : t('contextRuntime.noLayerContent')}
           </div>
         )}
       </div>
@@ -331,30 +377,47 @@ export function ContextRuntimePanel({
   return (
     <div className="ctx-runtime">
       <section className="panel sidebar-section">
-        <div className="sidebar-title">会话状态</div>
-        <div className="inspector-kv">视图模式: {viewMode}</div>
-        <div className="inspector-kv">运行状态: {runStatus}</div>
-        <div className="inspector-kv">上下文压缩: {compactText}</div>
-        <div className="inspector-kv">会话: {sessionId ?? '无'}</div>
-        <div className="inspector-kv">Agent: {agentId || '无'}</div>
-        <div className="inspector-kv">连接: {connection}</div>
+        <div className="sidebar-title">{t('contextRuntime.sessionStateTitle')}</div>
+        <div className="inspector-kv">
+          {t('contextRuntime.viewModeLabel')}: {viewMode}
+        </div>
+        <div className="inspector-kv">
+          {t('contextRuntime.runStatusLabel')}: {runStatus}
+        </div>
+        <div className="inspector-kv">
+          {t('contextRuntime.compactLabel')}: {compactText}
+        </div>
+        <div className="inspector-kv">
+          {t('contextRuntime.sessionLabel')}: {sessionId ?? t('contextRuntime.none')}
+        </div>
+        <div className="inspector-kv">
+          Agent: {agentId || t('contextRuntime.none')}
+        </div>
+        <div className="inspector-kv">
+          {t('contextRuntime.connectionLabel')}: {connection}
+        </div>
         {snapshot?.fallback && (
           <div className="small status-error" style={{ marginTop: 6 }}>
-            装配回退 concat{snapshot.fallbackError ? `：${snapshot.fallbackError}` : ''}
+            {t('contextRuntime.assemblyFallback')}
+            {snapshot.fallbackError ? t('contextRuntime.assemblyFallbackError', { error: snapshot.fallbackError }) : ''}
           </div>
         )}
       </section>
 
       {inspector.contextHealth && (
         <section className="panel sidebar-section">
-          <div className="sidebar-title">数据面健康</div>
+          <div className="sidebar-title">{t('contextRuntime.dataPlaneHealthTitle')}</div>
           <div className="small muted" style={{ marginBottom: 6 }}>
-            store 计数 · 与单轮 manifest 互补
+            {t('contextRuntime.dataPlaneHealthHint')}
           </div>
           <div className="ctx-health-grid">
             <div className="ctx-health-item">
               <span className="k">persona</span>
-              <span className="v">{inspector.contextHealth.summary.personaLoaded ? '已加载' : '未加载'}</span>
+              <span className="v">
+                {inspector.contextHealth.summary.personaLoaded
+                  ? t('contextRuntime.loaded')
+                  : t('contextRuntime.notLoaded')}
+              </span>
             </div>
             <div className="ctx-health-item">
               <span className="k">skills</span>
@@ -387,8 +450,8 @@ export function ContextRuntimePanel({
       <section className="ctx-panel">
         <div className="ctx-panel-header">
           <div>
-            <div className="sidebar-title" style={{ marginBottom: 0 }}>上下文装配 · E8 双组</div>
-            <div className="small muted">AssembleManifest 为真源 · 按 placement 分组（system / 本轮快照）</div>
+            <div className="sidebar-title" style={{ marginBottom: 0 }}>{t('contextRuntime.assemblyTitle')}</div>
+            <div className="small muted">{t('contextRuntime.assemblyHint')}</div>
           </div>
           <div className="small mono muted">
             {snapshot?.query ? `query: ${snapshot.query.slice(0, 36)}` : 'query: —'}
@@ -405,7 +468,7 @@ export function ContextRuntimePanel({
             <div className="v">{snapshot ? formatTokens(snapshot.usedTokens) : '—'}</div>
           </div>
           <div className="ctx-metric">
-            <div className="k">used · 快照</div>
+            <div className="k">used · {t('contextRuntime.snapshotShort')}</div>
             <div className="v">
               {snapshot?.usedSnapshotTokens != null ? formatTokens(snapshot.usedSnapshotTokens) : '—'}
             </div>
@@ -420,19 +483,19 @@ export function ContextRuntimePanel({
           </div>
         </div>
         <div className="small muted" style={{ marginTop: 4 }}>
-          分账：system 组计入 usedTokens（缓存稳定前缀）；本轮快照组计入 usedSnapshotTokens（易变，缺省无预算上限）。
+          {t('contextRuntime.budgetLedgerHint')}
         </div>
 
         {/* ── System 组：缓存稳定前缀 ── */}
         <div className="ctx-group">
           <div className="ctx-group-header">
-            <div className="ctx-group-title">System · 缓存稳定前缀（产品 L1–L7）</div>
-            <span className="ctx-placement ctx-placement-system" title={PLACEMENT_META.system.hint}>
-              {PLACEMENT_META.system.label}
+            <div className="ctx-group-title">{t('contextRuntime.systemGroupTitle')}</div>
+            <span className="ctx-placement ctx-placement-system" title={t(PLACEMENT_META.system.hintKey)}>
+              {t(PLACEMENT_META.system.labelKey)}
             </span>
           </div>
           <div className="small muted" style={{ marginBottom: 6 }}>
-            跨轮逐字节稳定 · 前缀缓存命中 → 延迟与成本双赢（宪法 E8）
+            {t('contextRuntime.systemGroupHint')}
           </div>
           {snapshot && snapshot.systemBudget > 0 ? (
             <div className="ctx-budget">
@@ -445,7 +508,7 @@ export function ContextRuntimePanel({
                     <div
                       key={rowKey(l)}
                       className="ctx-budget-seg"
-                      title={`${meta.label}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
+                      title={`${t(meta.labelKey)}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
                       style={{ width: `${Math.max(pct, 0.4)}%`, background: meta.hue }}
                     />
                   );
@@ -455,16 +518,18 @@ export function ContextRuntimePanel({
                 {systemIncluded.map((l) => (
                   <span key={rowKey(l)}>
                     <i className="ctx-dot" style={{ background: LAYER_META[l.id].hue }} />
-                    {LAYER_META[l.id].label}
+                    {t(LAYER_META[l.id].labelKey)}
                     {rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} {formatTokens(l.tokens)}
                   </span>
                 ))}
-                {!systemIncluded.length && <span className="muted">本轮 system 组无层纳入</span>}
+                {!systemIncluded.length && (
+                  <span className="muted">{t('contextRuntime.noSystemLayers')}</span>
+                )}
               </div>
             </div>
           ) : (
             <div className="ctx-empty">
-              装配完成后，这里按 order 显示 system 组契约层（缓存稳定前缀）。
+              {t('contextRuntime.systemGroupEmpty')}
             </div>
           )}
           {systemRows.length > 0 && <div className="ctx-stack">{systemRows.map(renderLayerItem)}</div>}
@@ -473,14 +538,15 @@ export function ContextRuntimePanel({
         {/* ── 本轮快照组：易变 ── */}
         <div className="ctx-group ctx-group-snapshot">
           <div className="ctx-group-header">
-            <div className="ctx-group-title">本轮快照 · 易变（content 尾部）</div>
-            <span className="ctx-placement ctx-placement-snapshot" title={PLACEMENT_META.snapshot.hint}>
-              {PLACEMENT_META.snapshot.label}
+            <div className="ctx-group-title">{t('contextRuntime.snapshotGroupTitle')}</div>
+            <span className="ctx-placement ctx-placement-snapshot" title={t(PLACEMENT_META.snapshot.hintKey)}>
+              {t(PLACEMENT_META.snapshot.labelKey)}
             </span>
           </div>
           <div className="small muted" style={{ marginBottom: 6 }}>
-            每轮重建 · 装配进本轮 <span className="mono">&lt;turn_context&gt;</span>（消息尾部），不进 system prompt；
-            含 query 择取（记忆/认知/智慧）与 Run 易变注入（datetime / 任务）
+            {t('contextRuntime.snapshotGroupHintLead')}
+            <span className="mono">&lt;turn_context&gt;</span>
+            {t('contextRuntime.snapshotGroupHintTail')}
           </div>
           {snapshotRows.length > 0 ? (
             <>
@@ -494,7 +560,7 @@ export function ContextRuntimePanel({
                       <div
                         key={rowKey(l)}
                         className="ctx-budget-seg"
-                        title={`${meta.label}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
+                        title={`${t(meta.labelKey)}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
                         style={{ width: `${Math.max(pct, 0.4)}%`, background: meta.hue }}
                       />
                     );
@@ -504,13 +570,15 @@ export function ContextRuntimePanel({
                   {snapshotIncluded.map((l) => (
                     <span key={rowKey(l)}>
                       <i className="ctx-dot" style={{ background: LAYER_META[l.id].hue }} />
-                      {LAYER_META[l.id].label}
+                      {t(LAYER_META[l.id].labelKey)}
                       {rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} {formatTokens(l.tokens)}
                     </span>
                   ))}
-                  {!snapshotIncluded.length && <span className="muted">本轮快照组无层纳入</span>}
+                  {!snapshotIncluded.length && (
+                    <span className="muted">{t('contextRuntime.noSnapshotLayers')}</span>
+                  )}
                   <span className="muted">
-                    合计 {formatTokens(snapshotUsed)} tok · 预算未随快照下发（不画预算条）
+                    {t('contextRuntime.snapshotTotalLegend', { tokens: formatTokens(snapshotUsed) })}
                   </span>
                 </div>
               </div>
@@ -518,16 +586,19 @@ export function ContextRuntimePanel({
             </>
           ) : (
             <div className="ctx-empty">
-              无快照组条目：本会话快照为空，或该装配早于 E8（旧快照无 placement）。
+              {t('contextRuntime.snapshotGroupEmpty')}
             </div>
           )}
         </div>
 
-        <div className="ctx-section-title">Information · 消息窗口（产品第 8 层）</div>
+        <div className="ctx-section-title">{t('contextRuntime.informationTitle')}</div>
         <div className="ctx-info-panel">
           <div className="ctx-info-lead">
-            产品第 8 层。session 正文与消息历史。由 <strong>DefaultContextEngine</strong> 做选择 / 压缩 / 主动摘要；
-            <strong>不进入</strong> System 装配栈（ContextLayer 只到 L7 Runtime）。
+            {t('contextRuntime.informationLead1')}
+            <strong>DefaultContextEngine</strong>
+            {t('contextRuntime.informationLead2')}
+            <strong>{t('contextRuntime.informationLead3')}</strong>
+            {t('contextRuntime.informationLead4')}
           </div>
           <div className="ctx-metrics" style={{ marginTop: 8 }}>
             <div className="ctx-metric">
@@ -535,11 +606,11 @@ export function ContextRuntimePanel({
               <div className="v">{messageCount != null ? String(messageCount) : '—'}</div>
             </div>
             <div className="ctx-metric">
-              <div className="k">promptTokensActual（上次实测）</div>
+              <div className="k">{t('contextRuntime.promptTokensActualLabel')}</div>
               <div className="v">{formatTokens(inspector.promptTokensActual)}</div>
             </div>
             <div className="ctx-metric">
-              <div className="k">viewTokensEst（视图估算）</div>
+              <div className="k">{t('contextRuntime.viewTokensEstLabel')}</div>
               <div className="v">{formatTokens(inspector.viewTokensEst)}</div>
             </div>
             <div className="ctx-metric">
@@ -560,15 +631,14 @@ export function ContextRuntimePanel({
             <span>{inspector.truncatedTo != null ? String(inspector.truncatedTo) : '—'}</span>
           </div>
           <div className="small muted" style={{ marginTop: 8 }}>
-            分馏关系：Information（session）→ 提炼 → Memory / Cognition / Wisdom → 再作为快照择取注入本轮 turn_context。
-            对话正文见中栏消息列表。
+            {t('contextRuntime.distillationHint')}
           </div>
         </div>
       </section>
 
       <section className="panel sidebar-section">
         <button type="button" className="btn-ghost small" onClick={() => setShowRaw((v) => !v)}>
-          {showRaw ? '收起原始数据' : '原始数据'}
+          {showRaw ? t('contextRuntime.hideRawData') : t('contextRuntime.showRawData')}
         </button>
         {showRaw && (
           <pre className="ctx-raw" style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>

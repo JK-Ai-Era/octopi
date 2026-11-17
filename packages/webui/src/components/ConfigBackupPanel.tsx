@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OctopiClient } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
+import { useT } from '../i18n/react';
 
 interface BackupItem {
   path: string;
@@ -16,6 +17,7 @@ interface BackupItem {
 }
 
 export function ConfigBackupPanel() {
+  const t = useT();
   const client = useMemo(
     () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [],
@@ -43,11 +45,7 @@ export function ConfigBackupPanel() {
 
   const rollbackTo = async (item: BackupItem) => {
     const stamp = new Date(item.mtimeMs).toLocaleString();
-    if (
-      !window.confirm(
-        `确认回滚到 ${stamp} 的备份？当前配置会先自动备份，回滚后新会话即用回滚后的配置。`,
-      )
-    ) {
+    if (!window.confirm(t('configBackup.confirmRollback', { time: stamp }))) {
       return;
     }
     setBusy(true);
@@ -56,9 +54,9 @@ export function ConfigBackupPanel() {
     try {
       const result = await client.rollbackConfig(item.path, hash);
       if (result.applied === 'restart-required') {
-        setNotice('已回滚——含端口/服务级（L3）段变更，需重启 daemon 才完全生效');
+        setNotice(t('configBackup.rolledBackRestart'));
       } else {
-        setNotice('已回滚，新会话生效');
+        setNotice(t('configBackup.rolledBack'));
       }
       await reload();
     } catch (err) {
@@ -71,21 +69,21 @@ export function ConfigBackupPanel() {
   return (
     <div className="set-panel">
       <div className="set-header">
-        <h2>配置备份 / 回滚</h2>
-        <span className="small muted">每次配置写入自动备份 · 回滚同样走校验与热生效</span>
+        <h2>{t('configBackup.title')}</h2>
+        <span className="small muted">{t('configBackup.subtitle')}</span>
       </div>
 
       {error && <div className="set-error">{error}</div>}
       {notice && <div className="set-notice">{notice}</div>}
 
       <div className="set-list" style={{ maxWidth: 640 }}>
-        {backups.length === 0 && <div className="small muted">暂无备份（配置发生第一次修改后自动生成）</div>}
+        {backups.length === 0 && <div className="small muted">{t('configBackup.empty')}</div>}
         {backups.map((item) => (
           <div key={item.path} className="set-item" style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <span className="small mono">{new Date(item.mtimeMs).toLocaleString()}</span>
             <span className="small muted">{Math.round(item.size / 1024)} KB</span>
             <button type="button" className="btn-ghost small" disabled={busy} onClick={() => rollbackTo(item)}>
-              回滚到此
+              {t('configBackup.rollbackHere')}
             </button>
           </div>
         ))}

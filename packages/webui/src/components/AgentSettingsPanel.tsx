@@ -13,34 +13,41 @@ import {
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
+import { useT } from '../i18n/react';
+import type { MessageKey } from '../i18n/core';
 
 type EffectMode = 'workspace' | 'project' | 'host' | 'untrusted';
 
-/** 安全组四选一卡片文案（与 arch/tool-effect-policy.md 运行模式对齐） */
-const EFFECT_MODE_CARDS: Array<{ mode: EffectMode; label: string; desc: string; risk: string }> = [
+/** 安全组四选一卡片文案键（与 arch/tool-effect-policy.md 运行模式对齐） */
+const EFFECT_MODE_CARDS: Array<{
+  mode: EffectMode;
+  labelKey: MessageKey;
+  descKey: MessageKey;
+  riskKey: MessageKey;
+}> = [
   {
     mode: 'workspace',
-    label: 'workspace（严格工作空间）',
-    desc: '工具效果限于 agent workspace；shell 默认拒绝。',
-    risk: '最低权限',
+    labelKey: 'agentSettings.modeWorkspaceLabel',
+    descKey: 'agentSettings.modeWorkspaceDesc',
+    riskKey: 'agentSettings.modeWorkspaceRisk',
   },
   {
     mode: 'project',
-    label: 'project（项目树）',
-    desc: '项目目录内读写自由；shell 允许；可动代码。',
-    risk: '中——可改项目文件',
+    labelKey: 'agentSettings.modeProjectLabel',
+    descKey: 'agentSettings.modeProjectDesc',
+    riskKey: 'agentSettings.modeProjectRisk',
   },
   {
     mode: 'host',
-    label: 'host（本机全能力）',
-    desc: '本机文件/命令全放开；等同你现在给我的默认能力。',
-    risk: '高——本机全权',
+    labelKey: 'agentSettings.modeHostLabel',
+    descKey: 'agentSettings.modeHostDesc',
+    riskKey: 'agentSettings.modeHostRisk',
   },
   {
     mode: 'untrusted',
-    label: 'untrusted（严格隔离）',
-    desc: '强制隔离运行；无 L4 进程隔离能力的宿主上拒绝运行。',
-    risk: '隔离最强',
+    labelKey: 'agentSettings.modeUntrustedLabel',
+    descKey: 'agentSettings.modeUntrustedDesc',
+    riskKey: 'agentSettings.modeUntrustedRisk',
   },
 ];
 
@@ -89,6 +96,7 @@ function isConflictError(err: unknown): boolean {
 }
 
 export function AgentSettingsPanel() {
+  const t = useT();
   const client = useMemo(
     () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [],
@@ -135,7 +143,7 @@ export function AgentSettingsPanel() {
 
   const handleWriteError = async (err: unknown): Promise<void> => {
     if (isConflictError(err)) {
-      setError('配置已被外部修改，已重新载入最新内容——请重新确认你的修改再保存');
+      setError(t('agentSettings.conflictReloaded'));
       await reload();
     } else {
       setError(err instanceof Error ? err.message : String(err));
@@ -178,7 +186,7 @@ export function AgentSettingsPanel() {
   /** 向导：渲染角色模板（服务端单一实现） */
   const renderRole = async () => {
     if (!wizard.rolePresetId || !wizard.agentName.trim() || !wizard.addressToUser.trim()) {
-      setError('先选角色，并填写 agent 名字与对用户的称谓');
+      setError(t('agentSettings.roleRequired'));
       return;
     }
     setBusy(true);
@@ -195,7 +203,7 @@ export function AgentSettingsPanel() {
         model: rendered.recommendedModelLevel ?? '',
         traits: rendered.recommendedTraits ?? [],
       }));
-      setNotice('已按角色生成 AGENTS.md 初稿（可直接编辑），并带出推荐安全组/模型档');
+      setNotice(t('agentSettings.roleGenerated'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -206,15 +214,15 @@ export function AgentSettingsPanel() {
   const createAgent = async () => {
     const id = wizard.agentName.trim();
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) {
-      setError('agent 名字需为 1-64 位字母/数字/._-（它同时是 agent id 与 home 目录名）');
+      setError(t('agentSettings.nameInvalid'));
       return;
     }
     if (!wizard.agentsMd.trim()) {
-      setError('AGENTS.md 不能为空（点「生成初稿」或手动填写）');
+      setError(t('agentSettings.agentsMdRequired'));
       return;
     }
     if (!wizard.model.trim()) {
-      setError('模型必填（provider/model 或档位名，如 standard）');
+      setError(t('agentSettings.modelRequired'));
       return;
     }
     setBusy(true);
@@ -233,7 +241,7 @@ export function AgentSettingsPanel() {
         agentsMd: wizard.agentsMd,
         hash: view?.hash ?? '',
       });
-      setNotice(`已创建 ${id}，新会话生效`);
+      setNotice(t('agentSettings.created', { id }));
       // fresh view 重新选中（防 stale state 串味旧 agent 的表单值）
       const fresh = await client.getConfigAgents();
       setView(fresh);
@@ -269,7 +277,7 @@ export function AgentSettingsPanel() {
       // traits 全量发（空数组 = 清除，#25）
       patch.traits = splitList(form.traits);
       await client.updateConfigAgent(selected, patch, view?.hash ?? '');
-      setNotice('已保存，新会话生效');
+      setNotice(t('agentSettings.saved'));
       await reload();
     } catch (err) {
       await handleWriteError(err);
@@ -286,14 +294,14 @@ export function AgentSettingsPanel() {
     try {
       const result = await client.updateAgentPersona(selected, personaText, personaHash);
       setPersonaHash(result.hash);
-      setNotice('persona 已保存，新会话生效');
+      setNotice(t('agentSettings.personaSaved'));
     } catch (err) {
       if (isConflictError(err)) {
         // #13 冲突可恢复：换新锁但保留用户编辑内容——再点保存 = 明确覆盖外部修改
         try {
           const latest = await client.getAgentPersona(selected);
           setPersonaHash(latest.hash);
-          setError('persona 已被外部修改——已更新校验 token，再点一次「保存 persona」将覆盖外部修改');
+          setError(t('agentSettings.personaConflict'));
         } catch {
           await handleWriteError(err);
         }
@@ -307,7 +315,7 @@ export function AgentSettingsPanel() {
 
   const deleteAgent = async () => {
     if (!selected || selected === '__new__') return;
-    if (!window.confirm(`确认下线 agent「${selected}」？配置将移除，但 home/persona 文件会保留。`)) {
+    if (!window.confirm(t('agentSettings.deleteConfirm', { id: selected }))) {
       return;
     }
     setBusy(true);
@@ -315,7 +323,7 @@ export function AgentSettingsPanel() {
     setNotice(null);
     try {
       await client.deleteConfigAgent(selected, view?.hash ?? '');
-      setNotice(`已下线 ${selected}`);
+      setNotice(t('agentSettings.deleted', { id: selected }));
       setSelected(null);
       await reload();
     } catch (err) {
@@ -328,10 +336,8 @@ export function AgentSettingsPanel() {
   return (
     <div className="set-panel">
       <div className="set-header">
-        <h2>Agent 配置</h2>
-        <span className="small muted">
-          保存即生效（新会话用新配置）· 安全组 = 工具效应面策略 · 下线不删文件
-        </span>
+        <h2>{t('agentSettings.title')}</h2>
+        <span className="small muted">{t('agentSettings.subtitle')}</span>
       </div>
 
       {/* 向导模式下错误显示在底栏（见 set-wizard-footer），避免顶部横幅滚出视野 */}
@@ -341,7 +347,7 @@ export function AgentSettingsPanel() {
       <div className="set-body">
         <aside className="set-list">
           <button type="button" className="btn-secondary small" onClick={() => selectAgent('__new__')}>
-            + 新建 agent
+            {t('agentSettings.newAgent')}
           </button>
           {(view?.agents ?? []).map((a) => (
             <button
@@ -353,7 +359,7 @@ export function AgentSettingsPanel() {
               <span className="mono">{a.id}</span>
               <span className="small muted">
                 {a.effectMode}
-                {a.effectModeSource === 'global' ? '（全局）' : ''}
+                {a.effectModeSource === 'global' ? t('agentSettings.globalSuffix') : ''}
               </span>
             </button>
           ))}
@@ -363,7 +369,7 @@ export function AgentSettingsPanel() {
           {selected === '__new__' && (
             <>
               <div className="set-presets">
-                <div className="small muted">① 选角色（生成器：预览可改，落盘即标准 AGENTS.md）：</div>
+                <div className="small muted">{t('agentSettings.stepRole')}</div>
                 <div className="set-preset-grid">
                   {rolePresets.map((preset) => (
                     <button
@@ -383,7 +389,7 @@ export function AgentSettingsPanel() {
               </div>
 
               <label className="set-field">
-                <span>② agent 名字（同时是 id / home 目录名）</span>
+                <span>{t('agentSettings.stepName')}</span>
                 <input
                   className="set-input mono"
                   value={wizard.agentName}
@@ -392,25 +398,25 @@ export function AgentSettingsPanel() {
                 />
               </label>
               <label className="set-field">
-                <span>③ 对用户的称谓（写入 persona「Your Human」段）</span>
+                <span>{t('agentSettings.stepAddress')}</span>
                 <input
                   className="set-input"
                   value={wizard.addressToUser}
                   onChange={(e) => setWizard((p) => ({ ...p, addressToUser: e.target.value }))}
-                  placeholder="大哥"
+                  placeholder={t('agentSettings.addressPlaceholder')}
                 />
               </label>
 
               <div className="set-actions">
                 <button type="button" className="btn-secondary" onClick={renderRole} disabled={busy}>
-                  ④ 生成 AGENTS.md 初稿
+                  {t('agentSettings.stepGenerate')}
                 </button>
               </div>
 
               {wizard.agentsMd && (
                 <>
                   <label className="set-field">
-                    <span>⑤ 预览（可直接编辑）：</span>
+                    <span>{t('agentSettings.stepPreview')}</span>
                     <textarea
                       className="set-input mono"
                       rows={16}
@@ -420,7 +426,7 @@ export function AgentSettingsPanel() {
                   </label>
 
                   <div className="set-field">
-                    <span>⑥ 安全组（工具效应面策略）</span>
+                    <span>{t('agentSettings.stepEffectMode')}</span>
                     <div className="set-preset-grid">
                       {EFFECT_MODE_CARDS.map((card) => (
                         <button
@@ -431,21 +437,21 @@ export function AgentSettingsPanel() {
                           }
                           onClick={() => setWizard((p) => ({ ...p, effectMode: card.mode }))}
                         >
-                          <strong>{card.label}</strong>
-                          <span className="small muted">{card.desc}</span>
-                          <span className="small">{card.risk}</span>
+                          <strong>{t(card.labelKey)}</strong>
+                          <span className="small muted">{t(card.descKey)}</span>
+                          <span className="small">{t(card.riskKey)}</span>
                         </button>
                       ))}
                     </div>
                   </div>
 
                   <label className="set-field">
-                    <span>⑦ 模型（provider/model 或档位名，必填）</span>
+                    <span>{t('agentSettings.stepModel')}</span>
                     <input
                       className="set-input mono"
                       value={wizard.model}
                       onChange={(e) => setWizard((p) => ({ ...p, model: e.target.value }))}
-                      placeholder="standard 或 openai/gpt-5.5"
+                      placeholder={t('agentSettings.modelPlaceholderWizard')}
                     />
                   </label>
                 </>
@@ -457,13 +463,11 @@ export function AgentSettingsPanel() {
                 {wizard.agentsMd ? (
                   <div className="set-actions">
                     <button type="button" className="btn-secondary" onClick={createAgent} disabled={busy}>
-                      {busy ? '创建中…' : '创建并生效'}
+                      {busy ? t('agentSettings.creating') : t('agentSettings.createAndApply')}
                     </button>
                   </div>
                 ) : (
-                  <div className="small muted">
-                    先完成 ④「生成 AGENTS.md 初稿」——创建按钮会出现在这里
-                  </div>
+                  <div className="small muted">{t('agentSettings.wizardFooterHint')}</div>
                 )}
               </div>
             </>
@@ -472,11 +476,11 @@ export function AgentSettingsPanel() {
           {selected && selected !== '__new__' && (
             <>
               <label className="set-field">
-                <span>id（不可改）· 身份/称谓请在下方 persona（AGENTS.md）中编辑</span>
+                <span>{t('agentSettings.idLabel')}</span>
                 <input className="set-input mono" value={selected} disabled />
               </label>
               <label className="set-field">
-                <span>模型（provider/model 或档位名）</span>
+                <span>{t('agentSettings.modelLabel')}</span>
                 <input
                   className="set-input mono"
                   value={form.model}
@@ -486,17 +490,17 @@ export function AgentSettingsPanel() {
               </label>
 
               <div className="set-field">
-                <span>安全组（工具效应面策略）</span>
+                <span>{t('agentSettings.effectModeLabel')}</span>
                 <div className="set-preset-grid">
                   <button
                     type="button"
                     className={form.effectMode === '' ? 'set-preset-card set-item-active' : 'set-preset-card'}
                     onClick={() => setForm((p) => ({ ...p, effectMode: '' }))}
-                    title="删除 agent 级配置，跟随全局 effectPolicy"
+                    title={t('agentSettings.inheritGlobalTitle')}
                   >
-                    <strong>继承全局</strong>
-                    <span className="small muted">不写 agent 级策略，跟随全局配置。</span>
-                    <span className="small">跟随</span>
+                    <strong>{t('agentSettings.inheritGlobal')}</strong>
+                    <span className="small muted">{t('agentSettings.inheritGlobalDesc')}</span>
+                    <span className="small">{t('agentSettings.inheritGlobalRisk')}</span>
                   </button>
                   {EFFECT_MODE_CARDS.map((card) => (
                     <button
@@ -507,16 +511,16 @@ export function AgentSettingsPanel() {
                       }
                       onClick={() => setForm((p) => ({ ...p, effectMode: card.mode }))}
                     >
-                      <strong>{card.label}</strong>
-                      <span className="small muted">{card.desc}</span>
-                      <span className="small">{card.risk}</span>
+                      <strong>{t(card.labelKey)}</strong>
+                      <span className="small muted">{t(card.descKey)}</span>
+                      <span className="small">{t(card.riskKey)}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
               <label className="set-field">
-                <span>工具 allow（逗号分隔，空 = 不限）</span>
+                <span>{t('agentSettings.toolsAllow')}</span>
                 <input
                   className="set-input mono"
                   value={form.allow}
@@ -524,7 +528,7 @@ export function AgentSettingsPanel() {
                 />
               </label>
               <label className="set-field">
-                <span>工具 deny（逗号分隔）</span>
+                <span>{t('agentSettings.toolsDeny')}</span>
                 <input
                   className="set-input mono"
                   value={form.deny}
@@ -532,7 +536,7 @@ export function AgentSettingsPanel() {
                 />
               </label>
               <label className="set-field">
-                <span>特质标签（委派发现用，逗号分隔）</span>
+                <span>{t('agentSettings.traitsLabel')}</span>
                 <input
                   className="set-input mono"
                   value={form.traits}
@@ -542,33 +546,33 @@ export function AgentSettingsPanel() {
 
               <div className="set-actions">
                 <button type="button" className="btn-secondary" onClick={saveAgent} disabled={busy}>
-                  {busy ? '保存中…' : '保存配置'}
+                  {busy ? t('agentSettings.saving') : t('agentSettings.saveConfig')}
                 </button>
                 <button
                   type="button"
                   className="btn-ghost"
                   onClick={async () => {
-                    const tplId = window.prompt('模板 id（字母/数字/._-，如 my-coder）：');
+                    const tplId = window.prompt(t('agentSettings.templateIdPrompt'));
                     if (!tplId) return;
-                    const label = window.prompt('模板显示名（可留空）：') ?? '';
+                    const label = window.prompt(t('agentSettings.templateLabelPrompt')) ?? '';
                     try {
                       await client.saveAgentAsTemplate(selected, { id: tplId.trim(), label });
-                      setNotice(`已另存为角色模板 ${tplId.trim()}（新建向导可选）`);
+                      setNotice(t('agentSettings.templateSaved', { id: tplId.trim() }));
                     } catch (err) {
                       await handleWriteError(err);
                     }
                   }}
                   disabled={busy}
                 >
-                  另存为模板
+                  {t('agentSettings.saveAsTemplate')}
                 </button>
                 <button type="button" className="btn-ghost" onClick={deleteAgent} disabled={busy}>
-                  下线 agent
+                  {t('agentSettings.unregister')}
                 </button>
               </div>
 
               <label className="set-field">
-                <span>persona（AGENTS.md 全文，保存即热生效）</span>
+                <span>{t('agentSettings.personaLabel')}</span>
                 <textarea
                   className="set-input mono"
                   rows={18}
@@ -578,13 +582,13 @@ export function AgentSettingsPanel() {
               </label>
               <div className="set-actions">
                 <button type="button" className="btn-secondary" onClick={savePersona} disabled={busy}>
-                  保存 persona
+                  {t('agentSettings.savePersona')}
                 </button>
               </div>
             </>
           )}
 
-          {!selected && <div className="small muted">选择左侧 agent 编辑，或新建。</div>}
+          {!selected && <div className="small muted">{t('agentSettings.selectPrompt')}</div>}
         </section>
       </div>
     </div>

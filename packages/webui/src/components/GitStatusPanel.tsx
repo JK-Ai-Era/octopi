@@ -17,12 +17,14 @@ import type {
   OctopiClient,
 } from '@octopi-agent/gateway/web/sdk/client';
 import { getGitStatusPollSeconds } from '../runtime-config';
+import { useT } from '../i18n/react';
+import { t as tNow, type MessageKey } from '../i18n/core';
 
-const GROUPS: Array<{ key: GitStatusEntryView['group']; label: string; color: string }> = [
-  { key: 'conflicted', label: '冲突', color: 'var(--color-error)' },
-  { key: 'staged', label: '已暂存', color: 'var(--color-ok)' },
-  { key: 'unstaged', label: '未暂存', color: 'var(--color-warn)' },
-  { key: 'untracked', label: '未跟踪', color: 'var(--color-muted)' },
+const GROUPS: Array<{ key: GitStatusEntryView['group']; labelKey: MessageKey; color: string }> = [
+  { key: 'conflicted', labelKey: 'gitStatus.groupConflicted', color: 'var(--color-error)' },
+  { key: 'staged', labelKey: 'gitStatus.groupStaged', color: 'var(--color-ok)' },
+  { key: 'unstaged', labelKey: 'gitStatus.groupUnstaged', color: 'var(--color-warn)' },
+  { key: 'untracked', labelKey: 'gitStatus.groupUntracked', color: 'var(--color-muted)' },
 ];
 
 function rootStorageKey(agentId: string | undefined): string {
@@ -33,7 +35,7 @@ function rootStorageKey(agentId: string | undefined): string {
 function branchLabel(b: GitStatusBranchView): string {
   if (b.detached) return `detached @ ${(b.oid ?? '').slice(0, 7)}`;
   const head = b.head ?? '(unknown)';
-  if (b.initial) return `${head} · 尚无提交`;
+  if (b.initial) return `${head}${tNow('gitStatus.noCommitsSuffix')}`;
   const up = b.upstream ? ` → ${b.upstream}` : '';
   const ab = b.ahead != null ? ` ↑${b.ahead} ↓${b.behind}` : '';
   return `${head}${up}${ab}`;
@@ -61,6 +63,7 @@ export function GitStatusPanel({
   const [snapshotKey, setSnapshotKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const t = useT();
   /** 轮询间隔（秒）：octopi.json web.gitStatusPollSeconds 下发，0 = 不自动轮询 */
   const pollSeconds = useMemo(() => getGitStatusPollSeconds(), []);
   const seqRef = useRef(0);
@@ -159,7 +162,7 @@ export function GitStatusPanel({
   }, [refresh, pollSeconds]);
 
   if (!sessionId) {
-    return <div className="small muted">请先打开会话。</div>;
+    return <div className="small muted">{t('gitStatus.noSession')}</div>;
   }
 
   const allRoots = roots ? [...roots.configured, ...roots.temporary] : [];
@@ -175,14 +178,14 @@ export function GitStatusPanel({
   return (
     <section className="panel sidebar-section">
       <div className="sidebar-title" style={{ marginBottom: 8 }}>
-        Git 状态
+        {t('gitStatus.title')}
         <button
           type="button"
           className="btn-ghost small"
           disabled={!selected}
           onClick={() => void refresh(true)}
         >
-          刷新
+          {t('gitStatus.refresh')}
         </button>
       </div>
 
@@ -194,9 +197,9 @@ export function GitStatusPanel({
           onChange={(e) => setSelected(e.target.value || null)}
           disabled={allRoots.length === 0}
         >
-          {allRoots.length === 0 && <option value="">（无可用目录）</option>}
+          {allRoots.length === 0 && <option value="">{t('gitStatus.noRootsOption')}</option>}
           {roots && roots.configured.length > 0 && (
-            <optgroup label="配置中的根">
+            <optgroup label={t('gitStatus.configuredRootsGroup')}>
               {roots.configured.map((p) => (
                 <option key={p} value={p}>
                   {p}
@@ -205,7 +208,7 @@ export function GitStatusPanel({
             </optgroup>
           )}
           {roots && roots.temporary.length > 0 && (
-            <optgroup label="会话临时根">
+            <optgroup label={t('gitStatus.temporaryRootsGroup')}>
               {roots.temporary.map((p) => (
                 <option key={p} value={p}>
                   {p}
@@ -218,23 +221,23 @@ export function GitStatusPanel({
 
       {rootsError && (
         <div className="small status-error" style={{ marginBottom: 8 }}>
-          目录加载失败：{rootsError}
+          {t('gitStatus.rootsLoadFailed', { error: rootsError })}
         </div>
       )}
       {!rootsError && allRoots.length === 0 && roots && (
         <div className="small muted" style={{ marginBottom: 8 }}>
-          当前 agent 无可选目录。可在「目录」页签为本会话追加临时根。
+          {t('gitStatus.noRootsHint')}
         </div>
       )}
       {error && (
         <div className="small status-error" style={{ marginBottom: 8 }}>
-          刷新失败：{error}
-          {snap ? '（下方为上次成功结果）' : ''}
+          {t('gitStatus.refreshFailed', { error })}
+          {snap ? t('gitStatus.staleResultNote') : ''}
         </div>
       )}
 
       {!snap && !error && !rootsError && selected && (
-        <div className="small muted">加载中…</div>
+        <div className="small muted">{t('gitStatus.loading')}</div>
       )}
 
       {snap && (
@@ -249,13 +252,13 @@ export function GitStatusPanel({
             {/* 独立 nowrap 行：任何瞬态文字与长路径并排都会触发 flex 重排、整列抖动 */}
             {updatedAt && (
               <div className="small muted" style={{ whiteSpace: 'nowrap' }}>
-                更新于 {new Date(updatedAt).toLocaleTimeString()}
+                {t('gitStatus.updatedAt', { time: new Date(updatedAt).toLocaleTimeString() })}
               </div>
             )}
           </div>
 
           {!snap.isRepo ? (
-            <div className="small muted">不是 git 仓库（该目录及其父目录均无 .git）。</div>
+            <div className="small muted">{t('gitStatus.notRepo')}</div>
           ) : (
             <>
               <div
@@ -270,16 +273,20 @@ export function GitStatusPanel({
                     color: 'var(--color-text)',
                   }}
                 >
-                  {snap.branch ? branchLabel(snap.branch) : '(无分支信息)'}
+                  {snap.branch ? branchLabel(snap.branch) : t('gitStatus.noBranchInfo')}
                 </span>
                 <span className="small muted">
-                  暂存 {snap.counts.staged} · 未暂存 {snap.counts.unstaged} · 未跟踪{' '}
-                  {snap.counts.untracked} · 冲突 {snap.counts.conflicted}
+                  {t('gitStatus.countsSummary', {
+                    staged: snap.counts.staged,
+                    unstaged: snap.counts.unstaged,
+                    untracked: snap.counts.untracked,
+                    conflicted: snap.counts.conflicted,
+                  })}
                 </span>
               </div>
 
               {isClean && (
-                <div className="small status-ok">工作区干净</div>
+                <div className="small status-ok">{t('gitStatus.clean')}</div>
               )}
 
               {GROUPS.map((g) => {
@@ -288,7 +295,16 @@ export function GitStatusPanel({
                 return (
                   <div key={g.key} style={{ marginBottom: 10 }}>
                     <div className="small muted" style={{ marginBottom: 4 }}>
-                      {g.label}（{g.key === 'conflicted' ? snap.counts.conflicted : g.key === 'untracked' ? snap.counts.untracked : g.key === 'staged' ? snap.counts.staged : snap.counts.unstaged}）
+                      {t('gitStatus.groupCount', {
+                        label: t(g.labelKey),
+                        count: g.key === 'conflicted'
+                          ? snap.counts.conflicted
+                          : g.key === 'untracked'
+                            ? snap.counts.untracked
+                            : g.key === 'staged'
+                              ? snap.counts.staged
+                              : snap.counts.unstaged,
+                      })}
                     </div>
                     <div style={{ display: 'grid', gap: 2 }}>
                       {items.map((e) => (
@@ -317,13 +333,13 @@ export function GitStatusPanel({
 
               {snap.skippedRecords > 0 && (
                 <div className="small status-warn">
-                  {snap.skippedRecords} 条记录解析失败（git 输出格式可能已变），计数可能不完整。
+                  {t('gitStatus.skippedRecords', { count: snap.skippedRecords })}
                 </div>
               )}
 
               {snap.truncated && (
                 <div className="small muted">
-                  条目过多，仅显示前 {snap.entries.length} 条（计数为全量）。
+                  {t('gitStatus.truncatedEntries', { count: snap.entries.length })}
                 </div>
               )}
             </>

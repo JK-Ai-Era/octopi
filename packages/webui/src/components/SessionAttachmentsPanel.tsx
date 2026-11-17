@@ -9,6 +9,7 @@ import {
   OctopiClient,
   type SessionAttachmentDto,
 } from '@octopi-agent/gateway/web/sdk/client';
+import { useT } from '../i18n/react';
 
 function formatSize(n: number): string {
   if (n < 1024) return `${n}B`;
@@ -34,6 +35,7 @@ export function SessionAttachmentsPanel({
   const [promoteFor, setPromoteFor] = useState<string | null>(null);
   const [projectKey, setProjectKey] = useState('');
   const [busy, setBusy] = useState(false);
+  const t = useT();
 
   const closeOverlays = useCallback(() => {
     setMenuFor(null);
@@ -70,11 +72,11 @@ export function SessionAttachmentsPanel({
 
   const doDelete = async (id: string) => {
     if (!client || !sessionId) return;
-    if (!window.confirm('删除该附件？仅影响本会话。')) return;
+    if (!window.confirm(t('sessionAttachments.confirmDelete'))) return;
     setBusy(true);
     try {
       await client.deleteSessionAttachment(sessionId, id);
-      onToast?.('已删除附件');
+      onToast?.(t('sessionAttachments.deletedToast'));
       closeOverlays();
       await refresh();
     } catch (err) {
@@ -89,7 +91,7 @@ export function SessionAttachmentsPanel({
     setBusy(true);
     try {
       await client.promoteSessionAttachment(sessionId, id, { projectKey: projectKey.trim() });
-      onToast?.(`已归入项目 ${projectKey.trim()}`);
+      onToast?.(t('sessionAttachments.promotedToast', { key: projectKey.trim() }));
       setProjectKey('');
       closeOverlays();
       await refresh();
@@ -108,21 +110,21 @@ export function SessionAttachmentsPanel({
   };
 
   if (!sessionId) {
-    return <div className="small muted">请先打开会话。</div>;
+    return <div className="small muted">{t('sessionAttachments.noSession')}</div>;
   }
 
   return (
     <section className="panel sidebar-section attachment-panel">
       <div className="sidebar-title" style={{ marginBottom: 0 }}>
-        附件 · 仅本会话
+        {t('sessionAttachments.title')}
         <button type="button" className="btn-ghost small" onClick={() => void refresh()}>
-          刷新
+          {t('sessionAttachments.refresh')}
         </button>
       </div>
       {error && <div className="kn-error small">{error}</div>}
       {items.length === 0 ? (
         <div className="small muted" style={{ marginTop: 8 }}>
-          尚无附件 · 可拖拽或粘贴文件到对话
+          {t('sessionAttachments.empty')}
         </div>
       ) : (
         <div className="attachment-list" style={{ marginTop: 8 }}>
@@ -137,7 +139,7 @@ export function SessionAttachmentsPanel({
                       <strong>{a.name}</strong>{' '}
                       <span className="small muted mono">
                         {formatSize(a.sizeBytes)} · {a.status}
-                        {a.searchableSourceId ? ' · 可检索' : ''}
+                        {a.searchableSourceId ? t('sessionAttachments.searchableSuffix') : ''}
                       </span>
                     </div>
                     <div className="small muted mono">{a.path}</div>
@@ -146,7 +148,7 @@ export function SessionAttachmentsPanel({
                 <button
                   type="button"
                   className="btn-ghost small"
-                  title="更多"
+                  title={t('sessionAttachments.moreTitle')}
                   // 开关置于 backdrop 之上，保证可点
                   style={menuOpen || promoteOpen ? { position: 'relative', zIndex: 90 } : undefined}
                   onClick={(e) => {
@@ -177,7 +179,7 @@ export function SessionAttachmentsPanel({
                           setBusy(true);
                           try {
                             const r = await client.makeAttachmentSearchable(sessionId, a.id);
-                            onToast?.(`已升为可检索（source ${r.sourceId.slice(0, 10)}…）`);
+                            onToast?.(t('sessionAttachments.madeSearchableToast', { id: r.sourceId.slice(0, 10) }));
                             closeOverlays();
                             await refresh();
                           } catch (err) {
@@ -187,7 +189,9 @@ export function SessionAttachmentsPanel({
                           }
                         }}
                       >
-                        {a.searchableSourceId ? '已可检索' : '升为可检索'}
+                        {a.searchableSourceId
+                          ? t('sessionAttachments.alreadySearchable')
+                          : t('sessionAttachments.makeSearchable')}
                       </button>
                       <button
                         type="button"
@@ -198,7 +202,7 @@ export function SessionAttachmentsPanel({
                           setPromoteFor(a.id);
                         }}
                       >
-                        归入项目…
+                        {t('sessionAttachments.promoteMenu')}
                       </button>
                       <button
                         type="button"
@@ -212,7 +216,7 @@ export function SessionAttachmentsPanel({
                         disabled={busy}
                         onClick={() => void doDelete(a.id)}
                       >
-                        删除附件
+                        {t('sessionAttachments.deleteAction')}
                       </button>
                     </div>
                   </>
@@ -226,7 +230,7 @@ export function SessionAttachmentsPanel({
                       style={{ top: menuPos.top, left: menuPos.left }}
                     >
                       <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}>
-                        归入项目（move，脱离本会话）
+                        {t('sessionAttachments.promoteTitle')}
                       </div>
                       <input
                         className="small"
@@ -242,10 +246,10 @@ export function SessionAttachmentsPanel({
                           disabled={busy || !projectKey.trim()}
                           onClick={() => void doPromote(a.id)}
                         >
-                          确认归入
+                          {t('sessionAttachments.confirmPromote')}
                         </button>
                         <button type="button" className="btn-ghost small" onClick={closeOverlays}>
-                          取消
+                          {t('sessionAttachments.cancel')}
                         </button>
                       </div>
                     </div>
@@ -257,7 +261,7 @@ export function SessionAttachmentsPanel({
         </div>
       )}
       <div className="corpus-foot small muted" style={{ marginTop: 8 }}>
-        默认仅当前会话可见；「归入项目」将文件移入项目源（非自动提升）。
+        {t('sessionAttachments.footnote')}
       </div>
     </section>
   );

@@ -13,6 +13,8 @@ import {
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
+import { useT } from '../i18n/react';
+import { t as tStatic } from '../i18n/core';
 
 interface ModelRow {
   id: string;
@@ -84,7 +86,7 @@ function modelRowFromUnknown(m: Record<string, unknown>): ModelRow {
 function parseNumberField(value: string, label: string): number | undefined {
   if (!value.trim()) return undefined;
   const n = Number(value);
-  if (!Number.isFinite(n)) throw new Error(`${label} 必须是数字：${value}`);
+  if (!Number.isFinite(n)) throw new Error(tStatic('modelSettings.numberMustBeNumber', { label, value }));
   return n;
 }
 
@@ -127,6 +129,7 @@ function isConflictError(err: unknown): boolean {
 }
 
 export function ModelSettingsPanel() {
+  const t = useT();
   const client = useMemo(
     () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [],
@@ -211,17 +214,17 @@ export function ModelSettingsPanel() {
   const noticeForApply = (result: ConfigApplyResultDto): string => {
     const scope =
       result.applied === 'hot'
-        ? '立即生效'
+        ? t('modelSettings.appliedHot')
         : result.affectedAgents.length > 0
-          ? `已保存，新会话生效（影响 ${result.affectedAgents.join(', ')}）`
-          : '已保存，新会话生效';
+          ? t('modelSettings.savedAffected', { agents: result.affectedAgents.join(', ') })
+          : t('modelSettings.saved');
     return scope;
   };
 
   /** 写操作错误统一处理：409 冲突 → 重载最新内容让用户重新确认（乐观锁可恢复） */
   const handleWriteError = async (err: unknown): Promise<void> => {
     if (isConflictError(err)) {
-      setError('配置已被外部修改，已重新载入最新内容——请重新确认你的修改再保存');
+      setError(t('modelSettings.conflictReloaded'));
       await reload();
     } else {
       setError(err instanceof Error ? err.message : String(err));
@@ -230,15 +233,15 @@ export function ModelSettingsPanel() {
 
   const saveProvider = async () => {
     if (!form.name.trim()) {
-      setError('provider 名不能为空');
+      setError(t('modelSettings.nameRequired'));
       return;
     }
     if (!form.baseUrl.trim()) {
-      setError('baseUrl 不能为空');
+      setError(t('modelSettings.baseUrlRequired'));
       return;
     }
     if (form.models.length === 0) {
-      setError('至少配置一个模型（或点「拉取模型列表」自动填充）');
+      setError(t('modelSettings.modelsRequired'));
       return;
     }
     setBusy(true);
@@ -286,7 +289,7 @@ export function ModelSettingsPanel() {
     try {
       const result = await client.testModelProvider(form.name.trim() || 'test', formToProviderConfig(form));
       if (result.ok) {
-        setTestResult(`✓ 连通成功，发现 ${result.models.length} 个模型`);
+        setTestResult(t('modelSettings.testOk', { count: result.models.length }));
         // 拉取式发现：未声明的模型合并进表单（已有的不动）
         setForm((prev) => {
           const known = new Set(prev.models.map((m) => m.id));
@@ -299,10 +302,14 @@ export function ModelSettingsPanel() {
           return { ...prev, models: merged };
         });
       } else {
-        setTestResult(`✗ 连通失败：${result.error ?? '未知错误'}`);
+        setTestResult(
+          t('modelSettings.testFailed', { error: result.error ?? t('modelSettings.unknownError') }),
+        );
       }
     } catch (err) {
-      setTestResult(`✗ 连通失败：${err instanceof Error ? err.message : String(err)}`);
+      setTestResult(
+        t('modelSettings.testFailed', { error: err instanceof Error ? err.message : String(err) }),
+      );
     } finally {
       setBusy(false);
     }
@@ -343,10 +350,8 @@ export function ModelSettingsPanel() {
   return (
     <div className="set-panel">
       <div className="set-header">
-        <h2>模型配置</h2>
-        <span className="small muted">
-          保存即生效（新会话用新配置）· apiKey 不回显明文 · 修改会自动备份 octopi.json · 端口/服务级配置需重启，不在本面板
-        </span>
+        <h2>{t('modelSettings.title')}</h2>
+        <span className="small muted">{t('modelSettings.subtitle')}</span>
       </div>
 
       {error && <div className="set-error">{error}</div>}
@@ -355,7 +360,7 @@ export function ModelSettingsPanel() {
       <div className="set-body">
         <aside className="set-list">
           <button type="button" className="btn-secondary small" onClick={() => selectProvider('__new__')}>
-            + 新建 provider
+            {t('modelSettings.newProvider')}
           </button>
           {(view?.providers ?? []).map((p) => (
             <button
@@ -366,7 +371,12 @@ export function ModelSettingsPanel() {
             >
               <span className="mono">{p.name}</span>
               <span className="small muted">
-                {p.models.length} 模型{p.apiKey.configured ? ' · key ✓' : ''}
+                {t(
+                  p.apiKey.configured
+                    ? 'modelSettings.providerSummaryKeyed'
+                    : 'modelSettings.providerSummary',
+                  { count: p.models.length },
+                )}
               </span>
             </button>
           ))}
@@ -375,7 +385,7 @@ export function ModelSettingsPanel() {
         <section className="set-form">
           {selected === '__new__' && (
             <div className="set-presets">
-              <div className="small muted">选择预设快速填充（生成器：可改后保存）：</div>
+              <div className="small muted">{t('modelSettings.presetHint')}</div>
               <div className="set-preset-grid">
                 {presets.map((preset) => (
                   <button
@@ -386,7 +396,11 @@ export function ModelSettingsPanel() {
                     title={preset.docsUrl}
                   >
                     <strong>{preset.label}</strong>
-                    <span className="small muted">{preset.custom ? '自定义' : `${preset.models.length} 预置模型`}</span>
+                    <span className="small muted">
+                      {preset.custom
+                        ? t('modelSettings.presetCustom')
+                        : t('modelSettings.presetModelCount', { count: preset.models.length })}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -396,7 +410,7 @@ export function ModelSettingsPanel() {
           {selected && (
             <>
               <label className="set-field">
-                <span>名称</span>
+                <span>{t('modelSettings.fieldName')}</span>
                 <input
                   className="set-input mono"
                   value={form.name}
@@ -415,7 +429,7 @@ export function ModelSettingsPanel() {
                 />
               </label>
               <label className="set-field">
-                <span>API 协议</span>
+                <span>{t('modelSettings.fieldProtocol')}</span>
                 {form.plugin !== undefined ? (
                   // 插件 provider：协议由贡献决定，UI 不编辑；只读展示防误改
                   <input className="set-input mono" value={`plugin:${form.plugin}`} readOnly />
@@ -441,14 +455,18 @@ export function ModelSettingsPanel() {
                   placeholder={
                     selected !== '__new__'
                       ? view?.providers.find((p) => p.name === selected)?.apiKey.configured
-                        ? `已配置（${view.providers.find((p) => p.name === selected)?.apiKey.ref ?? 'literal'}），留空保留`
-                        : '未配置；建议用 ${ENV_VAR} 引用'
-                      : '建议用 ${ENV_VAR} 引用；也可填明文'
+                        ? t('modelSettings.apiKeyConfiguredPlaceholder', {
+                            ref:
+                              view.providers.find((p) => p.name === selected)?.apiKey.ref ??
+                              'literal',
+                          })
+                        : t('modelSettings.apiKeyUnconfiguredPlaceholder')
+                      : t('modelSettings.apiKeyNewPlaceholder')
                   }
                 />
               </label>
               <label className="set-field">
-                <span>超时（秒，可选）</span>
+                <span>{t('modelSettings.fieldTimeout')}</span>
                 <input
                   className="set-input"
                   value={form.timeoutSeconds}
@@ -459,9 +477,9 @@ export function ModelSettingsPanel() {
 
               <div className="set-models">
                 <div className="set-models-head">
-                  <span>模型清单</span>
+                  <span>{t('modelSettings.modelList')}</span>
                   <button type="button" className="btn-secondary small" onClick={testProvider} disabled={busy}>
-                    测试连通并拉取模型列表
+                    {t('modelSettings.testAndFetch')}
                   </button>
                 </div>
                 {testResult && <div className="small">{testResult}</div>}
@@ -477,7 +495,7 @@ export function ModelSettingsPanel() {
                       className="set-input"
                       value={m.name}
                       onChange={(e) => updateModelRow(i, { name: e.target.value })}
-                      placeholder="展示名"
+                      placeholder={t('modelSettings.displayNamePlaceholder')}
                     />
                     <input
                       className="set-input"
@@ -520,13 +538,13 @@ export function ModelSettingsPanel() {
                     }))
                   }
                 >
-                  + 添加模型
+                  {t('modelSettings.addModel')}
                 </button>
               </div>
 
               <div className="set-actions">
                 <button type="button" className="btn-secondary" onClick={saveProvider} disabled={busy}>
-                  {busy ? '保存中…' : '保存并生效'}
+                  {busy ? t('modelSettings.saving') : t('modelSettings.saveAndApply')}
                 </button>
                 {selected !== '__new__' && presets.some((p) => p.id === selected) && (
                   <button
@@ -538,31 +556,35 @@ export function ModelSettingsPanel() {
                         applyPreset(preset);
                         // #9 重置≠换钥：保留当前 apiKey 输入（含"留空=保留现有"语义）
                         setForm((p) => ({ ...p, name: selected ?? p.name, apiKey: p.apiKey }));
-                        setNotice(`已填入「${preset.label}」预设默认值（apiKey 未动），确认后保存生效`);
+                        setNotice(
+                          t('modelSettings.presetApplied', { label: preset.label }),
+                        );
                       }
                     }}
                     disabled={busy}
                   >
-                    重置为预设默认值
+                    {t('modelSettings.resetToPreset')}
                   </button>
                 )}
                 {selected !== '__new__' && (
                   <button type="button" className="btn-ghost" onClick={deleteProvider} disabled={busy}>
-                    删除 provider
+                    {t('modelSettings.deleteProvider')}
                   </button>
                 )}
               </div>
             </>
           )}
 
-          {!selected && <div className="small muted">选择左侧 provider 编辑，或新建。</div>}
+          {!selected && <div className="small muted">{t('modelSettings.selectPrompt')}</div>}
         </section>
       </div>
 
       <div className="set-levels">
-        <h3>模型分级路由（models.level）</h3>
+        <h3>{t('modelSettings.levelsTitle')}</h3>
         <div className="small muted">
-          供 agent 默认模型按档位解析；primary 形如 <span className="mono">openai/gpt-5.5</span>，fallback 逗号分隔。
+          {t('modelSettings.levelsHintPrefix')}{' '}
+          <span className="mono">openai/gpt-5.5</span>
+          {t('modelSettings.levelsHintSuffix')}
         </div>
         {levels.map((row, i) => (
           <div key={i} className="set-level-row">
@@ -572,7 +594,7 @@ export function ModelSettingsPanel() {
               onChange={(e) =>
                 setLevels((prev) => prev.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))
               }
-              placeholder="level 名（如 standard）"
+              placeholder={t('modelSettings.levelNamePlaceholder')}
             />
             <input
               className="set-input mono"
@@ -605,10 +627,10 @@ export function ModelSettingsPanel() {
             className="btn-ghost small"
             onClick={() => setLevels((prev) => [...prev, { name: '', primary: '', fallback: '' }])}
           >
-            + 添加 level
+            {t('modelSettings.addLevel')}
           </button>
           <button type="button" className="btn-secondary" onClick={saveLevels} disabled={busy}>
-            保存 level（立即生效）
+            {t('modelSettings.saveLevels')}
           </button>
         </div>
       </div>

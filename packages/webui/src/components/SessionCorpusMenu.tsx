@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OctopiClient, type KnowledgeSessionVisibilityItemDto } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
+import { useT } from '../i18n/react';
 
 interface ProjectRow {
   projectKey: string;
@@ -31,6 +32,7 @@ export function SessionCorpusMenu({
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [overrides, setOverrides] = useState<KnowledgeSessionVisibilityItemDto[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const t = useT();
 
   const refresh = useCallback(async () => {
     if (!sessionId) return;
@@ -78,8 +80,11 @@ export function SessionCorpusMenu({
   const projectVisibleCount = effective.filter((e) => e.visible).length;
   const chipLabel =
     sourceOverrides.length > 0
-      ? `语料 ${projectVisibleCount} · 源级 ${sourceOverrides.length}`
-      : `语料 ${projectVisibleCount}`;
+      ? t('sessionCorpusMenu.chipLabelSources', {
+          count: projectVisibleCount,
+          sources: sourceOverrides.length,
+        })
+      : t('sessionCorpusMenu.chipLabel', { count: projectVisibleCount });
 
   const setOverlay = async (
     projectKey: string,
@@ -92,7 +97,7 @@ export function SessionCorpusMenu({
           targetType: 'project',
           targetId: projectKey,
         });
-        onToast?.(`已恢复「${projectKey}」默认可见性`);
+        onToast?.(t('sessionCorpusMenu.restoredDefault', { project: projectKey }));
       } else {
         await client.setKnowledgeSessionVisibility(agentId, {
           sessionId,
@@ -102,8 +107,8 @@ export function SessionCorpusMenu({
         });
         onToast?.(
           op === 'include'
-            ? `已附加 ${projectKey}（仅本会话）`
-            : `本会话排除 ${projectKey}`,
+            ? t('sessionCorpusMenu.includedToast', { project: projectKey })
+            : t('sessionCorpusMenu.excludedToast', { project: projectKey }),
         );
       }
       await refresh();
@@ -119,7 +124,9 @@ export function SessionCorpusMenu({
         targetType: 'source',
         targetId,
       });
-      onToast?.(`已清除源级 overlay ${targetId.slice(0, 12)}…`);
+      onToast?.(
+        t('sessionCorpusMenu.clearedSourceOverlay', { target: targetId.slice(0, 12) }),
+      );
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -146,8 +153,8 @@ export function SessionCorpusMenu({
       }
       onToast?.(
         mount
-          ? `已挂载 ${projectKey} → ${agentId}（跨会话；已清本场 project 调整）`
-          : `已从 ${agentId} 卸载 ${projectKey}（跨会话；已清本场 project 调整）`,
+          ? t('sessionCorpusMenu.mountedToAgent', { project: projectKey, agent: agentId })
+          : t('sessionCorpusMenu.unmountedFromAgent', { agent: agentId, project: projectKey }),
       );
       await refresh();
     } catch (err) {
@@ -161,22 +168,22 @@ export function SessionCorpusMenu({
         type="button"
         className={open ? 'btn-tab btn-tab-active corpus-chip' : 'btn-tab corpus-chip'}
         onClick={() => setOpen((v) => !v)}
-        title="本会话语料（项目快挂）"
+        title={t('sessionCorpusMenu.chipTitle')}
       >
         {chipLabel}
       </button>
       {open && (
         <div className="corpus-popover panel">
           <div className="corpus-popover-title small">
-            本会话可见（effective）
+            {t('sessionCorpusMenu.popoverTitle')}
             <button type="button" className="btn-ghost small" onClick={() => setOpen(false)}>
-              关闭
+              {t('sessionCorpusMenu.close')}
             </button>
           </div>
           {error && <div className="kn-error small">{error}</div>}
           <div className="corpus-list">
             {effective.length === 0 && (
-              <div className="small muted">尚无项目。请先到知识库创建项目。</div>
+              <div className="small muted">{t('sessionCorpusMenu.noProjects')}</div>
             )}
             {effective.map((p) => (
               <div key={p.projectKey} className="corpus-row">
@@ -186,28 +193,36 @@ export function SessionCorpusMenu({
                     <div>
                       <strong>{p.displayName || p.projectKey}</strong>
                       <span className="small muted">
-                        {p.state === 'default' && (p.mounted ? '默认（项目已挂）' : '默认不可见')}
-                        {p.state === 'session-include' && '本会话附加'}
-                        {p.state === 'session-exclude' && '本会话排除'}
+                        {p.state === 'default' &&
+                          (p.mounted
+                            ? t('sessionCorpusMenu.defaultMounted')
+                            : t('sessionCorpusMenu.defaultHidden'))}
+                        {p.state === 'session-include' &&
+                          t('sessionCorpusMenu.sessionInclude')}
+                        {p.state === 'session-exclude' &&
+                          t('sessionCorpusMenu.sessionExclude')}
                       </span>
                     </div>
-                    <div className="small muted mono">{p.projectKey} · {p.sourceCount} 源</div>
+                    <div className="small muted mono">
+                      {p.projectKey} ·{' '}
+                      {t('sessionCorpusMenu.sourceCount', { count: p.sourceCount })}
+                    </div>
                   </div>
                 </div>
                 <div className="corpus-row-actions">
                   {p.state === 'default' && !p.visible && (
                     <button type="button" className="btn-secondary small" onClick={() => void setOverlay(p.projectKey, 'include')}>
-                      本会话附加
+                      {t('sessionCorpusMenu.sessionInclude')}
                     </button>
                   )}
                   {p.state === 'default' && p.visible && (
                     <button type="button" className="btn-ghost small" onClick={() => void setOverlay(p.projectKey, 'exclude')}>
-                      本会话排除
+                      {t('sessionCorpusMenu.sessionExclude')}
                     </button>
                   )}
                   {p.state !== 'default' && (
                     <button type="button" className="btn-ghost small" onClick={() => void setOverlay(p.projectKey, null)}>
-                      恢复默认
+                      {t('sessionCorpusMenu.restoreDefault')}
                     </button>
                   )}
                   {!p.mounted ? (
@@ -216,7 +231,7 @@ export function SessionCorpusMenu({
                       className="btn-ghost small"
                       onClick={() => void escalateToAgent(p.projectKey, true)}
                     >
-                      挂到 Agent
+                      {t('sessionCorpusMenu.mountToAgent')}
                     </button>
                   ) : (
                     <button
@@ -224,7 +239,7 @@ export function SessionCorpusMenu({
                       className="btn-ghost small"
                       onClick={() => void escalateToAgent(p.projectKey, false)}
                     >
-                      从 Agent 卸载
+                      {t('sessionCorpusMenu.unmountFromAgent')}
                     </button>
                   )}
                 </div>
@@ -235,7 +250,7 @@ export function SessionCorpusMenu({
           {sourceOverrides.length > 0 && (
             <div className="corpus-source-ov">
               <div className="small" style={{ fontWeight: 600 }}>
-                源级 overlay（优先于项目）
+                {t('sessionCorpusMenu.sourceOverlayTitle')}
               </div>
               {sourceOverrides.map((o) => (
                 <div key={`${o.targetType}:${o.targetId}`} className="corpus-row">
@@ -244,7 +259,10 @@ export function SessionCorpusMenu({
                       {o.targetId.slice(0, 16)}…
                     </span>
                     <span className="small muted">
-                      {o.op === 'include' ? '本会话附加' : '本会话排除'}（source 级）
+                      {o.op === 'include'
+                        ? t('sessionCorpusMenu.sessionInclude')
+                        : t('sessionCorpusMenu.sessionExclude')}
+                      {t('sessionCorpusMenu.sourceLevel')}
                     </span>
                   </div>
                   <button
@@ -252,16 +270,14 @@ export function SessionCorpusMenu({
                     className="btn-ghost small"
                     onClick={() => void clearSourceOverlay(o.targetId)}
                   >
-                    清除
+                    {t('sessionCorpusMenu.clear')}
                   </button>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="corpus-foot small muted">
-            本场调整只影响当前会话；「挂到 / 卸载 Agent」为跨会话，会清除该项目的本场 project 调整。
-          </div>
+          <div className="corpus-foot small muted">{t('sessionCorpusMenu.footerHint')}</div>
         </div>
       )}
     </div>

@@ -19,6 +19,8 @@ import {
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
+import { useT } from '../i18n/react';
+import type { MessageKey, MessageParams } from '../i18n/core';
 
 type LifecycleKind =
   | 'exited'
@@ -41,10 +43,10 @@ interface LifecycleState {
 const RECOVERED_VISIBLE_MS = 5_000;
 
 /** restarting.reason 的英文枚举 → 中文（tooltip 用） */
-const REASON_LABELS: Record<string, string> = {
-  exited: '进程退出',
-  boot_failed: '首启失败',
-  restart_failed: '重启失败',
+const REASON_LABELS: Record<string, MessageKey> = {
+  exited: 'knowledgeServiceStatus.reasonExited',
+  boot_failed: 'knowledgeServiceStatus.reasonBootFailed',
+  restart_failed: 'knowledgeServiceStatus.reasonRestartFailed',
 };
 
 function pickLifecycle(event: { type: string; data?: unknown }): LifecycleState | null {
@@ -76,40 +78,54 @@ function pickSeed(state: string | undefined): LifecycleState | null {
   return null;
 }
 
-function describe(state: LifecycleState): { label: string; bg: string } {
+function describe(state: LifecycleState): { key: MessageKey; params?: MessageParams; bg: string } {
   switch (state.kind) {
     case 'exited':
-      return { label: '知识服务进程退出 · 自愈中', bg: '#c0392b' };
+      return { key: 'knowledgeServiceStatus.labelExited', bg: '#c0392b' };
     case 'restarting':
-      return {
-        label: `知识服务重启中（第 ${state.attempt ?? '?'} 次${state.backoffMs != null ? `，退避 ${Math.round(state.backoffMs / 1000)}s` : ''}）`,
-        bg: '#d35400',
-      };
+      return state.backoffMs != null
+        ? {
+            key: 'knowledgeServiceStatus.labelRestartingBackoff',
+            params: { attempt: state.attempt ?? '?', seconds: Math.round(state.backoffMs / 1000) },
+            bg: '#d35400',
+          }
+        : {
+            key: 'knowledgeServiceStatus.labelRestarting',
+            params: { attempt: state.attempt ?? '?' },
+            bg: '#d35400',
+          };
     case 'restart_failed':
       return {
-        label: `知识服务重启失败（第 ${state.attempt ?? '?'} 次）· 继续退避重试`,
+        key: 'knowledgeServiceStatus.labelRestartFailed',
+        params: { attempt: state.attempt ?? '?' },
         bg: '#c0392b',
       };
     case 'recovered':
-      return { label: '知识服务已恢复', bg: '#27ae60' };
+      return { key: 'knowledgeServiceStatus.labelRecovered', bg: '#27ae60' };
     case 'seed_degraded':
-      return { label: '知识服务不可用 · 自愈重试中', bg: '#c0392b' };
+      return { key: 'knowledgeServiceStatus.labelSeedDegraded', bg: '#c0392b' };
     case 'seed_starting':
-      return { label: '知识服务启动中', bg: '#d35400' };
+      return { key: 'knowledgeServiceStatus.labelSeedStarting', bg: '#d35400' };
   }
 }
 
-function tooltip(state: LifecycleState): string {
+function tooltip(state: LifecycleState, t: (key: MessageKey, params?: MessageParams) => string): string {
   const parts: string[] = [];
-  if (state.reason) parts.push(`触发=${REASON_LABELS[state.reason] ?? state.reason}`);
+  if (state.reason) {
+    const label = REASON_LABELS[state.reason];
+    parts.push(t('knowledgeServiceStatus.tooltipTrigger', { reason: label ? t(label) : state.reason }));
+  }
   if (state.error) parts.push(`error=${state.error}`);
   // OOM/被 kill 只能从 code/signal 看出来——崩溃唯一诊断信息不得丢
   if (state.kind === 'exited') parts.push(`code=${state.code ?? 'null'} signal=${state.signal ?? 'null'}`);
-  return parts.length > 0 ? parts.join('；') : '知识服务子进程生命周期（自愈：指数退避自动重启）';
+  return parts.length > 0
+    ? parts.join(t('knowledgeServiceStatus.partSeparator'))
+    : t('knowledgeServiceStatus.tooltipFallback');
 }
 
 /** 常驻知识服务状态标记（app header 用；正常时零占位） */
 export function KnowledgeServiceStatus({ client }: { client?: OctopiClient }) {
+  const t = useT();
   // 所有权：只有自建 client 才由本组件 connect/disconnect；借用的不接管生命周期
   const owned = useMemo(
     () =>
@@ -162,10 +178,10 @@ export function KnowledgeServiceStatus({ client }: { client?: OctopiClient }) {
   }, [owned]);
 
   if (!state) return null;
-  const { label, bg } = describe(state);
+  const { key, params, bg } = describe(state);
   return (
     <span
-      title={tooltip(state)}
+      title={tooltip(state, t)}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -178,7 +194,7 @@ export function KnowledgeServiceStatus({ client }: { client?: OctopiClient }) {
         letterSpacing: 0.5,
       }}
     >
-      {label}
+      {t(key, params)}
     </span>
   );
 }

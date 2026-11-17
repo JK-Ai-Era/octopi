@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import type { FlowErrorItem } from './error-classify';
+import { useT } from '../i18n/react';
 
 export * from './error-classify';
 
@@ -12,6 +13,7 @@ export * from './error-classify';
 export function ErrorCard({ item }: { item: FlowErrorItem }): JSX.Element {
   const [showRaw, setShowRaw] = useState(false);
   const [copied, setCopied] = useState(false);
+  const t = useT();
 
   const copyDiag = (): void => {
     if (!item.diagnosticId) return;
@@ -34,13 +36,18 @@ export function ErrorCard({ item }: { item: FlowErrorItem }): JSX.Element {
           </button>
         )}
         {item.diagnosticId && (
-          <button type="button" className="btn-ghost small" onClick={copyDiag} title="复制诊断 ID">
-            {copied ? '已复制' : `诊断 ID：${item.diagnosticId}`}
+          <button
+            type="button"
+            className="btn-ghost small"
+            onClick={copyDiag}
+            title={t('errorCard.copyDiagnosticId')}
+          >
+            {copied ? t('errorCard.copied') : t('errorCard.diagnosticId', { id: item.diagnosticId })}
           </button>
         )}
         {item.raw && (
           <button type="button" className="btn-ghost small" onClick={() => setShowRaw((v) => !v)}>
-            {showRaw ? '收起技术细节' : '技术细节'}
+            {showRaw ? t('errorCard.hideRaw') : t('errorCard.showRaw')}
           </button>
         )}
       </div>

@@ -24,13 +24,18 @@ declare global {
   }
 }
 
+/** 注入配置对象读取（globalThis 访问保持 lib 无关：本文件会进无 DOM lib 的 tests 类型检查图） */
+function injectedConfig(): Window['__OCTOPI_WEB__'] {
+  return (globalThis as { __OCTOPI_WEB__?: Window['__OCTOPI_WEB__'] }).__OCTOPI_WEB__;
+}
+
 /**
  * 产品版本（「关于」页展示）。
  *
  * @returns 下发的版本号；缺失时 undefined（UI 显示占位）
  */
 export function getProductVersion(): string | undefined {
-  const v = typeof window !== 'undefined' ? window.__OCTOPI_WEB__?.version : undefined;
+  const v = injectedConfig()?.version;
   return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
 
@@ -40,7 +45,7 @@ export function getProductVersion(): string | undefined {
  * @returns 'zh' | 'en'；缺失时 'zh'
  */
 export function getLanguage(): 'zh' | 'en' {
-  const v = typeof window !== 'undefined' ? window.__OCTOPI_WEB__?.language : undefined;
+  const v = injectedConfig()?.language;
   return v === 'en' ? 'en' : 'zh';
 }
 
@@ -53,7 +58,7 @@ const DEFAULT_GIT_STATUS_POLL_SECONDS = 5;
  * @returns 校验后的配置值；下发缺失/非法时回退默认 5s
  */
 export function getGitStatusPollSeconds(): number {
-  const v = typeof window !== 'undefined' ? window.__OCTOPI_WEB__?.gitStatusPollSeconds : undefined;
+  const v = injectedConfig()?.gitStatusPollSeconds;
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 3600
     ? v
     : DEFAULT_GIT_STATUS_POLL_SECONDS;
@@ -65,7 +70,7 @@ export function getGitStatusPollSeconds(): number {
  * @returns 部署模式；下发缺失时返回 undefined（按免登录处理）
  */
 export function getDeploymentMode(): string | undefined {
-  return typeof window !== 'undefined' ? window.__OCTOPI_WEB__?.deploymentMode : undefined;
+  return injectedConfig()?.deploymentMode;
 }
 
 /**

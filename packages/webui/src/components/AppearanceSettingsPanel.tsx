@@ -3,15 +3,17 @@
  */
 
 import { ThemeToggle } from './ThemeToggle';
+import { useT } from '../i18n/react';
 
 export function AppearanceSettingsPanel(): JSX.Element {
+  const t = useT();
   return (
     <div className="panel" style={{ display: 'grid', gap: 12 }}>
-      <h3 style={{ margin: 0 }}>外观</h3>
+      <h3 style={{ margin: 0 }}>{t('appearanceSettingsPanel.title')}</h3>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <span className="small muted">主题</span>
+        <span className="small muted">{t('appearanceSettingsPanel.theme')}</span>
         <ThemeToggle />
-        <span className="small muted">（跟随系统 / 浅色 / 深色，选择会记住）</span>
+        <span className="small muted">{t('appearanceSettingsPanel.themeHint')}</span>
       </div>
     </div>
   );

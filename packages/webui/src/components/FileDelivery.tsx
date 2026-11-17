@@ -13,6 +13,7 @@ import {
   saveBlobAs,
   type CachedFile,
 } from '../file-cache';
+import { useT } from '../i18n/react';
 
 export interface FileRef {
   fileId: string;
@@ -83,11 +84,12 @@ export function FilePreviewPanel({
   focusFileId?: string | null;
   onSelect?: (ref: FileRef) => void;
 }) {
+  const t = useT();
   if (!files.length) {
     return (
       <section className="panel sidebar-section">
-        <div className="sidebar-title">文件</div>
-        <div className="small muted">Agent 发送的文件会显示在这里。点击对话中的文件名可打开。</div>
+        <div className="sidebar-title">{t('fileDelivery.title')}</div>
+        <div className="small muted">{t('fileDelivery.emptyHint')}</div>
       </section>
     );
   }
@@ -99,9 +101,9 @@ export function FilePreviewPanel({
     <section className="panel sidebar-section">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <div className="sidebar-title" style={{ marginBottom: 0 }}>
-          文件
+          {t('fileDelivery.title')}
           <span className="small muted" style={{ marginLeft: 8, fontWeight: 400 }}>
-            {files.length} 个
+            {t('fileDelivery.count', { count: files.length })}
           </span>
         </div>
       </div>
@@ -146,6 +148,7 @@ function FilePanelItem({
   createdAt?: number;
 }) {
   const { file, error, loading } = useSessionFile(client, sessionId, fileRef);
+  const t = useT();
   return (
     <div style={{ borderTop: '1px solid var(--border-color, #e5e7eb)', paddingTop: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
@@ -158,14 +161,15 @@ function FilePanelItem({
           disabled={!file}
           onClick={() => file && saveBlobAs(file.blob, file.meta.name)}
         >
-          转存
+          {t('fileDelivery.save')}
         </button>
       </div>
       <div className="small muted" style={{ marginBottom: 8, wordBreak: 'break-all' }}>
-        {fileRef.mime || 'application/octet-stream'} · {fileRef.sizeBytes.toLocaleString()} 字节
+        {fileRef.mime || 'application/octet-stream'} ·{' '}
+        {t('fileDelivery.sizeCount', { size: fileRef.sizeBytes.toLocaleString() })}
         {createdAt ? ` · ${new Date(createdAt).toLocaleTimeString()}` : ''}
       </div>
-      {loading && <div className="small muted">加载中…</div>}
+      {loading && <div className="small muted">{t('fileDelivery.loading')}</div>}
       {error && <div className="small" style={{ color: 'var(--color-danger, #dc2626)' }}>{error}</div>}
       {file && <FileBody file={file} />}
     </div>
@@ -212,6 +216,7 @@ export function FileBody({ file }: { file: CachedFile }) {
 }
 
 function BinaryFileBody({ file, onDownload }: { file: CachedFile; onDownload: () => void }) {
+  const t = useT();
   return (
     <div
       style={{
@@ -223,16 +228,17 @@ function BinaryFileBody({ file, onDownload }: { file: CachedFile; onDownload: ()
         gap: 8,
       }}
     >
-      <div className="small muted">二进制 / 文档文件，不支持在线预览</div>
+      <div className="small muted">{t('fileDelivery.binaryNoPreview')}</div>
       <div className="small" style={{ wordBreak: 'break-all' }}>
         {file.meta.name}
       </div>
       <div className="small muted">
-        {file.meta.mime || 'application/octet-stream'} · {file.meta.sizeBytes.toLocaleString()} 字节
+        {file.meta.mime || 'application/octet-stream'} ·{' '}
+        {t('fileDelivery.sizeCount', { size: file.meta.sizeBytes.toLocaleString() })}
       </div>
       <div>
         <button type="button" className="btn-secondary" onClick={onDownload}>
-          转存到本地
+          {t('fileDelivery.saveToLocal')}
         </button>
       </div>
     </div>
@@ -252,13 +258,14 @@ function looksBinary(text: string): boolean {
 function TextFileBody({ file }: { file: CachedFile }) {
   const [text, setText] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const t = useT();
 
   useEffect(() => {
     let cancelled = false;
     void file.blob
       .text()
-      .then((t) => {
-        if (!cancelled) setText(t);
+      .then((value) => {
+        if (!cancelled) setText(value);
       })
       .catch((e) => {
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
@@ -269,7 +276,7 @@ function TextFileBody({ file }: { file: CachedFile }) {
   }, [file]);
 
   if (err) return <div className="small" style={{ color: 'var(--color-danger, #dc2626)' }}>{err}</div>;
-  if (text == null) return <div className="small muted">读取中…</div>;
+  if (text == null) return <div className="small muted">{t('fileDelivery.reading')}</div>;
 
   // 误标成 text 的二进制（如 docx 被当成 text/plain）→ 不进 md 渲染器
   if (looksBinary(text)) {
@@ -319,6 +326,7 @@ export function FileCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasRenderer = hasPreviewRenderer(fileRef.mime);
+  const t = useT();
 
   const activate = async () => {
     if (busy) return;
@@ -329,7 +337,7 @@ export function FileCard({
     }
     // 无渲染器 → 转存
     if (!client || !sessionId) {
-      setError('未连接，无法转存');
+      setError(t('fileDelivery.notConnected'));
       return;
     }
     setBusy(true);
@@ -370,7 +378,7 @@ export function FileCard({
           type="button"
           onClick={() => void activate()}
           disabled={busy}
-          title={hasRenderer ? '打开预览' : '转存到本地'}
+          title={hasRenderer ? t('fileDelivery.openPreview') : t('fileDelivery.saveToLocal')}
           style={{
             flex: 1,
             minWidth: 0,
@@ -392,13 +400,14 @@ export function FileCard({
           {fileRef.name}
         </button>
         <span className="small muted" style={{ flexShrink: 0 }}>
-          {hasRenderer ? '预览' : '转存'}
+          {hasRenderer ? t('fileDelivery.preview') : t('fileDelivery.save')}
         </span>
       </div>
       <div className="small muted" style={{ marginTop: 6, marginLeft: 18 }}>
-        {fileRef.mime || 'application/octet-stream'} · {fileRef.sizeBytes.toLocaleString()} 字节
+        {fileRef.mime || 'application/octet-stream'} ·{' '}
+        {t('fileDelivery.sizeCount', { size: fileRef.sizeBytes.toLocaleString() })}
         {createdAt ? ` · ${new Date(createdAt).toLocaleString()}` : ''}
-        {busy ? ' · 处理中…' : ''}
+        {busy ? ` · ${t('fileDelivery.processing')}` : ''}
       </div>
       {error ? (
         <div className="small" style={{ color: 'var(--color-danger, #dc2626)', marginTop: 6, marginLeft: 18 }}>

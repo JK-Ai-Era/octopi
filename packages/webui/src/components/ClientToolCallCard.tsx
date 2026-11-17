@@ -16,6 +16,7 @@ import type {
   OctopiClient,
 } from '@octopi-agent/gateway/web/sdk/client';
 import type { FileRef } from './FileDelivery';
+import { useT } from '../i18n/react';
 
 export interface RenderedWebView {
   id: string;
@@ -93,7 +94,9 @@ function HtmlFrame({
   frameRef?: Ref<HTMLIFrameElement>;
 }) {
   const [maximized, setMaximized] = useState(false);
+  const t = useT();
   const srcDoc = mode === 'form' ? injectFormHelper(html) : html;
+  const toggleLabel = maximized ? t('clientToolCallCard.restore') : t('clientToolCallCard.maximize');
 
   return (
     <>
@@ -105,9 +108,9 @@ function HtmlFrame({
           type="button"
           className="btn-secondary"
           onClick={() => setMaximized((v) => !v)}
-          title={maximized ? '还原' : '最大化'}
+          title={toggleLabel}
         >
-          {maximized ? '还原' : '最大化'}
+          {toggleLabel}
         </button>
       </div>
       <iframe
@@ -147,7 +150,7 @@ function HtmlFrame({
             zIndex: 1001,
           }}
         >
-          还原
+          {t('clientToolCallCard.restore')}
         </button>
       ) : null}
     </>
@@ -156,11 +159,12 @@ function HtmlFrame({
 
 /** 持久化 HTML 预览（关闭后仍可见） */
 export function WebViewPreview({ view }: { view: RenderedWebView }) {
+  const t = useT();
   return (
     <div className="panel" style={{ borderColor: 'var(--color-accent, #2563eb)', marginBottom: 12 }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>
         <span style={{ color: 'var(--color-accent, #2563eb)' }}>
-          {view.mode === 'form' ? '网页表单' : '网页'}
+          {view.mode === 'form' ? t('clientToolCallCard.webForm') : t('clientToolCallCard.webPage')}
         </span>
       </div>
       <HtmlFrame title={view.title} html={view.html} mode={view.mode} height={view.height} />
@@ -168,9 +172,9 @@ export function WebViewPreview({ view }: { view: RenderedWebView }) {
   );
 }
 
-function parseHtmlUiArgs(args: Record<string, unknown> | undefined) {
+function parseHtmlUiArgs(args: Record<string, unknown> | undefined, fallbackTitle: string) {
   const a = args ?? {};
-  const title = typeof a.title === 'string' && a.title.trim() ? a.title.trim() : '网页';
+  const title = typeof a.title === 'string' && a.title.trim() ? a.title.trim() : fallbackTitle;
   const html = typeof a.html === 'string' ? a.html : '';
   const height = normalizeHeight(a.height);
   const mode: 'display' | 'form' = a.mode === 'form' ? 'form' : 'display';
@@ -188,6 +192,7 @@ export function ClientToolCallCard({
 }: ClientToolCallCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const t = useT();
   const locked = busy || submitting;
 
   const finish = async (outcome: ClientToolCallOutcomeDto, keepPreview?: RenderedWebView) => {
@@ -205,7 +210,10 @@ export function ClientToolCallCard({
     }
   };
 
-  const htmlUi = call.name === 'html_ui' ? parseHtmlUiArgs(call.args as Record<string, unknown>) : null;
+  const htmlUi =
+    call.name === 'html_ui'
+      ? parseHtmlUiArgs(call.args as Record<string, unknown>, t('clientToolCallCard.webPage'))
+      : null;
   const fileRef: FileRef | null =
     call.name === 'send_file' && call.fileRef?.fileId ? call.fileRef : null;
   const preview: RenderedWebView | null = htmlUi?.html
@@ -222,16 +230,20 @@ export function ClientToolCallCard({
   return (
     <div className="panel question-card" style={{ borderColor: 'var(--color-accent, #2563eb)', marginBottom: 12 }}>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>
-        <span style={{ color: 'var(--color-accent, #2563eb)' }}>客户端能力</span>
+        <span style={{ color: 'var(--color-accent, #2563eb)' }}>{t('clientToolCallCard.capability')}</span>
         <span style={{ marginLeft: 8, fontWeight: 400 }} className="small muted">
           {call.name}
-          {htmlUi ? ` · ${htmlUi.mode === 'form' ? '交互表单' : '纯展示'}` : ''}
-          {fileRef ? ' · 文件' : ''}
+          {htmlUi
+            ? ` · ${t(htmlUi.mode === 'form' ? 'clientToolCallCard.modeForm' : 'clientToolCallCard.modeDisplay')}`
+            : ''}
+          {fileRef ? ` · ${t('clientToolCallCard.modeFile')}` : ''}
         </span>
       </div>
       {call.args && typeof call.args === 'object' && 'purpose' in call.args ? (
         <div className="small muted" style={{ marginBottom: 8 }}>
-          用途：{String((call.args as { purpose?: unknown }).purpose ?? '')}
+          {t('clientToolCallCard.purpose', {
+            purpose: String((call.args as { purpose?: unknown }).purpose ?? ''),
+          })}
         </div>
       ) : null}
 
@@ -295,7 +307,7 @@ export function ClientToolCallCard({
         />
       ) : (
         <div className="small" style={{ marginBottom: 8 }}>
-          该端未实现专属 UI，可取消本次调用。
+          {t('clientToolCallCard.unsupported')}
         </div>
       )}
 
@@ -306,7 +318,7 @@ export function ClientToolCallCard({
             disabled={locked}
             onClick={() => void finish({ status: 'error', reason: 'cancelled', hint: 'user cancelled' })}
           >
-            取消
+            {t('clientToolCallCard.cancel')}
           </button>
         </div>
       ) : null}
@@ -325,11 +337,12 @@ function SendFileBody({
   onReady: () => void;
 }) {
   const firedRef = useRef(false);
+  const t = useT();
   useEffect(() => {
     if (firedRef.current || locked) return;
     firedRef.current = true;
-    const t = setTimeout(onReady, 0);
-    return () => clearTimeout(t);
+    const timer = setTimeout(onReady, 0);
+    return () => clearTimeout(timer);
   }, [locked, onReady]);
 
   return (
@@ -338,7 +351,8 @@ function SendFileBody({
         {fileRef.name}
       </div>
       <div className="small muted">
-        {fileRef.mime || 'application/octet-stream'} · {fileRef.sizeBytes.toLocaleString()} 字节 · 已发送
+        {fileRef.mime || 'application/octet-stream'} ·{' '}
+        {t('clientToolCallCard.sizeSent', { size: fileRef.sizeBytes.toLocaleString() })}
       </div>
     </div>
   );
@@ -366,6 +380,7 @@ function HtmlUiBody({
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const [collecting, setCollecting] = useState(false);
   const displayFiredRef = useRef(false);
+  const t = useT();
 
   useEffect(() => {
     if (mode !== 'form') return;
@@ -382,8 +397,8 @@ function HtmlUiBody({
   useEffect(() => {
     if (mode !== 'display' || displayFiredRef.current) return;
     displayFiredRef.current = true;
-    const t = setTimeout(onDisplayReady, 0);
-    return () => clearTimeout(t);
+    const timer = setTimeout(onDisplayReady, 0);
+    return () => clearTimeout(timer);
   }, [mode, onDisplayReady]);
 
   const collectAndSubmit = () => {
@@ -407,7 +422,7 @@ function HtmlUiBody({
   };
 
   if (!html) {
-    return <div className="small">缺少 html 参数，无法渲染。</div>;
+    return <div className="small">{t('clientToolCallCard.missingHtml')}</div>;
   }
 
   return (
@@ -422,14 +437,14 @@ function HtmlUiBody({
       {mode === 'form' ? (
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn-primary" disabled={locked || collecting} onClick={collectAndSubmit}>
-            {collecting ? '提交中…' : '完成'}
+            {collecting ? t('clientToolCallCard.submitting') : t('clientToolCallCard.done')}
           </button>
           <button className="btn-secondary" disabled={locked || collecting} onClick={onDismissForm}>
-            跳过
+            {t('clientToolCallCard.skip')}
           </button>
         </div>
       ) : (
-        <div className="small muted">已展示，agent 可继续。</div>
+        <div className="small muted">{t('clientToolCallCard.shown')}</div>
       )}
     </div>
   );
@@ -465,6 +480,7 @@ function PhotoCaptureBody({
 }) {
   const [consented, setConsented] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const t = useT();
 
   const onFile = async (file: File | null) => {
     if (!file) return;
@@ -496,13 +512,13 @@ function PhotoCaptureBody({
   if (!consented) {
     return (
       <div style={{ display: 'grid', gap: 8 }}>
-        <div className="small">需要使用摄像头/相册采集图片。</div>
+        <div className="small">{t('clientToolCallCard.photoConsent')}</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn-primary" disabled={disabled} onClick={() => setConsented(true)}>
-            允许
+            {t('clientToolCallCard.allow')}
           </button>
           <button className="btn-secondary" disabled={disabled} onClick={onDeny}>
-            拒绝
+            {t('clientToolCallCard.deny')}
           </button>
         </div>
       </div>
@@ -512,7 +528,7 @@ function PhotoCaptureBody({
   return (
     <div style={{ display: 'grid', gap: 8 }}>
       <label className="btn-secondary" style={{ display: 'inline-block', cursor: 'pointer' }}>
-        {uploading ? '上传中…' : '选择图片'}
+        {uploading ? t('clientToolCallCard.uploading') : t('clientToolCallCard.chooseImage')}
         <input
           type="file"
           accept="image/*"
@@ -522,7 +538,7 @@ function PhotoCaptureBody({
         />
       </label>
       <button className="btn-secondary" disabled={disabled} onClick={onDeny}>
-        取消
+        {t('clientToolCallCard.cancel')}
       </button>
     </div>
   );

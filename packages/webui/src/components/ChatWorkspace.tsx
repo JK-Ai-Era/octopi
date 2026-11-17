@@ -25,7 +25,8 @@ import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, typ
 import { looksLikeCodeOrMarkup } from '@octopi-agent/engine/harness/session/title';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
-import { getLanguage } from '../runtime-config';
+import { t as tc, type MessageKey } from '../i18n/core';
+import { useLang, useT } from '../i18n/react';
 
 /** WebUI 会话级 clientInstanceId（同一标签页稳定） */
 function webuiClientInstanceId(): string {
@@ -48,7 +49,7 @@ function webViewsFromCalls(calls: ClientToolCallDto[]): RenderedWebView[] {
     if (!html) continue;
     out.push({
       id: c.id,
-      title: typeof args.title === 'string' && args.title ? args.title : '网页',
+      title: typeof args.title === 'string' && args.title ? args.title : tc('chatWorkspace.webViewDefaultTitle'),
       html,
       height: typeof args.height === 'number' ? args.height : 420,
       mode: args.mode === 'form' ? 'form' : 'display',
@@ -110,7 +111,7 @@ const WEBUI_SAMPLE_CLIENT_TOOLS: ClientToolDescriptorDto[] = [
 ];
 
 function formatTokens(n: number | undefined | null): string {
-  if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return '未知';
+  if (n == null || typeof n !== 'number' || !Number.isFinite(n)) return tc('chatWorkspace.unknown');
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
@@ -134,7 +135,7 @@ function formatTimestamp(ts: number | undefined | null): string {
 /** 列表/标题栏展示名：有 title 用 title，否则「新会话」；标记/载荷样标题不当标题 */
 function sessionDisplayTitle(s: { id: string; title?: string }): string {
   const t = s.title?.trim();
-  if (!t || looksLikeCodeOrMarkup(t)) return '新会话';
+  if (!t || looksLikeCodeOrMarkup(t)) return tc('chatWorkspace.newSession');
   return t;
 }
 
@@ -156,6 +157,7 @@ function hasCompletedAssistantTail(items: ConversationItem[]): boolean {
 
 function ToolCard({ item }: { item: ToolConversationItem }) {
   const [expanded, setExpanded] = useState(false);
+  const t = useT();
   const statusColor = item.status === 'success' ? 'var(--color-ok)' : item.status === 'error' ? 'var(--color-error)' : 'var(--color-warn)';
   const hasDetails = item.args !== undefined || item.result !== undefined || item.summary !== undefined;
 
@@ -203,19 +205,19 @@ function ToolCard({ item }: { item: ToolConversationItem }) {
         <div className="msg-tool-details">
           {item.args !== undefined && (
             <div style={{ marginBottom: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>参数</div>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>{t('chatWorkspace.toolArgs')}</div>
               <pre>{typeof item.args === 'string' ? item.args : JSON.stringify(item.args, null, 2)}</pre>
             </div>
           )}
           {item.result !== undefined && (
             <div style={{ marginBottom: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>结果</div>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>{t('chatWorkspace.toolResult')}</div>
               <pre>{typeof item.result === 'string' ? item.result : JSON.stringify(item.result, null, 2)}</pre>
             </div>
           )}
           {item.summary && (
             <div>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>摘要</div>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>{t('chatWorkspace.toolSummary')}</div>
               <div className="small muted">{item.summary}</div>
             </div>
           )}
@@ -227,6 +229,7 @@ function ToolCard({ item }: { item: ToolConversationItem }) {
 
 function ToolTimelineCard({ item }: { item: ToolConversationItem }) {
   const [expanded, setExpanded] = useState(false);
+  const t = useT();
   const statusColor = item.status === 'success' ? 'var(--color-ok)' : item.status === 'error' ? 'var(--color-error)' : 'var(--color-warn)';
   const hasDetails = item.result !== undefined || item.args !== undefined || item.error;
 
@@ -251,13 +254,13 @@ function ToolTimelineCard({ item }: { item: ToolConversationItem }) {
         <div className="msg-tool-details" style={{ marginTop: 8 }}>
           {item.args !== undefined && (
             <div style={{ marginBottom: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>参数</div>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>{t('chatWorkspace.toolArgs')}</div>
               <pre>{typeof item.args === 'string' ? item.args : JSON.stringify(item.args, null, 2)}</pre>
             </div>
           )}
           {item.result !== undefined && (
             <div style={{ marginBottom: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>结果</div>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>{t('chatWorkspace.toolResult')}</div>
               <pre>{typeof item.result === 'string' ? item.result : JSON.stringify(item.result, null, 2)}</pre>
             </div>
           )}
@@ -281,6 +284,7 @@ function ConversationItemCard({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const t = useT();
   switch (item.role) {
     case 'user': {
       const u = item as UserConversationItem;
@@ -290,28 +294,28 @@ function ConversationItemCard({
         <div className="msg-user">
           <div className={`msg-user-bubble${editing ? ' editing' : ''}`}>
             <div className="msg-user-label">
-              用户
+              {t('chatWorkspace.roleUser')}
               {canBranch && (
                 <button
                   className="btn-secondary"
                   style={{ marginLeft: 8, padding: '1px 8px', fontSize: 12 }}
-                  title="从此条之前分叉：新会话不含本条，可改写后继续"
+                  title={t('chatWorkspace.branchTitle')}
                   onClick={() => onBranch!(u.sourceIndex!)}
                 >
-                  分叉
+                  {t('chatWorkspace.branch')}
                 </button>
               )}
               {u.editResendable && onEditResend && !editing && (
                 <button
                   className="btn-secondary"
                   style={{ marginLeft: 8, padding: '1px 8px', fontSize: 12 }}
-                  title="编辑后重发：丢掉本轮中止残片，同会话继续"
+                  title={t('chatWorkspace.editResendTitle')}
                   onClick={() => {
                     setDraft(u.content);
                     setEditing(true);
                   }}
                 >
-                  编辑重发
+                  {t('chatWorkspace.editResend')}
                 </button>
               )}
             </div>
@@ -334,10 +338,10 @@ function ConversationItemCard({
                       onEditResend?.(u.sourceIndex, text);
                     }}
                   >
-                    重发
+                    {t('chatWorkspace.resend')}
                   </button>
                   <button className="btn-secondary" onClick={() => setEditing(false)}>
-                    取消
+                    {t('chatWorkspace.cancel')}
                   </button>
                 </div>
               </div>
@@ -354,19 +358,19 @@ function ConversationItemCard({
       return (
         <div className="msg-assistant">
           <div className="msg-assistant-header">
-            <span>助手</span>
+            <span>{t('chatWorkspace.roleAssistant')}</span>
             {a.status === 'streaming' && (
               // 仅思考流（llm_thinking_delta）阶段正文仍为空：显示「思考中」；正文出现后才进入「流式输出中」
-              <span className="status-ok">· {a.content.trim() ? '流式输出中' : '思考中'}</span>
+              <span className="status-ok">· {a.content.trim() ? t('chatWorkspace.statusStreaming') : t('chatWorkspace.statusThinking')}</span>
             )}
-            {a.status === 'error' && <span className="status-error">· 错误</span>}
-            {a.status === 'aborted' && <span className="status-neutral">· 已中止</span>}
+            {a.status === 'error' && <span className="status-error">· {t('chatWorkspace.statusError')}</span>}
+            {a.status === 'aborted' && <span className="status-neutral">· {t('chatWorkspace.statusAborted')}</span>}
             {formatTimestamp(a.createdAt) && <span className="muted">{formatTimestamp(a.createdAt)}</span>}
           </div>
           <div className="panel msg-assistant-body" style={{ borderColor }}>
             {a.reasoning && a.reasoning.trim() && (
               <details className="msg-reasoning">
-                <summary className="small muted">思考过程</summary>
+                <summary className="small muted">{t('chatWorkspace.reasoning')}</summary>
                 <div className="msg-reasoning-body small muted">
                   <MarkdownMessage content={a.reasoning} />
                 </div>
@@ -379,9 +383,9 @@ function ConversationItemCard({
                 // 仅有思考时正文留白，思考已在上方折叠区
                 null
               ) : a.error ? (
-                <span className="muted small">（出错，见下方）</span>
+                <span className="muted small">{t('chatWorkspace.errorSeeBelow')}</span>
               ) : (
-                '(空)'
+                t('chatWorkspace.emptyContent')
               )}
             </div>
             {a.error && (() => {
@@ -389,7 +393,7 @@ function ConversationItemCard({
               return (
                 <div className="small status-error" style={{ marginTop: 6 }} title={a.error}>
                   ⚠ {c.title}——{c.detail}
-                  {c.diagnosticId ? `（诊断 ID：${c.diagnosticId}）` : ''}
+                  {c.diagnosticId ? t('chatWorkspace.diagnosticId', { id: c.diagnosticId }) : ''}
                 </div>
               );
             })()}
@@ -422,10 +426,10 @@ function ConversationItemCard({
 
 function statusLabel(status: SessionTaskView['status']): string {
   switch (status) {
-    case 'open': return '进行中';
-    case 'paused': return '已暂停';
-    case 'done': return '已完成';
-    case 'dropped': return '已放弃';
+    case 'open': return tc('chatWorkspace.statusOpen');
+    case 'paused': return tc('chatWorkspace.statusPaused');
+    case 'done': return tc('chatWorkspace.statusDone');
+    case 'dropped': return tc('chatWorkspace.statusDropped');
     default: return status;
   }
 }
@@ -444,21 +448,22 @@ function QuestionCard({
   onClose: () => void;
 }) {
   const [text, setText] = useState('');
+  const t = useT();
 
   return (
     <div className="panel question-card" style={{ borderColor: 'var(--color-warn)', marginBottom: 12 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
         <div style={{ fontWeight: 600, flex: 1 }}>
-          <span style={{ color: 'var(--color-warn)' }}>待回答</span>
+          <span style={{ color: 'var(--color-warn)' }}>{t('chatWorkspace.questionPending')}</span>
           <span style={{ marginLeft: 8, fontWeight: 400 }} className="small muted">{question.question}</span>
         </div>
         <button
           className="btn-secondary"
           disabled={answering}
-          title="中止任务并保留当前状态"
+          title={t('chatWorkspace.questionCloseTitle')}
           onClick={onClose}
         >
-          关闭
+          {t('chatWorkspace.close')}
         </button>
       </div>
       {question.options && question.options.length > 0 && (
@@ -479,7 +484,7 @@ function QuestionCard({
         <input
           style={{ flex: 1 }}
           value={text}
-          placeholder="输入回答…"
+          placeholder={t('chatWorkspace.answerPlaceholder')}
           disabled={answering}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -497,7 +502,7 @@ function QuestionCard({
             setText('');
           }}
         >
-          回答
+          {t('chatWorkspace.answer')}
         </button>
       </div>
     </div>
@@ -517,11 +522,12 @@ function ApprovalCard({
 }) {
   const req = approval.request;
   const isEffect = req.kind === 'effect';
+  const t = useT();
   return (
     <div className="panel question-card" style={{ borderColor: 'var(--color-danger, #dc2626)', marginBottom: 12 }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>
         <span style={{ color: 'var(--color-danger, #dc2626)' }}>
-          {isEffect ? '效应确认' : '高风险确认'}
+          {isEffect ? t('chatWorkspace.approvalEffect') : t('chatWorkspace.approvalHighRisk')}
         </span>
         <span style={{ marginLeft: 8, fontWeight: 400 }} className="small muted">
           {req.actionDescription || req.toolName}
@@ -534,20 +540,20 @@ function ApprovalCard({
         )}
       </div>
       <div className="small muted" style={{ marginBottom: 8 }}>
-        「本会话允许」/「始终允许」按<b>工具/效应类型</b>记账（如全部 shell），不是仅这一次参数。
+        {t('chatWorkspace.approvalScopeHintPrefix')}<b>{t('chatWorkspace.approvalScopeHintBold')}</b>{t('chatWorkspace.approvalScopeHintSuffix')}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         <button className="btn-primary" disabled={deciding} onClick={() => onDecide('approve', 'once')}>
-          允许一次
+          {t('chatWorkspace.approvalAllowOnce')}
         </button>
         <button className="btn-secondary" disabled={deciding} onClick={() => onDecide('approve', 'session')}>
-          本会话允许（{req.toolName}）
+          {t('chatWorkspace.approvalAllowSession', { tool: req.toolName })}
         </button>
         <button className="btn-secondary" disabled={deciding} onClick={() => onDecide('approve', 'always')}>
-          始终允许（{req.toolName}）
+          {t('chatWorkspace.approvalAllowAlways', { tool: req.toolName })}
         </button>
         <button className="btn-secondary" disabled={deciding} onClick={() => onDecide('reject')}>
-          拒绝
+          {t('chatWorkspace.approvalReject')}
         </button>
       </div>
     </div>
@@ -561,6 +567,42 @@ const TASK_STATUS_ORDER: Record<SessionTaskView['status'], number> = {
   dropped: 3,
 };
 
+/** 空态快捷提示键（数组序即按钮顺序） */
+const QUICK_PROMPT_KEYS = [
+  'chatWorkspace.quickPromptEmail',
+  'chatWorkspace.quickPromptSummarize',
+  'chatWorkspace.quickPromptCapabilities',
+] as const;
+
+/** 右栏页签 id（概览行与详情浮层标题共用） */
+type RailTabId =
+  | 'context'
+  | 'run'
+  | 'services'
+  | 'tasks'
+  | 'schedules'
+  | 'subsessions'
+  | 'attachments'
+  | 'roots'
+  | 'git'
+  | 'file'
+  | 'tools';
+
+/** 右栏页签标题键（模块级只存键，渲染时翻译） */
+const RAIL_TAB_LABEL_KEYS: Record<RailTabId, MessageKey> = {
+  context: 'chatWorkspace.railContext',
+  run: 'chatWorkspace.railRun',
+  services: 'chatWorkspace.railServices',
+  tasks: 'chatWorkspace.railTasks',
+  schedules: 'chatWorkspace.railSchedules',
+  subsessions: 'chatWorkspace.railSubsessions',
+  attachments: 'chatWorkspace.railAttachments',
+  roots: 'chatWorkspace.railRoots',
+  git: 'chatWorkspace.railGit',
+  file: 'chatWorkspace.railFiles',
+  tools: 'chatWorkspace.railTools',
+};
+
 function SchedulePanel({
   schedules,
   onControl,
@@ -568,13 +610,14 @@ function SchedulePanel({
   schedules: SessionScheduleView[];
   onControl: (id: string, action: 'cancel' | 'pause' | 'resume') => void;
 }) {
+  const t = useT();
   if (!schedules.length) {
     return (
       <div className="tasks-empty">
         <span className="tasks-empty-icon" aria-hidden>⏱</span>
-        暂无定时作业
+        {t('chatWorkspace.scheduleEmpty')}
         <div style={{ marginTop: 6 }}>
-          对 Agent 说「2 小时后…」或「每天 9 点…」即可创建
+          {t('chatWorkspace.scheduleEmptyHint')}
         </div>
       </div>
     );
@@ -631,15 +674,15 @@ function SchedulePanel({
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 {s.status === 'active' ? (
                   <button type="button" className="btn btn-small" onClick={() => onControl(s.id, 'pause')}>
-                    暂停
+                    {t('chatWorkspace.schedulePause')}
                   </button>
                 ) : (
                   <button type="button" className="btn btn-small" onClick={() => onControl(s.id, 'resume')}>
-                    恢复
+                    {t('chatWorkspace.scheduleResume')}
                   </button>
                 )}
                 <button type="button" className="btn btn-small" onClick={() => onControl(s.id, 'cancel')}>
-                  取消
+                  {t('chatWorkspace.scheduleCancel')}
                 </button>
               </div>
             )}
@@ -651,6 +694,7 @@ function SchedulePanel({
 }
 
 function TaskPanel({ tasks }: { tasks: SessionTaskView[] }) {
+  const t = useT();
   const goals = tasks
     .filter((t) => !t.parentId)
     .slice()
@@ -664,9 +708,9 @@ function TaskPanel({ tasks }: { tasks: SessionTaskView[] }) {
     return (
       <div className="tasks-empty">
         <span className="tasks-empty-icon" aria-hidden>◎</span>
-        暂无会话任务
+        {t('chatWorkspace.taskEmpty')}
         <div style={{ marginTop: 6 }}>
-          对 Agent 说「帮我建一个任务…」即可开始跟踪
+          {t('chatWorkspace.taskEmptyHint')}
         </div>
       </div>
     );
@@ -696,7 +740,7 @@ function TaskPanel({ tasks }: { tasks: SessionTaskView[] }) {
 
             {steps.length > 0 && (
               <div className="task-meta-row">
-                <span>步骤 {settled}/{steps.length}</span>
+                <span>{t('chatWorkspace.taskSteps', { settled, total: steps.length })}</span>
                 <div className="task-progress-track" title={`${pct}%`}>
                   <div className="task-progress-fill" style={{ width: `${pct}%` }} />
                 </div>
@@ -741,6 +785,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   // 重连即生效，无需刷新页面（打磨批 M3；勿退回模块级常量/伪 state）。
   const baseUrl = resolveDefaultBase();
   const apiKey = getConsoleKey();
+  const t = useT();
+  const [lang] = useLang();
   // §5b splitter：右栏宽度（280px–约视口 50%，双击复位；localStorage 持久）
   const RIGHT_W_DEFAULT = 360;
   const clampRightW = (w: number): number => Math.min(Math.max(w, 280), Math.round(window.innerWidth * 0.5));
@@ -1030,7 +1076,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       });
     }) as EventListener);
     store.addEventListener('error', (() => {
-      setConnectError('连接出错——请检查服务是否在运行，或到设置 → 服务测试连接'); // MINOR-6：不甩 raw
+      setConnectError(tc('chatWorkspace.connectError')); // MINOR-6：不甩 raw
     }) as EventListener);
 
     clientRef.current = client;
@@ -1425,7 +1471,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     }
     const title = renameDraft.trim();
     if (!title) {
-      setActionError('标题不能为空');
+      setActionError(t('chatWorkspace.titleEmpty'));
       return;
     }
     try {
@@ -1434,7 +1480,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       setRenameDraft('');
     } catch (e) {
       pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
     }
   };
 
@@ -1482,10 +1528,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     setActionError(null);
     try {
       await store.setSessionPinned(sessionId, pinned);
-      setToast(pinned ? '已置顶会话' : '已取消置顶');
+      setToast(pinned ? t('chatWorkspace.toastPinned') : t('chatWorkspace.toastUnpinned'));
     } catch (e) {
       pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
     }
   };
 
@@ -1521,12 +1567,12 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       const fresh = await store.refreshSessions().catch(() => null);
       target = fresh?.find((s) => s.id === sessionId) ?? target;
       if (target.running) {
-        setActionError('会话正在运行中，请先停止运行，再删除。');
+        setActionError(t('chatWorkspace.deleteWhileRunning'));
         return;
       }
     }
     const label = target ? sessionDisplayTitle(target) : sessionId;
-    if (!window.confirm(`删除会话「${label}」？消息记录与运行痕迹将一并删除，不可恢复。`)) return;
+    if (!window.confirm(t('chatWorkspace.deleteConfirm', { label }))) return;
     setActionError(null);
     try {
       await store.deleteSession(sessionId);
@@ -1534,10 +1580,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         clearActiveSessionUi();
       }
       if (sidebarSessionId === sessionId) setSidebarSessionId(null);
-      setToast('会话已删除');
+      setToast(t('chatWorkspace.toastSessionDeleted'));
     } catch (e) {
       pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
     }
   };
 
@@ -1570,8 +1616,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   };
 
   const createSession = async () => {
-    if (connection !== 'connected') { setActionError('请先连接 Gateway，再新建会话。'); return; }
-    if (!agentId) { setActionError('请先选择一个 Agent，再新建会话。'); return; }
+    if (connection !== 'connected') { setActionError(t('chatWorkspace.createNeedsConnection')); return; }
+    if (!agentId) { setActionError(t('chatWorkspace.createNeedsAgent')); return; }
     const store = storeRef.current;
     if (!store) return;
     setActionError(null);
@@ -1584,7 +1630,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       await activateCreatedSession(created);
     } catch (error) {
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
     } finally {
       setCreating(false);
     }
@@ -1611,7 +1657,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     if (consoleKey) headers['Authorization'] = `Bearer ${consoleKey}`;
     const registryToken = getRegistryToken();
     if (registryToken) headers['X-Registry-Token'] = registryToken;
-    fetch(`${resolveDefaultBase()}/api/v1/demo/kit?lang=${getLanguage()}`, { headers })
+    fetch(`${resolveDefaultBase()}/api/v1/demo/kit?lang=${lang}`, { headers })
       .then((r) => (r.ok ? r.json() : null))
       .then((j: unknown) => {
         const kit = j as { ok?: boolean; available?: boolean; agentId?: string; prompt?: string } | null;
@@ -1620,7 +1666,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         }
       })
       .catch(() => setDemoKit(null));
-  }, [connection]);
+  }, [connection, lang]);
 
   /**
    * 一键跑演示剧本（真 agent 真工具）：选 demo agent → 新会话 → 发剧本 prompt，
@@ -1639,7 +1685,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       await sendMessage(demoKit.prompt);
     } catch (error) {
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError('演示启动失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.demoFailed'));
     } finally {
       setDemoRunning(false);
     }
@@ -1649,10 +1695,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const demoCard = demoKit?.available && demoKit.agentId && demoKit.prompt ? (
     <div className="demo-kit-card">
       <div className="small muted" style={{ marginBottom: 8 }}>
-        第一次来？让示例助手跑一个<b>真 agent、真工具</b>的三步剧本（读资料 → 总结周报 → 存成文件）：
+        {t('chatWorkspace.demoIntroPrefix')}<b>{t('chatWorkspace.demoIntroBold')}</b>{t('chatWorkspace.demoIntroSuffix')}
       </div>
       <button className="btn-primary" onClick={() => void runDemoScript()} disabled={demoRunning}>
-        {demoRunning ? '演示启动中…' : '试试这个示例'}
+        {demoRunning ? t('chatWorkspace.demoStarting') : t('chatWorkspace.demoTry')}
       </button>
     </div>
   ) : null;
@@ -1699,7 +1745,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       // M5：切换失败必须退到空态并回滚 agentId——否则 UI 显示新 agent 而 store.chat 仍指
       // 旧会话，此时发送会静默串台（正是本 bug 的定义）
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
       store.closeCurrentSession();
       clearActiveSessionUi();
       setViewMode('history');
@@ -1713,7 +1759,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const store = storeRef.current;
     const parent = activeSessionId;
     if (!store || !parent) {
-      setActionError('请先打开要分叉的历史会话。');
+      setActionError(t('chatWorkspace.branchNeedsSession'));
       return;
     }
     setActionError(null);
@@ -1737,7 +1783,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
     } catch (error) {
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
     }
   };
 
@@ -1756,7 +1802,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       setClientToolCalls(store.getClientToolCalls());
     } catch (error) {
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
     }
   };
 
@@ -1770,7 +1816,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       await store.answerQuestion(questionId, answer);
     } catch (error) {
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
     } finally {
       setAnsweringQuestion(false);
     }
@@ -1791,7 +1837,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       await store.resolveApproval(approvalId, { action, scope, approver: 'owner' });
     } catch (error) {
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
     } finally {
       setDecidingApproval(false);
     }
@@ -1829,7 +1875,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     } catch (error) {
       // 发送失败：store 已退出 waiting；保留输入便于重试
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError('操作失败，详情见对话流中的错误卡。');
+      setActionError(t('chatWorkspace.actionFailed'));
       const st = store.getState().chat.runStatus;
       setRunStatus(st === 'waiting' || st === 'sending' ? 'error' : st);
     }
@@ -1838,7 +1884,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const uploadFiles = async (fileList: FileList | File[]) => {
     const client = clientRef.current;
     if (!client || !activeSessionId) {
-      setActionError('请先打开会话再上传附件');
+      setActionError(t('chatWorkspace.uploadNeedsSession'));
       return;
     }
     const files = Array.from(fileList);
@@ -1864,7 +1910,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         ...uploaded.map((u) => ({ id: u.id, name: u.name, sizeBytes: u.sizeBytes, status: u.status })),
       ]);
       setAttachmentsReload((n) => n + 1);
-      setToast(`已上传 ${uploaded.length} 个附件（仅本会话）`);
+      setToast(t('chatWorkspace.toastUploaded', { count: uploaded.length }));
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1958,13 +2004,13 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     try {
       const r = await store.compactSession();
       if (!r.ok) {
-        show(r.reason || '压缩不可用');
+        show(r.reason || t('chatWorkspace.compactUnavailable'));
       } else if (!r.compacted) {
-        show(r.reason || '未压缩');
+        show(r.reason || t('chatWorkspace.notCompacted'));
       } else {
         const before = r.tokensBefore != null ? formatTokens(r.tokensBefore) : '?';
         const after = r.tokensAfter != null ? formatTokens(r.tokensAfter) : '?';
-        show(`已结构压缩 ${before} → ${after}（请求估算）`);
+        show(t('chatWorkspace.compacted', { before, after }));
       }
     } catch (e) {
       show(e instanceof Error ? e.message : String(e));
@@ -2005,22 +2051,22 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const contextWindowKnown = Boolean(selectedModelMeta?.known) && contextWindow != null;
   const contextWindowLabel = contextWindowKnown && contextWindow != null
     ? formatTokens(contextWindow)
-    : '未知';
+    : t('chatWorkspace.unknown');
 
   return (
     <>
       {/* Reconnect banner */}
       {isReconnecting && (
         <div className="reconnect-banner">
-          连接已断开，正在重连...
+          {t('chatWorkspace.reconnectBanner')}
         </div>
       )}
 
       {/* Mobile nav (hidden on desktop) */}
       <nav className="mobile-nav">
-        <button className={mobileTab === 'left' ? 'mobile-nav-active' : ''} onClick={() => setMobileTab('left')}>设置</button>
-        <button className={mobileTab === 'chat' ? 'mobile-nav-active' : ''} onClick={() => setMobileTab('chat')}>对话</button>
-        <button className={mobileTab === 'right' ? 'mobile-nav-active' : ''} onClick={() => setMobileTab('right')}>检查</button>
+        <button className={mobileTab === 'left' ? 'mobile-nav-active' : ''} onClick={() => setMobileTab('left')}>{t('chatWorkspace.navSettings')}</button>
+        <button className={mobileTab === 'chat' ? 'mobile-nav-active' : ''} onClick={() => setMobileTab('chat')}>{t('chatWorkspace.navChat')}</button>
+        <button className={mobileTab === 'right' ? 'mobile-nav-active' : ''} onClick={() => setMobileTab('right')}>{t('chatWorkspace.navInspect')}</button>
       </nav>
 
       <main
@@ -2034,21 +2080,21 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               type="button"
               className={`connection-dot connection-dot-${connection}`}
               onClick={() => void reconnect()}
-              title={`Gateway ${connection} · ${baseUrl} · 点击重连（设置 → 服务 可改地址/密钥）`}
-              aria-label="重连 Gateway"
+              title={t('chatWorkspace.connectionTitle', { state: connection, base: baseUrl })}
+              aria-label={t('chatWorkspace.reconnectAria')}
             />
             <span className="small muted">{connection}</span>
-            <a className="small muted connection-strip-settings" href="#settings-services" title="设置 → 服务">设置</a>
+            <a className="small muted connection-strip-settings" href="#settings-services" title={t('chatWorkspace.settingsServices')}>{t('chatWorkspace.navSettings')}</a>
             {connectError && <span className="small status-error" title={connectError}>⚠</span>}
           </section>
 
           <section className="panel sidebar-section">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div className="sidebar-title" style={{ marginBottom: 0 }}>选择 Agent</div>
+              <div className="sidebar-title" style={{ marginBottom: 0 }}>{t('chatWorkspace.selectAgent')}</div>
               <span className="small muted">{agents.length}</span>
             </div>
             {connection !== 'connected' ? (
-              <div className="small muted">请先连接 Gateway</div>
+              <div className="small muted">{t('chatWorkspace.connectFirst')}</div>
             ) : (
               <div style={{ display: 'grid', gap: 6 }}>
                 {agents.map(a => (
@@ -2091,38 +2137,38 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                         }}
                         title={
                           a.effectModeSource === 'agent'
-                            ? '来自 agents[].effectPolicy'
+                            ? t('chatWorkspace.effectSourceAgent')
                             : a.effectModeSource === 'global'
-                              ? '来自顶层 effectPolicy'
-                              : '引擎缺省（未配置 mode）'
+                              ? t('chatWorkspace.effectSourceGlobal')
+                              : t('chatWorkspace.effectSourceDefault')
                         }
                       >
                         {a.effectMode ?? 'workspace'}
                       </span>
                       {a.effectModeSource && a.effectModeSource !== 'agent' && (
                         <span className="small muted">
-                          {a.effectModeSource === 'global' ? '全局' : '缺省'}
+                          {a.effectModeSource === 'global' ? t('chatWorkspace.effectModeGlobal') : t('chatWorkspace.effectModeDefault')}
                         </span>
                       )}
                     </div>
                   </button>
                 ))}
-                {!agents.length && <div className="small muted">未发现可用 Agent</div>}
+                {!agents.length && <div className="small muted">{t('chatWorkspace.noAgents')}</div>}
               </div>
             )}
           </section>
 
           <section className="panel sidebar-section">
-            <div className="sidebar-title">新建会话</div>
+            <div className="sidebar-title">{t('chatWorkspace.newSession')}</div>
             <div className="small muted" style={{ marginBottom: 8 }}>
-              {agentId ? `当前 Agent: ${agentId}` : '请先选择 Agent'}
+              {agentId ? t('chatWorkspace.currentAgent', { id: agentId }) : t('chatWorkspace.selectAgentFirst')}
             </div>
             <button className="btn-primary" onClick={createSession} disabled={creating} style={{ width: '100%', marginBottom: 8, opacity: creating ? 0.7 : 1 }}>
-              {creating ? '创建中...' : '新建会话'}
+              {creating ? t('chatWorkspace.creating') : t('chatWorkspace.newSession')}
             </button>
             {actionError && <div className="small status-error" style={{ marginBottom: 8 }}>{actionError}</div>}
 
-            <div className="sidebar-title">历史会话</div>
+            <div className="sidebar-title">{t('chatWorkspace.historySessions')}</div>
             <div className="session-list-scroll">
               {displayedSessions.map(s => (
                 renamingSessionId === s.id ? (
@@ -2139,8 +2185,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                       maxLength={40}
                     />
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button className="btn-primary small" style={{ flex: 1 }} onClick={() => void commitRenameSession()}>保存</button>
-                      <button className="btn-ghost small" style={{ flex: 1 }} onClick={() => { setRenamingSessionId(null); setRenameDraft(''); }}>取消</button>
+                      <button className="btn-primary small" style={{ flex: 1 }} onClick={() => void commitRenameSession()}>{t('chatWorkspace.save')}</button>
+                      <button className="btn-ghost small" style={{ flex: 1 }} onClick={() => { setRenamingSessionId(null); setRenameDraft(''); }}>{t('chatWorkspace.cancel')}</button>
                     </div>
                   </div>
                 ) : (
@@ -2149,17 +2195,17 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                       className={`btn-secondary session-btn ${(sidebarSessionId ?? activeSessionId) === s.id ? 'session-btn-active' : ''}`}
                       onClick={() => openSession(s.id)}
                       onDoubleClick={() => startRenameSession(s.id, s.title ?? sessionDisplayTitle(s))}
-                      title="单击打开 · 双击重命名"
+                      title={t('chatWorkspace.sessionBtnTitle')}
                     >
                       <div className="session-card-title-row">
                         <span className="session-card-title">{sessionDisplayTitle(s)}</span>
                         {s.pinnedAt != null && (
-                          <span className="session-pin-chip" title="已置顶">置顶</span>
+                          <span className="session-pin-chip" title={t('chatWorkspace.pinnedTitle')}>{t('chatWorkspace.pinned')}</span>
                         )}
                         {s.running && (
-                          <span className="session-running-badge" title="会话正在运行中">
+                          <span className="session-running-badge" title={t('chatWorkspace.sessionRunningTitle')}>
                             <span className="session-running-dot" />
-                            运行中
+                            {t('chatWorkspace.running')}
                           </span>
                         )}
                       </div>
@@ -2169,8 +2215,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                     </button>
                     <button
                       className="session-menu-btn"
-                      title="更多操作"
-                      aria-label="会话操作菜单"
+                      title={t('chatWorkspace.moreActions')}
+                      aria-label={t('chatWorkspace.sessionMenuAria')}
                       aria-expanded={menuSessionId === s.id}
                       onClick={(e) => openSessionMenu(e, s.id)}
                     >
@@ -2189,14 +2235,14 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                             role="menuitem"
                             onClick={() => { closeSessionMenu(); void togglePinSession(s.id, s.pinnedAt == null); }}
                           >
-                            {s.pinnedAt == null ? '置顶会话' : '取消置顶'}
+                            {s.pinnedAt == null ? t('chatWorkspace.pinSession') : t('chatWorkspace.unpinSession')}
                           </button>
                           <button
                             className="session-menu-item session-menu-item-danger"
                             role="menuitem"
                             onClick={() => { closeSessionMenu(); void removeSession(s.id); }}
                           >
-                            删除会话
+                            {t('chatWorkspace.deleteSession')}
                           </button>
                         </div>
                       </>
@@ -2204,7 +2250,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   </div>
                 )
               ))}
-              {!agentSessions.length && <div className="small muted">暂无历史会话</div>}
+              {!agentSessions.length && <div className="small muted">{t('chatWorkspace.noHistory')}</div>}
             </div>
             {hiddenSessionCount > 0 && !showAllSessions && (
               <button
@@ -2212,7 +2258,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 style={{ marginTop: 6, textAlign: 'center', width: '100%', color: 'var(--color-muted)' }}
                 onClick={() => setShowAllSessions(true)}
               >
-                展开更多会话 ({hiddenSessionCount})
+                {t('chatWorkspace.showMoreSessions', { count: hiddenSessionCount })}
               </button>
             )}
             {showAllSessions && agentSessions.length > VISIBLE_SESSION_COUNT && (
@@ -2221,7 +2267,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 style={{ marginTop: 6, textAlign: 'center', width: '100%', color: 'var(--color-muted)' }}
                 onClick={() => setShowAllSessions(false)}
               >
-                收起会话列表
+                {t('chatWorkspace.collapseSessions')}
               </button>
             )}
           </section>
@@ -2236,7 +2282,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {activeSessionId
                       ? sessionDisplayTitle(sessions.find(s => s.id === activeSessionId) ?? { id: activeSessionId })
-                      : '未选择会话'}
+                      : t('chatWorkspace.noSessionSelected')}
                   </span>
                   {activeSessionId && (
                     <button
@@ -2246,17 +2292,20 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                         const cur = sessions.find(s => s.id === activeSessionId);
                         startRenameSession(activeSessionId, cur?.title ?? sessionDisplayTitle(cur ?? { id: activeSessionId }));
                       }}
-                      title="重命名会话"
+                      title={t('chatWorkspace.renameSessionTitle')}
                     >
-                      重命名
+                      {t('chatWorkspace.rename')}
                     </button>
                   )}
                 </div>
                 <div className="small muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>{agentId ? `Agent: ${agentId}` : '请先选择 Agent'}</span>
+                  <span>{agentId ? t('chatWorkspace.agentLine', { id: agentId }) : t('chatWorkspace.selectAgentFirst')}</span>
                   <span
                     className="composer-usage small"
-                    title={`上下文：上次实测 ${promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / 模型窗口 ${contextWindowLabel}`}
+                    title={t('chatWorkspace.contextUsageTitle', {
+                      actual: promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~',
+                      window: contextWindowLabel,
+                    })}
                   >
                     {promptTokensActual !== undefined ? formatTokens(promptTokensActual) : '~'} / {contextWindowLabel}
                   </span>
@@ -2269,11 +2318,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   className="btn-secondary small"
                   onClick={() => void runManualCompact()}
                   disabled={!activeSessionId || compacting}
-                  title="结构压缩：头尾保护 + 中间摘要；不依赖 contextWindow"
+                  title={t('chatWorkspace.compactTitle')}
                 >
-                  {compacting ? '压缩中…' : '压缩'}
+                  {compacting ? t('chatWorkspace.compacting') : t('chatWorkspace.compact')}
                 </button>
-                <button className="btn-secondary small" onClick={abort} disabled={!['streaming', 'waiting', 'tools', 'sending'].includes(runStatus)}>中止</button>
+                <button className="btn-secondary small" onClick={abort} disabled={!['streaming', 'waiting', 'tools', 'sending'].includes(runStatus)}>{t('chatWorkspace.abort')}</button>
               </div>
             </div>
             {compactMsg && (
@@ -2284,32 +2333,35 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
           <div ref={scrollRef} className="conversation-scroll" onScroll={handleConversationScroll}>
             {!activeSessionId && (
               <div className="panel empty-hint">
-                <div className="empty-hint-title">欢迎 👋</div>
+                <div className="empty-hint-title">{t('chatWorkspace.welcome')}</div>
                 <div className="small muted">
-                  在左侧选择一个助手，然后点击 <b>新建会话</b>，就可以开始对话了。
+                  {t('chatWorkspace.welcomeHintPrefix')}<b>{t('chatWorkspace.welcomeHintBold')}</b>{t('chatWorkspace.welcomeHintSuffix')}
                 </div>
                 {demoCard}
               </div>
             )}
             {activeSessionId && conversationItems.length === 0 && (
               <div className="panel empty-hint">
-                <div className="empty-hint-title">打个招呼吧 👋</div>
+                <div className="empty-hint-title">{t('chatWorkspace.sayHi')}</div>
                 <div className="small muted" style={{ marginBottom: 12 }}>
-                  输入第一句话开始；也可以直接试试下面的：
+                  {t('chatWorkspace.sayHiHint')}
                 </div>
                 <div className="quick-prompts">
-                  {['帮我写一封邮件', '帮我总结这份资料', '你能做什么？'].map((t) => (
-                    <button
-                      key={t}
-                      className="btn-secondary small quick-prompt"
-                      onClick={() => {
-                        setInput(t);
-                        void sendMessage(t);
-                      }}
-                    >
-                      {t}
-                    </button>
-                  ))}
+                  {QUICK_PROMPT_KEYS.map((key) => {
+                    const prompt = t(key);
+                    return (
+                      <button
+                        key={key}
+                        className="btn-secondary small quick-prompt"
+                        onClick={() => {
+                          setInput(prompt);
+                          void sendMessage(prompt);
+                        }}
+                      >
+                        {prompt}
+                      </button>
+                    );
+                  })}
                 </div>
                 {demoCard}
               </div>
@@ -2483,8 +2535,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             ) && (
               <div className="msg-assistant">
                 <div className="msg-assistant-header">
-                  <span>助手</span>
-                  <span className="status-ok">· 流式输出中</span>
+                  <span>{t('chatWorkspace.roleAssistant')}</span>
+                  <span className="status-ok">· {t('chatWorkspace.statusStreaming')}</span>
                 </div>
                 <div className="panel msg-assistant-body" style={{ borderColor: '#93c5fd' }}>
                   <div className="msg-assistant-content">
@@ -2503,22 +2555,25 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               !hasCompletedAssistantTail(conversationItems) && (
               <div className="msg-assistant">
                 <div className="msg-assistant-header">
-                  <span>助手</span>
+                  <span>{t('chatWorkspace.roleAssistant')}</span>
                   {/* 重试中必须显式告知：否则用户看到的就是「等待响应」无限挂起 */}
                   {modelRetry ? (
                     <span className="status-warn">
-                      · 上游无响应，第 {modelRetry.attempt}/{modelRetry.maxAttempts} 次重试
-                      {modelRetry.delayMs > 0 ? `（${Math.round(modelRetry.delayMs / 1000)}s 后发起）` : ''}
+                      {t('chatWorkspace.retryNotice', { attempt: modelRetry.attempt, max: modelRetry.maxAttempts })}
+                      {modelRetry.delayMs > 0 ? t('chatWorkspace.retryDelay', { seconds: Math.round(modelRetry.delayMs / 1000) }) : ''}
                     </span>
                   ) : (
-                    <span className="status-ok">· {runStatus === 'waiting' ? '等待响应' : '思考中…'}</span>
+                    <span className="status-ok">· {runStatus === 'waiting' ? t('chatWorkspace.statusWaiting') : t('chatWorkspace.statusThinkingEllipsis')}</span>
                   )}
                 </div>
                 <div className="panel msg-assistant-body" style={{ borderColor: modelRetry ? '#fcd34d' : '#93c5fd' }}>
                   <div className="msg-assistant-content muted">
                     {modelRetry
-                      ? `（${modelRetry.reason}：${modelRetry.error.length > 160 ? `${modelRetry.error.slice(0, 160)}…` : modelRetry.error}）`
-                      : '（模型尚未返回内容）'}
+                      ? t('chatWorkspace.retryReason', {
+                          reason: modelRetry.reason,
+                          error: modelRetry.error.length > 160 ? `${modelRetry.error.slice(0, 160)}…` : modelRetry.error,
+                        })
+                      : t('chatWorkspace.waitingNoContent')}
                   </div>
                 </div>
               </div>
@@ -2530,7 +2585,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             className="composer-splitter"
             role="separator"
             aria-orientation="horizontal"
-            aria-label="拖动调整输入区高度；双击复位"
+            aria-label={t('chatWorkspace.composerSplitterAria')}
             onPointerDown={onComposerSplitterDown}
             onPointerMove={onComposerSplitterMove}
             onPointerUp={onComposerSplitterUp}
@@ -2570,7 +2625,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                       <button
                         type="button"
                         className="btn-ghost small"
-                        title="移除"
+                        title={t('chatWorkspace.remove')}
                         onClick={() =>
                           setPendingAttachments((prev) => prev.filter((x) => x.id !== a.id))
                         }
@@ -2610,15 +2665,15 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               }}
               onKeyDown={handleComposerKeyDown}
               rows={1}
-              placeholder="输入消息，或 / 打开命令列表；可拖拽/粘贴附件"
-              title={activeSessionId ? `发送到会话 ${activeSessionId}` : '请先打开一个会话'}
+              placeholder={t('chatWorkspace.composerPlaceholder')}
+              title={activeSessionId ? t('chatWorkspace.composerTitleActive', { id: activeSessionId }) : t('chatWorkspace.composerTitleInactive')}
             />
             </div>
             <div className="composer-footer">
               {/* 工具条：附件 / 语料 / 模型选择（会话控制与物料集中一行，不再底部单占一排） */}
               <div className="composer-tools">
                 <label className="btn-secondary small" style={{ cursor: 'pointer' }}>
-                  {uploading ? '上传中…' : '附件'}
+                  {uploading ? t('chatWorkspace.uploading') : t('chatWorkspace.attachments')}
                   <input
                     type="file"
                     multiple
@@ -2647,17 +2702,17 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               </div>
               <div className="composer-footer-right">
                 <select
-                  aria-label="会话模型"
+                  aria-label={t('chatWorkspace.sessionModelAria')}
                   className="model-select"
                   value={effectiveModelId}
                   onChange={(e) => void applyModelChange(e.target.value)}
                   disabled={connection !== 'connected' || !agentId}
-                  title="会话模型（会话级覆盖只影响本会话，不改 Agent 默认）"
+                  title={t('chatWorkspace.sessionModelTitle')}
                 >
-                  {!effectiveModelId && <option value="">（默认）</option>}
+                  {!effectiveModelId && <option value="">{t('chatWorkspace.modelDefaultOption')}</option>}
                   {agentDefaultModelId && (
                     <option value={agentDefaultModelId}>
-                      {agentDefaultModelId}（Agent 默认）
+                      {agentDefaultModelId}{t('chatWorkspace.agentDefaultSuffix')}
                     </option>
                   )}
                   {modelOptions.items
@@ -2667,7 +2722,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                         {m.id}
                         {m.known && m.contextWindow != null
                           ? ` · ${formatTokens(m.contextWindow)}`
-                          : ' · 窗口未知'}
+                          : t('chatWorkspace.windowUnknown')}
                       </option>
                     ))}
                   {modelOptions.levelItems.map(lv => (
@@ -2681,7 +2736,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   onClick={() => void sendMessage()}
                   disabled={!activeSessionId || (!input.trim() && pendingAttachments.length === 0)}
                 >
-                  发送
+                  {t('chatWorkspace.send')}
                 </button>
               </div>
             </div>
@@ -2695,7 +2750,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             className="right-splitter"
             role="separator"
             aria-orientation="vertical"
-            aria-label="拖动调整右栏宽度；双击复位"
+            aria-label={t('chatWorkspace.rightSplitterAria')}
             onPointerDown={onSplitterPointerDown}
             onPointerMove={onSplitterPointerMove}
             onPointerUp={onSplitterPointerUp}
@@ -2705,48 +2760,48 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
           {/* ── 概览（重设计）：图标行 + 分组卡片 + 徽标；专家开关收口底部 ── */}
           <div className="rail-overview">
             {(() => {
-              const railGroups: Array<{ title: string; rows: Array<{ id: NonNullable<typeof rightTab>; icon: string; label: string; badge?: number }> }> = [
+              const railGroups: Array<{ titleKey: MessageKey; rows: Array<{ id: RailTabId; icon: string; labelKey: MessageKey; badge?: number }> }> = [
                 {
-                  title: '工作进度',
+                  titleKey: 'chatWorkspace.groupProgress',
                   rows: [
-                    { id: 'tasks', icon: '☑', label: '任务', badge: tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length },
-                    { id: 'schedules', icon: '◷', label: '日程', badge: schedules.filter((sc) => sc.status === 'active' || sc.status === 'paused').length },
-                    { id: 'subsessions', icon: '🖇', label: '子会话', badge: childSessions.length },
+                    { id: 'tasks', icon: '☑', labelKey: 'chatWorkspace.railTasks', badge: tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length },
+                    { id: 'schedules', icon: '◷', labelKey: 'chatWorkspace.railSchedules', badge: schedules.filter((sc) => sc.status === 'active' || sc.status === 'paused').length },
+                    { id: 'subsessions', icon: '🖇', labelKey: 'chatWorkspace.railSubsessions', badge: childSessions.length },
                   ],
                 },
                 {
-                  title: '会话物料',
+                  titleKey: 'chatWorkspace.groupMaterials',
                   rows: [
-                    { id: 'attachments', icon: '📎', label: '附件', badge: pendingAttachments.length },
-                    { id: 'roots', icon: '📁', label: '目录' },
-                    { id: 'file', icon: '📄', label: '文件', badge: deliveredFiles.length },
+                    { id: 'attachments', icon: '📎', labelKey: 'chatWorkspace.railAttachments', badge: pendingAttachments.length },
+                    { id: 'roots', icon: '📁', labelKey: 'chatWorkspace.railRoots' },
+                    { id: 'file', icon: '📄', labelKey: 'chatWorkspace.railFiles', badge: deliveredFiles.length },
                   ],
                 },
                 {
-                  title: '环境',
+                  titleKey: 'chatWorkspace.groupEnvironment',
                   rows: [
-                    { id: 'git', icon: '🌿', label: 'Git' },
-                    { id: 'tools', icon: '🔧', label: '工具' },
+                    { id: 'git', icon: '🌿', labelKey: 'chatWorkspace.railGit' },
+                    { id: 'tools', icon: '🔧', labelKey: 'chatWorkspace.railTools' },
                   ],
                 },
                 ...(expertMode
                   ? [{
-                      title: '运行时透明',
+                      titleKey: 'chatWorkspace.groupRuntime' as MessageKey,
                       rows: [
-                        { id: 'context' as const, icon: '📚', label: '上下文' },
-                        { id: 'run' as const, icon: '▶', label: 'Run' },
-                        { id: 'services' as const, icon: '⚙', label: '服务' },
+                        { id: 'context' as const, icon: '📚', labelKey: 'chatWorkspace.railContext' as MessageKey },
+                        { id: 'run' as const, icon: '▶', labelKey: 'chatWorkspace.railRun' as MessageKey },
+                        { id: 'services' as const, icon: '⚙', labelKey: 'chatWorkspace.railServices' as MessageKey },
                       ],
                     }]
                   : []),
               ];
               return railGroups.map((g) => (
-                <section className="rail-group" key={g.title}>
-                  <div className="rail-group-title">{g.title}</div>
+                <section className="rail-group" key={g.titleKey}>
+                  <div className="rail-group-title">{t(g.titleKey)}</div>
                   {g.rows.map((r) => (
                     <button key={r.id} className="rail-row" onClick={() => setRightTab(r.id)}>
                       <span className="rail-row-icon" aria-hidden>{r.icon}</span>
-                      <span className="rail-row-label">{r.label}</span>
+                      <span className="rail-row-label">{t(r.labelKey)}</span>
                       {r.badge ? <span className="tab-count">{r.badge}</span> : null}
                       <span className="rail-row-chevron" aria-hidden>›</span>
                     </button>
@@ -2755,13 +2810,13 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               ));
             })()}
             <div className="rail-expert-toggle">
-              <span className="small muted">专家模式</span>
+              <span className="small muted">{t('chatWorkspace.expertMode')}</span>
               <button
                 type="button"
                 role="switch"
                 aria-checked={expertMode}
-                aria-label="专家模式（显示运行时透明组：上下文 / Run / 服务）"
-                title="显示运行时透明组（上下文 / Run / 服务）"
+                aria-label={t('chatWorkspace.expertModeAria')}
+                title={t('chatWorkspace.expertModeTitle')}
                 className={`switch ${expertMode ? 'switch-on' : ''}`}
                 onClick={() => {
                   const next = !expertMode;
@@ -2785,17 +2840,17 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 className="detail-modal"
                 role="dialog"
                 aria-modal="true"
-                aria-label="详情"
+                aria-label={t('chatWorkspace.detailAria')}
                 tabIndex={-1}
                 ref={detailModalRef}
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="rail-detail-head">
                   <button className="btn-ghost small" onClick={() => setRightTab(null)}>
-                    ← 概览
+                    {t('chatWorkspace.backToOverview')}
                   </button>
                   <span className="rail-detail-title">
-                    {{ context: '上下文', run: 'Run', services: '服务', tasks: '任务', schedules: '日程', subsessions: '子会话', attachments: '附件', roots: '目录', git: 'Git', file: '文件', tools: '工具' }[rightTab]}
+                    {t(RAIL_TAB_LABEL_KEYS[rightTab])}
                   </span>
                 </div>
 
@@ -2848,13 +2903,15 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
           {rightTab === 'tasks' && (
             <div>
               <div className="tasks-panel-header">
-                <div className="sidebar-title" style={{ marginBottom: 0 }}>会话任务</div>
+                <div className="sidebar-title" style={{ marginBottom: 0 }}>{t('chatWorkspace.tasksPanelTitle')}</div>
                 <span className="small muted">
-                  {tasks.filter((t) => !t.parentId && (t.status === 'open' || t.status === 'paused')).length} 进行中
+                  {t('chatWorkspace.tasksActiveCount', {
+                    count: tasks.filter((x) => !x.parentId && (x.status === 'open' || x.status === 'paused')).length,
+                  })}
                 </span>
               </div>
               <div className="tasks-panel-hint">
-                只读列表，由 Agent 维护。对 Agent 说「把 xx 标为完成」即可更新。
+                {t('chatWorkspace.tasksPanelHint')}
               </div>
               <TaskPanel tasks={tasks} />
             </div>
@@ -2863,13 +2920,15 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
           {rightTab === 'schedules' && (
             <div>
               <div className="tasks-panel-header">
-                <div className="sidebar-title" style={{ marginBottom: 0 }}>会话日程</div>
+                <div className="sidebar-title" style={{ marginBottom: 0 }}>{t('chatWorkspace.schedulesPanelTitle')}</div>
                 <span className="small muted">
-                  {schedules.filter((s) => s.status === 'active' || s.status === 'paused').length} 未闭合
+                  {t('chatWorkspace.schedulesOpenCount', {
+                    count: schedules.filter((x) => x.status === 'active' || x.status === 'paused').length,
+                  })}
                 </span>
               </div>
               <div className="tasks-panel-hint">
-                由 Agent 用 schedule_* 登记；到点自动唤醒本会话执行。
+                {t('chatWorkspace.schedulesPanelHint')}
               </div>
               <SchedulePanel
                 schedules={schedules}
@@ -2885,12 +2944,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
           {rightTab === 'subsessions' && (
             <div>
               <div className="tasks-panel-header">
-                <div className="sidebar-title" style={{ marginBottom: 0 }}>子会话</div>
-                <span className="small muted">{childSessions.length} 个</span>
+                <div className="sidebar-title" style={{ marginBottom: 0 }}>{t('chatWorkspace.railSubsessions')}</div>
+                <span className="small muted">{t('chatWorkspace.subsessionsCount', { count: childSessions.length })}</span>
               </div>
               <div className="tasks-panel-hint">
-                本会话委派产生的直接子会话（按时间倒序）。点开后回概览，中栏对话与右栏信息切换为
-                该子会话（左栏保持主会话选中）；嵌套委派点进子会话后再看它的「子会话」。
+                {t('chatWorkspace.subsessionsPanelHint')}
               </div>
               <div style={{ display: 'grid', gap: 8 }}>
                 {childSessions.map((s) => (
@@ -2899,24 +2957,24 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                     className="btn-secondary session-btn"
                     style={{ textAlign: 'left' }}
                     onClick={() => openChildSession(s.id)}
-                    title="打开子会话（中栏对话与右栏信息切换；左栏保持主会话选中）"
+                    title={t('chatWorkspace.openSubsessionTitle')}
                   >
                     <div className="session-card-title-row">
                       <span className="session-card-title">{sessionDisplayTitle(s)}</span>
                       {s.running && (
-                        <span className="session-running-badge" title="子会话正在运行中">
+                        <span className="session-running-badge" title={t('chatWorkspace.subsessionRunningTitle')}>
                           <span className="session-running-dot" />
-                          运行中
+                          {t('chatWorkspace.running')}
                         </span>
                       )}
                     </div>
                     <div className="small muted session-card-meta">
                       {s.agentId} · {formatTimestamp(s.createdAt ?? s.lastInteractionAt)}
-                      {s.spawnBy?.depth ? ` · 深度 ${s.spawnBy.depth}` : ''}
+                      {s.spawnBy?.depth ? t('chatWorkspace.subsessionDepth', { depth: s.spawnBy.depth }) : ''}
                     </div>
                   </button>
                 ))}
-                {!childSessions.length && <div className="small muted">暂无子会话</div>}
+                {!childSessions.length && <div className="small muted">{t('chatWorkspace.noSubsessions')}</div>}
               </div>
             </div>
           )}
@@ -2959,12 +3017,12 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
           {rightTab === 'tools' && (
             <section className="panel sidebar-section">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <div className="sidebar-title" style={{ marginBottom: 0 }}>工具时间线</div>
+                <div className="sidebar-title" style={{ marginBottom: 0 }}>{t('chatWorkspace.toolsTimelineTitle')}</div>
                 <span className="small muted">{toolItems.length}</span>
               </div>
               <div style={{ display: 'grid', gap: 8 }}>
                 {toolItems.map(t => <ToolTimelineCard key={t.toolCallId} item={t} />)}
-                {!toolItems.length && <div className="small muted">暂无工具运行记录</div>}
+                {!toolItems.length && <div className="small muted">{t('chatWorkspace.noToolRuns')}</div>}
               </div>
             </section>
           )}
