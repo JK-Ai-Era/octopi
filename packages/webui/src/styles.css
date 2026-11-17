@@ -591,6 +591,7 @@ pre { font-family: var(--font-mono); font-size: 13px; }
   background: var(--color-surface-3);
   padding: 0;
   cursor: pointer;
+  user-select: none;
   flex-shrink: 0;
   transition: background 120ms ease, border-color 120ms ease;
 }
@@ -608,9 +609,6 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .switch-on { background: var(--color-accent); border-color: var(--color-accent-border); }
 .switch-on .switch-knob { transform: translateX(14px); }
 .switch:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
-  cursor: pointer;
-  user-select: none;
-}
 
 .right-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
 .inspector-kv { font-size: var(--text-sm); margin-bottom: 2px; }

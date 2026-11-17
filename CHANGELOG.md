@@ -127,6 +127,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.117.1 (2026-11-17)
+
+### fix(webui): styles.css 孤儿声明与多余闭括号——消除 CSS minify 语法警告
+
+`20031fbe`（专家模式 Switch 改造）重写 `.rail-expert-toggle` 时残留旧块尾巴三行（重复 `cursor: pointer;` + `user-select: none;` + 多余 `}`），落在 `.switch:focus-visible` 单行块后成为孤儿声明，vite/esbuild minify 报两处 css-syntax-error（`<stdin>:611`）。`user-select: none` 语义归 `.switch` 主块（点按开关不选中文本），孤儿碎片删除。
+
+**验证**：webui build 无 CSS minify 警告；全量构建 ✓。
+
 ## v0.117.0 (2026-11-17)
 
 ### feat(errors): 错误分类域×档——工具错误不再冒充「模型服务出错了」
