@@ -33,6 +33,8 @@ import {
   resolveAgentDataTargets,
   detectKnowledgeDb,
   detectKnowledgeSourcesAsync,
+  detectKnowledgeStorageHealth,
+  vacuumKnowledgeDatabaseIfWorthwhile,
   migrateKnowledgeDatabase,
   knowledgeDbPath,
   listKnowledgeSources,
@@ -469,6 +471,7 @@ async function diagnoseConfigLayoutData(
   findings.push(...detectDataLayer(targets));
   // knowledge 源注册健康（不自动删源）
   findings.push(...(await detectKnowledgeSourcesAsync()));
+  findings.push(...(await detectKnowledgeStorageHealth()));
   if (configPath) {
     findings.push(...checkDeprecatedSessionStore(rawUnexpanded, targets, dirname(resolve(configPath))));
   }
@@ -921,6 +924,8 @@ export {
   checkDeprecatedSessionStore,
   detectKnowledgeDb,
   detectKnowledgeSourcesAsync,
+  detectKnowledgeStorageHealth,
+  vacuumKnowledgeDatabaseIfWorthwhile,
   migrateKnowledgeDatabase,
   knowledgeDbPath,
   listKnowledgeSources,

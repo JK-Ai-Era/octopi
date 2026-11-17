@@ -128,6 +128,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.20 (2026-11-18)
+
+### feat(cli): doctor knowledge.db 存储健康（KN008 空页回收 / KN009 embed 墓碑）
+
+- **KN008**：检测 `freelist_count × page_size` 达阈值（64MB 命名常量、可覆盖）→ warn finding，`--fix data` 条件 `VACUUM` 真收缩文件。评审修复：VACUUM 连接 `skipMigrate`（防止顺带重跑旧库破坏性迁移，评审 M6）、`busyTimeoutMs: 2s` 快败（服务在跑不再挂满 15s，M7）、失败报独立 `KN010`（error 级、不可修，不再与检出同 id）、dry-run 如实预告将执行的 VACUUM。
+- **KN009**：统计 `knowledge_chunk_embeddings.dimensions=0` 墓碑（`embedSecretPolicy=skip` 写入，永不自动重嵌）→ warn finding + reprocess 指引（Web UI / `POST /v1/sources/:id/reprocess`）。doctor 零 LLM 章程不动、不自动重嵌（自动触发器待拍板）。存储健康检查自身失败报 `KN011`（不再复用 `KN004`）。
+
+---
+
 ## v0.118.19 (2026-11-18)
 
 ### fix(engine): vectorEngine 全链透传 + sqlite-vec 降级显式化

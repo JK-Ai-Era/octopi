@@ -206,6 +206,125 @@ export function detectKnowledgeDb(): DataFixResult['findings'] {
   return findings;
 }
 
+/** knowledge.db 空页回收阈值：freelist 空间达到才提示/执行 VACUUM（可按需覆盖；大库 VACUUM 贵） */
+export const KNOWLEDGE_VACUUM_MIN_RECLAIM_BYTES = 64 * 1024 * 1024;
+
+/**
+ * knowledge.db 存储健康（本地确定性，零 LLM）：
+ * - KN008 空页回收（A13）：DROP/DELETE/PRUNE 后 SQLite 不自动缩容，需显式 VACUUM；
+ * - KN009 embed 墓碑（A15）：`embedSecretPolicy=skip` 写 `dimensions=0` 占位、永不自动重嵌。
+ *   doctor 不触发重嵌（零 LLM 章程 + 会花 embedding 费用）——只报告并指引 reprocess。
+ *
+ * @param options - vacuumMinReclaimBytes 覆盖回收阈值（测试/运维用）
+ * @returns findings
+ */
+export async function detectKnowledgeStorageHealth(
+  options: { vacuumMinReclaimBytes?: number } = {},
+): Promise<DataFixResult['findings']> {
+  const findings: DataFixResult['findings'] = [];
+  const dbPath = knowledgeDbPath();
+  if (!existsSync(dbPath)) return findings;
+  const { KnowledgeDatabase } = await import('@octopi-agent/engine/harness/knowledge/db.js');
+  const db = await KnowledgeDatabase.create({
+    dbPath,
+    readOnly: true,
+    skipMigrate: true,
+    sqliteVec: false,
+  });
+  try {
+    const pageCount = pragmaNumber(db, 'page_count', 'page_count');
+    const freelist = pragmaNumber(db, 'freelist_count', 'freelist_count');
+    const pageSize = pragmaNumber(db, 'page_size', 'page_size');
+    const reclaimable = freelist * pageSize;
+    if (reclaimable >= (options.vacuumMinReclaimBytes ?? KNOWLEDGE_VACUUM_MIN_RECLAIM_BYTES)) {
+      findings.push({
+        id: 'KN008',
+        domain: 'data',
+        severity: 'warn',
+        message: `knowledge.db: ${formatBytes(reclaimable)} reclaimable (freelist=${freelist} of ${pageCount} pages) — SQLite keeps reserved pages after deletes/prunes`,
+        hint: 'run doctor --fix data to VACUUM (stop the Knowledge Service first if it is running)',
+        fixable: true,
+        group: 'data',
+      });
+    }
+    const tombstones = Number(
+      (
+        db.raw.prepare('SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings WHERE dimensions = 0').get() as {
+          n: number;
+        }
+      ).n,
+    );
+    if (tombstones > 0) {
+      findings.push({
+        id: 'KN009',
+        domain: 'data',
+        severity: 'warn',
+        message: `knowledge: ${tombstones} embed tombstone(s) (dimensions=0 written by embedSecretPolicy=skip) — will NOT re-embed automatically`,
+        hint: 'after fixing embed credentials / embedSecretPolicy, run reprocess for affected sources (Web UI or POST /v1/sources/:id/reprocess)',
+        fixable: false,
+        group: 'data',
+      });
+    }
+  } catch (err) {
+    findings.push({
+      id: 'KN011',
+      domain: 'data',
+      severity: 'warn',
+      message: `knowledge: storage health check failed: ${err instanceof Error ? err.message : String(err)}`,
+      hint: 'open knowledge.db failed — run doctor --fix data first',
+      fixable: false,
+    });
+  } finally {
+    db.close();
+  }
+  return findings;
+}
+
+function pragmaNumber(
+  db: { raw: { prepare(sql: string): { get(): unknown } } },
+  pragma: string,
+  field: string,
+): number {
+  const row = db.raw.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
+  return Number(row?.[field] ?? 0);
+}
+
+/**
+ * freelist 空间达阈值时对 knowledge.db 执行 VACUUM（真正收缩文件）。
+ *
+ * @param options - vacuumMinReclaimBytes 覆盖回收阈值
+ * @returns 说明；未达阈值/库不存在返回 null
+ */
+export async function vacuumKnowledgeDatabaseIfWorthwhile(
+  options: { vacuumMinReclaimBytes?: number } = {},
+): Promise<string | null> {
+  const dbPath = knowledgeDbPath();
+  if (!existsSync(dbPath)) return null;
+  const { KnowledgeDatabase } = await import('@octopi-agent/engine/harness/knowledge/db.js');
+  const db = await KnowledgeDatabase.create({
+    dbPath,
+    sqliteVec: false,
+    // VACUUM 不需要建表/迁移：skipMigrate 防止顺带重跑破坏性旧库迁移（M6）；
+    // busy 2s 快败：服务在跑时不要挂满 15s 才报 SQLITE_BUSY（M7）
+    skipMigrate: true,
+    busyTimeoutMs: 2_000,
+  });
+  try {
+    const freelist = pragmaNumber(db, 'freelist_count', 'freelist_count');
+    const pageSize = pragmaNumber(db, 'page_size', 'page_size');
+    const reclaimable = freelist * pageSize;
+    if (reclaimable < (options.vacuumMinReclaimBytes ?? KNOWLEDGE_VACUUM_MIN_RECLAIM_BYTES)) {
+      return null;
+    }
+    const before = statSync(dbPath).size;
+    db.raw.exec('VACUUM');
+    const after = statSync(dbPath).size;
+    return `knowledge: VACUUM reclaimed ${formatBytes(Math.max(0, before - after))} (${freelist} free pages)`;
+  } finally {
+    db.close();
+  }
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n}B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
@@ -419,6 +538,9 @@ export async function applyDataLayerFixes(
   const findings: DataFixResult['findings'] = [];
 
   if (options.dryRun) {
+    // A13 dry-run：如实预告将执行的 VACUUM（阈值判断同 --fix 路径）
+    const vacuumable = (await detectKnowledgeStorageHealth()).find((f) => f.id === 'KN008');
+    if (vacuumable) notes.push(`[dry-run] would VACUUM knowledge.db — ${vacuumable.message}`);
     for (const t of targets) {
       const dbPath = join(t.home, 'agent.db');
       notes.push(
@@ -490,6 +612,24 @@ export async function applyDataLayerFixes(
       message: `knowledge: schema migrate failed: ${msg}`,
       hint: 'requires Node.js >= 24 node:sqlite; pre-v2 backup written as knowledge.db.pre-v2.bak',
       fixable: false,
+    });
+  }
+
+  // A13 空页回收：freelist 超阈值才 VACUUM（大库 VACUUM 贵，不做无条件回收）
+  try {
+    const vacuumNote = await vacuumKnowledgeDatabaseIfWorthwhile();
+    if (vacuumNote) notes.push(vacuumNote);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    notes.push(`knowledge.db VACUUM failed: ${msg}`);
+    findings.push({
+      id: 'KN010',
+      domain: 'data',
+      severity: 'error',
+      message: `knowledge: VACUUM failed: ${msg}`,
+      hint: 'free pages remain; stop the Knowledge Service and retry --fix data',
+      fixable: false,
+      group: 'data',
     });
   }
 
