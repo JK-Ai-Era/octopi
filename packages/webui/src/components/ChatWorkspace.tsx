@@ -947,7 +947,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const [openIssues, setOpenIssues] = useState<Array<{ id: string; severity: string; title: string; detail: string }>>([]);
   // §5b：null = 概览（默认）；点 section 行进详情
   const [rightTab, setRightTab] = useState<'context' | 'run' | 'services' | 'tasks' | 'schedules' | 'subsessions' | 'attachments' | 'roots' | 'git' | 'file' | 'tools' | null>(null);
-  // 专家模式：显示「运行时透明」组（上下文/Run/服务）——普通用户不需要关注这 3 个
+  // 专家模式：显示「运行透视」组（上下文/Run/服务）——普通用户不需要关注这 3 个
   const [expertMode, setExpertMode] = useState(() => {
     try {
       return localStorage.getItem('octopi.expert') === '1';

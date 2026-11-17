@@ -7,7 +7,7 @@
 
 export const zh = {
   'app.panelToggle': '面板',
-  'app.panelToggleTitle': '显示/隐藏右侧面板（会话物料 · 工作进度 · 环境；专家模式含运行时透明）',
+  'app.panelToggleTitle': '显示/隐藏右侧面板（会话物料 · 工作进度 · 环境；专家模式含运行透视）',
   'theme.followSystem': '跟随系统',
   'theme.light': '浅色',
   'theme.dark': '深色',
@@ -20,7 +20,7 @@ export const zh = {
 export const en: Record<keyof typeof zh, string> = {
   'app.panelToggle': 'Panel',
   'app.panelToggleTitle':
-    'Show/hide the right panel (session materials · work progress · environment; expert mode adds runtime transparency)',
+    'Show/hide the right panel (session materials · work progress · environment; expert mode adds runtime internals)',
   'theme.followSystem': 'Follow system',
   'theme.light': 'Light',
   'theme.dark': 'Dark',

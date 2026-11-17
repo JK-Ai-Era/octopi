@@ -128,6 +128,12 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.1 (2026-11-17)
+
+### fix(webui): 右栏专家组名「运行时透明」→「运行透视」
+
+「运行时透明」是名词化概念、不合中文界面表达习惯（大哥反馈）。改「运行透视」——「透视运行」动宾感自然，且与官网叙事「透视」同构；英文同步 Runtime transparency → Runtime internals。统一改 zh/en 共 11 处：组名、专家模式开关 aria/tooltip、关于页右栏描述、顶栏面板提示、ChatWorkspace 注释。**验证**：webui build ✓、webui 测试 28 绿、旧词残留扫描 0。
+
 ## v0.118.0 (2026-11-17)
 
 ### feat(webui): WebUI 双语化（zh/en）——默认语言读配置 + 顶栏语言切换 + 全站文案 i18n

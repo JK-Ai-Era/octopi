@@ -57,7 +57,7 @@ export const zh = {
   'aboutPanel.layoutCenterLabel': '中栏',
   'aboutPanel.layoutCenterDesc': '：主对话；输入框下方切模型、看上下文、手动压缩',
   'aboutPanel.layoutRightLabel': '右栏',
-  'aboutPanel.layoutRightDesc': '：工作进度 / 会话物料 / 环境，点行进详情浮层；专家模式加「运行时透明」组',
+  'aboutPanel.layoutRightDesc': '：工作进度 / 会话物料 / 环境，点行进详情浮层；专家模式加「运行透视」组',
   'aboutPanel.layoutResizePrefix': '右栏与输入区都可',
   'aboutPanel.layoutResizeDrag': '拖拽手柄',
   'aboutPanel.layoutResizeMiddle': '调整大小，',
@@ -195,7 +195,7 @@ export const en: Record<keyof typeof zh, string> = {
     ': main conversation; below the input switch model, view context, compact manually',
   'aboutPanel.layoutRightLabel': 'Right column',
   'aboutPanel.layoutRightDesc':
-    ': work progress / session materials / environment; click a row for the detail overlay; expert mode adds a "runtime transparency" group',
+    ': work progress / session materials / environment; click a row for the detail overlay; expert mode adds a "runtime internals" group',
   'aboutPanel.layoutResizePrefix': 'Both the right column and the input area can be resized by ',
   'aboutPanel.layoutResizeDrag': 'dragging the handle',
   'aboutPanel.layoutResizeMiddle': '; ',
