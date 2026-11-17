@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { POSIX_FILE_MODE } from '../packages/engine/src/file-mode.js';
 import { doctorPlugin, syncPlugin, diffPluginCopy, listPluginFiles, collectPluginFiles, swapIn, findDeployedCopy, installPluginFromNpm, ensureDependencies, hasRuntimeDependencies, npmInstallArgs, npmPackArgs, resolveScriptConsent } from '../src/cli/plugin-tools.js';
 import { resolvePluginEntry } from '../packages/engine/src/harness/extension/plugin-ecosystem/plugins/loader.js';
 
@@ -100,7 +101,23 @@ describe('plugin doctor (P6-5)', () => {
     expect(result.findings.some((f) => f.id === 'PLG004' && f.severity === 'error')).toBe(true);
   });
 
-  it('warns when the state directory is not 0700 and ok when it is', () => {
+  // 回归锚：无 POSIX 权限位语义的平台不能假 warn、也不能假 ok——只能报"不适用"。
+  // 修前 PLG005 在 Windows 上对每个 state 目录都 warn（statSync().mode 恒 0666 形态）。
+  it.runIf(!POSIX_FILE_MODE)('reports PLG005 as not-applicable where POSIX mode bits do not exist', () => {
+    const dir = join(root, 'perm-windows');
+    writePlugin(dir, goodManifest());
+    const stateDir = join(octopiHome, 'plugin-state', 'demo');
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+
+    const finding = doctorPlugin(dir).findings.find((f) => f.id === 'PLG005')!;
+    expect(finding.severity).toBe('info');
+    expect(finding.message).toContain('POSIX-only');
+    // 关键：不能因为"看不见权限位"就声称目录不安全
+    expect(finding.severity).not.toBe('warn');
+  });
+
+  // 权限判定只在 POSIX 有意义（Windows 上 PLG005 报 info「不适用」，见 plugin-tools.ts）
+  it.skipIf(!POSIX_FILE_MODE)('warns when the state directory is not 0700 and ok when it is', () => {
     const dir = join(root, 'perm');
     writePlugin(dir, goodManifest());
     const stateDir = join(octopiHome, 'plugin-state', 'demo');
@@ -348,7 +365,7 @@ describe('plugin sync (P6-5)', () => {
     expect(finding.message).toContain('toString');
   });
 
-  it('PLG005 walks state subdirectories and arbitrary file names', () => {
+  it.skipIf(!POSIX_FILE_MODE)('PLG005 walks state subdirectories and arbitrary file names', () => {
     const dir = join(root, 'stateful');
     writePlugin(dir, goodManifest());
     const stateDir = join(octopiHome, 'plugin-state', 'demo');
@@ -392,7 +409,7 @@ describe('plugin sync (P6-5)', () => {
     expect(result.healthy).toBe(true);
   });
 
-  it('a state dir of 0700 survives the doctor round-trip after sync', () => {
+  it.skipIf(!POSIX_FILE_MODE)('a state dir of 0700 survives the doctor round-trip after sync', () => {
     const src = join(root, 'src-plugin');
     writePlugin(src, goodManifest());
     syncPlugin(src);

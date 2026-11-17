@@ -52,7 +52,8 @@ describe('V6 OP-KNOW-LOCK 撞锁取证（模拟 gateway 硬死）', () => {
 
   it('取证点 B：占锁存活下再拉起同库实例的行为（撞锁 or 接管）', async () => {
     const lockPath = join(home, 'knowledge.db.writer.lock');
-    const holder = JSON.parse(readFileSync(lockPath, 'utf8')) as { holderPid: number };
+    // 锁文件字段见 writer-lock.ts 的 JSON.stringify({ pid, at })
+    const holder = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid: number };
 
     // 第二进程拉起（= gateway 重启后 manageLocal 再 fork）
     // MIN-12 修复：钉实测行为（撞锁拒绝）——行为若变（接管落地）测试即红，届时更新锚
@@ -64,6 +65,6 @@ describe('V6 OP-KNOW-LOCK 撞锁取证（模拟 gateway 硬死）', () => {
         startTimeoutMs: 15_000,
       }),
     ).rejects.toThrow(/already locked/i);
-    console.log(`[V6 forensics] holderPid=${String(holder.holderPid)} — collision pinned`);
+    console.log(`[V6 forensics] holderPid=${String(holder.pid)} — collision pinned`);
   }, 30_000);
 });

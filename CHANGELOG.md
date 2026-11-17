@@ -128,6 +128,51 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.5 (2026-11-17)
+
+### fix(engine): make knowledge child stop() wait for actual exit
+
+**症状**：Windows 上 `tests/knowledge-lock-forensics.test.ts` 的 `afterAll` 清理临时目录报 `EPERM: operation not permitted`，该文件长期带红点。
+
+**根因**（`start-service-process.ts` 的 `stopChild`）：通道已断（等价宿主硬死）时走 disconnected 分支，`kill('SIGTERM')` 后**立即 resolve**，不等 `exit`。于是调用方拿到「已停止」的承诺时进程还活着、仍打开着 SQLite 文件；Windows 不允许删除被打开的文件 → EPERM。Linux 可以 unlink 打开中的文件，所以这个缺陷只在 Windows 显形。
+
+**改法**：`stopChild` 的唯一完成条件改成「真的观察到 exit」——disconnected 分支也走 SIGTERM→2s→SIGKILL 的升级链并等 `exit`；保留 1s 兜底（放行时 `console.warn`，不静默）避免不可观测的僵尸让调用方永久挂起。同时收紧四处实现细节：`send` 的通道错误改为由回调转入升级（通道刚断时 `send` 不抛异常、只把 `ERR_IPC_CHANNEL_CLOSED` 交给回调，原来空回调会让它干等满 3s 宽限）；三个定时器分开命名并加单发闸，避免新增升级入口时句柄被覆盖；新增 `settled` 闸——`exit` 先到时迟到的 `send` 错误不得再武装定时器（否则会在 `stop()` 已 resolve 后打出假的 `unobservable after SIGKILL` 告警）；`stopChild` 导出为测试缝。
+
+这修的是**生产语义**（`stop()` 承诺的是「已停止」，不是「信号已发出」），不只是测试。
+
+**验证**（双向）：探针实测断连后 `stop()` 等待 13ms 直到 `exit` 事件（`signalCode=SIGTERM`），随后 `rmSync` 成功；对照组「`kill` 后立刻 `rmSync`」稳定复现 `EPERM`；新增 `tests/knowledge-stop-child-unit.test.ts`（6 例，假 child + 假定时器）覆盖升级链三条路径——connected 自行退出不发信号、不理 close 则 3s SIGTERM→2s SIGKILL→1s 兜底、`send` 回调/同步抛两种错误立即升级；三组对照实验（丢 `send` 错误、不发 SIGKILL、退回旧语义）分别让对应用例变红。真实 fork 的端到端锚 `knowledge-stop-semantics` 连跑 3 次稳定，无孤儿子进程遗留。
+
+### fix(cli): plugin doctor no longer misreports state permissions on Windows
+
+**症状**：Windows 上 `octopi plugin doctor` 对**每个** `plugin-state/<id>` 都报 `PLG005 warn: is mode 666; must not be group/other-accessible`，即使目录权限正常。
+
+**根因**：`stateDirFindings` 用 `statSync(path).mode & 0o777` 判 `(mode & 0o077) !== 0`。Windows 上该值恒为 `0o666`（NTFS 无 POSIX 位语义，与 `mkdir` 的 `mode`/`chmodSync` 都无关），于是判定恒真。实测 `mkdirSync(..., {mode:0o700}) + chmodSync(0o700)` 后仍读到 `666`。
+
+**改法**：新增 `packages/engine/src/file-mode.ts` 的 `POSIX_FILE_MODE`（平台能力常量，生产与测试共用的唯一出口）；`stateDirFindings` 在无 POSIX 位语义的平台报 `info`「permission check is POSIX-only（访问由目录 ACL 约束）」而不是假 warn 或假 ok。
+
+**验证**：新增 `it.runIf(!POSIX_FILE_MODE)` 回归锚，断言 PLG005 在该平台是 `info` 且**不得**为 `warn`；回退生产修复后该用例精确变红。
+
+### test: one policy for POSIX file-mode assertions
+
+**动机**：`mode & 0o777 === 0o600` 类断言在 Windows 上必然红（同上语义缺口），散落在 5 个测试文件、各修各的。改成断言 0666 更糟——那是把不安全现状反锁成期望值。
+
+**改法**：`tests/helpers/file-mode.ts` 提供 `POSIX_FILE_MODE`（转导出 engine 的常量）+ `expectFileMode0600`，作为唯一出口；`expectFileMode0600` 在无 POSIX 位语义平台**主动抛错**，防止漏门控时变成永远通过的断言。收口：`onboarding-core`（2 例 `skipIf`）、`plugin-weixin-channel`（只门控权限那半句，状态内容断言保留）、`plugin-storage-secrets`（2 例，目录创建断言拆出平台无关部分）、`plugin-cli-tools`（3 例）。`run-remote-backend` 的 boot 0600 维持 v0.118.4 做法（POSIX 真位 + 平台无关的意图断言 `run-serve-boot-mode`）。
+
+**验证**：`knowledge-stop-child-unit` 9、`knowledge-stop-semantics` 1、`knowledge-lock-forensics` 2、`knowledge-parse-isolation` 5、`onboarding-core` 18（2 skip）、`plugin-weixin-channel` 33（1 skip）、`plugin-cli-tools` 42（3 skip）、`plugin-storage-secrets` 17（2 skip）、`secret-file-mode-intent` 2、`fork-child-options` 6、`fork-child-usage-guard` 15、`run-remote-backend`（1 平台 skip）合计 **152 通过 / 9 跳过**；`tsc`、测试 typecheck、eslint 全绿。
+
+**升级链单测的对照组**（每组都确认能变红后恢复）：删掉 `escalated` 单发闸 → "单发"用例红；删掉 `settled` 检查 → "exit 先到、错误后到"用例红；删掉 `writeEnvLine` 的 `mode: 0o600` → 意图断言红；回退 PLG005 平台门控 → 回归锚红；把 `stopChild` 退回旧语义 → 端到端锚红。
+
+**顺带修正**：`knowledge-lock-forensics` 的取证日志读 `holderPid` 而锁文件实际写的是 `pid`，导致该行永远打印 `undefined`（正是这条测试存在的理由，却一直没输出有用信息）；`knowledge-stop-semantics` 的 `finally` 清理失败会掩盖断言结果，改为只报告清理自身失败。
+
+**已知限制**：
+
+- Windows 上「秘密文件同机他用户不可读」的真实保护面是目录 ACL（用户 profile 私有目录），本套件不验证（需 `icacls` 且输出本地化）；Windows 侧只覆盖「写入方请求了 0600」的意图，且目前**仅 boot 文件**有这种意图断言——`writeEnvLine` 与 weixin state 的 0600 在 Windows 上无覆盖。
+- `stopChild` 的 1s 兜底路径在极端情形下仍可能在进程未完全退出时放行（此时调用方 `rmSync` 仍会 EPERM），已加 `console.warn` 使其可观测。
+- 同族实现未合并：`packages/gateway/src/gateway/remote-run-backend.ts` 的 run 实例停止逻辑是 5s/3s 阶梯、SIGKILL 后无兜底（可永久挂起），与 knowledge 侧已分叉，宜后续抽 `stopForkedChild` 共用。
+- CLI 侧 `killProcess` 默认 3000ms 后强杀，knowledge 最坏停机路径为 6s（改动前 5s）。POSIX 上 `killProcess` 只杀 gateway PID（Windows 走 `taskkill /T` 连带杀树），若恰在 `stop()` 的信号窗口内被强杀，按设计存活的知识子进程会成为孤儿并继续持有写者锁。属既有边界，若在意需对齐两侧 deadline。
+- Windows 上 PLG005 报 `info` 本质是"未检查"：若 `OCTOPI_HOME` 被指到共享卷，该平台确实失去了权限告警。可选的后续改进：非 POSIX 平台按 `getOctopiHome()` 是否位于用户 profile 内分级（在内 info、在外 warn）。
+- `packages/engine/.../plugins/api.ts` 的 `ensureStateDir` 在 Windows 上 `chmod` 不抛错，其"降级必须显式"的 catch 分支永不触发——诊断信息因此与"由 ACL 约束"的说法不完全对称，待后续用 `POSIX_FILE_MODE` 显式化。
+
 ## v0.118.4 (2026-11-17)
 
 ### refactor(engine): single exit for fork options and guard Windows console-less hosts

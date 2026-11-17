@@ -17,6 +17,7 @@ import semverModule from 'semver';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { getOctopiHome } from '@octopi-agent/engine/paths.js';
+import { POSIX_FILE_MODE } from '@octopi-agent/engine/file-mode.js';
 import { parseManifest, validateManifest, type PluginManifest } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manifest.js';
 import { resolvePluginEntry } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/loader.js';
 import { getEngineVersion, satisfiesEngineRange } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/engine-compatibility.js';
@@ -127,12 +128,33 @@ export function diffPluginCopy(sourceDir: string, deployedDir: string): string[]
   return drifted.sort();
 }
 
-/** State files use their own walk: any name is legitimate, and dirs count too. */
+/**
+ * State files use their own walk: any name is legitimate, and dirs count too.
+ *
+ * 权限判定只在有 POSIX 权限位的平台有意义：Windows 上 `statSync().mode` 恒报 0666
+ * 形态（与 chmod 无关），照 `mode & 0o077` 判会把每个 state 目录都误报成
+ * group/other-accessible。那里的真实保护面是用户 profile 的目录 ACL，stat 看不到，
+ * 所以宁可报"不适用"也不假 ok / 假 warn。
+ */
 function stateDirFindings(pluginId: string): PluginFinding[] {
   const dir = join(getOctopiHome(), 'plugin-state', pluginId);
   const findings: PluginFinding[] = [];
   if (!existsSync(dir)) {
-    findings.push({ id: 'PLG005', severity: 'info', message: `plugin-state/${pluginId} not created yet (lazy, 0700 on first use)` });
+    findings.push({
+      id: 'PLG005',
+      severity: 'info',
+      message: POSIX_FILE_MODE
+        ? `plugin-state/${pluginId} not created yet (lazy, 0700 on first use)`
+        : `plugin-state/${pluginId} not created yet (lazy; this platform has no POSIX mode bits, access is governed by the directory ACL)`,
+    });
+    return findings;
+  }
+  if (!POSIX_FILE_MODE) {
+    findings.push({
+      id: 'PLG005',
+      severity: 'info',
+      message: `plugin-state/${pluginId} permission check is POSIX-only (this platform reports no POSIX mode bits; access is governed by directory ACL)`,
+    });
     return findings;
   }
   const modeOf = (path: string): number => statSync(path).mode & 0o777;

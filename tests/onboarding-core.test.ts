@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -20,6 +20,7 @@ import {
 import { initialOnboardingState, nextStep, mergeOnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 import type { OnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 import { classifyProbeError, mergeConfigFragment, writeEnvLine } from '../packages/engine/src/config-admin/onboarding-apply.js';
+import { POSIX_FILE_MODE, expectFileMode0600 } from './helpers/file-mode.js';
 
 function baseChoices(overrides: Partial<OnboardingChoices> = {}): OnboardingChoices {
   return {
@@ -122,7 +123,7 @@ describe('落盘动作', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('writeEnvLine：创建 0600、同名键替换、异名保留', () => {
+  it('writeEnvLine：同名键替换、异名保留', () => {
     writeEnvLine(home, 'A_KEY=one');
     writeEnvLine(home, 'B_KEY=two');
     writeEnvLine(home, 'A_KEY=updated');
@@ -130,8 +131,11 @@ describe('落盘动作', () => {
     expect(text).toContain('A_KEY=updated');
     expect(text).toContain('B_KEY=two');
     expect(text).not.toContain('A_KEY=one');
-    // 权限收紧到 0600（umask 不影响显式 chmod）
-    expect(statSync(join(home, '.env')).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(!POSIX_FILE_MODE)('writeEnvLine：文件权限收紧到 0600（umask 不影响显式 mode）', () => {
+    writeEnvLine(home, 'A_KEY=one');
+    expectFileMode0600(join(home, '.env'));
   });
 
   it('mergeConfigFragment：providers 合并不覆盖既有、language/deploymentMode 落顶层', () => {
@@ -155,12 +159,12 @@ describe('落盘动作', () => {
     expect(merged.agents).toHaveLength(1); // 既有 agents 不动
   });
 
-  it('writeEnvLine：已存在宽松权限文件会被收紧到 0600', () => {
+  it.skipIf(!POSIX_FILE_MODE)('writeEnvLine：已存在宽松权限文件会被收紧到 0600', () => {
     const envPath = join(home, '.env');
     writeFileSync(envPath, 'K=v\n', { mode: 0o644 });
     chmodSync(envPath, 0o644);
     writeEnvLine(home, 'K=v2');
-    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+    expectFileMode0600(envPath);
   });
 });
 

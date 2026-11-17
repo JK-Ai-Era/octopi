@@ -10,7 +10,7 @@
  * startup blocker or a request storm.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,7 @@ import {
   parseOptions,
   toChannelMessage,
 } from '../examples/plugins/weixin-clawbot/index.mjs';
+import { POSIX_FILE_MODE, expectFileMode0600 } from './helpers/file-mode.js';
 
 const EXAMPLE_PLUGINS_DIR = fileURLToPath(new URL('../examples/plugins', import.meta.url));
 
@@ -516,7 +517,9 @@ describe('weixin plugin — login QR state machine via pair()', () => {
     return t;
   }
 
-  it('walks wait → scaned → confirmed and persists state with chmod 600', async () => {
+  // 权限位断言单独成例并平台门控：Windows 无 POSIX 位语义（保护面是目录 ACL），
+  // 报告里要显式显示 skip，而不是被内联 if 悄悄跳过。策略见 helpers/file-mode。
+  it('walks wait → scaned → confirmed and persists state', async () => {
     const t = pairDrive([{ status: 'wait' }, { status: 'scaned' }, { status: 'confirmed', bot_token: 'tok-1', baseurl: 'https://im-bot.weixin.qq.com', ilink_bot_id: 'b1', ilink_user_id: 'u1' }]);
     const adapter = createWeixinChannelAdapter(ctxFor(statePath()), fastDeps(t)) as ReturnType<typeof createWeixinChannelAdapter> & { pairingPromise: Promise<void> | null };
     await adapter.start(async () => {});
@@ -524,7 +527,16 @@ describe('weixin plugin — login QR state machine via pair()', () => {
     await adapter.pairingPromise;
     const state = JSON.parse(readFileSync(statePath(), 'utf8'));
     expect(state).toMatchObject({ bot_token: 'tok-1', baseurl: 'https://im-bot.weixin.qq.com', get_updates_buf: '' });
-    expect(statSync(statePath()).mode & 0o777).toBe(0o600);
+    await adapter.stop();
+  });
+
+  it.skipIf(!POSIX_FILE_MODE)('persists the pairing state with mode 0600 (POSIX)', async () => {
+    const t = pairDrive([{ status: 'wait' }, { status: 'scaned' }, { status: 'confirmed', bot_token: 'tok-1', baseurl: 'https://im-bot.weixin.qq.com', ilink_bot_id: 'b1', ilink_user_id: 'u1' }]);
+    const adapter = createWeixinChannelAdapter(ctxFor(statePath()), fastDeps(t)) as ReturnType<typeof createWeixinChannelAdapter> & { pairingPromise: Promise<void> | null };
+    await adapter.start(async () => {});
+    await adapter.pair();
+    await adapter.pairingPromise;
+    expectFileMode0600(statePath());
     await adapter.stop();
   });
 

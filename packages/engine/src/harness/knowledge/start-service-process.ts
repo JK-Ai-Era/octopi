@@ -45,7 +45,12 @@ export interface KnowledgeServiceProcessOptions {
 export interface KnowledgeServiceProcessHandle {
   child: ChildProcess;
   port: number;
-  /** 发 close 并等待退出；超时 SIGTERM */
+  /**
+   * 停止子进程并**等待其退出**。connected 时先发 close 让其优雅收摊，3s 未退则
+   * SIGTERM，再 2s 未退则 SIGKILL；通道已断（宿主硬死）时直接走信号升级。
+   * SIGKILL 之后仍等 1s 观察 exit，超时则放行（避免不可观测的僵尸让调用方永久挂起，
+   * 代价是极端情形下进程可能尚未完全退出）。
+   */
   stop(): Promise<void>;
 }
 
@@ -141,51 +146,79 @@ export async function startKnowledgeServiceProcess(
   }
 }
 
-async function stopChild(child: ChildProcess): Promise<void> {
+/**
+ * 停止子进程并**等到它真的退出**（导出为测试缝：升级链要能用假 child 单测）。
+ *
+ * 完成条件：观察到 `exit`，或 SIGKILL 后 1s 兜底放行。调用方依赖这个语义——例如
+ * 释放 SQLite 句柄后才能删临时目录（Windows 上删被打开的文件直接 EPERM）。
+ *
+ * @param child - 目标子进程
+ */
+export async function stopChild(child: ChildProcess): Promise<void> {
   if (child.exitCode != null || child.signalCode != null) return;
   await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
+    let graceTimer: NodeJS.Timeout | undefined;
+    let killTimer: NodeJS.Timeout | undefined;
+    let reapFallbackTimer: NodeJS.Timeout | undefined;
+    let settled = false;
+    let escalated = false;
+
+    const finish = (): void => {
+      settled = true;
+      if (graceTimer) clearTimeout(graceTimer);
+      if (killTimer) clearTimeout(killTimer);
+      if (reapFallbackTimer) clearTimeout(reapFallbackTimer);
+      child.off('exit', finish);
+      resolve();
+    };
+
+    child.once('exit', finish);
+
+    /** 先礼后兵：SIGTERM 给 2s 自收摊，再 SIGKILL；SIGKILL 后仍等一拍 exit。单发。 */
+    const escalate = (): void => {
+      // settled 也要查：exit 先到之后，迟到的 send 错误回调仍可能进来
+      // （通道写挂起 → 子进程退出 → 回调报错）。此时再武装定时器会在 stop() 已 resolve
+      // 后打出假的 unobservable after SIGKILL 告警。
+      if (settled || escalated) return;
+      escalated = true;
+      if (graceTimer) clearTimeout(graceTimer);
       try {
         child.kill('SIGTERM');
       } catch {
-        /* already gone */
+        /* 已经退出：exit 事件会/已把 promise 收掉 */
       }
-      const hard = setTimeout(() => {
+      killTimer = setTimeout(() => {
         try {
           child.kill('SIGKILL');
         } catch {
-          /* ignore */
+          /* 已经退出（同上） */
         }
-        resolve();
+        // 兜底：SIGKILL 后若仍拿不到 exit（不可观测的僵尸），不让调用方永久挂起
+        reapFallbackTimer = setTimeout(() => {
+          console.warn(
+            `[knowledge] child pid=${String(child.pid)} unobservable after SIGKILL; releasing stop() without exit`,
+          );
+          finish();
+        }, 1_000);
+        reapFallbackTimer.unref?.();
       }, 2_000);
-      hard.unref?.();
-    }, 3_000);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    try {
-      if (child.connected) {
-        child.send({ type: 'close' }, () => {
-          /* send callback only observes channel errors; exit path resolves */
-        });
-      } else {
-        clearTimeout(timer);
-        try {
-          child.kill('SIGTERM');
-        } catch {
-          /* ignore */
-        }
-        resolve();
-      }
-    } catch {
-      clearTimeout(timer);
+      killTimer.unref?.();
+    };
+
+    if (child.connected) {
+      graceTimer = setTimeout(escalate, 3_000);
+      graceTimer.unref?.();
       try {
-        child.kill('SIGTERM');
+        // 通道刚断时 send 不抛异常，错误只进回调——必须由回调转入升级。
+        child.send({ type: 'close' }, (err?: Error | null) => {
+          if (err) escalate();
+        });
       } catch {
-        /* ignore */
+        escalate();
       }
-      resolve();
+    } else {
+      // 通道已断（等价于宿主硬死）：没有优雅关闭通道可走，直接终止并**等 exit**。
+      escalate();
     }
   });
 }

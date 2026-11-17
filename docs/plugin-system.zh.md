@@ -340,7 +340,7 @@ register(api) {
 `octopi plugin` 命令组覆盖运行时之外的插件生命周期（v1 刻意不做 dev-mode watch/热重载——sync 直接提示重启而不是假装生效）：
 
 - **`octopi plugin init <name> [--dir <path>]`** —— 脚手架一个插件工程（manifest + TS 入口 + package/tsconfig）。`npm run build` 之后（entry 指向 `dist/`）产物通过 `plugin doctor` 全绿；首次构建前 doctor 会按 loader 同样规则报 entry 缺失（PLG004）。
-- **`octopi plugin doctor [dir] [--json]`** —— 单插件目录的本地体检（无 LLM，有错 exit 1）：manifest JSON/schema（`PLG001/2`）、engine 范围与已装 engine（`PLG003`，与 loader 同一条规则）、entry 文件存在（`PLG004`）、`plugin-state/<id>` 权限（`PLG005`，不可 group/other 访问）、与 `OCTOPI_HOME/plugins/<id>` 的部署副本漂移（`PLG006`）、`secretOptions` 键与 `configSchema.properties` 对照（`PLG007`）、运行时依赖存在性/版本（`PLG009`，沿 Node 解析链——hoisting 的 workspace 依赖能找到；非 semver spec 只验存在性）、陈旧 sync 暂存目录（`PLG010`，info）。warn 不阻断加载；error 意味着 loader 会拒绝该插件。
+- **`octopi plugin doctor [dir] [--json]`** —— 单插件目录的本地体检（无 LLM，有错 exit 1）：manifest JSON/schema（`PLG001/2`）、engine 范围与已装 engine（`PLG003`，与 loader 同一条规则）、entry 文件存在（`PLG004`）、`plugin-state/<id>` 权限（`PLG005`，不可 group/other 访问；只判 POSIX 权限位——Windows 上 `stat` 不报告 POSIX 位，该检查报 `info` 而不是猜，访问由目录 ACL 约束）、与 `OCTOPI_HOME/plugins/<id>` 的部署副本漂移（`PLG006`）、`secretOptions` 键与 `configSchema.properties` 对照（`PLG007`）、运行时依赖存在性/版本（`PLG009`，沿 Node 解析链——hoisting 的 workspace 依赖能找到；非 semver spec 只验存在性）、陈旧 sync 暂存目录（`PLG010`，info）。warn 不阻断加载；error 意味着 loader 会拒绝该插件。
 ## 插件分发与部署（P6-6）
 
 可部署的插件副本 = **文件 + 运行时依赖闭包**——Node 的模块解析在加载时需要 entry 旁的 `node_modules`，所以依赖安装是部署的一部分、不是用户差事。三种形态、两条管道、同一语义（「文件到位、依赖到位」）：

@@ -477,7 +477,9 @@ instead of pretending):
   directory (no LLM, exit 1 on errors): manifest JSON/schema (`PLG001/2`),
   engine range vs the installed engine (`PLG003`, the loader's own rule),
   entry file presence (`PLG004`), `plugin-state/<id>` permissions (`PLG005`,
-  no group/other access), deployed-copy drift against `OCTOPI_HOME/plugins/<id>`
+  no group/other access; POSIX mode bits only — on Windows, where `stat` reports
+  no POSIX bits, the check reports `info` instead of guessing and access is
+  governed by the directory ACL), deployed-copy drift against `OCTOPI_HOME/plugins/<id>`
   (`PLG006`), `secretOptions` keys vs `configSchema.properties` (`PLG007`),
   runtime dependency presence/versions (`PLG009`, Node-resolution aware —
   hoisted workspace deps resolve; non-semver specs verified by presence only)
