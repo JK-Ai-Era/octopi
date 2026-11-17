@@ -44,6 +44,8 @@ export interface KnowledgeBootRetriever {
 
 /** boot 文件里的调参块 */
 export interface KnowledgeBootTuning {
+  /** 跨租户共享闸（B-5）：knowledge.projects.allowPublic，缺省 false=禁止创建 visibility='public' 项目 */
+  allowPublic?: boolean;
   embed?: KnowledgeBootEmbed;
   ingest?: KnowledgeBootIngest;
   retriever?: KnowledgeBootRetriever;
@@ -100,6 +102,7 @@ export function knowledgeTuningFromConfig(
   if (Object.keys(retriever).length > 0) tuning.retriever = retriever;
 
   if (kn.catalog?.autoDescribe !== undefined) tuning.autoDescribe = kn.catalog.autoDescribe;
+  if (kn.projects?.allowPublic !== undefined) tuning.allowPublic = kn.projects.allowPublic;
 
   return tuning;
 }

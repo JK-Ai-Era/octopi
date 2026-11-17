@@ -37,6 +37,8 @@ export interface WorkerWriteStartOptions {
   dbPath: string;
   documentConfig?: DocumentCapabilityConfig | null;
   sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
+  /** 跨租户共享闸（B-5）：允许创建 visibility='public' 项目 */
+  allowPublic?: boolean;
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
@@ -133,6 +135,7 @@ export class WorkerWriteService implements KnowledgeWriteService {
         dbPath: opts.dbPath,
         documentConfig: opts.documentConfig ?? null,
         sqliteVec: opts.sqliteVec,
+        allowPublic: opts.allowPublic,
         embeddingModels: opts.embeddingModels ?? null,
         embed: opts.embed ?? null,
         ingest: opts.ingest ?? null,

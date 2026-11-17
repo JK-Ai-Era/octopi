@@ -27,6 +27,8 @@ interface BootFile {
   retriever?: KnowledgeBootRetriever;
   /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
   autoDescribe?: boolean;
+  /** 跨租户共享闸（B-5）：允许创建 visibility='public' 项目 */
+  allowPublic?: boolean;
   sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   embeddingModels?: {
     providers?: Record<string, unknown>;
@@ -76,6 +78,7 @@ async function main(): Promise<void> {
     retriever: boot.retriever ?? null,
     autoDescribe: boot.autoDescribe,
     sqliteVec: boot.sqliteVec,
+    allowPublic: boot.allowPublic,
   });
 
   let closing = false;

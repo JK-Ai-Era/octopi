@@ -104,6 +104,10 @@ function mapWriteError(res: ServerResponse, e: unknown): boolean {
     err(res, 403, 'visibility_requires_platform_claim', msg);
     return true;
   }
+  if (code === 'public_projects_disabled') {
+    err(res, 403, 'public_projects_disabled', msg);
+    return true;
+  }
   if (code === 'principal_not_registered' || /principal not registered/i.test(msg)) {
     err(res, 403, 'principal_not_registered', msg);
     return true;

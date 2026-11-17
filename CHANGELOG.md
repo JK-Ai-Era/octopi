@@ -128,6 +128,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.21 (2026-11-18)
+
+### fix(gateway): 审批归因诚实化 + 无钥暴露面分级告警 + init 默认随机 apiKey（B-1 拍板）
+
+**Breaking**：无认证部署（未配 `channels.http.apiKey`）的审批 `confirmedBy` **不再采信客户端自报署名**，固定记 `unauthenticated`（可仿冒署名=审计撒谎；认证部署仍记持钥方，不受 body 影响）。配套：① 无钥启动告警按暴露面分级——非回环监听出 🚨 大字告警（明说 console 对网络敞开、审批匿名），回环保持原 ⚠️ 提示（告警放行，不拒绝启动）；② `octopi init` 生成的默认配置为 http 通道**随机 `apiKey`**（`randomBytes(32)` base64url，secure-by-default）。回环判定 `isLoopbackListenHost` 单源于 engine config。
+
+### fix(engine): knowledge.projects.allowPublic 部署闸（B-5 拍板，缺省关）
+
+**Breaking**：创建 `visibility='public'`（跨租户共享）项目**默认被拒**（403 `public_projects_disabled`），需配置 `knowledge.projects.allowPublic: true` 显式放行；放行后仍走 platform claim 闸（顺序不放松）。WebUI 新建项目的「公共项目」选项移除（固定 private）。完整正解 = registry 角色模型（平台管理员），已立项 `arch/open-problems.md` **OP-TEN-1**，T1 落地后替换该布尔闸。说明：两案共享 `engine/src/config.ts` 等文件，合并为单提交。
+
+---
+
 ## v0.118.20 (2026-11-18)
 
 ### feat(cli): doctor knowledge.db 存储健康（KN008 空页回收 / KN009 embed 墓碑）

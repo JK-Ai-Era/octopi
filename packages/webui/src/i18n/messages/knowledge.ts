@@ -76,7 +76,6 @@ export const zh = {
   'knowledgeAdminPanel.projectsTitle': '项目',
   'knowledgeAdminPanel.projectsSubtitle': '先建项目，再挂源；挂载后 Agent 可见',
   'knowledgeAdminPanel.newProject': '新建项目',
-  'knowledgeAdminPanel.newProjectPublic': '公共项目（platform 共享面，跨租户共享）',
   'knowledgeAdminPanel.statsScopeLabel': '本视图',
   'knowledgeAdminPanel.statsScopeHint': '仅统计当前 agent 可见的源；全库口径见 octopi doctor',
   'knowledgeAdminPanel.noProjects': '尚无项目。先建项目再挂源。',
@@ -296,7 +295,6 @@ export const en: Record<keyof typeof zh, string> = {
   'knowledgeAdminPanel.projectsSubtitle':
     'Create a project, then add sources; agents see it once mounted',
   'knowledgeAdminPanel.newProject': 'New project',
-  'knowledgeAdminPanel.newProjectPublic': 'Public project (platform shared plane, cross-tenant)',
   'knowledgeAdminPanel.statsScopeLabel': 'This view',
   'knowledgeAdminPanel.statsScopeHint':
     'Counts only sources visible to this agent; global counts via octopi doctor',

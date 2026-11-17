@@ -102,7 +102,7 @@ describe('审批署名取认证身份（credential-backed）', () => {
     expect(seenApprover).toBe('owner');
   });
 
-  it('无认证部署（approverIdentity 缺省）退回客户端自报（现状语义）', async () => {
+  it('无认证部署（approverIdentity 缺省）固定记 unauthenticated（B-1，不收自报）', async () => {
     let seenApprover: string | undefined;
     const router = new WebApiRouter({
       gateway: {
@@ -129,6 +129,7 @@ describe('审批署名取认证身份（credential-backed）', () => {
     } as unknown as ServerResponse;
 
     await router.handle(req, res);
-    expect(seenApprover).toBe('self-report');
+    // B-1（2026-11-18 拍板）：无认证部署不再采信客户端自报（可仿冒=审计撒谎），固定记 unauthenticated
+    expect(seenApprover).toBe('unauthenticated');
   });
 });

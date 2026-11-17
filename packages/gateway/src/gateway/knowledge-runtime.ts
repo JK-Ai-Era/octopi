@@ -72,6 +72,8 @@ export interface KnowledgeStartOpts {
   /** 自愈退避参数覆盖（测试用；缺省 1s→60s 封顶、无限次） */
   restartBackoff?: { initialMs?: number; maxMs?: number };
   sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
+  /** 跨租户共享闸（B-5）：允许创建 visibility='public' 项目 */
+  allowPublic?: boolean;
 }
 
 /**
@@ -236,6 +238,7 @@ export class GatewayKnowledgeRuntime {
         // connectTimeoutMs = 连接建立等待（fork→ready 握手）；远程模式无独立连接阶段，请求由 timeoutMs 约束
         ...(boot.cfg?.connectTimeoutMs != null ? { startTimeoutMs: boot.cfg.connectTimeoutMs } : {}),
         sqliteVec: boot.opts.sqliteVec,
+        allowPublic: boot.opts.allowPublic,
       });
       this.local = handle;
 

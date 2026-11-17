@@ -97,6 +97,10 @@ export type KnowledgeRecallMode = 'off' | 'hint' | 'hybrid' | 'inject';
 
 /** Knowledge 全局配置（agents[].knowledge 覆盖 recall 等） */
 export interface KnowledgeRuntimeConfig {
+  /** 跨租户共享闸（B-5）：allowPublic 缺省 false=禁止创建 visibility='public' 项目 */
+  projects?: {
+    allowPublic?: boolean;
+  };
   /** Knowledge Service 连接（v2：Gateway 不打开 knowledge.db）；对齐 KnowledgeConfigSchema */
   service?: {
     baseUrl?: string;
@@ -296,6 +300,16 @@ export interface PluginConfig {
  * - 具体 IP / 主机名：绑定该地址
  */
 export type NetworkHostConfig = 'local' | 'lan' | (string & {});
+
+/**
+ * 判定 listen 地址是否仅回环可达（B-1：无钥告警分级依据——非回环 = 网络敞开）
+ *
+ * @param host - `resolveListenHost` 解析后的 listen 地址
+ * @returns 是否回环（127/8 · ::1 · localhost）
+ */
+export function isLoopbackListenHost(host: string): boolean {
+  return /^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|localhost)$/i.test(host.trim());
+}
 
 /**
  * 将 host 配置解析为 HTTP listen 地址

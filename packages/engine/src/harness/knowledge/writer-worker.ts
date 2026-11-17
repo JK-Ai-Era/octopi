@@ -19,6 +19,8 @@ interface WriterBoot {
   autoRegisterPrincipals?: boolean;
   documentConfig?: DocumentCapabilityConfig | null;
   sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
+  /** 跨租户共享闸（B-5）：允许创建 visibility='public' 项目 */
+  allowPublic?: boolean;
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
@@ -80,6 +82,7 @@ async function main(): Promise<void> {
     documentConfig: boot.documentConfig ?? null,
     embeddingProvider: embeddingProvider as never,
     embed: boot.embed ?? null,
+    allowPublic: boot.allowPublic ?? false,
     ingest: boot.ingest ?? null,
     autoDescribe: boot.autoDescribe,
   });

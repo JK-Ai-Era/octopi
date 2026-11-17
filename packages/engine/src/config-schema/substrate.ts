@@ -7,6 +7,12 @@ import { z } from 'zod';
 
 /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
 export const KnowledgeConfigSchema = z.object({
+  /** 允许创建 visibility='public'（跨租户共享）项目（B-5 拍板）：缺省 false；放开属部署级显式任命，正解=registry 角色模型 */
+  projects: z
+    .object({
+      allowPublic: z.boolean().default(false),
+    })
+    .default({ allowPublic: false }),
   /** Knowledge Service 连接（v2：Gateway 不打开 knowledge.db） */
   service: z
     .object({

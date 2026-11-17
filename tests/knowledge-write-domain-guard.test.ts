@@ -20,7 +20,10 @@ import { KnowledgeDatabase } from '@octopi-agent/engine/harness/knowledge/db.js'
 import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
 import { KnowledgeIndexStore } from '@octopi-agent/engine/harness/knowledge/index-store.js';
 import { KnowledgeRetriever } from '@octopi-agent/engine/harness/knowledge/retriever.js';
-import { LocalKnowledgeWriteService } from '@octopi-agent/engine/harness/knowledge/writer-service.js';
+import {
+  LocalKnowledgeWriteService,
+  type WriteIdentity,
+} from '@octopi-agent/engine/harness/knowledge/writer-service.js';
 import { LocalKnowledgeQueryService } from '@octopi-agent/engine/harness/knowledge/query-service.js';
 import { createKnowledgeHttpApp } from '@octopi-agent/engine/harness/knowledge/http-app.js';
 
@@ -38,7 +41,7 @@ describe('knowledge 写归属护栏（broker token）', () => {
     const sources = new KnowledgeSourceStore(db);
     const index = new KnowledgeIndexStore(db);
     const retriever = new KnowledgeRetriever({ sourceStore: sources, indexStore: index });
-    const write = new LocalKnowledgeWriteService({ db });
+    const write = new LocalKnowledgeWriteService({ db, allowPublic: true });
     const query = new LocalKnowledgeQueryService({ db, sources, index, retriever, embeddingEnabled: false });
     app = createKnowledgeHttpApp({
       write,
@@ -237,5 +240,39 @@ describe('knowledge 写归属护栏（broker token）', () => {
       body: { op: 'mount', sourceId: 'ks_nonexistent' },
     });
     expect(r.status).toBe(404);
+  });
+});
+
+describe('B-5：knowledge.projects.allowPublic 部署闸（缺省关）', () => {
+  const platformIdentity = {
+    tenantId: PLATFORM_TENANT_ID,
+    claimed: true,
+    gatewayId: 'gw-platform',
+  } as unknown as WriteIdentity;
+
+  it('allowPublic 缺省/显式 false → public 创建被拒（public_projects_disabled，先于 claim 闸）', async () => {
+    for (const deps of [{}, { allowPublic: false }] as const) {
+      const db = await KnowledgeDatabase.create({ dbPath: ':memory:' });
+      const write = new LocalKnowledgeWriteService({ db, ...deps });
+      await expect(
+        write.createProject(platformIdentity, {
+          projectKey: 'pub-x',
+          visibility: 'public',
+        }),
+      ).rejects.toThrow(/allowPublic/);
+      db.close();
+    }
+  });
+
+  it('allowPublic=true 但无 platform claim → 仍走 claim 闸（顺序不放松）', async () => {
+    const db = await KnowledgeDatabase.create({ dbPath: ':memory:' });
+    const write = new LocalKnowledgeWriteService({ db, allowPublic: true });
+    await expect(
+      write.createProject(
+        { tenantId: 'default', claimed: true, gatewayId: 'gw-tenant' } as unknown as WriteIdentity,
+        { projectKey: 'pub-y', visibility: 'public' },
+      ),
+    ).rejects.toThrow(/platform claim/);
+    db.close();
   });
 });

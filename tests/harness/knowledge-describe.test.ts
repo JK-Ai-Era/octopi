@@ -30,7 +30,7 @@ async function setup(): Promise<{
   write: LocalKnowledgeWriteService;
 }> {
   const db = await KnowledgeDatabase.create({ dbPath: ':memory:' });
-  const write = new LocalKnowledgeWriteService({ db });
+  const write = new LocalKnowledgeWriteService({ db, allowPublic: true });
   return { db, write };
 }
 

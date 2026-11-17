@@ -183,6 +183,8 @@ export interface LocalWriteDeps {
   ingest?: KnowledgeBootIngest | null;
   /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
   autoDescribe?: boolean;
+  /** 跨租户共享闸（B-5）：允许创建 visibility='public' 项目；缺省 false（fail-closed） */
+  allowPublic?: boolean;
 }
 
 /** 进程内唯一写者（测试 / :memory:）。 */
@@ -312,6 +314,14 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     }
     // 评审 m3：visibility='public' 是跨租户共享面动作，只接受显式 claim 'platform' 的写——
     // 租户/无断言写造出的 'public' 不产生共享语义，如实拒绝而非假成功
+    if (input.visibility === 'public' && this.deps.allowPublic !== true) {
+      throw Object.assign(
+        new Error(
+          "visibility 'public' is disabled (knowledge.projects.allowPublic=false) — public projects are cross-tenant shared assets",
+        ),
+        { code: 'public_projects_disabled' },
+      );
+    }
     if (
       input.visibility === 'public' &&
       !(identity.claimed && identity.tenantId === PLATFORM_TENANT_ID)

@@ -369,7 +369,6 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
   const t = useT();
 
   const [newProjectKey, setNewProjectKey] = useState('');
-  const [newProjectPublic, setNewProjectPublic] = useState(false);
   const [newSource, setNewSource] = useState({
     kind: 'directory',
     location: '',
@@ -833,14 +832,6 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                 value={newProjectKey}
                 onChange={(e) => setNewProjectKey(e.target.value)}
               />
-              <label className="small muted kn-form-check">
-                <input
-                  type="checkbox"
-                  checked={newProjectPublic}
-                  onChange={(e) => setNewProjectPublic(e.target.checked)}
-                />
-                {t('knowledgeAdminPanel.newProjectPublic')}
-              </label>
               <button
                 type="button"
                 className="btn-secondary small"
@@ -852,11 +843,9 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                       agentId,
                       key,
                       undefined,
-                      newProjectPublic ? 'public' : 'private',
                     )
                     .then(() => {
                       setNewProjectKey('');
-                      setNewProjectPublic(false);
                       setSelectedProject(key);
                       return refresh();
                     })

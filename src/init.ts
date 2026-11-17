@@ -44,6 +44,7 @@
  * ```
  */
 
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import {
@@ -213,6 +214,9 @@ export function generateDefaultConfig(homeDir: string, agentId: string = 'defaul
         // local=仅本机；lan=局域网访问
         host: 'local',
         path: '/messages',
+        // B-1（2026-11-18 拍板）：init 默认生成随机 apiKey（secure-by-default）；
+        // 局域网/远程访问凭此钥准入，审批归因 = 持钥方
+        apiKey: randomBytes(32).toString('base64url'),
       },
     ],
     session: {

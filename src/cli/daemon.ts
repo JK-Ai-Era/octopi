@@ -1186,7 +1186,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const { OnboardingService } = await import('@octopi-agent/gateway/web/api/onboarding.js');
     const { DemoKitService } = await import('@octopi-agent/gateway/web/api/demo-kit.js');
     const { OctopiConfigSchema } = await import('../config-schema/index.js');
-    const { resolveListenHost } = await import('@octopi-agent/engine/config.js');
+    const { resolveListenHost, isLoopbackListenHost } = await import('@octopi-agent/engine/config.js');
     // 配置管理面（arch/config-hot-reload.md）：FileConfigService（IO）+ provider 工厂（带 wireDump）
     const { ConfigApplyService } = await import('@octopi-agent/gateway/gateway/config-apply.js');
     const { FileConfigService } = await import('../config-service.js');
@@ -1280,9 +1280,17 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     // SEC-7 边界显式化：无 apiKey 时 console/config API 不设防（checkAuth 放行），
     // 与 `--port` 单独启动同语义；gateway.port 覆盖段使该组合更易撞上，必须出声。
     if (!httpConfig?.apiKey) {
-      console.warn(
-        '⚠️  Gateway HTTP listener has NO apiKey (channels[type=http].apiKey): console/config API is unauthenticated — local use only, configure an apiKey otherwise.',
-      );
+      // B-1（2026-11-18 拍板）：无钥部署按暴露面分级出声（告警放行，不拒绝）——
+      // 非回环 = console 对网络敞开且审批匿名，必须大字告警。
+      if (isLoopbackListenHost(listenHost)) {
+        console.warn(
+          '⚠️  Gateway HTTP listener has NO apiKey (channels[type=http].apiKey): console/config API is unauthenticated — local use only, configure an apiKey otherwise.',
+        );
+      } else {
+        console.warn(
+          '🚨 Gateway HTTP listener is NETWORK-FACING WITHOUT apiKey (channels[type=http].apiKey): the console is OPEN to anyone who can reach this port and approvals are anonymous (confirmedBy=unauthenticated). Set an apiKey — anyone on the network can drive agents and approve high-risk actions.',
+        );
+      }
     }
     gateway.registerChannel(new HttpChannelAdapter({
       port: listenPort,

@@ -1378,12 +1378,8 @@ export class WebApiRouter {
           scope: scope as 'once' | 'session' | 'always' | undefined,
           reason: body.reason,
           // ops P5 确认人入账：认证身份优先（apiKey 闸验明的持钥方，credential-backed）；
-          // 无认证部署退回客户端自报署名（trim + 长度上限收口；可仿冒，KNOWN-ISSUES 已声明）
-          approver:
-            this.approverIdentity ??
-            (typeof body.approver === 'string' && body.approver.trim() !== ''
-              ? body.approver.trim().slice(0, 128)
-              : undefined),
+          // 无认证部署不再收客户端自报（可仿冒=审计撒谎）——固定记 unauthenticated（B-1 拍板 2026-11-18）
+          approver: this.approverIdentity ?? 'unauthenticated',
           channel: body.channel === 'webhook' ? 'webhook' : 'gateway',
         });
 

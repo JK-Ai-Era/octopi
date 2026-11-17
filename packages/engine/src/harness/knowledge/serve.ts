@@ -50,6 +50,8 @@ export interface KnowledgeServeOptions {
   /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
   autoDescribe?: boolean;
   sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
+  /** 跨租户共享闸（B-5）：允许创建 visibility='public' 项目 */
+  allowPublic?: boolean;
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
@@ -122,6 +124,7 @@ export async function startKnowledgeService(
       ingest: opts.ingest ?? null,
       retriever: opts.retriever ?? null,
       autoDescribe: opts.autoDescribe,
+      allowPublic: opts.allowPublic,
       testEmbeddingStub: opts.testEmbeddingStub ?? false,
       // 文件库：纯读在主线程 Meta/Search；Engine 只做写编排 + 残留短读
       skipQueryWorker: useSplitQuery,

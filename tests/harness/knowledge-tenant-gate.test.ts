@@ -152,7 +152,7 @@ describe('tenant-gate 回归（管理面读身份 = platform 域）', () => {
   const openStack = async () => {
     const store = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
     const db = store.database;
-    const write = new LocalKnowledgeWriteService({ db });
+    const write = new LocalKnowledgeWriteService({ db, allowPublic: true });
     const index = new KnowledgeIndexStore(db);
     const retriever = new KnowledgeRetriever({ sourceStore: store, indexStore: index });
     const query = new LocalKnowledgeQueryService({
@@ -267,7 +267,7 @@ describe('评审修复批（B1/M1/M3/M4）', () => {
   const openStack = async () => {
     const store = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
     const db = store.database;
-    const write = new LocalKnowledgeWriteService({ db });
+    const write = new LocalKnowledgeWriteService({ db, allowPublic: true });
     const index = new KnowledgeIndexStore(db);
     const retriever = new KnowledgeRetriever({ sourceStore: store, indexStore: index });
     const query = new LocalKnowledgeQueryService({
@@ -407,7 +407,7 @@ describe('m6/m7：项目行缓存等价 + 统计本视图口径（拍板 B）', 
   const openStack = async () => {
     const store = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
     const db = store.database;
-    const write = new LocalKnowledgeWriteService({ db });
+    const write = new LocalKnowledgeWriteService({ db, allowPublic: true });
     const index = new KnowledgeIndexStore(db);
     const retriever = new KnowledgeRetriever({ sourceStore: store, indexStore: index });
     const query = new LocalKnowledgeQueryService({

@@ -17,7 +17,7 @@ const gwB = { tenantId: 'acme', gatewayId: 'gw-b' };
 async function openStack() {
   const store = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
   const db = store.database;
-  const write = new LocalKnowledgeWriteService({ db });
+  const write = new LocalKnowledgeWriteService({ db, allowPublic: true });
   const index = new KnowledgeIndexStore(db);
   const retriever = new KnowledgeRetriever({
     sourceStore: store,

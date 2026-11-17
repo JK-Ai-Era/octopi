@@ -34,6 +34,8 @@ export interface KnowledgeServiceProcessOptions {
   retriever?: KnowledgeBootRetriever;
   /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
   autoDescribe?: boolean;
+  /** 跨租户共享闸（B-5）：允许创建 visibility='public' 项目；缺省 false（fail-closed） */
+  allowPublic?: boolean;
   sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   embeddingModels?: {
     providers?: Record<string, unknown>;
@@ -73,6 +75,7 @@ export function buildKnowledgeServiceBootFile(
     ingest: opts.ingest,
     retriever: opts.retriever,
     autoDescribe: opts.autoDescribe,
+    allowPublic: opts.allowPublic,
     sqliteVec: opts.sqliteVec,
     embeddingModels: opts.embeddingModels ?? null,
   };
