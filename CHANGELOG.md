@@ -128,11 +128,27 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.17 (2026-11-18)
+
+### fix(engine): agents[].tools.denyCapabilities 接线（曾被 zod 静默剥离）
+
+`ToolPolicySchema` 只收 `allow`/`deny`，`agents[].tools.denyCapabilities` 被静默剥离（能力黑名单配了不生效）。现 schema + core `ToolPolicy` 放行该字段，主漏斗（工具列表 + `beforeToolCall`）即刻生效（能力标签未知 fail-closed、与 session `toolRights.denyCapabilities` 层求交）；`isToolPermitted` 层类型如实含该字段；`allow`/`deny` 元素校验与 `denyCapabilities` 对称（`.min(1)`）。
+
+### fix(gateway): updateAgent 对 tools 字段级合并（独立评审 B1，安全）
+
+WebUI/部分更新只发自己管的字段（UI 契约即如此），但 `updateAgent` 对 `tools` 是整对象替换——控制台一次保存就静默抹掉 `tools.denyCapabilities` 能力黑名单（安全收紧项丢失、工具面放宽）。现 `tools` 与 `effectPolicy` 同享字段级浅合并，未提及字段不丢；回归测试锁定。
+
+### fix(engine): ToolBus 漏斗补能力闸（独立评审 M8）
+
+`ToolBus.resolve`/`toLLMDefinitions`/`execute` 此前只认 `allow`/`deny` 名过滤（内联手抄一份），`denyCapabilities` 不生效，与 ToolPolicy 契约不一致。现双闸：`isPluginToolPermitted` 保留源别默认（agent 级插件工具无策略=不暴露、全局内置默认暴露）+ `isToolPermitted` 能力漏斗（与 runner 列表闸同语义）。
+
+---
+
 ## v0.118.16 (2026-11-18)
 
 ### docs: KNOWN-ISSUES 范围收窄 + 中文版同步
 
-按定义收窄 `docs/KNOWN-ISSUES.md` 定位：只公示**使用者/集成开发者须知的确定已知问题与边界**，已处理项不入内（属 CHANGELOG），内部开放项归 `arch/open-problems.md`。处置 v0.118.14 写入的「Knowledge tenant gates」条目：B1/M1/M3/M4/m1–m7 等已处理叙述移出（记录在 v0.118.11–15 各段）；M5 改写为部署须知（多租户下 console `apiKey` 等同平台管理员凭据的风险提示 + 统计「本视图」口径说明）；「全库口径回接」转 `arch/open-problems.md` OP-OPS-7。中文版 `KNOWN-ISSUES.zh.md` 同步补齐（此前漏同步）；两文件头部均写明本文件定位。
+按定义收窄 `docs/KNOWN-ISSUES.md` 定位：只公示**使用者/集成开发者须知的确定已知问题与边界**，已处理项不入内（属 CHANGELOG），内部开放项另行内部跟踪（不对外公示、不对外链）。处置 v0.118.14 写入的「Knowledge tenant gates」条目：B1/M1/M3/M4/m1–m7 等已处理叙述移出（记录在 v0.118.11–15 各段）；M5 改写为部署须知（多租户下 console `apiKey` 等同平台管理员凭据的风险提示 + 统计「本视图」口径说明）；「全库口径回接」属内部开放项，转内部账本跟踪（不在本文件公示）。中文版 `KNOWN-ISSUES.zh.md` 同步补齐（此前漏同步）；两文件头部均写明本文件定位。
 
 ---
 
@@ -144,7 +160,7 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ### fix(engine): knowledge stats = 本视图口径（评审 m7，拍板 B）
 
-`principalStats.stats` 原返回 `db.stats()` 全库裸计数（不过任何闸），与闸后列表口径不一致——即「统计有数、列表为空」误读的另一半。现改为 `db.statsForSourceIds(可见源集)`：文件/分块/可嵌入/向量/jobs 全部按可见源计（File 本位经 membership 认领、多源认领 distinct 计），可见性计数器报本 agent/本身份自己的行；WebUI 统计条加「本视图」标注（tooltip 注明全库口径见 `octopi doctor`）。**口径拍板**：现阶段无运维面，全库口径只留 doctor/ops；等运维功能落地再回接双口径（内部开放项：`arch/open-problems.md` OP-OPS-7）。
+`principalStats.stats` 原返回 `db.stats()` 全库裸计数（不过任何闸），与闸后列表口径不一致——即「统计有数、列表为空」误读的另一半。现改为 `db.statsForSourceIds(可见源集)`：文件/分块/可嵌入/向量/jobs 全部按可见源计（File 本位经 membership 认领、多源认领 distinct 计），可见性计数器报本 agent/本身份自己的行；WebUI 统计条加「本视图」标注（tooltip 注明全库口径见 `octopi doctor`）。**口径拍板**：现阶段无运维面，全库口径只留 doctor/ops；等运维功能落地再回接双口径（属内部开放项，另行内部跟踪，不对外公示）。
 
 ---
 

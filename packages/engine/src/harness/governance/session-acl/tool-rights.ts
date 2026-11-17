@@ -243,7 +243,7 @@ export function isToolAllowedByRights(
 export function isToolPermitted(
   toolName: string,
   capabilities: readonly string[] | null | undefined,
-  layers: Array<ToolRights | { allow?: string[]; deny?: string[] } | undefined>,
+  layers: Array<ToolRights | { allow?: string[]; deny?: string[]; denyCapabilities?: string[] } | undefined>,
 ): boolean {
   for (const layer of layers) {
     if (!layer) continue;

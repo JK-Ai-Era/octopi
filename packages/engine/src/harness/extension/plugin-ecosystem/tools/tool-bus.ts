@@ -17,7 +17,11 @@
  * @module harness/extension/plugin-ecosystem/tools/tool-bus
  */
 
-import { registerToolCapabilities } from '../../execution-environment/tool-capabilities.js';
+import {
+  registerToolCapabilities,
+  resolveToolCapabilities,
+} from '../../execution-environment/tool-capabilities.js';
+import { isToolPermitted } from '../../../governance/session-acl/tool-rights.js';
 import type {
   RegisteredTool,
   ToolDefinition,
@@ -119,29 +123,13 @@ export class DefaultToolBus implements ToolBus {
   // ── 解析 ──
 
   resolve(agentId: string, policy?: ToolPolicy): RegisteredTool[] {
-    let tools = this.listForAgent(agentId).filter((tool) => isPluginToolPermitted(tool, policy));
-
-    if (policy) {
-      if (policy.allow && policy.allow.length > 0) {
-        const allowSet = new Set(policy.allow);
-        // "*" 表示放行全部（配置常见写法），不得只匹配字面量 "*"
-        const allowAll = allowSet.has('*');
-        if (!allowAll) {
-          tools = tools.filter(t => allowSet.has(t.definition.name));
-        }
-      }
-      if (policy.deny && policy.deny.length > 0) {
-        const denySet = new Set(policy.deny);
-        // deny '*' = deny every tool (mirror allow '*')
-        if (denySet.has('*')) {
-          tools = [];
-        } else {
-          tools = tools.filter(t => !denySet.has(t.definition.name));
-        }
-      }
-    }
-
-    return tools;
+    // 双闸：isPluginToolPermitted 保留源别默认（agent 级插件工具无策略=不暴露，全局内置默认暴露）；
+    // isToolPermitted 补能力漏斗（denyCapabilities + 未知标签 fail-closed，与 runner 列表闸同语义）
+    return this.listForAgent(agentId).filter(
+      (tool) =>
+        isPluginToolPermitted(tool, policy) &&
+        isToolPermitted(tool.definition.name, resolveToolCapabilities(tool.definition.name), [policy]),
+    );
   }
 
   toLLMDefinitions(agentId: string, policy?: ToolPolicy): LLMToolDefinition[] {
@@ -201,7 +189,12 @@ export class DefaultToolBus implements ToolBus {
     }
     const { getRunScope } = await import('../../../run/run-scope.js');
     const effectivePolicy = getRunScope()?.toolRuntime?.agentToolPolicy ?? policy;
-    if (!isPluginToolPermitted(tool, effectivePolicy)) {
+    if (
+      !isPluginToolPermitted(tool, effectivePolicy) ||
+      !isToolPermitted(tool.definition.name, resolveToolCapabilities(tool.definition.name), [
+        effectivePolicy,
+      ])
+    ) {
       throw new Error(`Plugin tool "${name}" is not allowed for agent "${context.agentId}"`);
     }
     this.validateArgs(name, args, tool.definition);

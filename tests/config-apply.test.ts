@@ -317,6 +317,28 @@ describe('ConfigApplyService — agent CRUD（P2）', () => {
     expect(agents.some((a) => a.id === 'helper')).toBe(true);
   });
 
+  it('B1 回归：updateAgent 部分更新 tools 不得抹掉 denyCapabilities（能力黑名单）', async () => {
+    const before = service.read();
+    await apply.createAgent({
+      agent: {
+        id: 'keeper',
+        model: 'standard',
+        tools: { allow: ['*'], deny: ['x'], denyCapabilities: ['exec'] },
+      },
+      agentsMd: '# k',
+      hash: before.hash,
+    });
+    const mid = service.read();
+    // 模拟控制台保存：只发 allow/deny（UI 不编辑 denyCapabilities）
+    await apply.updateAgent('keeper', { tools: { allow: ['shell'], deny: [] } }, mid.hash);
+    const raw = service.read().raw;
+    const entry = (raw.agents as Array<Record<string, unknown>>).find((a) => a.id === 'keeper');
+    const tools = entry?.tools as { allow?: string[]; deny?: string[]; denyCapabilities?: string[] };
+    expect(tools.denyCapabilities).toEqual(['exec']); // 安全收紧项必须存活
+    expect(tools.allow).toEqual(['shell']);
+    expect(tools.deny).toEqual([]);
+  });
+
   it('createAgent：重名 / 非法 id 拒绝（不动盘、不 scaffold）', async () => {
     const before = service.read();
     await expect(

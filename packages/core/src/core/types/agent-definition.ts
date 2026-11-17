@@ -25,5 +25,8 @@ export interface ModelInfo {
 export interface ToolPolicy {
   allow: string[];
   deny?: string[];
+  /** 能力标签黑名单（exec / egress / send / dynamic-code / …）；与 session toolRights.denyCapabilities 同语义。
+   * 注意 fail-closed：配置本字段后，能力标签解析不出的工具（未知=保守拒绝）也会被拒。 */
+  denyCapabilities?: string[];
   requireConfirmation?: string[];
 }

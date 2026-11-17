@@ -647,14 +647,16 @@ export class ConfigApplyService {
       if (value === null) {
         delete mergedEntry[key];
       } else if (
-        key === 'effectPolicy' &&
+        (key === 'effectPolicy' || key === 'tools') &&
         value &&
         typeof value === 'object' &&
-        mergedEntry.effectPolicy &&
-        typeof mergedEntry.effectPolicy === 'object'
+        mergedEntry[key] &&
+        typeof mergedEntry[key] === 'object'
       ) {
-        mergedEntry.effectPolicy = {
-          ...(mergedEntry.effectPolicy as Record<string, unknown>),
+        // 字段级浅合并：部分更新只发自己管的字段（UI 即此契约），未提及字段
+        // （如 tools.denyCapabilities 能力黑名单）绝不能被整体替换抹掉（B1：安全收紧项丢失）
+        mergedEntry[key] = {
+          ...(mergedEntry[key] as Record<string, unknown>),
           ...(value as Record<string, unknown>),
         };
       } else {

@@ -32,3 +32,29 @@ describe('DefaultToolBus.register', () => {
     expect(bus.listForAgent('default')).toHaveLength(1);
   });
 });
+
+describe('DefaultToolBus.resolve — denyCapabilities 漏斗（M8）', () => {
+  it('denyCapabilities 作用于 resolve/execute（此前只认 allow/deny 名）', async () => {
+    const bus = new DefaultToolBus();
+    bus.register(tool('exec_tool'));
+    bus.register(tool('reader_tool'));
+    // 无 denyCapabilities：名称闸正常
+    expect(
+      bus
+        .resolve('default', { allow: ['*'] })
+        .map((t) => t.definition.name)
+        .sort(),
+    ).toEqual(['exec_tool', 'reader_tool']);
+    // 有 denyCapabilities：能力标签未知（resolveToolCapabilities→null）→ fail-closed 全拒
+    expect(bus.resolve('default', { allow: ['*'], denyCapabilities: ['exec'] })).toHaveLength(0);
+    // denyCapabilities 存在时 execute 同样拒绝
+    await expect(
+      bus.execute(
+        'exec_tool',
+        {},
+        { agentId: 'default' } as never,
+        { allow: ['*'], denyCapabilities: ['exec'] },
+      ),
+    ).rejects.toThrow(/not allowed/);
+  });
+});

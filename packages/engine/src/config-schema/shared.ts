@@ -52,8 +52,10 @@ export const InlinePersonaSchema = z.object({
 });
 
 export const ToolPolicySchema = z.object({
-  allow: z.array(z.string()).optional(),
-  deny: z.array(z.string()).optional(),
+  allow: z.array(z.string().min(1)).optional(),
+  deny: z.array(z.string().min(1)).optional(),
+  /** 能力标签黑名单（agents[].tools.denyCapabilities；与 session toolRights.denyCapabilities 同漏斗） */
+  denyCapabilities: z.array(z.string().min(1)).optional(),
 });
 
 export const InlineModelConfigSchema = z.object({
