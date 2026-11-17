@@ -128,6 +128,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.16 (2026-11-18)
+
+### docs: KNOWN-ISSUES 范围收窄 + 中文版同步
+
+按定义收窄 `docs/KNOWN-ISSUES.md` 定位：只公示**使用者/集成开发者须知的确定已知问题与边界**，已处理项不入内（属 CHANGELOG），内部开放项归 `arch/open-problems.md`。处置 v0.118.14 写入的「Knowledge tenant gates」条目：B1/M1/M3/M4/m1–m7 等已处理叙述移出（记录在 v0.118.11–15 各段）；M5 改写为部署须知（多租户下 console `apiKey` 等同平台管理员凭据的风险提示 + 统计「本视图」口径说明）；「全库口径回接」转 `arch/open-problems.md` OP-OPS-7。中文版 `KNOWN-ISSUES.zh.md` 同步补齐（此前漏同步）；两文件头部均写明本文件定位。
+
+---
+
 ## v0.118.15 (2026-11-18)
 
 ### perf(engine): knowledge project-row lookups — batch cache + project_key index（评审 m6）
@@ -136,7 +144,7 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ### fix(engine): knowledge stats = 本视图口径（评审 m7，拍板 B）
 
-`principalStats.stats` 原返回 `db.stats()` 全库裸计数（不过任何闸），与闸后列表口径不一致——即「统计有数、列表为空」误读的另一半。现改为 `db.statsForSourceIds(可见源集)`：文件/分块/可嵌入/向量/jobs 全部按可见源计（File 本位经 membership 认领、多源认领 distinct 计），可见性计数器报本 agent/本身份自己的行；WebUI 统计条加「本视图」标注（tooltip 注明全库口径见 `octopi doctor`）。**口径拍板**：现阶段无运维面，全库口径只留 doctor/ops；等运维功能落地再回接双口径（见 KNOWN-ISSUES）。
+`principalStats.stats` 原返回 `db.stats()` 全库裸计数（不过任何闸），与闸后列表口径不一致——即「统计有数、列表为空」误读的另一半。现改为 `db.statsForSourceIds(可见源集)`：文件/分块/可嵌入/向量/jobs 全部按可见源计（File 本位经 membership 认领、多源认领 distinct 计），可见性计数器报本 agent/本身份自己的行；WebUI 统计条加「本视图」标注（tooltip 注明全库口径见 `octopi doctor`）。**口径拍板**：现阶段无运维面，全库口径只留 doctor/ops；等运维功能落地再回接双口径（内部开放项：`arch/open-problems.md` OP-OPS-7）。
 
 ---
 
@@ -144,7 +152,7 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ### docs: knowledge tenant-gate open items (review M5/m6/m7)
 
-`docs/KNOWN-ISSUES.md` 落三条评审开放项：M5「公共项目创建缺平台管理员角色闸」（待 registry 角色模型）、m6「项目行按源逐条查询热路径 N+1/缺索引」、m7「stats 全库口径与列表闸口径不一致」。修复批已处置项见 v0.118.11–13。
+`docs/KNOWN-ISSUES.md` 落三条评审开放项：M5「公共项目创建缺平台管理员角色闸」（待 registry 角色模型）、m6「项目行按源逐条查询热路径 N+1/缺索引」、m7「stats 全库口径与列表闸口径不一致」。修复批已处置项见 v0.118.11–13。（后续：m6/m7 于 v0.118.15 处置；该条目于 v0.118.16 按 KNOWN-ISSUES 定位收窄为 M5 部署须知。）
 
 ---
 

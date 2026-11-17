@@ -1,7 +1,7 @@
 # 已知问题
 
 > **语言说明**：英文版见 [KNOWN-ISSUES.md](./KNOWN-ISSUES.md)。本文为中文对译，变更须双语同步。
-> 最后更新：2026-11-01（清理已解决条目——本文件仅保留**开放项**与**现存边界**；已解决/已关闭问题见 `CHANGELOG` 与对应架构文档）
+> 最后更新：2026-11-18（清理已解决条目——本文件仅保留**使用者/集成开发者须知的确定已知问题与边界**；已解决/已关闭问题见 `CHANGELOG` 与对应架构文档，内部开放项账本见 `arch/open-problems.md`）
 
 ## Session / ACL 能力层
 
@@ -92,3 +92,7 @@
 ## 压缩摘要路径 — 已知边界（2026-10，F8 review 跟进）
 
 - **`context.compact.summarize_fallback` 暂无 WebUI 消费端。** 事件已进 run timeline（observer `TIMELINE_TYPES`），但 `web/runtime/store.ts` / `web/conversation/adapter.ts` 无对应 case，会话 inspector 不渲染 cache-miss 旁路。
+
+## Knowledge 多租户共享 — 部署须知（2026-11）
+
+- **暂无平台管理员角色**：创建 `visibility='public'` 项目（跨租户共享资产）目前只凭显式 platform claim 放行——任何 console API 调用方（即持有网关 `apiKey` 的人）都能发起该调用。在 registry 角色模型（multi-tenancy T1）落地前，多租户部署应把 console `apiKey` 视作平台管理员凭据对待。（管理面统计条为「本视图」口径——只数当前 agent 可见源集；全库口径见 `octopi doctor`。）

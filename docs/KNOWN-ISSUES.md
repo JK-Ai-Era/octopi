@@ -1,7 +1,7 @@
 # Known Issues
 
 > **Language note**: This English edition is the **working authority**. The Chinese translation is [`KNOWN-ISSUES.zh.md`](./KNOWN-ISSUES.zh.md). Keep both in sync.
-> Last updated: 2026-11-01 (cleaned resolved entries — this file keeps only **open items** and **existing boundaries**; resolved/closed issues live in `CHANGELOG` and the corresponding architecture docs)
+> Last updated: 2026-11-18 (cleaned resolved entries — this file keeps only **open items / boundaries that users or integrating developers must know**; resolved/closed issues live in `CHANGELOG` and the corresponding architecture docs; internal open-item tracking lives in `arch/open-problems.md`)
 
 ## Session / ACL capability layer
 
@@ -92,20 +92,6 @@ The top-level mapping guard checks section-level keys only; these **sub-keys** a
 
 - **`context.compact.summarize_fallback` has no web-UI consumer yet.** The event lands in the run timeline (observer `TIMELINE_TYPES`), but `web/runtime/store.ts` / `web/conversation/adapter.ts` have no case for it, so the conversation inspector does not render cache-miss fallbacks.
 
-## Knowledge tenant gates — open items (2026-11, MAJ-4 review follow-up)
+## Knowledge multi-tenant sharing — deployment note (2026-11)
 
-From the independent review of the knowledge tenant-gate landing (v0.118.11–13)
-(fixed there: B1 cross-domain removeProject, M1 public-project domain inheritance,
-M3 same-key cross-domain merge, M4 override-row domain isolation, m1–m5; closed
-later in v0.118.15/16: m6 project-row N+1 → batch cache + `idx_knowledge_projects_key`,
-m7 stats scope → `statsForSourceIds` 本视图口径 + UI「本视图」标注). Still
-open:
-
-- **M5 — no role gate on "public project" creation.** `visibility='public'`
-  asserts a platform claim (cross-tenant publish). The service enforces
-  "explicit claim only", but any console-API caller (i.e. anyone holding the
-  gateway apiKey) can make that call — there is no distinct platform-admin role
-  yet. Close together with the registry role model (multi-tenancy T1).
-- **全库口径回接（原 m7 的另一半）**：`db.stats()` 全库计数现只服务 doctor/ops；
-  等运维功能（平台管理员/ops 面）落地时，把「全库口径」作为运维视图接回 UI
-  （届时统计条=双口径：全库 N · 本视图 M）。
+- **No platform-admin role yet**: creating a `visibility='public'` project (a cross-tenant shared asset) is gated only on an explicit platform claim — any console-API caller (i.e. anyone holding the gateway `apiKey`) can make that call. Until the registry role model (multi-tenancy T1) lands, multi-tenant deployments should treat the console `apiKey` as a platform-admin credential. (Knowledge stats shown in the admin panel are scoped to the agent's visible sources — "本视图"; global counts are available via `octopi doctor`.)
