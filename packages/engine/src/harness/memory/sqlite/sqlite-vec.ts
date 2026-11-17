@@ -1,7 +1,7 @@
 /**
  * sqlite-vec 集成 — 可选原生向量索引
  *
- * 扩展未安装或加载失败时返回 false，调用方退回 JS 余弦路径。
+ * 扩展未安装或加载失败时返回 false；降级/拒启语义由 loadSqliteVecOrDegrade 统一处理。
  * 向量同时冗余写入 memories.embedding（JSON），便于审计与引擎切换。
  */
 
@@ -168,4 +168,54 @@ export function syncMemoryVectorFromBlob(db: any, memoryId: string, embeddingJso
   } catch {
     return false;
   }
+}
+
+/** sqlite-vec 加载请求（建库点选项；false = 显式不加载） */
+export type SqliteVecOption = boolean | { extensionPath?: string; require?: boolean };
+
+/**
+ * vectorEngine 模式 → sqlite-vec 加载请求（配置边界单源换算；各 hop 只透传选项）。
+ *
+ * @param mode - 'auto'（默认）＝尝试加载、失败显式降级；'js'＝不加载；'sqlite-vec'＝必须加载成功
+ * @param extensionPath - 可选显式扩展路径（缺省用 npm 包内置二进制）
+ * @returns 加载请求；'js' 返回 false
+ */
+export function sqliteVecOption(
+  mode?: 'auto' | 'js' | 'sqlite-vec',
+  extensionPath?: string,
+): SqliteVecOption {
+  if (mode === 'js') return false;
+  return { ...(extensionPath ? { extensionPath } : {}), require: mode === 'sqlite-vec' };
+}
+
+/**
+ * 加载 sqlite-vec 并统一降级语义（所有建库点的唯一入口）。
+ *
+ * @param db - node:sqlite DatabaseSync
+ * @param option - 加载请求（false / undefined = 不加载）
+ * @param label - 库标签（用于错误/告警，如 'knowledge.db'）
+ * @returns 是否加载成功
+ * @throws `require` 且加载失败时抛 `sqlite_vec_load_failed`（fail-loud）
+ */
+export async function loadSqliteVecOrDegrade(
+  db: unknown,
+  option: SqliteVecOption | undefined,
+  label: string,
+): Promise<boolean> {
+  if (option === false || option === undefined) return false;
+  const extensionPath = typeof option === 'object' ? option.extensionPath : undefined;
+  const required = typeof option === 'object' && option.require === true;
+  const loaded = await tryLoadSqliteVec(db, extensionPath);
+  if (!loaded) {
+    if (required) {
+      throw new Error(
+        `sqlite_vec_load_failed: vectorEngine='sqlite-vec' but the sqlite-vec extension failed to load for ${label} — check the sqlite-vec npm package / models.embedding.sqliteVecExtensionPath`,
+      );
+    }
+    // 显式降级（不静默）：大库会退化为 JS 邻桶扫描（docs/KNOWN-ISSUES.md）
+    console.warn(
+      `[octopi] ${label}: sqlite-vec unavailable — falling back to the JS vector path; large corpora will degrade`,
+    );
+  }
+  return loaded;
 }

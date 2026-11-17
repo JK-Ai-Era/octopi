@@ -71,7 +71,7 @@ export interface KnowledgeStartOpts {
   onLifecycle?: (evt: { type: string; data: Record<string, unknown> }) => void;
   /** 自愈退避参数覆盖（测试用；缺省 1s→60s 封顶、无限次） */
   restartBackoff?: { initialMs?: number; maxMs?: number };
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
 }
 
 /**
@@ -235,9 +235,7 @@ export class GatewayKnowledgeRuntime {
         embeddingModels: boot.opts.embeddingModels ?? null,
         // connectTimeoutMs = 连接建立等待（fork→ready 握手）；远程模式无独立连接阶段，请求由 timeoutMs 约束
         ...(boot.cfg?.connectTimeoutMs != null ? { startTimeoutMs: boot.cfg.connectTimeoutMs } : {}),
-        ...(boot.opts.sqliteVecExtensionPath
-          ? { sqliteVecExtensionPath: boot.opts.sqliteVecExtensionPath }
-          : {}),
+        sqliteVec: boot.opts.sqliteVec,
       });
       this.local = handle;
 
@@ -264,6 +262,14 @@ export class GatewayKnowledgeRuntime {
       });
       this.client.setTenantProvider(runTenantClaimProvider());
       await this.client.health();
+      // 降级显式宣告（父侧回读）：子进程 stdio 被丢弃，其 console.warn 不可见——
+      // 非 js 档而服务端未加载 sqlite-vec 时必须在此告警（M3：显式降级不得变成静默）
+      const readyState = await this.client.ready();
+      if (boot.opts.sqliteVec !== false && !readyState.sqliteVec) {
+        console.warn(
+          '[Knowledge] sqlite-vec unavailable — running the JS vector path; large corpora degrade (vectorEngine fallback, see docs/KNOWN-ISSUES.md)',
+        );
+      }
       // stop()/换代可能在 fork+握手窗口内完成：丢弃结果，绝不留下复活的子进程（P0-1 竞态闸）
       if (this.stopped || gen !== this.generation) {
         throw new Error('launch aborted: runtime stopped during launch');

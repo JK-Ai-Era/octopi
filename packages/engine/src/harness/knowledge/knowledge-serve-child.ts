@@ -27,7 +27,7 @@ interface BootFile {
   retriever?: KnowledgeBootRetriever;
   /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
   autoDescribe?: boolean;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: Record<string, unknown>;
@@ -75,9 +75,7 @@ async function main(): Promise<void> {
     ingest: boot.ingest ?? null,
     retriever: boot.retriever ?? null,
     autoDescribe: boot.autoDescribe,
-    ...(boot.sqliteVecExtensionPath
-      ? { sqliteVecExtensionPath: boot.sqliteVecExtensionPath }
-      : {}),
+    sqliteVec: boot.sqliteVec,
   });
 
   let closing = false;

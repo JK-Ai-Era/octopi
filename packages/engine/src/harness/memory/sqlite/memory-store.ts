@@ -102,6 +102,12 @@ export class SqliteMemoryStore implements MemoryStore {
         // sqlite-vec 已加载时建/验 vec 表；auto 且扩展未加载则保持 false，走 JS hybrid
         if (db.sqliteVecEnabled || this.vectorEngine === 'sqlite-vec') {
           this.vecReady = ensureMemoryVecTable(db.raw, dims);
+          // require 档（vectorEngine='sqlite-vec'）覆盖建表失败：不许静默退回 JS（M4）
+          if (!this.vecReady && this.vectorEngine === 'sqlite-vec') {
+            throw new Error(
+              "sqlite_vec_table_failed: memory_vec table creation failed under vectorEngine='sqlite-vec'",
+            );
+          }
         }
       }
     }

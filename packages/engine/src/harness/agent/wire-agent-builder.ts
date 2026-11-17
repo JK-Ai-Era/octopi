@@ -43,6 +43,7 @@ import { DefaultBudgetAllocator } from '../context/budget-allocator.js';
 import { JsonlTransformStore } from '../session/transform-store.js';
 import type { AgentBuilder } from './builder.js';
 import { initShellParser } from '../governance/security/shell-parser.js';
+import { sqliteVecOption } from '../memory/sqlite/sqlite-vec.js';
 
 // ── 配置解析（唯一实现；供 wire 与公开导出共用） ──
 
@@ -513,8 +514,8 @@ async function wireContextStores(
     const useVec = embRuntime && embRuntime.vectorEngine !== 'js';
     const db = await AgentDatabase.create({
       dbPath: join(input.agentHome, 'agent.db'),
-      sqliteVec: useVec
-        ? { extensionPath: embRuntime?.sqliteVecExtensionPath }
+      sqliteVec: embRuntime
+        ? sqliteVecOption(embRuntime.vectorEngine, embRuntime.sqliteVecExtensionPath)
         : false,
       vectorDimensions: useVec ? embRuntime?.dimensions : undefined,
     });

@@ -4218,12 +4218,17 @@ export class Gateway {
         const { resolveKnowledgePaths, knowledgeTuningFromConfig } = await import(
           '@octopi-agent/engine/harness/knowledge/index.js'
         );
+        const { sqliteVecOption } = await import(
+          '@octopi-agent/engine/harness/memory/sqlite/sqlite-vec.js'
+        );
         const paths = resolveKnowledgePaths(getOctopiHome());
         const embeddingModels = {
           providers: this.config.modelProviders ?? {},
           embedding: this.config.embedding,
         };
-        const embForVec = this.config.embedding as { sqliteVecExtensionPath?: string } | undefined;
+        const embForVec = this.config.embedding as
+          | { vectorEngine?: 'auto' | 'js' | 'sqlite-vec'; sqliteVecExtensionPath?: string }
+          | undefined;
         const tuning = knowledgeTuningFromConfig(this.config.knowledge);
         await rt.start(kn?.service, {
           dataDir: paths.root ?? paths.dbPath.replace(/[/\\][^/\\]+$/, ''),
@@ -4239,9 +4244,7 @@ export class Gateway {
           // v0.98.11 闸门补线：catalog.autoDescribe 必须进 manageLocal 子进程，
           // 否则「false=不自动生成」在 Service 钩子上永远不触发（假接线）
           autoDescribe: tuning.autoDescribe,
-          ...(embForVec?.sqliteVecExtensionPath
-            ? { sqliteVecExtensionPath: embForVec.sqliteVecExtensionPath }
-            : {}),
+          sqliteVec: sqliteVecOption(embForVec?.vectorEngine, embForVec?.sqliteVecExtensionPath),
           // 子进程生命周期观测：WS 可见（exited/restarting/recovered/restart_failed）；
           // recovered 后重挂 SSE 进度订阅并补扫错过的 describe-pending
           onLifecycle: (e) => void this.handleKnowledgeLifecycle(e).catch(() => undefined),

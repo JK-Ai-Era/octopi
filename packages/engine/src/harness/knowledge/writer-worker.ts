@@ -18,7 +18,7 @@ interface WriterBoot {
   dbPath: string;
   autoRegisterPrincipals?: boolean;
   documentConfig?: DocumentCapabilityConfig | null;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
@@ -59,9 +59,7 @@ async function main(): Promise<void> {
 
   const db = await KnowledgeDatabase.create({
     dbPath: boot.dbPath,
-    sqliteVec: boot.sqliteVecExtensionPath
-      ? { extensionPath: boot.sqliteVecExtensionPath }
-      : true,
+    sqliteVec: boot.sqliteVec ?? true,
   });
 
   let embeddingProvider: unknown = null;

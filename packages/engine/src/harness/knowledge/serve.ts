@@ -49,7 +49,7 @@ export interface KnowledgeServeOptions {
   retriever?: KnowledgeBootRetriever | null;
   /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
   autoDescribe?: boolean;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
@@ -79,7 +79,7 @@ function toBridgeHeaders(
 async function startQueryWorker(opts: {
   dbPath: string;
   role: QueryWorkerRole;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   embeddingModels?: KnowledgeServeOptions['embeddingModels'];
   /** 向量化开关（embed.enabled=false 时检索侧不建 embedding provider，不外发 query embed） */
   embed?: KnowledgeBootEmbed | null;
@@ -93,9 +93,7 @@ async function startQueryWorker(opts: {
     embeddingModels: opts.embeddingModels ?? null,
     embed: opts.embed ?? null,
     retriever: opts.retriever ?? null,
-    ...(opts.sqliteVecExtensionPath
-      ? { sqliteVecExtensionPath: opts.sqliteVecExtensionPath }
-      : {}),
+    sqliteVec: opts.sqliteVec,
   });
 }
 
@@ -118,7 +116,7 @@ export async function startKnowledgeService(
       tokens: opts.tokens,
       autoRegisterPrincipals: opts.autoRegisterPrincipals ?? true,
       documentConfig: opts.documentConfig ?? null,
-      sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+      sqliteVec: opts.sqliteVec,
       embeddingModels: opts.embeddingModels ?? null,
       embed: opts.embed ?? null,
       ingest: opts.ingest ?? null,
@@ -164,7 +162,7 @@ export async function startKnowledgeService(
         startQueryWorker({
           dbPath: opts.dbPath,
           role: 'meta',
-          sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+          sqliteVec: opts.sqliteVec,
           embeddingModels: opts.embeddingModels,
           embed: opts.embed,
           retriever: opts.retriever,
@@ -172,7 +170,7 @@ export async function startKnowledgeService(
         startQueryWorker({
           dbPath: opts.dbPath,
           role: 'search',
-          sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+          sqliteVec: opts.sqliteVec,
           embeddingModels: opts.embeddingModels,
           embed: opts.embed,
           retriever: opts.retriever,

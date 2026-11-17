@@ -34,7 +34,7 @@ export interface KnowledgeServiceProcessOptions {
   retriever?: KnowledgeBootRetriever;
   /** false = 索引稳定后不自动生成 generatedDescription（knowledge.catalog.autoDescribe） */
   autoDescribe?: boolean;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
@@ -73,7 +73,7 @@ export function buildKnowledgeServiceBootFile(
     ingest: opts.ingest,
     retriever: opts.retriever,
     autoDescribe: opts.autoDescribe,
-    sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+    sqliteVec: opts.sqliteVec,
     embeddingModels: opts.embeddingModels ?? null,
   };
 }

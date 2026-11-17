@@ -36,7 +36,7 @@ interface WriterReply {
 export interface WorkerWriteStartOptions {
   dbPath: string;
   documentConfig?: DocumentCapabilityConfig | null;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   embeddingModels?: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
@@ -132,7 +132,7 @@ export class WorkerWriteService implements KnowledgeWriteService {
       workerData: {
         dbPath: opts.dbPath,
         documentConfig: opts.documentConfig ?? null,
-        sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+        sqliteVec: opts.sqliteVec,
         embeddingModels: opts.embeddingModels ?? null,
         embed: opts.embed ?? null,
         ingest: opts.ingest ?? null,

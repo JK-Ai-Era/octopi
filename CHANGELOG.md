@@ -128,6 +128,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.19 (2026-11-18)
+
+### fix(engine): vectorEngine 全链透传 + sqlite-vec 降级显式化
+
+- **降级语义单源**：新增 `loadSqliteVecOrDegrade`（所有建库点唯一入口）——`vectorEngine='sqlite-vec'`（显式档）加载失败抛 `sqlite_vec_load_failed` 拒启；`auto` 档回退 JS 显式告警（网关在服务 ready 后回读宣告——子进程 `stdio: ignore` 使子进程内 `console.warn` 不可见的问题一并解决）；`js` 档不加载。显式档同时覆盖 vec 表创建失败（`sqlite_vec_table_failed`）。
+- **保真度修复**：knowledge 服务 boot 此前只带 `sqliteVecExtensionPath` 且建库恒 `sqliteVec:true`，`vectorEngine:'js'` 对知识库根本不生效。现 `sqliteVec` 选项（`boolean | { extensionPath?; require? }`）经 gateway → knowledge-runtime → serve/子进程 → writer/query worker 全链透传，各 hop 逐跳手抄派生（`path ? {path} : true` ×6）删除。
+- **缺省语义归一**：两建库类缺省不同（KnowledgeDatabase 缺省尝试加载、AgentDatabase 缺省不加载），在各类建库点显式写出（`?? true` / `?? false`）并测试锁定（开发中曾因助手吞 `undefined` 引发 `knowledge-vector-ann` 回归，被全量测试抓获）。
+- hop-lock 测试补 `sqliteVec` 透传断言；新增换算/降级/缺省语义测试（含真库端到端拒启）。
+
+**Breaking（独立评审 M1/M2）**：
+
+1. 公开选项 `sqliteVecExtensionPath?: string` 被 `sqliteVec?: boolean | { extensionPath?: string; require?: boolean }` 取代（`KnowledgeServeOptions` / `EngineBoot` / worker opts / `KnowledgeDatabaseOptions` 等 `./harness/*` 可达面）——外部嵌入方需改传参形态。
+2. `models.embedding.vectorEngine='js'` 现在**同时**关闭 Knowledge Service 的 sqlite-vec（此前仅作用于 memory 向量、知识库仍恒加载）：`'js'` 部署升级后知识库检索走 JS 邻桶路径（>2000 chunk 的库召回质量下降）。如需旧行为请用 `'auto'`（默认）。
+
+---
+
 ## v0.118.18 (2026-11-18)
 
 ### fix(engine): documents.legacy.converter='remote' fail-loud

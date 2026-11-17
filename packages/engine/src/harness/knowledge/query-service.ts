@@ -652,7 +652,7 @@ export async function createKnowledgeQueryService(opts: {
     providers?: Record<string, unknown>;
     embedding?: unknown;
   } | null;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   /** Worker 角色：meta=列表/控制面，search=检索/catalog，all=单 Worker 全量 */
   role?: QueryWorkerRole;
   queryTimeoutMs?: number;
@@ -669,7 +669,7 @@ export async function createKnowledgeQueryService(opts: {
   return WorkerQueryService.start({
     dbPath: opts.dbPath,
     embeddingModels: opts.embeddingModels ?? null,
-    sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+    sqliteVec: opts.sqliteVec,
     role: opts.role ?? 'all',
     queryTimeoutMs: opts.queryTimeoutMs,
     embed: opts.embed ?? null,

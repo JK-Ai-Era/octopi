@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { ensureMemoryVecTable, tryLoadSqliteVec } from './sqlite-vec.js';
+import { ensureMemoryVecTable, loadSqliteVecOrDegrade } from './sqlite-vec.js';
 
 export interface AgentDatabaseOptions {
   /** 数据库文件路径（默认 ':memory:'） */
@@ -26,7 +26,7 @@ export interface AgentDatabaseOptions {
   /** busy timeout（毫秒，默认 5000；与 journal mode 无关） */
   busyTimeoutMs?: number;
   /** 尝试加载 sqlite-vec 扩展（默认 false） */
-  sqliteVec?: boolean | { extensionPath?: string };
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   /** 向量维度；配合 sqlite-vec 时用于创建 memory_vec 虚拟表 */
   vectorDimensions?: number;
 }
@@ -80,14 +80,17 @@ export class AgentDatabase {
 
     // 可选：sqlite-vec + memory_vec 虚拟表
     const vecOpt = options?.sqliteVec;
-    if (vecOpt) {
-      const extensionPath = typeof vecOpt === 'object' ? vecOpt.extensionPath : undefined;
-      const loaded = await tryLoadSqliteVec(db, extensionPath);
-      agentDb._sqliteVec = loaded;
-      if (loaded && options?.vectorDimensions) {
-        const ok = ensureMemoryVecTable(db, options.vectorDimensions);
-        agentDb._vecDimensions = ok ? options.vectorDimensions : null;
+    // AgentDatabase 缺省 = 不加载（与 KnowledgeDatabase 的「缺省尝试」不同；缺省在类上显式归一，防再吃 undefined 语义）
+    agentDb._sqliteVec = await loadSqliteVecOrDegrade(db, vecOpt ?? false, 'agent.db');
+    if (agentDb._sqliteVec && options?.vectorDimensions) {
+      const ok = ensureMemoryVecTable(db, options.vectorDimensions);
+      // require 档覆盖「实际可用」而不仅是扩展加载：建表失败同样 fail-loud（契约一致，M4）
+      if (!ok && typeof vecOpt === 'object' && vecOpt.require === true) {
+        throw new Error(
+          "sqlite_vec_table_failed: memory_vec table creation failed under vectorEngine='sqlite-vec'",
+        );
       }
+      agentDb._vecDimensions = ok ? options.vectorDimensions : null;
     }
 
     return agentDb;

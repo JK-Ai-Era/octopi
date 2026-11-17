@@ -22,7 +22,7 @@ import {
 
 interface QueryBoot {
   dbPath: string;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   role?: QueryWorkerRole;
   embeddingModels?: {
     providers?: Record<string, unknown>;
@@ -141,9 +141,7 @@ async function main(): Promise<void> {
     dbPath: boot.dbPath,
     readOnly: true,
     skipMigrate: true,
-    sqliteVec: boot.sqliteVecExtensionPath
-      ? { extensionPath: boot.sqliteVecExtensionPath }
-      : true,
+    sqliteVec: boot.sqliteVec ?? true,
   });
 
   let embeddingProvider: unknown = null;

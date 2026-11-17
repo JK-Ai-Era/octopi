@@ -118,6 +118,9 @@ describe('manageLocal 子进程自愈（退避重启）', () => {
             await new Promise<void>((resolve) => healthWaiters.push(resolve));
           }
         }
+        async ready(): Promise<{ ready: boolean; sqliteVec: boolean }> {
+          return { ready: true, sqliteVec: true };
+        }
       },
     }));
 

@@ -14,7 +14,7 @@ export interface KnowledgeDatabaseOptions {
   wal?: boolean;
   busyTimeoutMs?: number;
   /** 尝试加载 sqlite-vec（默认 true；失败则 JS 余弦）；可指定扩展路径 */
-  sqliteVec?: boolean | { extensionPath?: string };
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   /**
    * 只读打开（Query Worker / Engine 残留短读）：跳过 DDL/升列，不抢写锁。
    * 业务写路径必须走 Writer Worker 唯一写者；此模式仅用于同库只读连接。
@@ -76,13 +76,9 @@ export class KnowledgeDatabase {
       kdb.createTables();
     }
     if (vecOpt !== false) {
-      try {
-        const { tryLoadSqliteVec } = await import('../memory/sqlite/sqlite-vec.js');
-        const extensionPath = typeof vecOpt === 'object' ? vecOpt.extensionPath : undefined;
-        kdb._sqliteVec = await tryLoadSqliteVec(db, extensionPath);
-      } catch {
-        kdb._sqliteVec = false;
-      }
+      const { loadSqliteVecOrDegrade } = await import('../memory/sqlite/sqlite-vec.js');
+      // KnowledgeDatabase 缺省 = 尝试加载（见 KnowledgeDatabaseOptions.sqliteVec 注释）；agent-db 缺省不同，由各自类归一
+      kdb._sqliteVec = await loadSqliteVecOrDegrade(db, vecOpt ?? true, 'knowledge.db');
     }
     return kdb;
   }

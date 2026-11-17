@@ -98,7 +98,7 @@ export class WorkerQueryService implements KnowledgeQueryService {
    */
   static async start(opts: {
     dbPath: string;
-    sqliteVecExtensionPath?: string;
+    sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
     queryTimeoutMs?: number;
     role?: QueryWorkerRole;
     embeddingModels?: {
@@ -113,7 +113,7 @@ export class WorkerQueryService implements KnowledgeQueryService {
     const worker = new Worker(resolveWorkerUrl('./query-worker.js', import.meta.url), {
       workerData: {
         dbPath: opts.dbPath,
-        sqliteVecExtensionPath: opts.sqliteVecExtensionPath,
+        sqliteVec: opts.sqliteVec,
         embeddingModels: opts.embeddingModels ?? null,
         role: opts.role ?? 'all',
         embed: opts.embed ?? null,

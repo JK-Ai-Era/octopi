@@ -29,7 +29,7 @@ interface EngineBoot {
   tokens: KnowledgeServiceToken[];
   autoRegisterPrincipals?: boolean;
   documentConfig?: DocumentCapabilityConfig | null;
-  sqliteVecExtensionPath?: string;
+  sqliteVec?: boolean | { extensionPath?: string; require?: boolean };
   /** 文件库生产：纯读在主线程 Meta/Search Worker */
   skipQueryWorker?: boolean;
   embeddingModels?: {
@@ -190,9 +190,7 @@ async function main(): Promise<void> {
     // :memory: 无法跨连接共享 → 写/读同连接
     writeDb = await KnowledgeDatabase.create({
       dbPath: boot.dbPath,
-      sqliteVec: boot.sqliteVecExtensionPath
-        ? { extensionPath: boot.sqliteVecExtensionPath }
-        : true,
+      sqliteVec: boot.sqliteVec ?? true,
     });
     write = new LocalKnowledgeWriteService({
       db: writeDb,
@@ -223,7 +221,7 @@ async function main(): Promise<void> {
     write = await WorkerWriteService.start({
       dbPath: boot.dbPath,
       documentConfig: boot.documentConfig ?? null,
-      sqliteVecExtensionPath: boot.sqliteVecExtensionPath,
+      sqliteVec: boot.sqliteVec,
       embeddingModels: boot.testEmbeddingStub ? null : (boot.embeddingModels ?? null),
       embed: boot.embed ?? null,
       ingest: boot.ingest ?? null,
@@ -235,9 +233,7 @@ async function main(): Promise<void> {
       dbPath: boot.dbPath,
       readOnly: true,
       skipMigrate: true,
-      sqliteVec: boot.sqliteVecExtensionPath
-        ? { extensionPath: boot.sqliteVecExtensionPath }
-        : true,
+      sqliteVec: boot.sqliteVec ?? true,
     });
     const sources = new KnowledgeSourceStore(readDb);
     const index = new KnowledgeIndexStore(readDb);

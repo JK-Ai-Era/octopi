@@ -88,6 +88,11 @@ describe('buildKnowledgeServiceBootFile (hop lock)', () => {
     });
     expect(boot.retriever).toEqual({ keywordWeight: 0.6 });
     expect(boot.autoDescribe).toBe(false);
+    // sqlite-vec 选项原样过 hop（历史 bug 形态：逐跳改写/丢失派生参数）
+    expect(
+      buildKnowledgeServiceBootFile({ dbPath: '/tmp/kn.db', tokens: [], sqliteVec: { require: true } })
+        .sqliteVec,
+    ).toEqual({ require: true });
   });
 });
 
