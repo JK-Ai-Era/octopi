@@ -31,11 +31,18 @@ export class PulseScheduler {
   private readonly fleet: PulseFleet;
   private readonly resyncMs: number;
   private readonly timers = new Map<string, ReturnType<typeof setInterval>>();
+  /** 延迟首跳的 pending timer（stop/拆除时清掉，防残留活 timer） */
+  private readonly firstFires = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 已首跳的 key（进程内记忆；key 重挂载不重复首跳，进程重启自然清零） */
+  private readonly firstFired = new Set<string>();
+  /** 首跳截止时刻（首见 key 即定、不随 key 重现重置——防重挂载快于延迟时饿死） */
+  private readonly firstDeadline = new Map<string, number>();
   private readonly specs = new Map<string, PulseSpec>();
   /** 同 key 的候选持有实例（key → instanceId 集合；归属转移的输入） */
   private readonly candidates = new Map<string, Set<string>>();
   private resyncTimer?: ReturnType<typeof setInterval>;
   private started = false;
+  private stopped = false;
 
   /**
    * @param options - fleet（脉搏 fleet 端口）+ resyncMs（自述重收周期，默认 60s）
@@ -61,6 +68,8 @@ export class PulseScheduler {
    * 拉取失败保持既有调度（fail-soft：实例短暂不可达不丢调度），fail-loud 打 warning。
    */
   async resync(): Promise<void> {
+    // 停机后不得重建调度；未 start 的手动对账合法（装配/演练入口）
+    if (this.stopped) return;
     let inventory: Array<{ instanceId: string; spec: PulseSpec }>;
     try {
       inventory = await this.fleet.pulseInventory();
@@ -70,6 +79,8 @@ export class PulseScheduler {
       );
       return;
     }
+    // await 期间 stop() 的代际复检：停机后不得再 arm 定时器/首跳
+    if (this.stopped) return;
 
     // 按 key 归并候选实例（同 key 多副本自述同名——归属即去重）
     const byKey = new Map<string, { spec: PulseSpec; instances: Set<string> }>();
@@ -96,7 +107,13 @@ export class PulseScheduler {
     const seen = new Set(byKey.keys());
     for (const [key, entry] of byKey) {
       const existing = this.specs.get(key);
-      if (existing && existing.intervalMs === entry.spec.intervalMs && this.timers.has(key)) {
+      if (
+        existing &&
+        existing.intervalMs === entry.spec.intervalMs &&
+        existing.runOnStart === entry.spec.runOnStart &&
+        existing.startupDelayMs === entry.spec.startupDelayMs &&
+        this.timers.has(key)
+      ) {
         continue;
       }
       const stale = this.timers.get(key);
@@ -110,9 +127,29 @@ export class PulseScheduler {
       }, entry.spec.intervalMs);
       (timer as { unref?: () => void }).unref?.();
       this.timers.set(key, timer);
-      // 首跳（替代原 runOnStart 自跳；仅新 key，周期变更重建不重发）
-      if (entry.spec.runOnStart && !existing) {
-        void this.fire(key);
+      // 首跳（替代原 runOnStart 自跳）：deadline 首见即定、key 重现不重置（防重挂载快于
+      // 延迟时饿死）；已首跳的 key 不再首跳（重挂载 ≠ 重启）；周期变更重建 timer 不重发
+      if (entry.spec.runOnStart && !this.firstFired.has(key)) {
+        const deadline =
+          this.firstDeadline.get(key) ?? Date.now() + (entry.spec.startupDelayMs ?? 0);
+        this.firstDeadline.set(key, deadline);
+        if (!this.firstFires.has(key)) {
+          const delay = deadline - Date.now();
+          if (delay > 0) {
+            const first = setTimeout(() => {
+              this.firstFires.delete(key);
+              this.firstFired.add(key);
+              this.firstDeadline.delete(key);
+              void this.fire(key);
+            }, delay);
+            (first as { unref?: () => void }).unref?.();
+            this.firstFires.set(key, first);
+          } else {
+            this.firstFired.add(key);
+            this.firstDeadline.delete(key);
+            void this.fire(key);
+          }
+        }
       }
     }
     for (const key of [...this.specs.keys()]) {
@@ -120,6 +157,9 @@ export class PulseScheduler {
       const t = this.timers.get(key);
       if (t) clearInterval(t);
       this.timers.delete(key);
+      const first = this.firstFires.get(key);
+      if (first) clearTimeout(first);
+      this.firstFires.delete(key);
       this.specs.delete(key);
       this.candidates.delete(key);
       this.fleet.clearPulseOwner(key);
@@ -136,8 +176,11 @@ export class PulseScheduler {
 
   /** 停止全部调度（归属表留在 fleet，随实例注销清理） */
   stop(): void {
+    this.stopped = true;
     for (const t of this.timers.values()) clearInterval(t);
     this.timers.clear();
+    for (const f of this.firstFires.values()) clearTimeout(f);
+    this.firstFires.clear();
     this.specs.clear();
     this.candidates.clear();
     if (this.resyncTimer) {

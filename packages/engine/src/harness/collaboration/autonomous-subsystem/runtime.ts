@@ -8,6 +8,7 @@
  */
 
 import type { EventBus, AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
+import type { PulseSpec } from '../../activation/run-protocol.js';
 import type { RegisteredTool, Message } from '@octopi-agent/core/types.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SubsystemTimeoutError } from './errors.js';
@@ -410,7 +411,7 @@ export class SubsystemRuntime {
   /**
    * 脉搏声明（P0c A′）：schedule 型子系统的周期声明，供装配层聚合为实例级 PulseSpec。
    */
-  pulseSpecs(): Array<{ key: string; intervalMs: number; runOnStart?: boolean }> {
+  pulseSpecs(): PulseSpec[] {
     return this.senseEngine.pulseSpecs();
   }
 

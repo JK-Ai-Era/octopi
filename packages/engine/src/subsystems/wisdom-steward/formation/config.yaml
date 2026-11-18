@@ -7,6 +7,9 @@ sense:
   # 8h 兜底脉搏；启动首跳 + memory.stored 增量触发补足响应速度
   interval: 28800000
   runOnStart: true
+  # 首跳序 3/5：晚 20 分钟——产出 maxim 先于消费它的 attribute 与治理它的 wisdom.govern；
+  # 顺序的真正保证是事件边（governed/stored），延迟只保证错峰与事件丢失时的保底
+  startupDelayMs: 1200000
   cooldownMs: 3600000
   filter:
     condition: "true"

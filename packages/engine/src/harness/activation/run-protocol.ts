@@ -183,6 +183,8 @@ export interface PulseSpec {
   agentId?: string;
   /** 首次收集后立即发一跳（替代原 runOnStart 自跳） */
   runOnStart?: boolean;
+  /** 首跳延迟（毫秒）——多子系统按数据流依赖序错峰（govern 先于下游巩固/归因跑完） */
+  startupDelayMs?: number;
 }
 
 /**

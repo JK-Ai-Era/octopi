@@ -8,6 +8,10 @@ sense:
   # OP-9R 记账），部署重启周期 < 24h 时纯 interval 会被饿死——runOnStart 保证每次启动必跑一轮
   interval: 86400000
   runOnStart: true
+  # 首跳序 2/5：晚 10 分钟——吃 memory.govern 的合并产物（支撑累加/晋升）；
+  # 顺序的真正保证是 governed 事件边（事件先到会先跑，与本首跳双跑时第二次空转、无 LLM 成本），
+  # 本首跳是事件丢失时的保底
+  startupDelayMs: 600000
   filter:
     condition: "true"
     events: ['cognition.consolidate.request', 'session.ended', 'memory.steward.governed']

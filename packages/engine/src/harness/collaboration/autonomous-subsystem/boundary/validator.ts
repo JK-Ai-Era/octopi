@@ -93,6 +93,19 @@ export function validateSubsystemSpec(
         message: 'sense.source "schedule" requires interval >= 1000ms',
       });
     }
+    const delay = spec.sense.startupDelayMs;
+    if (delay !== undefined && (!Number.isFinite(delay) || delay < 0)) {
+      errors.push({
+        field: 'sense.startupDelayMs',
+        message: 'sense.startupDelayMs must be a finite number >= 0',
+      });
+    }
+    if (delay !== undefined && interval !== undefined && Number.isFinite(delay) && delay > interval) {
+      errors.push({
+        field: 'sense.startupDelayMs',
+        message: 'sense.startupDelayMs must be <= interval（否则周期 tick 早于首跳，错峰语义失效）',
+      });
+    }
   }
 
   // ── act.mode 非 none 时，信号通道不能只有 escalate ──

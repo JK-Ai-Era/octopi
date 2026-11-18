@@ -141,6 +141,8 @@ export interface SenseConfig {
   interval?: number;
   /** schedule 模式：注册后立即补一次首跳（长 interval 跨不过进程生命周期时的保底脉搏） */
   runOnStart?: boolean;
+  /** schedule 模式：首跳延迟（毫秒）——多子系统首跳按数据流依赖序错峰（如 govern 先于下游巩固/归因） */
+  startupDelayMs?: number;
   /** 本子系统的触发冷却（毫秒）；缺省用 SenseEngine 全局 defaultCooldownMs */
   cooldownMs?: number;
   isolation: IsolationLevel;

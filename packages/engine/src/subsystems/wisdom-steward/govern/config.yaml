@@ -8,6 +8,8 @@ sense:
   # runOnStart 抗重启饿死（interval 计时器随进程清零，OP-9R 记账）
   interval: 86400000
   runOnStart: true
+  # 首跳序 4/5：晚 30 分钟——治理 formation 产出的 maxim 库，先于消费方 attribute
+  startupDelayMs: 1800000
   filter:
     condition: "true"
     events: ['wisdom.steward.govern.request']

@@ -171,4 +171,74 @@ describe('PulseScheduler', () => {
     expect(fleet.fired).toHaveLength(0);
     expect(scheduler.activeKeys()).toHaveLength(0);
   });
+
+  it('首跳按 startupDelayMs 错峰：deadline 首见即定，key 重现不重置、已首跳不重发', async () => {
+    const lateSpec: PulseSpec = {
+      key: 'a:late',
+      intervalMs: 10_000_000,
+      runOnStart: true,
+      startupDelayMs: 600_000,
+    };
+    const fleet = makeFleet([
+      { instanceId: 'run-0', spec: { key: 'a:now', intervalMs: 10_000_000, runOnStart: true, startupDelayMs: 0 } },
+      { instanceId: 'run-0', spec: lateSpec },
+    ]);
+    const scheduler = new PulseScheduler({ fleet });
+    await scheduler.start();
+    expect(keys(fleet)).toEqual(['a:now']); // delay 0 立即；late 延后
+
+    // pending 中 key 拆除再重现：deadline 不重置（防重挂载快于延迟时饿死）
+    fleet.inventory = [
+      { instanceId: 'run-0', spec: { key: 'a:now', intervalMs: 10_000_000, runOnStart: true, startupDelayMs: 0 } },
+    ];
+    await scheduler.resync();
+    fleet.inventory = [
+      { instanceId: 'run-0', spec: { key: 'a:now', intervalMs: 10_000_000, runOnStart: true, startupDelayMs: 0 } },
+      { instanceId: 'run-0', spec: { ...lateSpec, startupDelayMs: 600_000 } },
+    ];
+    await scheduler.resync();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(keys(fleet).filter((k) => k === 'a:late')).toHaveLength(1); // 按原 deadline 恰好一次
+
+    // 已首跳的 key 拆除重现 → 不再首跳（重挂载 ≠ 重启）
+    fleet.inventory = [];
+    await scheduler.resync();
+    fleet.inventory = [{ instanceId: 'run-0', spec: { ...lateSpec, startupDelayMs: 0 } }];
+    await scheduler.resync();
+    expect(keys(fleet).filter((k) => k === 'a:late')).toHaveLength(1);
+    scheduler.stop();
+  });
+
+  it('pending 首跳不因重复 resync 二次 arm；stop 清 pending', async () => {
+    const fleet = makeFleet([
+      { instanceId: 'run-0', spec: { key: 'a:hold', intervalMs: 10_000_000, runOnStart: true, startupDelayMs: 600_000 } },
+    ]);
+    const scheduler = new PulseScheduler({ fleet });
+    await scheduler.start();
+    await scheduler.resync();
+    await scheduler.resync(); // 同参重复对账 → 不重 arm
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(keys(fleet).filter((k) => k === 'a:hold')).toHaveLength(1);
+
+    const fleet2 = makeFleet([
+      { instanceId: 'run-0', spec: { key: 'a:pend', intervalMs: 10_000_000, runOnStart: true, startupDelayMs: 600_000 } },
+    ]);
+    const s2 = new PulseScheduler({ fleet: fleet2 });
+    await s2.start();
+    s2.stop();
+    await vi.advanceTimersByTimeAsync(1_200_000);
+    expect(keys(fleet2)).toEqual([]); // pending 已随 stop 清掉
+  });
+
+  it('stop 后 resync 不再重建调度（停机闸门 + await 后代际复检）', async () => {
+    const fleet = makeFleet([
+      { instanceId: 'run-0', spec: { key: 'a:gate', intervalMs: 10_000_000, runOnStart: true } },
+    ]);
+    const scheduler = new PulseScheduler({ fleet });
+    await scheduler.start(); // 首跳 1 次
+    scheduler.stop();
+    await scheduler.resync(); // 闸门挡：不得重建 timer/首跳
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(keys(fleet).filter((k) => k === 'a:gate')).toHaveLength(1); // 仅 start 的首跳，无 tick
+  });
 });

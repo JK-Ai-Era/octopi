@@ -349,6 +349,7 @@ async function buildSpec(
       } : undefined,
       interval: senseRaw.interval as number | undefined,
       runOnStart: senseRaw.runOnStart as boolean | undefined,
+      startupDelayMs: senseRaw.startupDelayMs as number | undefined,
       cooldownMs: senseRaw.cooldownMs as number | undefined,
       isolation: (senseRaw.isolation ?? 'structured') as IsolationLevel,
       fields: senseRaw.fields as ContextField[] | undefined,

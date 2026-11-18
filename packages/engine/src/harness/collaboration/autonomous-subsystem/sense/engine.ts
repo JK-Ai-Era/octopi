@@ -8,6 +8,7 @@
  */
 
 import type { EventBus, AgentEvent, Disposable } from '@octopi-agent/core/primitives/event-bus.js';
+import type { PulseSpec } from '../../../activation/run-protocol.js';
 import type { SenseConfig, SenseContext, SubsystemSpec } from '../types.js';
 import { MetricsStore } from './metrics.js';
 
@@ -178,8 +179,8 @@ export class SenseEngine {
   /**
    * 脉搏声明（P0c A′）：全部 schedule 型子系统的周期声明，供装配层聚合。
    */
-  pulseSpecs(): Array<{ key: string; intervalMs: number; runOnStart?: boolean }> {
-    const specs: Array<{ key: string; intervalMs: number; runOnStart?: boolean }> = [];
+  pulseSpecs(): PulseSpec[] {
+    const specs: PulseSpec[] = [];
     for (const [id, entry] of this.subsystems) {
       if (entry.spec.sense.source !== 'schedule') continue;
       const intervalMs = entry.spec.sense.interval;
@@ -188,6 +189,7 @@ export class SenseEngine {
         key: `subsystem.schedule:${id}`,
         intervalMs,
         runOnStart: entry.spec.sense.runOnStart,
+        startupDelayMs: entry.spec.sense.startupDelayMs,
       });
     }
     return specs;

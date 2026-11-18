@@ -8,6 +8,8 @@ sense:
   # runOnStart 抗重启饿死（interval 计时器随进程清零，OP-9R 记账）
   interval: 86400000
   runOnStart: true
+  # 首跳序 1/5（数据流链首）：先于 consolidate 跑完，下游吃到刚产出的合并结果
+  startupDelayMs: 0
   filter:
     condition: "true"
     events: ['memory.health.high_count', 'memory.health.shadow_backlog', 'memory.steward.govern.request']

@@ -8,6 +8,9 @@ sense:
   interval: 86400000
   # 重启首跳兜底（interval 计时器随重启清零、无 catch-up——同 consolidate，OP-9R 记账）
   runOnStart: true
+  # 首跳序 5/5：晚 40 分钟——消费 govern 治理后范式 + formation 的 maxim（两上游都完才轮到）；
+  # 实际常态是 governed 事件先触发它（顺序由事件边保证），本首跳是事件丢失时的保底
+  startupDelayMs: 2400000
   cooldownMs: 86400000
   filter:
     condition: "true"

@@ -128,6 +128,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.35 (2026-11-19)
+
+### feat(subsystems): 首跳错峰——runOnStart 按数据流依赖序串行（startupDelayMs）
+
+- **动机**（大哥拍板）：5 个子系统 runOnStart 首跳并发会互踩吗？——结构上有 inFlight/pulse lease/事务三层防护（不会坏），但**上游产物应被下游吃到**：govern 的记忆合并改变 memoryIds 支撑，consolidate 晋升应在合并之后。
+- **变更**：PulseSpec（engine↔gateway 协议）+ SenseSpec 增 `startupDelayMs`（loader 解析、validator 非负+有限+≤interval 校验、pulseSpecs 三处签名归一 PulseSpec 类型）；PulseScheduler 首跳**状态机**：deadline 首见即定（key 重现不重置——防重挂载快于延迟时饿死）、已首跳不重发、周期变更重建不重发、pending timer 随 stop/key 拆除清理、`resync` 加 started 闸门+await 后代际复检（stop 后不得重建）；5 个子系统按数据流声明：memory.govern(0) → consolidate(+10min) → formation(+20min) → wisdom.govern(+30min) → attribute(+40min)。
+- **语义澄清**：依赖对的**顺序由事件边保证**（governed/stored 事件驱动下游即时跑），**延迟只保证错峰与事件丢失时的保底**；consolidate 启动期可能出现「事件跑+首跳跑」双跑（幂等、第二次空转无 LLM 成本）。
+- **兼容**：旧实例自述无此字段 → undefined → 0 延迟即旧行为。
+- **验证**：`tests/pulse-scheduler.test.ts` 增 4 用例（错峰时序/deadline 不重置/重复 resync 不二次 arm/stop 清 pending/停机闸门），fake timers 钉住（换立即 fire 或 setInterval 会红）；全量 5361 用例绿、`npm run build` 绿。
+
+---
+
 ## v0.118.34 (2026-11-19)
 
 ### fix(subsystems): 全量触发周期盘点——两个 govern 从 1h 降为日批（时间尺度匹配）
