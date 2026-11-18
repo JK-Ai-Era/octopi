@@ -186,6 +186,8 @@ export interface SessionView {
   /** 全量原文估算（仅 Run 页签展示，不进主显示/决策） */
   rawTokens?: number;
   contextWindow?: number;
+  /** 当前上下文大小显示槽（runner 持久化；web 顶栏「xxx / xxx」前段唯一取数源） */
+  contextSize?: import('@octopi-agent/engine/harness/context/types.js').ContextSizeSnapshot;
 }
 
 /** 会话任务（UI 只读）*/
@@ -1002,6 +1004,8 @@ export class OctopiClient {
     reason?: string;
     tokensBefore: number;
     tokensAfter?: number;
+    /** 当前上下文大小快照（显示槽；tokens 与 tokensAfter 同值同源） */
+    contextSize?: import('@octopi-agent/engine/harness/context/types.js').ContextSizeSnapshot;
     summary?: string;
   }> {
     const data = await this.postJson(`/sessions/${encodeURIComponent(sessionId)}/compact`, {

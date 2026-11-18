@@ -57,7 +57,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
 import { readSessionCompact } from '../session/compact.js';
-import type { ContextCompactSnapshot } from '../context/types.js';
+import type { ContextCompactSnapshot, ContextSizeSnapshot } from '../context/types.js';
+import { contextSizeSnapshot } from '../context/types.js';
 import { toCompactTransport } from '../context/capabilities/compact/types.js';
 import {
   InProcessSessionLock,
@@ -2150,6 +2151,9 @@ export class SessionAwareRunner {
       let lastViewTokensEst: number | undefined = undefined;
       let lastRawTokens: number | undefined = undefined;
       let lastContextWindow: number | undefined = undefined;
+      /** 当前上下文大小显示槽（持久化 contextSize）：只随真实用量更新（stale 不冒名，F4）；
+       *  压缩后估算由 manual 压缩持久化 / auto 压缩随该步 usage 覆盖 */
+      let lastContextSize: ContextSizeSnapshot | undefined = undefined;
       const meta = { agentId: effectiveRunConfig.agentId ?? 'default', sessionId };
       /** 本轮起始消息下标（afterStep 只传增量） */
       let stepStartIndex = runContext.messages.length;
@@ -2291,6 +2295,15 @@ export class SessionAwareRunner {
               console.log(
                 `[ctx] session=${sessionId} writer=${promptWriter} field=promptTokensActual value=${promptActual}`,
               );
+              // contextSize 显示槽：只随真实用量更新（stale 回填不冒名新实测，评审 F4）。
+              // 只在更新的这一步随事件携带——无用量步不重发旧值，防覆盖更新的压缩估算
+              if (rawUsage) {
+                lastContextSize = contextSizeSnapshot('usage', promptActual);
+                eventData.contextSize = lastContextSize;
+                console.log(
+                  `[ctx] session=${sessionId} writer=usage field=contextSize value=${promptActual}`,
+                );
+              }
             }
             // viewTokensEst = 本请求视图估算（校准后，assemble/pressure 口径）；
             // rawTokens = 全量原文估算（只进 Run 页签，永不冒充上下文用量）
@@ -2639,7 +2652,8 @@ export class SessionAwareRunner {
         lastPromptTokensActual !== undefined ||
         lastViewTokensEst !== undefined ||
         lastRawTokens !== undefined ||
-        lastContextWindow !== undefined
+        lastContextWindow !== undefined ||
+        lastContextSize !== undefined
       ) {
         session.metadata = {
           ...session.metadata,
@@ -2651,6 +2665,8 @@ export class SessionAwareRunner {
           ...(lastViewTokensEst !== undefined ? { viewTokensEst: lastViewTokensEst } : {}),
           ...(lastRawTokens !== undefined ? { rawTokens: lastRawTokens } : {}),
           ...(lastContextWindow !== undefined ? { contextWindow: lastContextWindow } : {}),
+          // contextSize 显示槽（web 顶栏唯一取数源）：冷恢复不回退压缩前读数（F8）
+          ...(lastContextSize !== undefined ? { contextSize: lastContextSize } : {}),
         };
         if (lastPromptTokensActual !== undefined) {
           console.log(
@@ -3018,6 +3034,25 @@ export class SessionAwareRunner {
         loadCompactState: () => readSessionCompact(session, agentId),
       });
       // 压缩产物 = 引擎内持久转换记录（append-only）；旧 contextCompact 快照不再写回。
+
+      // contextSize 显示槽持久化（F8：刷新不丢压缩后读数）——manual 压缩完成即写即落盘。
+      // 只在真压缩（compacted）时持久化：零覆盖轮的估算不得覆盖旧实测（评审 F-1）。
+      // 走 updateMetadata 目标写（与 save 同会话串行）：compactStructural 可达数十秒，
+      // 整包 save 会用陈旧 session 回写并发更新的 metadata 键（浅合并调用方优先）。
+      if (result.compacted && result.contextSize) {
+        const size = result.contextSize;
+        if (this.store.updateMetadata) {
+          await this.store.updateMetadata(sessionId, (meta) => {
+            meta.contextSize = size;
+          });
+          console.log(`[ctx] session=${sessionId} writer=compact field=contextSize value=${size.tokens} (persist)`);
+        } else {
+          // 显式降级不静默：缺 updateMetadata 的 store 丢的是「刷新后仍显示压缩后读数」
+          console.warn(
+            `[ctx] session=${sessionId} writer=compact field=contextSize persist skipped: store lacks updateMetadata`,
+          );
+        }
+      }
 
       // 传输投影：view 不过锁面（大对象，UI 无需）——唯一投影实现在能力层
       //（禁止手抄字段表：新可选字段会静默丢失，评审 P3 major）

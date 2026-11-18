@@ -49,7 +49,9 @@ export type {
   BudgetAllocator,
   BudgetAllocateParams,
   BudgetAllocateResult,
+  ContextSizeSnapshot,
 } from './harness/context/types.js';
+export { contextSizeSnapshot, isContextSizeSnapshot } from './harness/context/types.js';
 
 // ============================================================
 // Harness 层

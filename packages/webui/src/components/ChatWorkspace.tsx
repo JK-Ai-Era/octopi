@@ -2007,8 +2007,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         show(r.reason || t('chatWorkspace.compactUnavailable'));
       } else if (!r.compacted) {
         show(r.reason || t('chatWorkspace.notCompacted'));
-      } else if (r.tokensAfter == null) {
-        // 降级显式（评审 F7）：压缩成功但没拿到压缩后大小——不静默成功，提示已压缩但无读数
+      } else if (r.contextSize == null) {
+        // 降级显式（评审 F7）：压缩成功但没拿到压缩后读数快照——不静默成功，提示已压缩但无读数
         show(t('chatWorkspace.compactedNoSize'));
       }
       // 正常成功不弹「已结构压缩」提示（2026-11-18 产品变更）：顶栏上下文大小前段直接换显压缩后大小
@@ -2042,11 +2042,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   // 视图估算按产品裁决不再在对话面呈现（rawTokens 仍只在 Run 页签）。
   // 不用「已加载消息」估算——那只是末页 100 条，会把 400k 的会话显示成 21.6k 误导人。
   const promptTokensActual = typeof inspector.promptTokensActual === 'number' ? inspector.promptTokensActual : undefined;
-  // 压缩后大小覆盖（manual 压缩写入、下一次实测让位）：顶栏上下文大小前段优先显示它，
-  // tooltip 按来源标注（实测 vs 压缩后估算），不冒充「上次实测」（arch 口径 R3）。
-  const postCompactContextSize =
-    typeof inspector.postCompactContextSize === 'number' ? inspector.postCompactContextSize : undefined;
-  const contextSizeDisplay = postCompactContextSize ?? promptTokensActual;
+  // 当前上下文大小显示槽（服务端 contextSize 快照，随会话持久化）：顶栏前段唯一取数源。
+  // tooltip 按 source 标注（usage=上次实测 / compact-est=压缩后估算）+ asOf 时点——R3 来源
+  // 标注，冷恢复后仍诚实。旧会话无快照时回退 promptTokensActual（标注「上次实测」）。
+  const contextSize = inspector.contextSize;
+  const contextSizeDisplay = contextSize?.tokens ?? promptTokensActual;
   // 预算展示：只读引擎下发的 snapshot（catalog / sessionModel.resolved），UI 不做策略
   const selectedModelMeta =
     (sessionModel?.resolved?.id === effectiveModelId ? sessionModel.resolved : undefined)
@@ -2308,12 +2308,15 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   <span
                     className="composer-usage small"
                     title={t(
-                      postCompactContextSize !== undefined
-                        ? 'chatWorkspace.contextUsageTitlePostCompact'
+                      contextSize
+                        ? contextSize.source === 'compact-est'
+                          ? 'chatWorkspace.contextUsageTitlePostCompact'
+                          : 'chatWorkspace.contextUsageTitleAt'
                         : 'chatWorkspace.contextUsageTitle',
                       {
                         actual: contextSizeDisplay !== undefined ? formatTokens(contextSizeDisplay) : '~',
                         window: contextWindowLabel,
+                        asOf: contextSize ? new Date(contextSize.asOf).toLocaleString() : '',
                       },
                     )}
                   >

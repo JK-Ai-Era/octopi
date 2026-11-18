@@ -20,6 +20,7 @@
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
 import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { AgentId, Binding, TenantId } from '@octopi-agent/engine/harness/governance/registry/types.js';
+import { isContextSizeSnapshot } from '@octopi-agent/engine/harness/context/types.js';
 import { readTitleState } from '@octopi-agent/core/types/session.js';
 import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
@@ -3615,6 +3616,8 @@ export class Gateway {
     /** 全量原文估算（仅 Run 页签展示） */
     rawTokens?: number;
     contextWindow?: number;
+    /** 当前上下文大小显示槽（runner 持久化；web 顶栏「xxx / xxx」前段唯一取数源） */
+    contextSize?: import('@octopi-agent/engine').ContextSizeSnapshot;
   } | null> {
     const session = await this.store.load(sessionId);
     if (!session) return null;
@@ -3652,6 +3655,10 @@ export class Gateway {
     const viewTokensEst = metaNum('viewTokensEst');
     const rawTokens = metaNum('rawTokens');
     const contextWindow = metaNum('contextWindow');
+    // contextSize 显示槽（web 顶栏唯一取数源）：形状守卫走共享实现（metadata 是自由 JSON，
+    // 手改/旧版本残留不得把垃圾值当读数显示；评审 F-4 单一守卫）
+    const contextSizeRaw = session.metadata?.contextSize;
+    const contextSize = isContextSizeSnapshot(contextSizeRaw) ? contextSizeRaw : undefined;
     // 存量校正（P0-C）：旧 metadata.contextTokens 混装实测/估算、来源不可区分，
     // 恢复路径显式清除、不再映射为实测（下次 run 由 runner 持久化新字段补位）。
     // best-effort：读路径不得因清理失败打不开会话（runner 收尾路径会兜底再清）
@@ -3678,6 +3685,11 @@ export class Gateway {
     if (rawTokens !== undefined) {
       console.log(`[ctx] session=${sessionId} writer=estimate field=rawTokens value=${rawTokens} (restore)`);
     }
+    if (contextSize !== undefined) {
+      console.log(
+        `[ctx] session=${sessionId} writer=${contextSize.source === 'usage' ? 'usage' : 'compact'} field=contextSize value=${contextSize.tokens} (restore)`,
+      );
+    }
     return {
       meta: session.meta,
       messageCount: session.messages.length,
@@ -3688,6 +3700,7 @@ export class Gateway {
       viewTokensEst,
       rawTokens,
       contextWindow,
+      contextSize,
     };
   }
 

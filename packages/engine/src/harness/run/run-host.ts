@@ -57,20 +57,15 @@ import type {
   CompactTransportOutcome,
   SummarizeFunction,
 } from '../context/capabilities/compact/types.js';
-import type { ContextCompactSnapshot } from '../context/types.js';
+import type { ContextCompactSnapshot, ContextEmitFn } from '../context/types.js';
 import { registeredToolToAgentTool } from '../agent/registered-tool-adapter.js';
 
 /** Runner compactSession 的选项形状（搬移解析的目标类型，禁手抄） */
 type CompactSessionOptions = Parameters<SessionAwareRunner['compactSession']>[2];
 
-/** compact 进度事件形状（ContextEmitFn 同式；双缝出口见 onCompactEvent） */
-interface CompactEmitEvent {
-  type: string;
-  sessionId?: string;
-  reason?: string;
-  fallback?: string;
-  cached?: boolean;
-}
+/** compact 进度事件形状（ContextEmitFn 同式；双缝出口见 onCompactEvent）——
+ *  从事件联合**派生**而非手抄字段表（评审 F-6：手抄形状会随新字段静默丢失） */
+type CompactEmitEvent = Parameters<ContextEmitFn>[0];
 
 /**
  * ContextEngine 结构压缩扩展面（gateway.ts 原内联类型，随 compact 解析搬入；

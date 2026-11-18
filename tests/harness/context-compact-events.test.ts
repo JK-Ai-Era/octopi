@@ -121,9 +121,11 @@ describe('DefaultContextEngine emit', () => {
     // 复用重建无新压缩计量（与结构回放一致 0/0；2026-11-06 事故的 1ms 误报家族）
     expect(end?.tokensBefore).toBe(0);
     expect(end?.tokensAfter).toBe(0);
+    // 显示槽闸门（评审 F-1）：零压缩计量 = 零覆盖 = 不携带快照（不动显示）
+    expect(end?.contextSize).toBeUndefined();
   });
 
-  it('compact 计量对 = messages-only 未校准同集合（比率不变性：两条不同 ratio 下读数全等）', async () => {
+  it('compact 计量对 = 报告尺全请求估算同集合（M3；比率不变性：两条不同 ratio 下读数全等）', async () => {
     async function runGaugeScenario(
       sessionId: string,
       seedMult: number,
@@ -174,7 +176,7 @@ describe('DefaultContextEngine emit', () => {
 
     const a = await runGaugeScenario('s-gauge-a', 2); // ratio → 1.7
     const b = await runGaugeScenario('s-gauge-b', 4); // ratio → 3.1
-    const rawBefore = new HeuristicTokenEstimator().estimateMessages(
+    const messagesOnly = new HeuristicTokenEstimator().estimateMessages(
       Array.from({ length: 30 }, (_, i) => ({
         role: 'tool',
         content: '',
@@ -182,16 +184,22 @@ describe('DefaultContextEngine emit', () => {
         timestamp: Date.now() + i,
       })) as Message[],
     );
-    // before = 全视图原始估算：不乘校准 ratio、不取溢出子集（事故的 142371 → 1243157 家族）
-    expect(a.start?.tokensBefore).toBe(rawBefore);
-    expect(a.end?.tokensBefore).toBe(rawBefore);
+    // M3（2026-11-18）：报告尺 = 全请求估算（fold+老化+system+tools，reportRequestTokens
+    // 唯一公式），不再 messages-only——测试钉不变量、不手抄公式：
+    // ①含 system/tools（严格大于 messages-only 裸估）②before=raw 单位（比率不变性）
+    // ③before/after 同口径同集合 ④contextSize 与 tokensAfter 同值同源
+    expect(a.start?.tokensBefore).toBeGreaterThan(messagesOnly);
+    expect(a.end?.tokensBefore).toBe(a.start?.tokensBefore);
     // 比率不变性（评审 F4 变异点）：校准污染会让两条读数随 ratio 漂移
     expect(b.start?.tokensBefore).toBe(a.start?.tokensBefore);
     expect(b.end?.tokensBefore).toBe(a.end?.tokensBefore);
     expect(b.end?.tokensAfter).toBe(a.end?.tokensAfter);
     // after 与 before 同口径同集合：真实压缩应当缩水
     expect(a.end?.tokensAfter).toBeGreaterThan(0);
-    expect(a.end?.tokensAfter).toBeLessThan(rawBefore);
+    expect(a.end?.tokensAfter).toBeLessThan(a.start!.tokensBefore!);
+    // contextSize 显示槽：与 tokensAfter 同值同源（一次计算、两处引用）
+    expect(a.end?.contextSize?.tokens).toBe(a.end?.tokensAfter);
+    expect(a.end?.contextSize?.source).toBe('compact-est');
   });
 
   it('overflow 压缩对同为原始口径同集合（比率不变性）', async () => {
@@ -249,7 +257,7 @@ describe('DefaultContextEngine emit', () => {
     expect(a.end).toBeDefined(); // 场景确实走了 overflow 路径
     expect(a.start?.tokensBefore).toBe(a.end?.tokensBefore); // 同集合（计量对同一集合）
     expect(a.end?.tokensAfter).toBeLessThan(a.end?.tokensBefore!);
-    // 比率不变性（口径）：计量对 = messages-only 未校准原始口径——同集合的 raw 读数
+    // 比率不变性（口径）：计量对 = 报告尺全请求 raw 读数（M3 统一）——同集合的 raw 读数
     // 不随校准 ratio 变。注意：ratio 参与**决策**（fits 判档）后两 run 收敛档位/产物可不同，
     // 产物的 tokensAfter 不要求相等；不变的是口径（raw 未校准），不是产物。
     expect(b.start?.tokensBefore).toBe(a.start?.tokensBefore); // 口径不变

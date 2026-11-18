@@ -152,6 +152,7 @@ export type {
   ContextCompactReason,
   ContextCompactEvent,
   ContextEmitFn,
+  ContextSizeSnapshot,
   ContextCompactSnapshot,
 } from './context/index.js';
 

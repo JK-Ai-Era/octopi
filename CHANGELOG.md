@@ -128,6 +128,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.24 (2026-11-18)
+
+### feat(engine/gateway/webui): contextSize 显示槽持久化（刷新不丢压缩后读数）；M3 auto 压缩口径统一
+
+**用户可感变更**：①顶栏「上下文大小 xxx / xxx」前段改从持久化的 `contextSize` 快照取值，tooltip 按来源标注「上次实测 / 压缩后估算（asOf 时点）」；②页面刷新/重开会话不再回退压缩前读数（F8 解决）；③auto 压缩（proactive/overflow）的 before/after 读数从 messages-only 统一为全请求口径（M3 收口）——数字比旧版大（补上 system+tools），与 manual 同尺。
+
+**设计（大哥拍板）**：`session.metadata.contextSize = { tokens, source: 'usage' | 'compact-est', asOf }` 为显示唯一取数源。写入规则两条：真实用量（writer=usage）与压缩完成（manual 即写即持久化 / auto 随事件携带）；stale 回填不写、0/0 与 cancelled 事件不带快照 = 显示不动。由此消解三笔记债：F8（持久化）、F4（stale 不冒名新实测）、F5（事件与 REST 携带同一服务端快照，任意顺序终值一致）。web 端退化为纯镜像（删除 postCompactContextSize 与全部客户端新鲜度推理）；报告尺唯一公式 `reportRequestTokens`（manual/auto 同式，决策尺不动）。
+
+**取舍/边界**：auto 压缩后 run 在下一次实测前中止，持久值停留旧实测（下次 run 首个 usage 自愈，记债）；消息增长偏差停在上次测量点（asOf 标注，不引入第三把尺）。store.compactSession 返回类型改从 OctopiClient 派生（手抄字段表漂移的实例修复）；CompactEmitEvent 同理由事件联合派生（F-6）。
+
+**独立评审补强（同批）**：①真压缩闸门（F-1）——三个压缩发射点只在有砍除记录时挂快照、runner 持久化加 compacted 闸门、web REST 侧 compacted 闸门，三层对齐：零覆盖轮的估算不得覆盖上一次实测；②asOf 单调摄入（F-2）——`ingestContextSize`（形状守卫单点 `isContextSizeSnapshot`，F-4）挡迟到旧帧，REST/WS 乱序不回退；③冷恢复按 asOf 取新（F-3）。
+
+**验证**：新增 6 用例（usage/F4/manual 持久化 F8/零覆盖不持久化 引擎层、镜像规则/0-0/cancelled/跨会话/后台/asOf 单调 web 层）；M3 口径测试改钉不变量（含 contextSize 同值同源契约）；全量 5280 passed / 9 skipped；lint + 类型检查三绿。
+
+---
+
 ## v0.118.23 (2026-11-18)
 
 ### feat(gateway/webui): 压缩后顶栏上下文大小换显压缩后估算；移除「已结构压缩」toast

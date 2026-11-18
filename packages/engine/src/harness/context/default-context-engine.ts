@@ -37,6 +37,7 @@ import type {
   ContextEmitFn,
   ContextCompactSnapshot,
 } from './types.js';
+import { contextSizeSnapshot } from './types.js';
 import { HeuristicTokenEstimator, estimateLLMMessages } from './token-estimator.js';
 import { ContextSizeLedger } from './context-size-ledger.js';
 import { toolResultBody } from './tool-result-body.js';
@@ -590,8 +591,9 @@ export class DefaultContextEngine implements ContextEngine {
     }
 
     const overflowStart = Date.now();
-    // 事件计量口径（P0-C M2）：compact 对 = messages-only 未校准、同一集合（全视图前后）。
-    const compactTokensBefore = rawEstimator.estimateMessages(view);
+    // 事件计量口径（M3 统一，报告尺 reportRequestTokens）：compact 对 = 全请求估算
+    //（fold+老化+system+tools，未校准）、同一集合前后对——与 manual before/after 同式。
+    const compactTokensBefore = this.reportRequestTokens(view, systemPrompt, tools, overflowAgingPlan, rawEstimator);
     emit?.({
       type: 'context.compact.start',
       sessionId,
@@ -730,12 +732,17 @@ export class DefaultContextEngine implements ContextEngine {
         lastUsageAnchor: overflowRecord === undefined ? state?.lastUsageAnchor : undefined,
       });
 
+      // 估算一次、两处引用（tokensAfter 与 contextSize 同值同源）
+      const tokensAfter = this.reportRequestTokens(view, systemPrompt, tools, overflowAgingPlan, rawEstimator);
       emit?.({
         type: 'context.compact.end',
         sessionId,
         reason: 'overflow',
         tokensBefore: compactTokensBefore,
-        tokensAfter: rawEstimator.estimateMessages(view),
+        tokensAfter,
+        // contextSize 显示槽：仅真压缩（有砍除记录）才携带——零覆盖轮不动显示（评审 F-1：
+        // 估算不得在没砍东西时覆盖上一次实测）；0/0 与 cancelled 同理不带
+        contextSize: overflowRecord !== undefined ? contextSizeSnapshot('compact-est', tokensAfter) : undefined,
         durationMs: Date.now() - overflowStart,
         // 无记录 = 未砍（第 0 轮 aging 后即收敛）：空转缓存语义
         cached: overflowRecord === undefined,
@@ -877,6 +884,32 @@ export class DefaultContextEngine implements ContextEngine {
   ): number {
     return estimator.estimateMessages(
       applyAgingToMessages(folded.view, agingPlan, this.config.historyAging),
+    );
+  }
+
+  /**
+   * 报告尺（rawRequestViewTokens，M3 统一）：**请求形状 messages（fold+老化）+ system + tools**
+   * 的未校准全请求估算。manual/proactive/overflow 的 compact 对 tokensBefore/After 与
+   * contextSize 快照同式（一处公式，禁止手抄分叉——旧 auto 口径 messages-only 缺
+   * system/tools，报出来比顶栏永远少一截，M3）。
+   *
+   * @param view - fold 视图（未老化原文形态）
+   * @param systemPrompt - 同形 system（缺省按空串）
+   * @param tools - 请求工具面（缺省按空）
+   * @param agingPlan - 老化计划（与真实请求同式）
+   * @param raw - 未校准估算器（报告尺单位，不乘 ratio）
+   * @returns 全请求口径 token 估算
+   */
+  private reportRequestTokens(
+    view: Message[],
+    systemPrompt: string | undefined,
+    tools: LLMToolDefinition[] | undefined,
+    agingPlan: ToolResultAgingPlan,
+    raw: TokenEstimator,
+  ): number {
+    return (
+      estimateLLMMessages(this.buildLlmMessages(view, systemPrompt ?? '', agingPlan)) +
+      raw.estimateTools(tools ?? [])
     );
   }
 
@@ -1424,8 +1457,8 @@ export class DefaultContextEngine implements ContextEngine {
       // 上游已中止：不发起压缩、不写记录（本轮已经作废，留下记录只会污染历史）
       return { view: folded.view, fold: folded };
     }
-    // 事件计量口径同 overflow（P0-C M2）：messages-only 未校准、同集合前后对
-    const compactTokensBefore = rawEstimator.estimateMessages(folded.view);
+    // 事件计量口径同 overflow（M3 统一，报告尺 reportRequestTokens）：全请求估算、同集合前后对
+    const compactTokensBefore = this.reportRequestTokens(folded.view, systemPrompt, tools, agingPlan, rawEstimator);
     emit?.({
       type: 'context.compact.start',
       sessionId,
@@ -1592,7 +1625,7 @@ export class DefaultContextEngine implements ContextEngine {
       Boolean(outcome.summary) &&
       !isMechanicalNotice(outcome.summary!);
 
-    await this.appendRecordFromProduct({
+    const proactiveRecord = await this.appendRecordFromProduct({
       sessionId,
       agentId: params.agentId,
       messages,
@@ -1626,12 +1659,16 @@ export class DefaultContextEngine implements ContextEngine {
       lastProactiveLlmAt: outcome.summarizeAttempted ? Date.now() : state?.lastProactiveLlmAt,
     });
 
+    // 估算一次、两处引用（tokensAfter 与 contextSize 同值同源）
+    const tokensAfter = this.reportRequestTokens(folded.view, systemPrompt, tools, agingPlan, rawEstimator);
     emit?.({
       type: 'context.compact.end',
       sessionId,
       reason: 'proactive',
       tokensBefore: compactTokensBefore,
-      tokensAfter: rawEstimator.estimateMessages(folded.view),
+      tokensAfter,
+      // contextSize 显示槽：仅真压缩（有砍除记录）才携带——零覆盖轮不动显示（评审 F-1）
+      contextSize: proactiveRecord !== undefined ? contextSizeSnapshot('compact-est', tokensAfter) : undefined,
       durationMs: Date.now() - proactiveStart,
       cached: false,
     });
@@ -1700,18 +1737,13 @@ export class DefaultContextEngine implements ContextEngine {
       toolAgers: params.toolAgers,
       toolArgAgers: params.toolArgAgers,
     });
-    // 计量口径（2026-11-08 三数字核对拍板）：before/after 用「报告尺」= fold 视图 + 老化 +
-    // system + tools 的未校准估算（rawRequestViewTokens，与 assemble 的 rawEstimatedTokens
-    // /配对槽分母同式）。注意与「决策尺」分工：proactive/overflow 触发走
-    // measureRequestViewTokens（校准后 messages-only）；增长门**基数**存 raw 同形读数、
-    // 比较点按当前 ratio 折算（M-3，评审 del-e1ee43ef）——report vs decision 两把尺各有其职，
-    // 勿互换（互换会搅乱增长门基数，见 arch/context-size-accounting.md §10.19）。
-    // 旧口径「未老化 fold 视图 messages-only」量的是存储形态不是请求（缺 aging 降级、
-    // 缺 system/tools），toast 数字与顶栏永远对不上。
+    // 报告尺唯一公式在 reportRequestTokens（M3 统一）：fold+老化+system+tools 的未校准
+    // 全请求估算（与 assemble 的 rawEstimatedTokens/配对槽分母同式）。注意与「决策尺」分工：
+    // proactive/overflow 触发走 measureRequestViewTokens（校准后 messages-only）；增长门
+    // **基数**存 raw 同形读数、比较点按当前 ratio 折算（M-3，评审 del-e1ee43ef）——report
+    // vs decision 两把尺各有其职，勿互换（互换会搅乱增长门基数，见 arch/context-size-accounting.md §10.19）。
     const rawRequestViewTokens = (fold: { view: Message[] }): number =>
-      estimateLLMMessages(
-        this.buildLlmMessages(fold.view, systemText ?? '', agingPlan),
-      ) + raw.estimateTools(params.tools ?? []);
+      this.reportRequestTokens(fold.view, systemText, params.tools, agingPlan, raw);
     const tokensBefore = rawRequestViewTokens(folded);
     // P2：前缀 = 折叠视图（与主会话请求同形）。
     // 只能由 buildRequestView 产出（messages+tools 原子）——不接受调用方单独塞
@@ -1954,7 +1986,10 @@ export class DefaultContextEngine implements ContextEngine {
       lastProactiveLlmAt: outcome.summarizeAttempted ? Date.now() : this.states.get(stateKey)?.lastProactiveLlmAt,
     });
 
-    // M1（评审 del-e1ee43ef）：manual 终端事件（成功收口）——与 progress 配对收敛 store
+    // M1（评审 del-e1ee43ef）：manual 终端事件（成功收口）——与 progress 配对收敛 store。
+    // 显示槽快照一次构造、事件与 outcome 两处引用（同值同源同 asOf——F5 顺序无关的前提）；
+    // 仅真压缩（record!==undefined ⟺ compacted）才挂——零覆盖轮不动显示（评审 F-1）
+    const afterSize = record !== undefined ? contextSizeSnapshot('compact-est', tokensAfter) : undefined;
     if (llmPrefix) {
       params.emit?.({
         type: 'context.compact.end',
@@ -1962,6 +1997,8 @@ export class DefaultContextEngine implements ContextEngine {
         reason: 'manual',
         tokensBefore,
         tokensAfter,
+        // contextSize 显示槽：压缩后估算随事件携带（as-of）；REST 返回侧由 outcome 同源携带
+        contextSize: afterSize,
         ...(outcome.summarizeAttempted === true ? {} : { cached: true }),
       });
     }
@@ -1972,6 +2009,8 @@ export class DefaultContextEngine implements ContextEngine {
       compacted: record !== undefined,
       tokensBefore,
       tokensAfter,
+      // 显示槽同源（与事件同一快照）：runner 据此持久化 session.metadata.contextSize
+      contextSize: afterSize,
       coveredMessageCount: record ? tailStart : this.derivedCoverEnd(folded),
       fresh: true,
       summarizeAttempted: outcome.summarizeAttempted,

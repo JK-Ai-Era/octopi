@@ -53,6 +53,9 @@ export interface AgentEventMap {
     /** 全量原文估算（仅 Run 页签展示，不进决策/主显示） */
     rawTokens?: number;
     contextWindow?: number;
+    /** 当前上下文大小快照（显示槽）：只随真实用量写入（stale 回填不带，不冒名新实测）——
+     *  web 顶栏「xxx / xxx」前段唯一取数源（持久化同源） */
+    contextSize?: import('../../context/types.js').ContextSizeSnapshot;
   };
   'tool.exec.start': {
     toolCallId: string;
@@ -184,6 +187,9 @@ export interface AgentEventMap {
     reason: 'proactive' | 'overflow' | 'manual';
     tokensBefore?: number;
     tokensAfter?: number;
+    /** 当前上下文大小快照（显示槽；tokens 与 tokensAfter 同值同源，报告尺）。
+     *  只在真压缩完成时携带——0/0（无新压缩）与 cancelled（中止零写入）不带 = 显示不动 */
+    contextSize?: import('../../context/types.js').ContextSizeSnapshot;
     durationMs?: number;
     cached?: boolean;
     /** true=中止收尾（本轮作废、零写入）——不是「压缩完成」，UI 不得显示 compacted */

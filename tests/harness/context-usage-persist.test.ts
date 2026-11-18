@@ -5,6 +5,7 @@
  * - promptTokensActual = provider 实测单源（无实测不更新、不猜；旧「全量估算兜底」已删）
  * - viewTokensEst = 请求视图估算（校准后，estimate 写入）
  * - rawTokens = 全量原文估算（只进 Run 页签展示，保留计算不删）
+ * - contextSize = 当前上下文大小显示槽（usage 真实写入 / manual 压缩持久化；stale 不写）
  * 每次写入打 `[ctx] writer=usage|stale|estimate|compact field=… value=…` 审计行。
  * 旧 metadata.contextTokens（混装实测/估算）为存量负债：显式清除，不映射为实测。
  *
@@ -316,5 +317,152 @@ describe('context size accounting persistence (three quantities, measured-only c
     } finally {
       logSpy.mockRestore();
     }
+  });
+});
+
+describe('contextSize 显示槽写点（web 顶栏唯一取数源，持久化）', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'octopi-ctx-size-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('真实用量写 contextSize（source=usage）：事件携带、收尾持久化、换新实例重读保全', async () => {
+    const store = new JsonlSessionStore({ sessionsDir: dir });
+    const provider = mockProvider({
+      usage: makeTokenUsage({ promptTokens: 54321, completionTokens: 9 }),
+    });
+    const { runner } = await new AgentBuilder().model(provider).store(store).build();
+
+    const events = await runOnce(runner as never, 's-cs-usage', 'hi');
+    const stepEnd = stepEnds(events)[0];
+    // 事件携带（真实用量步才带）：source=usage、与 promptTokensActual 同值
+    expect((stepEnd?.data?.contextSize as { tokens?: number } | undefined)?.tokens).toBe(54321);
+    expect((stepEnd?.data?.contextSize as { source?: string } | undefined)?.source).toBe('usage');
+
+    const fresh = new JsonlSessionStore({ sessionsDir: dir });
+    const reread = await fresh.load('s-cs-usage');
+    expect((reread!.metadata.contextSize as { tokens?: number }).tokens).toBe(54321);
+    expect((reread!.metadata.contextSize as { source?: string }).source).toBe('usage');
+  });
+
+  it('stale 回填不写 contextSize（F4：不冒名新实测）', async () => {
+    const store = new JsonlSessionStore({ sessionsDir: dir });
+    const provider = sequencedProvider([
+      {
+        usage: makeTokenUsage({ promptTokens: 11111, completionTokens: 3 }),
+        finishReason: 'tool_calls' as const,
+        toolCalls: [{ id: 't1', name: 'echo', arguments: { text: 'x' } }],
+      },
+      {},
+    ]);
+    const { runner } = await new AgentBuilder().model(provider).store(store).tool(echoTool).build();
+
+    const events = await runOnce(runner as never, 's-cs-stale', 'hi');
+    const ends = stepEnds(events);
+    expect(ends.length).toBe(2);
+    // 第一步（真实用量）带快照；第二步（stale 沿用）不带——显示槽不被旧实测刷新
+    expect((ends[0]?.data?.contextSize as { tokens?: number } | undefined)?.tokens).toBe(11111);
+    expect('contextSize' in (ends[1]?.data ?? {})).toBe(false);
+
+    const fresh = new JsonlSessionStore({ sessionsDir: dir });
+    const reread = await fresh.load('s-cs-stale');
+    expect((reread!.metadata.contextSize as { tokens?: number }).tokens).toBe(11111);
+  });
+
+  it('manual 压缩完成即持久化 contextSize（F8：刷新不丢压缩后读数）', async () => {
+    const store = new JsonlSessionStore({ sessionsDir: dir });
+    const provider = mockProvider({
+      usage: makeTokenUsage({ promptTokens: 54321, completionTokens: 9 }),
+    });
+    const { runner } = await new AgentBuilder().model(provider).store(store).build();
+    await store.save('s-cs-manual', emptySession('s-cs-manual'));
+    await runOnce(runner as never, 's-cs-manual', 'hi');
+
+    const size = { tokens: 3000, source: 'compact-est' as const, asOf: Date.now() };
+    const result = await (runner as never as {
+      compactSession(
+        sid: string,
+        agentId: string,
+        options: {
+          compactStructural: () => Promise<{
+            ok: boolean;
+            compacted: boolean;
+            summarizeAttempted: boolean;
+            tokensBefore: number;
+            tokensAfter?: number;
+            contextSize?: typeof size;
+            view: Message[];
+          }>;
+        },
+      ): Promise<{ contextSize?: typeof size }>;
+    }).compactSession('s-cs-manual', 'default', {
+      compactStructural: async () => ({
+        ok: true,
+        compacted: true,
+        summarizeAttempted: true,
+        tokensBefore: 9000,
+        tokensAfter: 3000,
+        contextSize: size,
+        view: [],
+      }),
+    });
+
+    // 传输投影携带（web 端镜像来源）
+    expect(result.contextSize).toEqual(size);
+    // 换新实例重读：F8——刷新/重开不回退压缩前读数
+    const fresh = new JsonlSessionStore({ sessionsDir: dir });
+    const reread = await fresh.load('s-cs-manual');
+    expect(reread!.metadata.contextSize).toEqual(size);
+  });
+
+  it('零覆盖压缩（compacted:false）不持久化 contextSize（F-1：估算不覆盖旧实测）', async () => {
+    const store = new JsonlSessionStore({ sessionsDir: dir });
+    const provider = mockProvider({
+      usage: makeTokenUsage({ promptTokens: 54321, completionTokens: 9 }),
+    });
+    const { runner } = await new AgentBuilder().model(provider).store(store).build();
+    await store.save('s-cs-zero', emptySession('s-cs-zero'));
+    await runOnce(runner as never, 's-cs-zero', 'hi');
+
+    // 引擎 bug 形状：compacted:false 却错带快照——runner 的 compacted 闸门必须挡住
+    await (runner as never as {
+      compactSession(
+        sid: string,
+        agentId: string,
+        options: {
+          compactStructural: () => Promise<{
+            ok: boolean;
+            compacted: boolean;
+            summarizeAttempted: boolean;
+            tokensBefore: number;
+            tokensAfter?: number;
+            contextSize?: { tokens: number; source: 'compact-est'; asOf: number };
+            view: Message[];
+          }>;
+        },
+      ): Promise<unknown>;
+    }).compactSession('s-cs-zero', 'default', {
+      compactStructural: async () => ({
+        ok: true,
+        compacted: false,
+        summarizeAttempted: false,
+        tokensBefore: 9000,
+        tokensAfter: 9000,
+        contextSize: { tokens: 9000, source: 'compact-est', asOf: Date.now() },
+        view: [],
+      }),
+    });
+
+    const fresh = new JsonlSessionStore({ sessionsDir: dir });
+    const reread = await fresh.load('s-cs-zero');
+    // 持久值仍是 usage 实测，不被零覆盖轮的估算顶掉
+    expect(reread!.metadata.contextSize).toEqual(
+      expect.objectContaining({ tokens: 54321, source: 'usage' }),
+    );
   });
 });

@@ -77,6 +77,9 @@ export interface ContextCompactEvent {
   tokensBefore?: number;
   /** 压缩后估算 token（end） */
   tokensAfter?: number;
+  /** 当前上下文大小快照（显示槽；tokens 与 tokensAfter 同值同源，报告尺）。
+   *  只在真压缩完成时携带——0/0（无新压缩）与 cancelled 不带 = 显示不动 */
+  contextSize?: ContextSizeSnapshot;
   /** 触发阈值（proactive） */
   threshold?: number;
   /** 耗时 ms（end/error） */
@@ -112,6 +115,58 @@ export interface ContextCompactEvent {
   echoHitChars?: number;
   /** contamination：被判定的输出字符数 */
   textChars?: number;
+}
+
+/**
+ * 当前上下文大小（显示槽，持久化取数源——web 顶栏「xxx / xxx」前段只从这里取）。
+ *
+ * 语义（as-of，不猜增长）：`tokens` = 最近一次**测量/压缩**时点的全请求口径大小；
+ * `source` 标注是哪把尺（R3 显示标注硬规则）：'usage' = provider 实测（step.end 真实用量），
+ * 'compact-est' = 压缩后估算（报告尺 rawRequestViewTokens）。消息增长导致的偏差停在
+ * 上次测量点，由 `asOf` 标注时点，不引入第三把尺。
+ *
+ * 写点（写入即持久化 session.metadata.contextSize）：
+ * ① 真实用量到达（runner step.end，writer=usage）——stale 回填不写（不冒名新实测）；
+ * ② 压缩完成（manual=runner.compactSession 持久化 / auto=compact.end 事件携带、随
+ *   该步 usage 或 run 收尾落盘）。其余情况不写：0/0（无新压缩）与 cancelled（中止零
+ *   写入）事件不带本字段 = 不动显示。
+ */
+export interface ContextSizeSnapshot {
+  tokens: number;
+  source: 'usage' | 'compact-est';
+  /** 写入时点（epoch ms） */
+  asOf: number;
+}
+
+/**
+ * 构造 contextSize 快照（唯一构造点：source/asOf 语义一致，禁止手抄字面量）。
+ *
+ * @param source - 读数来源（usage=provider 实测 / compact-est=压缩后估算）
+ * @param tokens - 全请求口径 token 数
+ * @returns 快照
+ */
+export function contextSizeSnapshot(
+  source: ContextSizeSnapshot['source'],
+  tokens: number,
+): ContextSizeSnapshot {
+  return { tokens, source, asOf: Date.now() };
+}
+
+/**
+ * ContextSizeSnapshot 形状守卫（所有摄入点共用，禁止各处手抄校验强度不一——评审 F-4）。
+ * metadata 是自由 JSON、事件/REST 是跨进程边界，脏值不得当读数显示。
+ *
+ * @param v - 待校验值
+ * @returns 是否合法快照
+ */
+export function isContextSizeSnapshot(v: unknown): v is ContextSizeSnapshot {
+  if (!v || typeof v !== 'object') return false;
+  const s = v as Partial<ContextSizeSnapshot>;
+  return (
+    typeof s.tokens === 'number' &&
+    (s.source === 'usage' || s.source === 'compact-est') &&
+    typeof s.asOf === 'number'
+  );
 }
 
 /** 事件回调（Builder 注入 → EventBus） */

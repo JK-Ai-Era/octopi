@@ -7,6 +7,7 @@
 import type { Message } from '@octopi-agent/core/types.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { SummaryCoverage, SummaryPolicy } from '../summary/types.js';
+import type { ContextSizeSnapshot } from '../../types.js';
 
 export type CompactMode =
   | 'structure_only'
@@ -181,6 +182,11 @@ export interface CompactOutcome {
    *  摘要产物体量的真值；无回传（自定义 summarizeFn/失败）时缺省，计量回落估算。 */
   summaryOutputTokens?: number;
   coverage?: SummaryCoverage;
+  /**
+   * 当前上下文大小快照（显示槽，压缩后估算口径 = tokensAfter 同值同源）：
+   * runner 据此持久化 session.metadata.contextSize（web 顶栏唯一取数源）。
+   */
+  contextSize?: ContextSizeSnapshot;
   /** Message[] 或纯文本结果，由入口决定 */
   view: Message[] | string;
   droppedSummary?: string;
