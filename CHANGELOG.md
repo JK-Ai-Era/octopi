@@ -128,6 +128,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.29 (2026-11-19)
+
+### fix(cognition): 召回种子单源化——切词按空白/标点、匹配改双向（token 含 name 亦命中）
+
+- **根因（R2）**：CognitionLayer 种子只按空白切词（中文整句成 1 个 token），匹配只有「name 含 token」单向——逐字提到概念名但无空格（「进程模块缓存是保存在哪里的？」）必然 miss；且 sqlite 与 InMemory 两实现已漂移（后者有反向匹配、前者没有），`normName` 两处各有一份拷贝。
+- **变更**：新增 `harness/memory/cognition-seeds.ts` 单源模块——`normName` 收敛为唯一实现；`deriveQuerySeeds` 复用 `tokenizeKeywordDetail` 分词内核（token ≥2 字、子句上限 8、**截断时追加整句兜底种子**、切不出回退整句）；`createSeedMatcher` 双向谓词（name 含 token ∣ token 含 name〔name 归一后 ≥2 字才参与〕∣ description 含 token）。CognitionLayer 与两个 store 的 `spreadingActivate` 统一走共享谓词，删除死代码 `escapeLike`。
+- **行为变更**：sqlite 种子查找由 per-seed `SELECT * … LIKE` 改为一次轻列扫描（id/name/description）+ 共享谓词——反向匹配无法下推 SQL，以扫描换取匹配语义单源；包含匹配的「针」（正向/描述＝token、反向＝name）≥2 字才参与，单字仅精确命中（防单字子串误锚）；第 9 子句之后的直呼概念名经整句兜底种子仍可召回（不因截断丢覆盖面）。
+- **验证**：新增 `tests/memory/cognition-seeds.test.ts` 23 例（切词/匹配单测、CognitionLayer 接线钉、双 store 真实查询回归：无空格直呼名命中、有空格不倒退、整句多直呼名全中、截断兜底、语义近指 0 命中边界锁定）；全量 5333 用例绿、`npm run build` 绿。
+
+---
+
 ## v0.118.28 (2026-11-18)
 
 ### fix(cognition): contextSlice 锚定域并入工具文本；引文按引号边界拆片段

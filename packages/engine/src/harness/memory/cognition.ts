@@ -35,10 +35,7 @@ import {
   nextEdgeStrength,
 } from './cognition-decay.js';
 import { evaluateConceptGate, licenseEdge } from './cognition-gates.js';
-
-function normName(name: string): string {
-  return name.trim().toLowerCase();
-}
+import { createSeedMatcher, normName } from './cognition-seeds.js';
 
 function daysBetween(a: number, b: number): number {
   return Math.max(0, (b - a) / 86_400_000);
@@ -446,16 +443,11 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
 
     const seedIds: string[] = [];
     const activation = new Map<string, number>();
-    const seedSet = new Set(seeds.map((s) => normName(s)));
+    const seedMatcher = createSeedMatcher(seeds);
 
     for (const n of this.nodes.values()) {
       if (!statuses.has(n.status)) continue;
-      const key = normName(n.name);
-      const hit =
-        seedSet.has(key) ||
-        [...seedSet].some((s) => key.includes(s) || s.includes(key)) ||
-        [...seedSet].some((s) => (n.description ?? '').toLowerCase().includes(s));
-      if (hit) {
+      if (seedMatcher(n.name, n.description)) {
         seedIds.push(n.id);
         activation.set(n.id, 1);
       }

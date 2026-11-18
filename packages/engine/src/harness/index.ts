@@ -492,7 +492,11 @@ export {
   DEFAULT_EDGE_DECAY_PER_DAY,
   hebbianStrengthen,
   nextEdgeStrength,
+  normName,
+  deriveQuerySeeds,
+  createSeedMatcher,
 } from './memory/index.js';
+export type { DeriveQuerySeedsOptions, SeedMatcher } from './memory/index.js';
 export type {
   Planner, Reflector, AgentState, AgentStats, Plan, PlanStep,
   StepResult, ExecutionRecord, Assessment, Pattern,

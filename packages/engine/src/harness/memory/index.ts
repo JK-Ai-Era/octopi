@@ -139,6 +139,12 @@ export type { WisdomEvaluateRequestPayload } from './wisdom-events.js';
 
 // ── Cognition 门控 / 可塑 / 概念化 ──
 export {
+  normName,
+  deriveQuerySeeds,
+  createSeedMatcher,
+} from './cognition-seeds.js';
+export type { DeriveQuerySeedsOptions, SeedMatcher } from './cognition-seeds.js';
+export {
   evaluateConceptGate,
   licenseEdge,
   edgeBasisFromLicense,

@@ -19,6 +19,7 @@ import {
   LAYER_PRIORITY,
 } from './layer-types.js';
 import type { MemoryStore, ConceptGraphStore } from '../memory/types.js';
+import { deriveQuerySeeds } from '../memory/cognition-seeds.js';
 import { formatWisdomBody } from '../memory/wisdom-formation.js';
 import { formatMemoryTimeSuffix } from '../memory/time-format.js';
 import type {
@@ -368,12 +369,7 @@ export class CognitionLayer extends BaseLayer {
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
     if (!ctx.query?.trim()) return null;
-    const queryTokens = ctx.query
-      .split(/\s+/)
-      .map((t) => t.trim())
-      .filter((t) => t.length >= 2)
-      .slice(0, 8);
-    const seeds = queryTokens.length ? queryTokens : [ctx.query.trim()];
+    const seeds = deriveQuerySeeds(ctx.query);
 
     const graph = await this.store.spreadingActivate(seeds, {
       depth: this.depth,

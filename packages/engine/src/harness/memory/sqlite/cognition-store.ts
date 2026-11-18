@@ -34,6 +34,7 @@ import {
   nextEdgeStrength,
 } from '../cognition-decay.js';
 import { evaluateConceptGate, licenseEdge, normalizeForCue } from '../cognition-gates.js';
+import { createSeedMatcher, normName } from '../cognition-seeds.js';
 import { AgentDatabase } from './agent-db.js';
 import type { EmbeddingProvider } from './embedding.js';
 import { cosineDistance, parseEmbedding, serializeEmbedding } from './vector-search.js';
@@ -56,15 +57,6 @@ export interface SqliteConceptGraphOptions {
 
 function daysBetween(a: number, b: number): number {
   return Math.max(0, (b - a) / 86_400_000);
-}
-
-function normName(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-/** 转义 LIKE 通配符（配合 ESCAPE '\'） */
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 interface ConceptRow {
@@ -750,19 +742,15 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     const statusPlace = statuses.map(() => '?').join(',');
     const statusSet = new Set(statuses);
 
-    const seedMap = new Map<string, ConceptNode>();
-    for (const seed of seeds) {
-      const q = `%${escapeLike(seed.toLowerCase())}%`;
-      const rows = this.db.raw
-        .prepare(
-          `SELECT * FROM concepts WHERE status IN (${statusPlace})
-           AND (LOWER(name) LIKE ? ESCAPE '\\' OR LOWER(description) LIKE ? ESCAPE '\\')`,
-        )
-        .all(...statuses, q, q) as unknown as ConceptRow[];
-      for (const r of rows) seedMap.set(r.id, this.rowToNode(r));
+    // 反向匹配（token 含 name）无法下推 SQL：轻列扫描 + 共享谓词（cognition-seeds 单源）
+    const candidateRows = this.db.raw
+      .prepare(`SELECT id, name, description FROM concepts WHERE status IN (${statusPlace})`)
+      .all(...statuses) as unknown as Array<Pick<ConceptRow, 'id' | 'name' | 'description'>>;
+    const seedMatcher = createSeedMatcher(seeds);
+    const seedIds: string[] = [];
+    for (const r of candidateRows) {
+      if (seedMatcher(r.name, r.description)) seedIds.push(r.id);
     }
-
-    const seedIds = [...seedMap.keys()];
     if (!seedIds.length) return empty;
 
     const activation = new Map<string, number>();
