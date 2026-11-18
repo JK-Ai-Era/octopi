@@ -9,6 +9,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, act } from '@testing-library/react';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
 import type { InspectorState } from '@octopi-agent/gateway/web/runtime/store';
+import type { ViewMode } from '@octopi-agent/gateway/web/conversation/types';
 
 function inspectorWithCompact(startedAt: number): InspectorState {
   return {
@@ -24,11 +25,11 @@ function inspectorWithCompact(startedAt: number): InspectorState {
   } as unknown as InspectorState;
 }
 
-function renderPanel(inspector: InspectorState) {
+function renderPanel(inspector: InspectorState, viewMode: ViewMode = 'history') {
   return render(
     <ContextRuntimePanel
       inspector={inspector}
-      viewMode="context"
+      viewMode={viewMode}
       runStatus="waiting"
       sessionId="s1"
       agentId="a1"
@@ -102,5 +103,18 @@ describe('ContextRuntimePanel 压缩 elapsed tick', () => {
     } as unknown as InspectorState;
     renderPanel(inspector);
     expect(screen.queryByText(/已等待/)).toBeNull();
+  });
+
+  it('视图模式取值本地化（history/runtime/hybrid → 历史/实时/混合）', () => {
+    const cases: Array<[ViewMode, string]> = [
+      ['history', '历史'],
+      ['runtime', '实时'],
+      ['hybrid', '混合'],
+    ];
+    for (const [mode, label] of cases) {
+      renderPanel(inspectorWithCompact(Date.now()), mode);
+      expect(screen.getByText(`视图模式: ${label}`)).toBeTruthy();
+      cleanup();
+    }
   });
 });

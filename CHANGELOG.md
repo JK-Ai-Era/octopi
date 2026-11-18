@@ -128,6 +128,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.26 (2026-11-18)
+
+### feat(webui): 顶栏删除 [viewMode] 标签；面板「视图模式」取值中英双版
+
+- **用户可感**：顶栏运行状态左侧的 `[runtime]` / `[history]` / `[hybrid]` 裸枚举标签**删除**（诊断入口保留在右侧面板「会话状态」）；面板「视图模式」行的取值本地化——中文「历史 / 实时 / 混合」、英文 History / Runtime / Hybrid（标签本身此前已有双版）。
+- **实现**：`VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey>`（`ContextRuntimePanel.tsx`，编译期强制全覆盖）；`viewMode` prop 从 `string` 收紧为 `ViewMode`——顺带修掉测试里一直非法的 `viewMode="context"`（旧 string 类型放过了它）。
+- **验证**：`ContextRuntimePanel.test.tsx` 新增取值本地化用例（三种模式逐一断言）；lint + 类型检查绿。
+
+---
+
 ## v0.118.25 (2026-11-18)
 
 ### feat(webui): 顶栏运行状态标签中英文化；压缩进行中显示「正在压缩」

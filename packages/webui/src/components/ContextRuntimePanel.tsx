@@ -3,8 +3,16 @@ import type {
   LayerRuntimeViewDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import type { InspectorState } from '@octopi-agent/gateway/web/runtime/store';
+import type { ViewMode } from '@octopi-agent/gateway/web/conversation/types';
 import { useT } from '../i18n/react';
 import { t as tNow, type MessageKey } from '../i18n/core';
+
+/** 会话视图模式取值 → i18n 键（`Record` 强制全覆盖） */
+const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
+  history: 'contextRuntime.viewModeHistory',
+  runtime: 'contextRuntime.viewModeRuntime',
+  hybrid: 'contextRuntime.viewModeHybrid',
+};
 
 /**
  * 产品八层之 1–7（System ContextLayer）。
@@ -102,7 +110,7 @@ function rowRoleLabel(layer: LayerRow): string | undefined {
 
 export interface ContextRuntimePanelProps {
   inspector: InspectorState;
-  viewMode: string;
+  viewMode: ViewMode;
   runStatus: string;
   sessionId: string | null;
   agentId: string;
@@ -379,7 +387,7 @@ export function ContextRuntimePanel({
       <section className="panel sidebar-section">
         <div className="sidebar-title">{t('contextRuntime.sessionStateTitle')}</div>
         <div className="inspector-kv">
-          {t('contextRuntime.viewModeLabel')}: {viewMode}
+          {t('contextRuntime.viewModeLabel')}: {t(VIEW_MODE_LABEL_KEY[viewMode])}
         </div>
         <div className="inspector-kv">
           {t('contextRuntime.runStatusLabel')}: {runStatus}

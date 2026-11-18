@@ -2326,7 +2326,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 </div>
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>
                 <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{t(runStatusLabelKey(runStatus, compacting || inspector.compact?.active === true))}</span>
                 <button
                   className="btn-secondary small"
