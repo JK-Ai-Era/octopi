@@ -478,7 +478,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
   async listMergeCandidates(limit = 50): Promise<MergeCandidate[]> {
     const rows = this.db.raw
       .prepare(
-        `SELECT * FROM concept_merge_candidates WHERE status = 'open' ORDER BY created_at DESC LIMIT ?`,
+        `SELECT * FROM concept_merge_candidates WHERE status = 'open' ORDER BY created_at ASC LIMIT ?`,
       )
       .all(limit) as Array<{
       id: string;
@@ -509,6 +509,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
   async resolveMerge(
     id: string,
     action: 'merge' | 'keep_split' | 'drop',
+    options?: { canonicalKind?: ConceptKind },
   ): Promise<void> {
     const row = this.db.raw
       .prepare('SELECT * FROM concept_merge_candidates WHERE id = ?')
@@ -563,6 +564,13 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       db.prepare(
         'UPDATE concepts SET frequency = frequency + ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
       ).run(right.frequency, JSON.stringify([...memIds]), JSON.stringify([...domains]), right.description ?? null, Date.now(), left.id);
+      if (options?.canonicalKind && left.kind !== options.canonicalKind) {
+        db.prepare('UPDATE concepts SET kind = ?, updated_at = ? WHERE id = ?').run(
+          options.canonicalKind,
+          Date.now(),
+          left.id,
+        );
+      }
 
       // 迁边前：丢掉会变自环的边
       db.prepare('DELETE FROM concept_edges WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)')

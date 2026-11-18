@@ -288,19 +288,31 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
   async resolveMerge(
     id: string,
     action: 'merge' | 'keep_split' | 'drop',
+    options?: { canonicalKind?: ConceptKind },
   ): Promise<void> {
     const cand = this.mergeCandidates.get(id);
     if (!cand) return;
-    cand.status =
-      action === 'merge' ? 'merged' : action === 'keep_split' ? 'kept_split' : 'dropped';
-    cand.resolvedAt = Date.now();
-    cand.resolvedAction = action;
 
-    if (action !== 'merge') return;
+    if (action !== 'merge') {
+      cand.status = action === 'keep_split' ? 'kept_split' : 'dropped';
+      cand.resolvedAt = Date.now();
+      cand.resolvedAction = action;
+      return;
+    }
 
     const left = this.nodes.get(cand.leftId);
     const right = this.nodes.get(cand.rightId);
-    if (!left || !right || left.id === right.id) return;
+    if (!left || !right || left.id === right.id) {
+      // 与 Sqlite 同构：端点缺失/悬空记 drop_missing_endpoint，不假记 merged
+      cand.status = 'dropped';
+      cand.resolvedAt = Date.now();
+      cand.resolvedAction = 'drop_missing_endpoint';
+      return;
+    }
+
+    cand.status = 'merged';
+    cand.resolvedAt = Date.now();
+    cand.resolvedAction = 'merge';
 
     left.frequency += right.frequency;
     for (const mid of right.memoryIds) {
@@ -311,6 +323,9 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
     }
     if (left.description == null && right.description) {
       left.description = right.description;
+    }
+    if (options?.canonicalKind && left.kind !== options.canonicalKind) {
+      left.kind = options.canonicalKind;
     }
     // 迁移边；同 pair 同类型去重，丢自环
     const seen = new Set<string>();

@@ -128,6 +128,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.31 (2026-11-19)
+
+### feat(cognition): merge_llm_adjudication——kind≠ / 跨名近邻候选经 LLM 裁决出池（R1 出口闭合）
+
+- **根因（R1 出口）**：merge_candidates 只进不出——kind≠（如「上下文切片锚定」construct≠method）与跨名近邻对（B1-M2 起一律退候选）无人裁决，候选池只增不减，概念行永不合并、支撑永不累加。
+- **变更**：consolidate 批新增 merge 候选**语义路由** + LLM 裁决——同名同 kind（B1 身份规则）免 LLM 确定性合并；同名 kind≠ / 跨名（**不论历史 reason**——reason 是产物不是语义）交 LLM 裁决 `merge|keep_split|drop`（候选两侧 name/kind/domain/description + memoryIds 命题摘要 ≤200 字，不喂全文）；`chatForCompleteOutput` 完整性语义；限流 `adjudicateMaxBatch`（缺省 10）/批、超出留池计 unresolved；悬空候选作废、`pending:` 右端点跳过（store 按名解析路径）；`canonicalKind` 限 CONCEPT_KINDS 值域，kind≠ 合并**缺有效 canonicalKind 时降级 keep_split** 并计 `canonicalKindMissing`（不静默按左侧行 kind 合并）。`resolveMerge` 增可选 `canonicalKind`（合并后幸存行落规范 kind，两实现同构）；候选批改 FIFO（`created_at ASC`，旧候选不饥饿）。
+- **行为变更**：**显式降级语义**——裁决失败（缺 llmPort / LLM 错误 / 解析失败）不吞并确定性巩固（decay/promote/capacity 照常），`act.status=failed` + alert 信号 + 全量计数可见；SKIPPED_STEPS 删 merge_llm_adjudication（余四项仍显式 skipped）；`lifecycle.maxDurationMs` 15s→60s；runtimeInject 增 `memoryStore`（只读）；删除 `autoKeepSplitConflicts` 旋钮（语义路由取代 reason 字符串分支）；配置数值键 positiveInt 校验（NaN 不再空转）。
+- **验证**：新增 `tests/memory/consolidate-handler.test.ts` 11 例（merge+canonicalKind 落置、keep_split 出池、限流留池、解析失败 fail-loud 且确定性步骤照常、llmPort 缺失、无候选不烧 LLM、canonicalKind 缺失降级、漏答计 unresolved、大括号 reason 不炸解析、同名同 kind 免 LLM、跨名必经 LLM）；全量 5351 用例绿、`npm run build` 绿。**真实验收（2026-11-19，真 LLM）**：生产库 2 个 open 候选全裁决——kind 漂移对（「上下文切片锚定」construct≠method）merge 且 canonicalKind(method) 落置、跨名 0.325 对（版本重放验证↔三证合一版本核验）经语义判别 keep_split（确为不同验证方法）、候选池清零有进有出。
+
+---
+
 ## v0.118.30 (2026-11-19)
 
 ### fix(cognition): domain 不再是概念义项指纹——同名同 kind 跨 domain 合并，支撑可累加

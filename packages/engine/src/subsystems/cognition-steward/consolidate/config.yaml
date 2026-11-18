@@ -37,10 +37,10 @@ session:
 
 lifecycle:
   maxConcurrent: 1
-  maxDurationMs: 15000
+  maxDurationMs: 60000
 
 runtimeInject:
-  requires: ['conceptGraphStore']
+  requires: ['conceptGraphStore', 'memoryStore']
 
 observability:
   eventPrefix: cognition.steward.consolidate
@@ -52,3 +52,5 @@ metadata:
     warnEdges: 20000
     stopNodes: 10000
     stopEdges: 40000
+    adjudicateMaxBatch: 10
+    adjudicateMaxTokens: 8192

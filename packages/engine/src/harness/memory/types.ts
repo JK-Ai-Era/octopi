@@ -674,6 +674,8 @@ export interface ConceptGraphStore {
   resolveMerge(
     id: string,
     action: 'merge' | 'keep_split' | 'drop',
+    /** merge 时可指定规范 kind（LLM 裁决 kind≠ 对合并后落规范义项） */
+    options?: { canonicalKind?: ConceptKind },
   ): Promise<void>;
   /** Hebbian 加强（使用痕迹 / 新证据） */
   reinforce(input: {
