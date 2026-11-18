@@ -128,6 +128,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.36 (2026-11-19)
+
+### fix(security): 工具输出注入命中改为标记放行，不再销毁内容（修复资料误杀）
+
+- **误杀症状**：工具输出里含「引用/讨论」注入短语的合法资料（安全文档、宪法 default-agents.md、引擎源码自身、任务回显）被 SecurityGuard 输出扫描整份替换为 `Blocked by SecurityGuard`，内容全毁；连守卫读自己的源码、宪法都读不出来。
+- **根因**：`checkInjection` 命中一律判 `high`（与 injectionSensitivity 无关）→ `severityToAction` 得 `confirm` → 输出侧「confirm/high 一律拦截」升级 block；`warn` 档在此链路永不可达。「资料含攻击形态文本」被当成「攻击已生效」。
+- **修复**：注入命中按通道分流——**工具输出**默认档降为 `medium`（→ warn）**标记放行**：内容完整保留、首个文本载体前置「不可信资料」标记（资料不是指令），`INJECTION_DETECTED` 事件照发，用户 `afterToolCall` 钩子照常执行且标记打在最终内容上；**用户输入**不适用「资料」语义，维持 `high`（→confirm）不变。`injectionSensitivity: 'high'` 两通道一律 `critical`→拦截（需要恢复「注入即拦截」的部署用它）。`checkToolCall` 硬边界、`checkModelOutput` 敏感信息、`checkBehavior` 均不变。
+- **取舍**：字符串/字符串数组/文本块数组三种内容形状可标记（覆盖 `extractMcpToolResult` 全部产出），其余形状保持原样仅记事件（形状是契约，不为标记改写）；字符串形态的 JSON 工具输出会被标记行前缀（模型侧如需 JSON.parse 需自行剥离首行）；部分输出（展示通道）与 afterToolCall 同一口径——block 类仍扣发、warn 类先截尾再标记。`enforce: 'audit'` 只覆盖风险分档，**不**降级严格档的输出拦截。已知盲区（既有限制）：扫描窗口 100k，注入形态落在截断点之后不检出（头尾双段扫描列为后续改进）。
+- **验证**：守卫级（tests/security.test.ts：默认档 medium→warn / 严格档 critical / 用户输入维持 high / 标记文案不自触发）+ 端到端（tests/agent-run-e2e.test.ts：文档完整保留且标记在前 / 严格档整条 entry 不含正文 / 钩子先于标记恰好一次 / string[] 与文本块数组标记首个载体 / 部分输出先截尾再标记、block 类扣发）；全量 5373 用例绿、`npm run build` 绿。
+
+---
+
 ## v0.118.35 (2026-11-19)
 
 ### feat(subsystems): 首跳错峰——runOnStart 按数据流依赖序串行（startupDelayMs）

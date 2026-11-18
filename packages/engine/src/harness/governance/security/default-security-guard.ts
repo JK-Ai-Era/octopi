@@ -332,6 +332,9 @@ export class DefaultSecurityGuard {
 
   /**
    * 检查工具输出（注入检测，始终开启）
+   *
+   * 默认档命中的处置是「标记放行」（severity medium → warn，调用方附不可信资料标记后放行），
+   * 不是销毁内容；只有 `injectionSensitivity: 'high'` 严格档升级为拦截。
    */
   checkToolOutput(output: string): SecurityCheckResult {
     return this.checkInjection(output, 'tool_output');
@@ -646,7 +649,16 @@ export class DefaultSecurityGuard {
       if (match) {
         violations.push({
           type: 'injection',
-          severity: this.config.injectionSensitivity === 'high' ? 'critical' : 'high',
+          // 注入命中的处置分通道：工具输出是「资料」——出现攻击形态文本 ≠ 攻击已生效，
+          // 默认档标记放行（medium→warn），内容不销毁（否则一切讨论注入的安全文档、
+          // 宪法、本守卫源码自身都被整份误杀）；用户输入不适用「资料」语义，维持
+          // high（→confirm）。injectionSensitivity: 'high' 是严格档，两通道一律拦截。
+          severity:
+            this.config.injectionSensitivity === 'high'
+              ? 'critical'
+              : source === 'tool_output'
+                ? 'medium'
+                : 'high',
           description: `检测到可能的 prompt injection: "${match[0].substring(0, 50)}..."`,
           range: { start: match.index, end: match.index + match[0].length },
         });
