@@ -27,6 +27,7 @@ import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
 import { t as tc, type MessageKey } from '../i18n/core';
 import { useLang, useT } from '../i18n/react';
+import { runStatusLabelKey } from './run-status-label';
 
 /** WebUI 会话级 clientInstanceId（同一标签页稳定） */
 function webuiClientInstanceId(): string {
@@ -2326,7 +2327,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               </div>
               <div className="small" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span className="small muted" style={{ marginRight: 8 }}>[{viewMode}]</span>
-                <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{runStatus}</span>
+                <span className={runStatus === 'error' ? 'status-error' : runStatus === 'streaming' ? 'status-ok' : 'status-neutral'}>{t(runStatusLabelKey(runStatus, compacting || inspector.compact?.active === true))}</span>
                 <button
                   className="btn-secondary small"
                   onClick={() => void runManualCompact()}

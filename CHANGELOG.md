@@ -128,6 +128,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.25 (2026-11-18)
+
+### feat(webui): 顶栏运行状态标签中英文化；压缩进行中显示「正在压缩」
+
+- **用户可感**：顶栏压缩按钮左侧的运行状态从裸枚举（`idle` / `waiting` / …）改为本地化文案（中文如「空闲 / 等待响应 / 流式输出中 / 工具执行中 / 发送中 / 已中止 / 错误」，英文对应 Idle / Waiting for response / Streaming / …）；**压缩进行中显示「正在压缩 / Compacting」**（手动点击压缩与 run 内 auto 压缩均覆盖显示，来源 store `inspector.compact.active`）。
+- **实现**：`RunStatus → MessageKey` 唯一映射 `runStatusLabel-key`（`packages/webui/src/components/run-status-label.ts`，`Record<RunStatus, MessageKey>` 编译期强制全覆盖）；补齐 4 个缺口键（statusIdle/statusSending/statusTools/statusCompacting），其余复用既有状态键；en 目录经 `Record<keyof typeof zh, string>` 编译期保证键对齐。
+- **验证**：新增 `run-status-label.test.ts` 3 用例（键在中英文目录存在且非空、压缩覆盖任意状态、非压缩按映射）；lint + 类型检查绿。
+
+---
+
 ## v0.118.24 (2026-11-18)
 
 ### feat(engine/gateway/webui): contextSize 显示槽持久化（刷新不丢压缩后读数）；M3 auto 压缩口径统一
