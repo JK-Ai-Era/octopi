@@ -128,6 +128,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.32 (2026-11-19)
+
+### feat(cognition): 语义种子——查询向量近邻补召回（R3 语义路径闭合）
+
+- **根因（R3）**：写侧 embedding 已落库、读侧纯词面——语义近指（问「召回逻辑」想不起「上下文切片锚定」）无解。本次补语义种子：`ConceptGraphStore.semanticSeeds(query, k)`（InMemory/Sqlite 同契约；store 自有 provider 嵌入查询——单一 provider 源、零新增接线、无跨 provider 维度失配）+ CognitionLayer 词面外补语义种子（normName 去重，默认 4，可关）+ `supportsSemanticSeeds` 能力标记（InMemory 显式缺失）。
+- **行为变更**：语义种子用独立距离带 `semanticSeedMaxDistance`（默认 0.65）——与 merge 同一性带（candidateBandHi 0.35）**不同距离域**（真模型实测「查询句→短概念名」相关对 0.41–0.59，同一性带会全军覆没）；provider 缺失/嵌入失败降级纯词面不 fail；layer-health 增 `degraded` 注记（`semantic_seeds_unavailable`，**按装配事实注记**——home 探针无装配事实时不冒充能力判定）。
+- **breaking note**：`ConceptGraphStore` 接口新增必需成员 `supportsSemanticSeeds` / `semanticSeeds`——第三方 store 实现需补齐（InMemory/Sqlite 已实现；InMemory 为显式能力缺失恒空）。
+- **评审修复（性能与接线）**：查询嵌入限时 `semanticSeedEmbedTimeoutMs`（默认 5s，超时降级空种子，热路径防无界延迟）+ 已解析向量缓存（updated_at 指纹失效，免逐轮 JSON.parse）；旋钮接入配置面（`cognition.identity.semanticSeedMaxDistance/semanticSeedEmbedTimeoutMs`）与 assembler 选项（`cognitionSemanticSeedCount`，0 关闭）；gateway `ContextLayerHealthDto` 同步 `degraded`；`findSimilarConcept` 补维度失配守卫（与 semanticSeeds 对齐）；`octopi.schema.json` 随 Zod 重新生成（收掉长期漂移欠账）。
+- **已知限制**：短概念名向量粗——真库实测目标概念排 #6（默认 k=4 召不全），根治为写侧 name+description 嵌入（open-problems 记账）。
+- **验证**：新增 5 例（近邻/k/排序、三层降级、维度失配跳过、layer 语义补召回+降级不炸、health 注记）；全量 5356 用例绿、`npm run build` 绿。**真实验收（真嵌入）**：「认知概念的召回逻辑」→ 语义种子含「上下文切片锚定」（8 个语义近邻入种子，最近邻「召回修复范围」语义正确）。
+
+---
+
 ## v0.118.31 (2026-11-19)
 
 ### feat(cognition): merge_llm_adjudication——kind≠ / 跨名近邻候选经 LLM 裁决出池（R1 出口闭合）

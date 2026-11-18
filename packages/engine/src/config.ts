@@ -1005,6 +1005,8 @@ export interface HarnessConfig {
     identity?: {
       mergeThreshold?: number;
       candidateBandHi?: number;
+      semanticSeedMaxDistance?: number;
+      semanticSeedEmbedTimeoutMs?: number;
     };
     capacity?: {
       stopNodes?: number;

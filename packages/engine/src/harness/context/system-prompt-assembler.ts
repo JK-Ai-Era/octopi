@@ -130,6 +130,8 @@ export function createDefaultSystemPromptAssembler(options?: {
   knowledgeGroupByScope?: boolean;
   knowledgeShowProgress?: 'off' | 'bucket' | 'exact';
   cognitionDepth?: number;
+  /** 语义种子上限（缺省 4；0 关闭语义种子） */
+  cognitionSemanticSeedCount?: number;
   /** 全局宪法；提供则 preamble 固定最前 */
   constitution?: ConstitutionConfig | string | null;
   /** 直接注入宪法正文（覆盖 constitution 配置） */
@@ -253,6 +255,7 @@ export function createDefaultSystemPromptAssembler(options?: {
           new CognitionLayer({
             store: cognitionStore,
             depth: options?.cognitionDepth,
+            semanticSeedCount: options?.cognitionSemanticSeedCount,
           }),
         );
       }

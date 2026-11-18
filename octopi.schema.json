@@ -390,13 +390,22 @@
               "allow": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1
                 }
               },
               "deny": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "denyCapabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
                 }
               }
             }
@@ -1562,6 +1571,18 @@
     "knowledge": {
       "type": "object",
       "properties": {
+        "projects": {
+          "default": {
+            "allowPublic": false
+          },
+          "type": "object",
+          "properties": {
+            "allowPublic": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        },
         "service": {
           "type": "object",
           "properties": {
@@ -2275,6 +2296,16 @@
               "type": "number",
               "minimum": 0,
               "maximum": 1
+            },
+            "semanticSeedMaxDistance": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "semanticSeedEmbedTimeoutMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
             }
           }
         },

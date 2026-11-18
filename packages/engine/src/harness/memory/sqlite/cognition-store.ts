@@ -43,6 +43,10 @@ export interface SqliteConceptGraphOptions {
   embeddingProvider?: EmbeddingProvider | null;
   /** 强同义距离：≤ 此值的近邻候选在 fingerprintDiff 落 `strong_near`（供裁决优先）；不再触发自动合并（跨名一律候选） */
   mergeThreshold?: number;
+  /** 语义种子距离带（相关性域：查询→概念名，实测相关对 0.41–0.59）；默认 0.65，与 merge 同一性带不同域 */
+  semanticSeedMaxDistance?: number;
+  /** 语义种子查询嵌入超时（毫秒；热路径防无界延迟，超时降级空种子）；默认 5000 */
+  semanticSeedEmbedTimeoutMs?: number;
   /** 近阈带上界；[lo, hi) 写 merge_candidates，默认 0.35 */
   candidateBandHi?: number;
   /** capacity 软顶 */
@@ -57,6 +61,23 @@ export interface SqliteConceptGraphOptions {
 
 function daysBetween(a: number, b: number): number {
   return Math.max(0, (b - a) / 86_400_000);
+}
+
+/** 增强路径限时：超时拒绝；内层 Promise 终态经 then 兜底，无悬挂未处理拒绝 */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
 }
 
 interface ConceptRow {
@@ -91,6 +112,10 @@ export class SqliteConceptGraph implements ConceptGraphStore {
   private embedding: EmbeddingProvider | null;
   private mergeThreshold: number;
   private candidateBandHi: number;
+  private semanticSeedMaxDistance: number;
+  private semanticSeedEmbedTimeoutMs: number;
+  /** 已解析向量缓存：key=概念 id，value=updated_at 指纹 + 向量（写入即换指纹，天然失效） */
+  private parsedVectorCache = new Map<string, { stamp: string; vec: number[] } | null>();
   private stopNodes: number;
   private stopEdges: number;
   private decayFloor: number;
@@ -101,6 +126,8 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     this.embedding = options?.embeddingProvider ?? null;
     this.mergeThreshold = options?.mergeThreshold ?? 0.2;
     this.candidateBandHi = options?.candidateBandHi ?? 0.35;
+    this.semanticSeedMaxDistance = options?.semanticSeedMaxDistance ?? 0.65;
+    this.semanticSeedEmbedTimeoutMs = options?.semanticSeedEmbedTimeoutMs ?? 5000;
     this.stopNodes = options?.stopNodes ?? 10_000;
     this.stopEdges = options?.stopEdges ?? 40_000;
     this.decayFloor = options?.decayFloor ?? DEFAULT_EDGE_DECAY_FLOOR;
@@ -305,7 +332,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     let best: { node: ConceptNode; distance: number } | null = null;
     for (const row of rows) {
       const vec = parseEmbedding(row.embedding!);
-      if (!vec) continue;
+      if (!vec || vec.length !== embedding.length) continue; // 维度失配行跳过（与 semanticSeeds 同守卫）
       const distance = cosineDistance(embedding, vec);
       if (!best || distance < best.distance) {
         best = { node: this.rowToNode(row), distance };
@@ -504,6 +531,52 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       resolvedAt: r.resolved_at ?? undefined,
       resolvedAction: r.resolved_action ?? undefined,
     }));
+  }
+
+  /** 语义种子能力：已注 embeddingProvider 才可做查询近邻 */
+  get supportsSemanticSeeds(): boolean {
+    return this.embedding != null;
+  }
+
+  /**
+   * 查询语义种子：查询文本经自有 provider 嵌入后，对已存向量做近邻扫描。
+   * 距离带用 `semanticSeedMaxDistance`（相关性域，默认 0.65）——与 merge 的同一性带
+   * （candidateBandHi 0.35）不同域：真模型下「查询句→短概念名」相关对实测 0.41–0.59。
+   *
+   * @param query - 查询文本
+   * @param k - 种子上限（缺省 4）
+   * @returns 概念名列表（近者优先）；provider 缺失/嵌入失败/无近邻/维度失配行 → 空/跳过（增强路径不 fail）
+   */
+  async semanticSeeds(query: string, k = 4): Promise<string[]> {
+    if (!this.embedding || !query.trim()) return [];
+    const limit = Math.max(1, Math.floor(k));
+    let vec: number[];
+    try {
+      vec = await withTimeout(this.embedding.embed(query), this.semanticSeedEmbedTimeoutMs);
+    } catch {
+      // 增强路径：嵌入失败/超时降级空种子（词面召回照常），不向上抛
+      return [];
+    }
+    const rows = this.db.raw
+      .prepare('SELECT id, name, embedding, updated_at FROM concepts WHERE embedding IS NOT NULL')
+      .all() as unknown as Array<{ id: string; name: string; embedding: string | null; updated_at: number }>;
+    const scored: Array<{ name: string; distance: number }> = [];
+    const freshCache = new Map<string, { stamp: string; vec: number[] } | null>();
+    for (const r of rows) {
+      const stamp = `${r.updated_at}`;
+      let entry = this.parsedVectorCache.get(r.id);
+      if (!entry || entry.stamp !== stamp) {
+        const parsed = r.embedding ? parseEmbedding(r.embedding) : null;
+        entry = parsed ? { stamp, vec: parsed } : null;
+      }
+      freshCache.set(r.id, entry);
+      if (!entry || entry.vec.length !== vec.length) continue; // 维度失配行跳过（provider 换代遗留向量）
+      const distance = cosineDistance(vec, entry.vec);
+      if (distance <= this.semanticSeedMaxDistance) scored.push({ name: r.name, distance });
+    }
+    this.parsedVectorCache = freshCache; // 顺带清掉已删行的缓存
+    scored.sort((a, b) => a.distance - b.distance);
+    return scored.slice(0, limit).map((s) => s.name);
   }
 
   async resolveMerge(

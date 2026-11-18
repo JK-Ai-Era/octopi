@@ -22,6 +22,8 @@ export interface ContextLayerHealthEntry {
   entries?: number;
   /** 附加读数（如 cognition edges） */
   extra?: Record<string, number>;
+  /** 显式降级注记（如语义种子不可用）；无降级为空/缺省 */
+  degraded?: string[];
 }
 
 export interface ContextLayerHealth {
@@ -43,6 +45,8 @@ export interface ContextLayerHealth {
 
 export interface ProbeContextHealthDeps {
   agentId: string;
+  /** 语义种子能力的装配事实：true/false=调用方确知（如实注记），缺省=未知（不冒充能力判定） */
+  semanticSeedsCapable?: boolean;
   skillCount?: number;
   memoryStore?: MemoryStore;
   knowledgeCatalog?: KnowledgeCatalogProvider;
@@ -204,6 +208,10 @@ export async function probeContextLayerHealth(
       entries: entriesMap[id],
       ...(id === 'cognition' && cognitionEdges !== undefined
         ? { extra: { edges: cognitionEdges } }
+        : {}),
+      // 显式降级：仅当调用方确知装配缺失时注记（home 探针无装配事实时不得冒充能力判定）
+      ...(id === 'cognition' && deps.semanticSeedsCapable === false
+        ? { degraded: ['semantic_seeds_unavailable'] }
         : {}),
     };
   });

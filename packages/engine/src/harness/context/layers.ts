@@ -19,7 +19,7 @@ import {
   LAYER_PRIORITY,
 } from './layer-types.js';
 import type { MemoryStore, ConceptGraphStore } from '../memory/types.js';
-import { deriveQuerySeeds } from '../memory/cognition-seeds.js';
+import { deriveQuerySeeds, normName } from '../memory/cognition-seeds.js';
 import { formatWisdomBody } from '../memory/wisdom-formation.js';
 import { formatMemoryTimeSuffix } from '../memory/time-format.js';
 import type {
@@ -360,16 +360,32 @@ export class MemoryLayer extends BaseLayer {
 export class CognitionLayer extends BaseLayer {
   private readonly store: ConceptGraphStore;
   private readonly depth: number;
+  private readonly semanticSeedCount: number;
 
-  constructor(options: { store: ConceptGraphStore; depth?: number; order?: number }) {
+  constructor(options: {
+    store: ConceptGraphStore;
+    depth?: number;
+    order?: number;
+    /** 语义种子上限（缺省 4；0 关闭语义种子） */
+    semanticSeedCount?: number;
+  }) {
     super('cognition', { order: options.order, placement: 'snapshot' });
     this.store = options.store;
     this.depth = options.depth ?? 2;
+    this.semanticSeedCount = options.semanticSeedCount ?? 4;
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
     if (!ctx.query?.trim()) return null;
     const seeds = deriveQuerySeeds(ctx.query);
+    // 语义种子：向量近邻概念名补充（store 无向量能力/嵌入失败时为空 = 降级纯词面）
+    if (this.semanticSeedCount > 0 && this.store.supportsSemanticSeeds) {
+      const semantic = await this.store.semanticSeeds(ctx.query, this.semanticSeedCount);
+      for (const name of semantic) {
+        const key = normName(name);
+        if (key && !seeds.some((s) => normName(s) === key)) seeds.push(name);
+      }
+    }
 
     const graph = await this.store.spreadingActivate(seeds, {
       depth: this.depth,

@@ -542,6 +542,8 @@ async function wireContextStores(
           embeddingProvider: embRuntime?.provider ?? null,
           mergeThreshold: cog?.identity?.mergeThreshold,
           candidateBandHi: cog?.identity?.candidateBandHi,
+          semanticSeedMaxDistance: cog?.identity?.semanticSeedMaxDistance,
+          semanticSeedEmbedTimeoutMs: cog?.identity?.semanticSeedEmbedTimeoutMs,
           stopNodes: cog?.capacity?.stopNodes,
           stopEdges: cog?.capacity?.stopEdges,
           causesMinIndependentMemories: cog?.relations?.causesMinIndependentMemories,

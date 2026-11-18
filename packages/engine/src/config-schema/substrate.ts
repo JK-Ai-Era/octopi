@@ -257,6 +257,8 @@ export const CognitionConfigSchema = z.object({
     .object({
       mergeThreshold: z.number().min(0).max(1).optional(),
       candidateBandHi: z.number().min(0).max(1).optional(),
+      semanticSeedMaxDistance: z.number().min(0).max(1).optional(),
+      semanticSeedEmbedTimeoutMs: z.number().int().positive().optional(),
     })
     .optional(),
   capacity: z

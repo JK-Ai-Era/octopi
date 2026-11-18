@@ -677,6 +677,19 @@ export interface ConceptGraphStore {
     /** merge 时可指定规范 kind（LLM 裁决 kind≠ 对合并后落规范义项） */
     options?: { canonicalKind?: ConceptKind },
   ): Promise<void>;
+
+  /** 语义种子能力：已注入 embeddingProvider 可做查询向量近邻；false 时 CognitionLayer 降级纯词面 */
+  readonly supportsSemanticSeeds: boolean;
+
+  /**
+   * 查询语义种子：向量近邻概念名（近者优先，距离 ≤ candidateBandHi）。
+   * 由 store 自有 embeddingProvider 嵌入查询文本——与写入侧同源同维，调用方无需持 provider。
+   *
+   * @param query - 查询文本
+   * @param k - 种子上限（缺省 4）
+   * @returns 概念名列表；provider 缺失/嵌入失败/无近邻/维度失配 → 空数组（增强路径不 fail）
+   */
+  semanticSeeds(query: string, k?: number): Promise<string[]>;
   /** Hebbian 加强（使用痕迹 / 新证据） */
   reinforce(input: {
     nodeIds?: string[];

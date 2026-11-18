@@ -285,6 +285,14 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       .slice(0, limit);
   }
 
+  /** 无向量能力（InMemory 不注 embedding）：语义种子恒空，调用方据 supportsSemanticSeeds 降级纯词面 */
+  readonly supportsSemanticSeeds = false;
+
+  /** @returns 恒空数组——InMemory 无向量，语义种子不可用（能力缺失，非数据为空） */
+  async semanticSeeds(): Promise<string[]> {
+    return [];
+  }
+
   async resolveMerge(
     id: string,
     action: 'merge' | 'keep_split' | 'drop',

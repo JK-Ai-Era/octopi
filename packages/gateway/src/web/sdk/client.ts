@@ -479,6 +479,8 @@ export interface ContextLayerHealthDto {
     registered: boolean;
     entries?: number;
     extra?: Record<string, number>;
+    /** 显式降级注记（如 semantic_seeds_unavailable） */
+    degraded?: string[];
   }>;
   summary: {
     skills?: number;
