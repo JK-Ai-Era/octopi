@@ -259,7 +259,7 @@ describe.each([
     expect(b.id).toBe(a.id);
   });
 
-  it('splits polysemy on fingerprint conflict', async () => {
+  it('splits polysemy on kind fingerprint conflict', async () => {
     const a = await store.admitConcept({
       name: '锁',
       kind: 'construct',
@@ -277,6 +277,45 @@ describe.each([
     expect(a.action).toBe('created');
     expect(b.action).toBe('merge_candidate');
     expect(b.id).not.toBe(a.id);
+    const candidates = await store.listMergeCandidates(10);
+    expect(candidates.find((c) => c.id === b.candidateId)?.reason).toBe('kind:construct≠entity');
+  });
+
+  it('同名同 kind 跨 domain 合并且 domain 取并集（B1：domain 多值不拆行）', async () => {
+    const a = await store.admitConcept({
+      name: '版本重放验证',
+      kind: 'method',
+      domain: ['cognition'],
+      memoryIds: ['m1'],
+      supportCount: 2,
+    });
+    const b = await store.admitConcept({
+      name: '版本重放验证',
+      kind: 'method',
+      domain: ['release'],
+      memoryIds: ['m2'],
+      supportCount: 2,
+    });
+    expect(a.action).toBe('created');
+    expect(b.action).toBe('merged');
+    expect(b.id).toBe(a.id);
+    const node = (await store.getFullGraph()).nodes.find((n) => n.id === a.id)!;
+    expect(node.frequency).toBe(2);
+    expect([...node.memoryIds].sort()).toEqual(['m1', 'm2']);
+    expect([...node.domain].sort()).toEqual(['cognition', 'release']);
+    expect(await store.listMergeCandidates(10)).toHaveLength(0);
+  });
+
+  it('同名多义项：与 kind 兼容的行合并（不被其他义项挡住）', async () => {
+    await store.admitConcept({ name: '锁', kind: 'construct', supportCount: 2, memoryIds: ['m1'] });
+    const b = await store.admitConcept({ name: '锁', kind: 'entity', supportCount: 2, memoryIds: ['m2'] });
+    const c = await store.admitConcept({ name: '锁', kind: 'entity', supportCount: 2, memoryIds: ['m3'] });
+    expect(b.action).toBe('merge_candidate');
+    expect(c.action).toBe('merged');
+    expect(c.id).toBe(b.id);
+    // n2：合并只 +1、不重复累加
+    const node = (await store.getFullGraph()).nodes.find((n) => n.id === b.id)!;
+    expect(node.frequency).toBe(2);
   });
 
   it('admitEdge: active strong with license; shadow related', async () => {
@@ -472,9 +511,10 @@ describe.each([
     });
     const right = await store.admitConcept({
       name: 'left',
-      kind: 'entity',
+      kind: 'construct',
       domain: ['y'],
       memoryIds: ['m2'],
+      description: '右描述',
       supportCount: 2,
     });
     expect(right.action).toBe('merge_candidate');
@@ -504,6 +544,11 @@ describe.each([
     await store.resolveMerge(cand!.id, 'merge');
     const full = await store.getFullGraph();
     expect(full.nodes.some((n) => n.id === right.id)).toBe(false);
-    expect(full.nodes.some((n) => n.id === left.id)).toBe(true);
+    const survivor = full.nodes.find((n) => n.id === left.id)!;
+    expect(survivor).toBeTruthy();
+    // M1：合并语义完整——domain 并集、description 空侧吸收、frequency 累加（禁静默丢数据）
+    expect([...survivor.domain].sort()).toEqual(['x', 'y']);
+    expect(survivor.description).toBe('右描述');
+    expect(survivor.frequency).toBe(2);
   });
 });

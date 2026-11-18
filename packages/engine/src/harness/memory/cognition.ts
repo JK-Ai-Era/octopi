@@ -68,14 +68,14 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
     }
 
     const key = normName(input.name);
-    const sameName = [...this.nodes.values()].find((n) => normName(n.name) === key);
+    const sameNames = [...this.nodes.values()].filter((n) => normName(n.name) === key);
 
-    if (sameName) {
+    const conflicts: Array<{ node: ConceptNode; reason: string }> = [];
+    for (const sameName of sameNames) {
       const conflict = this.fingerprintConflict(sameName, input);
       if (conflict) {
-        const id = this.insertNode(input);
-        const candidateId = this.pushMergeCandidate(sameName.id, id, conflict);
-        return { action: 'merge_candidate', id, candidateId, reason: 'fingerprint_conflict' };
+        conflicts.push({ node: sameName, reason: conflict });
+        continue;
       }
       // 指纹兼容 → 合并
       sameName.frequency += 1;
@@ -83,17 +83,22 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       for (const mid of input.memoryIds ?? []) {
         if (!sameName.memoryIds.includes(mid)) sameName.memoryIds.push(mid);
       }
-      if (input.description && !sameName.description) {
+      for (const d of input.domain ?? []) {
+        if (!sameName.domain.includes(d)) sameName.domain.push(d);
+      }
+      if (input.description && sameName.description == null) {
         sameName.description = input.description;
       }
       return { action: 'merged', id: sameName.id, reason: 'ok' };
     }
 
-    // embedding 近邻 → merge_candidate（不自动合）
-    if (this.nodes.size > 0) {
-      // 无 embedding 时跳过；有则由上层 Sqlite 路径处理
+    if (conflicts.length) {
+      const id = this.insertNode(input);
+      const candidateId = this.pushMergeCandidate(conflicts[0]!.node.id, id, conflicts[0]!.reason);
+      return { action: 'merge_candidate', id, candidateId, reason: 'fingerprint_conflict' };
     }
 
+    // 无 embedding 注入的近邻候选不在此实现（有向量的近邻路径在 SqliteConceptGraph）
     const id = this.insertNode(input);
     return { action: 'created', id, reason: 'ok' };
   }
@@ -107,8 +112,8 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       kind: input.kind,
       description: input.description,
       frequency: 1,
-      memoryIds: [...(input.memoryIds ?? [])],
-      domain: [...(input.domain ?? [])],
+      memoryIds: [...new Set(input.memoryIds ?? [])],
+      domain: [...new Set(input.domain ?? [])],
       status: 'shadow',
       embedding: null,
       createdAt: now,
@@ -117,18 +122,12 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
     return id;
   }
 
-  /** 义项指纹冲突：kind 不同或论域无交集且双方皆非空 */
+  /** 义项指纹冲突：仅 kind 不同。domain 是多值标签不参与义项判定（同名同 kind 合并且 domain 取并集） */
   private fingerprintConflict(
     existing: ConceptNode,
     input: AdmitConceptInput,
   ): string | null {
     if (existing.kind !== input.kind) return `kind:${existing.kind}≠${input.kind}`;
-    const a = new Set(existing.domain);
-    const b = new Set(input.domain ?? []);
-    if (a.size > 0 && b.size > 0) {
-      const overlap = [...b].some((d) => a.has(d));
-      if (!overlap) return 'domain_disjoint';
-    }
     return null;
   }
 
@@ -306,6 +305,12 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
     left.frequency += right.frequency;
     for (const mid of right.memoryIds) {
       if (!left.memoryIds.includes(mid)) left.memoryIds.push(mid);
+    }
+    for (const d of right.domain) {
+      if (!left.domain.includes(d)) left.domain.push(d);
+    }
+    if (left.description == null && right.description) {
+      left.description = right.description;
     }
     // 迁移边；同 pair 同类型去重，丢自环
     const seen = new Set<string>();

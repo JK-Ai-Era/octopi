@@ -502,7 +502,7 @@ export interface ConceptNode {
   description?: string;
   frequency: number;
   memoryIds: string[];
-  /** 论域标签（义项指纹） */
+  /** 论域标签（多值；不参与义项判定——义项只看 kind，合并时取并集） */
   domain: string[];
   status: ConceptStatus;
   embedding?: number[] | null;
@@ -601,6 +601,7 @@ export interface AdmitConceptInput {
   name: string;
   kind: ConceptKind;
   description?: string;
+  /** 论域标签（多值；不参与义项判定，合并时取并集） */
   domain?: string[];
   memoryIds?: string[];
   /** 提出该概念的命题条数（MDL）；缺省用 memoryIds.length */

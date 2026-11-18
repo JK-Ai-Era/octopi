@@ -41,7 +41,7 @@ import { cosineDistance, parseEmbedding, serializeEmbedding } from './vector-sea
 
 export interface SqliteConceptGraphOptions {
   embeddingProvider?: EmbeddingProvider | null;
-  /** embedding 自动合并距离上限（仅指纹兼容时）；默认 0.20 */
+  /** 强同义距离：≤ 此值的近邻候选在 fingerprintDiff 落 `strong_near`（供裁决优先）；不再触发自动合并（跨名一律候选） */
   mergeThreshold?: number;
   /** 近阈带上界；[lo, hi) 写 merge_candidates，默认 0.35 */
   candidateBandHi?: number;
@@ -170,8 +170,10 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     }
 
     const nameKey = normName(input.name);
+    // 注意：SQLite LOWER() 仅折 ASCII，与 JS toLowerCase 的 Unicode 折叠有别（CJK 无碍）——
+    // 归一根治（name_key 列）见 arch/open-problems OP-9R 遗留
     const existing = this.db.raw
-      .prepare('SELECT * FROM concepts WHERE LOWER(name) = ?')
+      .prepare('SELECT * FROM concepts WHERE LOWER(name) = ? ORDER BY created_at ASC, id ASC')
       .all(nameKey) as unknown as ConceptRow[];
 
     // 同名多义项：指纹兼容则合并，冲突则新建 + merge_candidate
@@ -185,11 +187,12 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       }
 
       const memIds = new Set([...node.memoryIds, ...(input.memoryIds ?? [])]);
+      const domains = new Set([...node.domain, ...(input.domain ?? [])]);
       this.db.raw
         .prepare(
-          'UPDATE concepts SET frequency = frequency + 1, memory_ids = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
+          'UPDATE concepts SET frequency = frequency + 1, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
         )
-        .run(JSON.stringify([...memIds]), input.description ?? null, Date.now(), node.id);
+        .run(JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, Date.now(), node.id);
       return { action: 'merged', id: node.id, reason: 'ok' };
     }
 
@@ -198,24 +201,19 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       const vec = await this.embedding.embed(input.name);
       const near = await this.findSimilarConcept(vec);
       if (near) {
+        // 跨名一律退候选、不自动合并（拍板 2026-11-19）：自动合并会静默吞名、无审计、支撑虚高
         const conflict = this.fingerprintConflict(near.node, input);
-        if (!conflict && near.distance <= this.mergeThreshold) {
-          const memIds = new Set([...near.node.memoryIds, ...(input.memoryIds ?? [])]);
-          this.db.raw
-            .prepare(
-              'UPDATE concepts SET frequency = frequency + 1, memory_ids = ?, updated_at = ? WHERE id = ?',
-            )
-            .run(JSON.stringify([...memIds]), Date.now(), near.node.id);
-          return { action: 'merged', id: near.node.id, reason: 'ok' };
-        }
-        // 近阈带或指纹冲突 → candidate
         const id = this.insertConcept(input, vec);
+        const fingerprintDiff = conflict ? [conflict] : [];
+        if (!conflict && near.distance <= this.mergeThreshold) {
+          fingerprintDiff.push('strong_near');
+        }
         const candidateId = this.insertMergeCandidate(
           near.node.id,
           id,
           conflict ?? 'embedding_band',
           near.distance,
-          conflict ? [conflict] : [],
+          fingerprintDiff,
         );
         return {
           action: 'merge_candidate',
@@ -252,17 +250,9 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     return { action: 'created', id, reason: 'ok' };
   }
 
+  /** 义项指纹冲突：仅 kind 不同。domain 是多值标签不参与义项判定（同名同 kind 合并且 domain 取并集） */
   private fingerprintConflict(existing: ConceptNode, input: AdmitConceptInput): string | null {
-    if (existing.kind !== input.kind && existing.kind !== 'construct' && input.kind !== 'construct') {
-      return `kind:${existing.kind}≠${input.kind}`;
-    }
     if (existing.kind !== input.kind) return `kind:${existing.kind}≠${input.kind}`;
-    const a = new Set(existing.domain);
-    const b = new Set(input.domain ?? []);
-    if (a.size > 0 && b.size > 0) {
-      const overlap = [...b].some((d) => a.has(d));
-      if (!overlap) return 'domain_disjoint';
-    }
     return null;
   }
 
@@ -279,8 +269,8 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         input.name.trim(),
         input.kind,
         input.description ?? null,
-        JSON.stringify(input.memoryIds ?? []),
-        JSON.stringify(input.domain ?? []),
+        JSON.stringify([...new Set(input.memoryIds ?? [])]),
+        JSON.stringify([...new Set(input.domain ?? [])]),
         vec ? serializeEmbedding(vec) : null,
         now,
         now,
@@ -545,7 +535,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     if (!right && row.right_id.startsWith('pending:')) {
       const pendingName = row.right_id.slice('pending:'.length).toLowerCase();
       const candidates = this.db.raw
-        .prepare('SELECT * FROM concepts WHERE LOWER(name) = ?')
+        .prepare('SELECT * FROM concepts WHERE LOWER(name) = ? ORDER BY created_at ASC, id ASC')
         .all(pendingName) as unknown as ConceptRow[];
       // 同名多义项：取非 left 的第一个
       right = candidates.find((c) => c.id !== row.left_id);
@@ -566,9 +556,13 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         ...safeJsonArray(left.memory_ids),
         ...safeJsonArray(right.memory_ids),
       ]);
+      const domains = new Set([
+        ...safeJsonArray(left.domain),
+        ...safeJsonArray(right.domain),
+      ]);
       db.prepare(
-        'UPDATE concepts SET frequency = frequency + ?, memory_ids = ?, updated_at = ? WHERE id = ?',
-      ).run(right.frequency, JSON.stringify([...memIds]), Date.now(), left.id);
+        'UPDATE concepts SET frequency = frequency + ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
+      ).run(right.frequency, JSON.stringify([...memIds]), JSON.stringify([...domains]), right.description ?? null, Date.now(), left.id);
 
       // 迁边前：丢掉会变自环的边
       db.prepare('DELETE FROM concept_edges WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)')

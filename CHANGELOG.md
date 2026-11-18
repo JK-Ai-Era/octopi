@@ -128,6 +128,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.30 (2026-11-19)
+
+### fix(cognition): domain 不再是概念义项指纹——同名同 kind 跨 domain 合并，支撑可累加
+
+- **根因（R1 主断裂面）**：同名概念复现时 `fingerprintConflict` 把「domain 无交集」判为义项冲突拆行，支撑恒 1 永不晋升（实测「版本重放验证」×2 即此机制产物）。但 domain 是数组、本就多值语义——多论域恰恰是概念成立的常态，不是义项分裂信号。
+- **变更**：`fingerprintConflict` 只判 kind 不同（两实现同构；sqlite 顺删被后行架空的 construct 豁免死分支）；同名同 kind 合并补 **domain 取并集**；sqlite embedding 近邻自动合并路径补对称合并语义（description COALESCE + domain 并集）；InMemory admit 改为遍历全部同名行找首个指纹兼容者合并（与 sqlite 对齐，此前只看第一行、会被其他义项挡住）。
+- **行为变更（评审 M2，大哥拍板 2026-11-19）**：kind 不同是唯一拆行依据（候选 reason `kind:X≠Y`）；embedding 近邻**跨名一律退候选**（reason `embedding_band`，距离 ≤ `mergeThreshold` 者在 fingerprintDiff 标 `strong_near` 供裁决优先）——**不再自动合并**：自动合并会静默吞名（无 alias 表）、不落审计、memoryIds 并入致支撑虚高可假晋升。`mergeThreshold` 语义随之变更：不再触发合并，转为强同义标注阈值（配置键保留）。
+- **合并语义补全（评审 M1）**：`resolveMerge(id,'merge')` 补 domain 并集 + description COALESCE（此前被合并行删除时二者静默丢失）；description「缺失」定义统一为 null-only（两实现对齐 COALESCE）；入库 memoryIds/domain 去重（与合并路径对称）；同名查找加确定性排序（`ORDER BY created_at, id`，候选配对不再依赖 rowid 偶然性）。
+- **存量数据修复改排至 B2 尾随**（计划文档已更新）：「版本重放验证」×2 等拆行对用 `resolveMerge(id,'merge')` 合并执行器一次性合并，避免一次性 SQL 合并逻辑造成合并语义双实现。
+- **验证**：双 store 新增「同名同 kind 跨 domain 合并且 domain 并集」「多义项兼容行合并」「resolveMerge 合并保 domain/description/frequency」；sqlite 近邻边界新增固定向量四态用例（强同义/band/出带/kind 冲突——跨名不静默合并、名字不消失）；全量测试绿、`npm run build` 绿。
+
+---
+
 ## v0.118.29 (2026-11-19)
 
 ### fix(cognition): 召回种子单源化——切词按空白/标点、匹配改双向（token 含 name 亦命中）

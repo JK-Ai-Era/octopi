@@ -57,6 +57,7 @@ async function handler(
     for (const c of candidates) {
       if (
         c.reason.includes('conflict') ||
+        // legacy：B1 前产生的 domain_disjoint 候选；存量数据修复（arch/cognition-recall-repair.md §2 B1.3）完成后可删
         c.reason === 'domain_disjoint' ||
         c.reason === 'fingerprint_conflict'
       ) {

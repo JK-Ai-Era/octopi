@@ -491,18 +491,84 @@ describe('SqliteConceptGraph with embedding', () => {
     };
     expect(row.embedding).toBeTruthy();
   });
+});
 
-  it('near-threshold embedding creates merge_candidate not silent merge', async () => {
-    const id1 = await graph.admitConcept({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 });
-    const id2 = await graph.admitConcept({ name: 'PostgresDatabase', kind: 'entity', supportCount: 2 });
+// ── 近邻裁决边界（B1-M2 拍板：跨名一律退候选，不静默合并）──
 
-    const full = await graph.getFullGraph();
-    expect(full.nodes.length).toBeGreaterThanOrEqual(1);
-    if (id2.action === 'merge_candidate') {
-      expect(id2.id).not.toBe(id1.id);
-      const candidates = await graph.listMergeCandidates();
-      expect(candidates.length).toBeGreaterThan(0);
-    }
+describe('SqliteConceptGraph 近邻裁决边界', () => {
+  let db: AgentDatabase;
+  let graph: SqliteConceptGraph;
+
+  // 精确向量：距离确定（1-cos），不依赖词元哈希的桶碰撞
+  const fixed: EmbeddingProvider = {
+    name: 'fixed',
+    dimensions: 2,
+    embed: async (t: string) => {
+      const table: Record<string, number[]> = {
+        锚定验证: [1, 0],
+        验证锚定: [5, 1], // 与「锚定验证」距离 ≈ 0.02（强同义带）
+        切片缓存: [1, 1], // 与「锚定验证」距离 ≈ 0.29（band 段）
+        晋升门限: [0, 1], // 与「锚定验证」距离 1.0（band 外）
+      };
+      const v = table[t];
+      if (!v) throw new Error(`no fixed vector for ${t}`);
+      return v;
+    },
+    embedBatch: async (texts: string[]) => {
+      const out: number[][] = [];
+      for (const t of texts) out.push(await fixed.embed(t));
+      return out;
+    },
+  };
+
+  beforeEach(async () => {
+    db = await AgentDatabase.create({ dbPath: ':memory:' });
+    graph = new SqliteConceptGraph(db, { embeddingProvider: fixed });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('强同义（距离 ≤ mergeThreshold）跨名退候选并标 strong_near（不静默合并、名字不消失）', async () => {
+    const a = await graph.admitConcept({ name: '锚定验证', kind: 'construct', supportCount: 2 });
+    const b = await graph.admitConcept({ name: '验证锚定', kind: 'construct', supportCount: 2, domain: ['x'] });
+    expect(a.action).toBe('created');
+    expect(b.action).toBe('merge_candidate');
+    expect(b.id).not.toBe(a.id);
+    const names = (await graph.getFullGraph()).nodes.map((n) => n.name);
+    expect(names).toContain('锚定验证');
+    expect(names).toContain('验证锚定');
+    const cand = (await graph.listMergeCandidates()).find((c) => c.id === b.candidateId)!;
+    expect(cand.reason).toBe('embedding_band');
+    expect(cand.fingerprintDiff).toContain('strong_near');
+    expect(cand.distance).toBeLessThanOrEqual(0.2);
+  });
+
+  it('band 段（mergeThreshold < 距离 ≤ candidateBandHi）候选且无 strong_near', async () => {
+    await graph.admitConcept({ name: '锚定验证', kind: 'construct', supportCount: 2 });
+    const b = await graph.admitConcept({ name: '切片缓存', kind: 'construct', supportCount: 2 });
+    expect(b.action).toBe('merge_candidate');
+    const cand = (await graph.listMergeCandidates()).find((c) => c.id === b.candidateId)!;
+    expect(cand.reason).toBe('embedding_band');
+    expect(cand.fingerprintDiff ?? []).not.toContain('strong_near');
+    expect(cand.distance).toBeGreaterThan(0.2);
+    expect(cand.distance).toBeLessThanOrEqual(0.35);
+  });
+
+  it('band 外不写候选、独立成行', async () => {
+    await graph.admitConcept({ name: '锚定验证', kind: 'construct', supportCount: 2 });
+    const b = await graph.admitConcept({ name: '晋升门限', kind: 'construct', supportCount: 2 });
+    expect(b.action).toBe('created');
+    expect(await graph.listMergeCandidates()).toHaveLength(0);
+  });
+
+  it('kind 冲突的近邻对候选 reason 为指纹冲突（B2 裁决输入）', async () => {
+    await graph.admitConcept({ name: '锚定验证', kind: 'construct', supportCount: 2 });
+    const b = await graph.admitConcept({ name: '验证锚定', kind: 'entity', supportCount: 2 });
+    expect(b.action).toBe('merge_candidate');
+    const cand = (await graph.listMergeCandidates()).find((c) => c.id === b.candidateId)!;
+    expect(cand.reason).toBe('kind:construct≠entity');
   });
 });
 
