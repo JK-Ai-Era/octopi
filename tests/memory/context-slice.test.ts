@@ -110,7 +110,66 @@ describe('extractContextSlice', () => {
     expect(extractContextSlice({ messages, evidence: '另一处的原话片段足够长' })).toBe('');
   });
 
-  it('过短 evidence 片段不锚定（MIN_FRAGMENT_LEN 防误锚）', () => {
+  it('tool 文本经 toolResults/toolCalls 侧写可锚定（content 为空也行）', () => {
+    const messages = [
+      msg('assistant', '确认一下部署方案'),
+      {
+        role: 'tool',
+        content: '',
+        timestamp: 0,
+        toolResults: [
+          { toolCallId: 'c1', name: 'ask_user', purpose: '拍板验证方式', result: { answer: '都不动，等下次自然运行验证' }, durationMs: 100 },
+        ],
+      },
+      msg('user', '好的就等自然运行'),
+    ];
+    const slice = extractContextSlice({
+      messages,
+      evidence: 'ask_user 答案：「等下次自然运行验证」',
+      windowMessages: 1,
+    });
+    expect(slice).toContain('ask_user');
+    expect(slice).toContain('都不动，等下次自然运行验证');
+    expect(slice).toContain('确认一下部署方案');
+    expect(slice).toContain('好的就等自然运行');
+  });
+
+  it('assistant 的 toolCalls 参数文本可锚定', () => {
+    const messages = [
+      msg('user', '前置讨论若干内容'),
+      {
+        role: 'assistant',
+        content: '我来查一下',
+        timestamp: 0,
+        toolCalls: [{ id: 'c2', name: 'file_read', arguments: { path: 'arch/NEXT-STEPS.md' } }],
+      },
+      msg('user', '后续讨论若干内容'),
+    ];
+    const slice = extractContextSlice({ messages, evidence: '读取了「arch/NEXT-STEPS.md」的清单', windowMessages: 1 });
+    expect(slice).toContain('arch/NEXT-STEPS.md');
+    expect(slice).toContain('前置讨论若干内容');
+    expect(slice).toContain('后续讨论若干内容');
+  });
+
+  it('相邻引文按引号括号边界拆开，不粘连成跨引文片段', () => {
+    const messages = [
+      msg('user', '前文话题甲甲甲甲甲甲'),
+      { role: 'tool', content: '', timestamp: 0, toolResults: [{ name: 'ask_user', result: { answer: '都不动，等下次自然运行验证' } }] },
+      msg('user', '我手动重启了'),
+    ];
+    const evidence = '原话：「都不动，等下次自然运行验证」（补充「我手动重启了」）';
+    const slice = extractContextSlice({ messages, evidence, windowMessages: 1 });
+    expect(slice).toContain('都不动，等下次自然运行验证');
+    expect(slice).toContain('我手动重启了');
+  });
+
+  it('含 CJK 的 6 字引文可锚定，纯拉丁仍需 ≥8', () => {
+    const messages = [msg('user', '他说我手动重启了然后继续')];
+    expect(extractContextSlice({ messages, evidence: '记录：「我手动重启了」' })).toContain('我手动重启了');
+    expect(extractContextSlice({ messages: [msg('user', 'the test ran fine')], evidence: 'quote: the tes' })).toBe('');
+  });
+
+  it('过短 evidence 片段不锚定（防误锚阈值）', () => {
     const messages = [msg('user', '短句在这里')];
     expect(extractContextSlice({ messages, evidence: '租约' })).toBe('');
   });

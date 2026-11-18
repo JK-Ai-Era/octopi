@@ -16,9 +16,6 @@ import { elidedCharsMarker } from '@octopi-agent/core/elision.js';
 import { getTextContent } from '@octopi-agent/core/types.js';
 import { isEngineCarrierSource } from '../context/layer-types.js';
 
-/** evidence 片段最小长度；短于它的命中易误锚（误锚比无锚更糟），宁可不锚定 */
-const MIN_FRAGMENT_LEN = 8;
-
 /** 缺省窗口：锚点两侧各取的实质消息条数 */
 export const DEFAULT_CONTEXT_WINDOW_MESSAGES = 2;
 
@@ -50,19 +47,63 @@ function matchKey(text: string): string {
 }
 
 /**
- * evidence → 候选片段：按省略号/句读/换行拆开，归一后保留 ≥ MIN_FRAGMENT_LEN 的片段。
+ * evidence → 候选片段：按省略号/句读/换行/**引号与括号边界**拆开（相邻引文
+ * 不粘连成跨引文长片段），归一后保留过阈值的片段。
  *
  * @param evidence - 记忆证据原文
  * @returns 归一化候选片段（保持出现顺序）
  */
 function evidenceFragments(evidence: string): string[] {
-  const rough = evidence.split(/[…⋯]|\.{3,}|[。！？!?\n；;，,：:]/);
+  const rough = evidence.split(/[…⋯]|\.{3,}|[。！？!?\n；;，,：:「」『』“”"'‘’（）()【】[\]]/);
   const out: string[] = [];
   for (const piece of rough) {
     const cleaned = matchKey(piece);
-    if (cleaned.length >= MIN_FRAGMENT_LEN) out.push(cleaned);
+    if (fragmentAcceptable(cleaned)) out.push(cleaned);
   }
   return out;
+}
+
+/** CJK 字符（中日韩音节块）——单字信息量高，短引文常足以唯一锚定 */
+const CJK_RE = /[　-〿㐀-䶿一-鿿가-힯]/;
+
+/** evidence 片段最小长度：拉丁 ≥8（短通用片段易误锚）；含 CJK ≥6（误锚比无锚更糟，宁可不锚定） */
+function fragmentAcceptable(fragment: string): boolean {
+  return fragment.length >= (CJK_RE.test(fragment) ? 6 : 8);
+}
+
+/**
+ * 工具调用/结果的文本侧写 — evidence 常引用工具输出与调用参数。
+ *
+ * SessionData 的 toolCalls/toolResults 是一等字段（content 常为空），只取
+ * name/purpose/args/result 的文本形态；条目形状未知时跳过。
+ *
+ * @param value - toolCalls 或 toolResults 数组（未知形状）
+ * @returns 侧写文本行（可能为空数组）
+ */
+function toolSidecarLines(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const lines: string[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as {
+      name?: unknown;
+      purpose?: unknown;
+      arguments?: unknown;
+      input?: unknown;
+      args?: unknown;
+      result?: unknown;
+    };
+    const parts: string[] = [];
+    if (typeof e.name === 'string' && e.name) parts.push(e.name);
+    if (typeof e.purpose === 'string' && e.purpose) parts.push(e.purpose);
+    const payload = e.result ?? e.arguments ?? e.input ?? e.args;
+    if (payload !== undefined && payload !== null) {
+      parts.push(typeof payload === 'string' ? payload : JSON.stringify(payload));
+    }
+    const line = parts.join(' ').trim();
+    if (line) lines.push(line);
+  }
+  return lines;
 }
 
 /**
@@ -82,14 +123,18 @@ function asSubstantive(message: unknown): { text: string; role: string } | null 
     role?: unknown;
     content?: unknown;
     metadata?: { source?: unknown };
+    toolCalls?: unknown;
+    toolResults?: unknown;
   };
   if (isEngineCarrierSource(m.metadata?.source)) return null;
   if (m.role !== 'user' && m.role !== 'assistant' && m.role !== 'tool') return null;
   const raw = m.content;
   // 只取文本块：ContentBlock[] 整体 stringify 会把 tool_use 参数/图片塞进语境
-  const text = (
-    typeof raw === 'string' ? raw : Array.isArray(raw) ? getTextContent(raw as never) : ''
-  ).trim();
+  const contentText =
+    typeof raw === 'string' ? raw : Array.isArray(raw) ? getTextContent(raw as never) : '';
+  // 工具文本是一等字段（content 常为空），必须并入锚定域：evidence 常引用工具输出
+  const sidecar = [...toolSidecarLines(m.toolCalls), ...toolSidecarLines(m.toolResults)].join('\n');
+  const text = [contentText.trim(), sidecar].filter(Boolean).join('\n');
   if (!text) return null;
   return { text, role: String(m.role) };
 }

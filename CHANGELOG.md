@@ -128,6 +128,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.28 (2026-11-18)
+
+### fix(cognition): contextSlice 锚定域并入工具文本；引文按引号边界拆片段
+
+首个真实运行样本（v0.118.27 后）暴露三处锚定失配，均以实际 SessionData 形状为据修复：
+
+- **工具文本入锚定域**：SessionData 的 `toolCalls`/`toolResults`（name/purpose/args/result）是一等字段、`content` 常为空——此前整条 tool 消息被丢弃，ask_user 答案、工具输出引文永远无法命中。现并入消息文本侧写。
+- **引文拆分加引号括号边界**：相邻引文（「A」（补充「B」））此前粘连成跨引文长片段、两边都匹配不上；现按「」『』（）等边界拆开，各引文独立锚定。
+- **阈值 CJK 感知**：含 CJK 片段 ≥6 可锚定（短中文引文常足以唯一锚定），纯拉丁仍 ≥8 防通用短语误锚。
+- 验证：全量 5310 测试绿（context-slice 测试 17 例含新边界）；真实样本「都不动，等下次自然运行验证」/「我手动重启了」两类引文均已可命中（测试固化）。
+
+---
+
 ## v0.118.27 (2026-11-18)
 
 ### fix(cognition): conceptualize 管线 contextSlice 回补——修复概念图谱零产出
