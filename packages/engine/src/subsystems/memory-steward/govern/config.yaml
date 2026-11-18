@@ -4,7 +4,10 @@ description: 记忆库治理：连续衰减、重复合并、软删除、保护�
 
 sense:
   source: schedule
-  interval: 3600000
+  # 治理门槛全是天/周/月级（保护窗 24h/衰减 90d/shadow TTL 14d）——日批匹配时间尺度；
+  # runOnStart 抗重启饿死（interval 计时器随进程清零，OP-9R 记账）
+  interval: 86400000
+  runOnStart: true
   filter:
     condition: "true"
     events: ['memory.health.high_count', 'memory.health.shadow_backlog', 'memory.steward.govern.request']

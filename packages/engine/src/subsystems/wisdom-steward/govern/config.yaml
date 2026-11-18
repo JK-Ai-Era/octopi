@@ -4,7 +4,10 @@ description: 范式库治理：零应用衰减、容量演化、软退休（不�
 
 sense:
   source: schedule
-  interval: 3600000
+  # 范式治理门槛是周/月级（零应用衰减/容量演化/软退休）——日批匹配时间尺度；
+  # runOnStart 抗重启饿死（interval 计时器随进程清零，OP-9R 记账）
+  interval: 86400000
+  runOnStart: true
   filter:
     condition: "true"
     events: ['wisdom.steward.govern.request']

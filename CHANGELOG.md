@@ -128,6 +128,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.34 (2026-11-19)
+
+### fix(subsystems): 全量触发周期盘点——两个 govern 从 1h 降为日批（时间尺度匹配）
+
+- **依据**：治理对象的时间门槛全是天/周/月级（memory.govern：新记忆保护窗 24h/连续衰减 90d/shadow TTL 14d；wisdom.govern：零应用衰减/容量演化/软退休周月级）——1h 触发 56% 空转（实测 18 跑 10 空转），且对象都在保护窗外。降为 `interval 24h + runOnStart`（同 v0.118.33 的抗饿死兜底）；`memory.health.*` 增量事件触发保留（近实时路径不动）。
+- **盘点结论（9 子系统）**：conceptualize/backfill/evaluate/safety-guard 为事件驱动（趁热提取/请求驱动/流下游/风险即判）✓ 不动；consolidate/attribute v0.118.33 已改日批 ✓；**formation 保持 8h**（响应式是设计意图、实测 17 跑 0 空转、多源门控+cooldown 1h 节流在位）。
+- **验证**：全量 5359 用例绿、`npm run build` 绿。
+
+---
+
 ## v0.118.33 (2026-11-19)
 
 ### fix(subsystems): 每日脉搏抗重启饿死——consolidate/attribute 补 runOnStart 兜底
