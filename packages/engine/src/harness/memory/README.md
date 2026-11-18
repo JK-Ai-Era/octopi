@@ -56,6 +56,7 @@
 - cognition-decay.ts — 边衰减 / Hebbian / 反证
 - cognition-trigger.ts — 落库后 emit `cognition.conceptualize.request`
 - conceptualizer.ts — 命题+contextSlice → 概念化（唯一概念化入口）
+- context-slice.ts — session 消息 + evidence 锚定 → ±N 窗口语境切片（conceptualize 回补）
 - cognition.ts / sqlite/cognition-store.ts — 概念图谱（结构同一性、扩散激活）
 - index.ts — 导出
 

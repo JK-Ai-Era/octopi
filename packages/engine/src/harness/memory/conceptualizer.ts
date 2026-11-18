@@ -32,7 +32,10 @@ export interface ConceptualizerInput {
   /** 证据周边语境（±N 消息或 anchor span）；缺失时拒绝概念化 */
   contextSlice: string;
   memoryStatus?: MemoryStatus;
-  /** 用于 cue 校验的拼接文本（默认 evidence + contextSlice） */
+  /**
+   * 用于 cue 校验的拼接文本（默认 evidence + contextSlice）。
+   * 仅当调用方已把语境切片并入本字段时可替代 contextSlice（evidence 单独不算语境）。
+   */
   evidenceText?: string;
 }
 
@@ -132,6 +135,18 @@ export function parseConceptualizerJson(text: string): RawConceptualizerOutput |
 }
 
 /**
+ * 语境充分性判定 — handler 前置检查与 admit 门共用（唯一判定点）。
+ *
+ * @param input - contextSlice 或调用方预合并的 evidenceText 任一非空即有语境
+ * @returns 是否具备概念化所需的证据语境
+ */
+export function hasSufficientContext(
+  input: Pick<ConceptualizerInput, 'contextSlice' | 'evidenceText'>,
+): boolean {
+  return Boolean(input.contextSlice?.trim() || input.evidenceText?.trim());
+}
+
+/**
  * 解析 + 门控 + 入库（store 可选时只评估不写）。
  *
  * @param raw - LLM 结构化输出或原文
@@ -149,7 +164,7 @@ export async function conceptualizeAndAdmit(
     return { nodes: [], edges: [], rejected: [{ name: '*', reason: 'parse_failed' }] };
   }
 
-  if (!input.contextSlice?.trim() && !input.evidenceText?.trim()) {
+  if (!hasSufficientContext(input)) {
     return {
       nodes: [],
       edges: [],

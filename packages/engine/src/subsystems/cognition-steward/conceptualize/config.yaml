@@ -40,7 +40,7 @@ lifecycle:
   maxDurationMs: 120000
 
 runtimeInject:
-  requires: ['conceptGraphStore']
+  requires: ['conceptGraphStore', 'sessionStore']
 
 observability:
   eventPrefix: cognition.steward.conceptualize
@@ -50,3 +50,5 @@ metadata:
     maxNodesPerProposition: 6
     maxEdgesPerProposition: 12
     maxTokens: 8192
+    contextWindowMessages: 2
+    contextSliceMaxChars: 4000

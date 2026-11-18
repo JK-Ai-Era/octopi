@@ -161,6 +161,7 @@ export {
 export type { EdgeDecayConfig } from './cognition-decay.js';
 export {
   conceptualizeAndAdmit,
+  hasSufficientContext,
   parseConceptualizerJson,
 } from './conceptualizer.js';
 export type {
@@ -175,6 +176,12 @@ export {
   emitConceptualizeRequest,
 } from './cognition-trigger.js';
 export type { ConceptualizeRequestPayload } from './cognition-trigger.js';
+export {
+  DEFAULT_CONTEXT_SLICE_MAX_CHARS,
+  DEFAULT_CONTEXT_WINDOW_MESSAGES,
+  extractContextSlice,
+} from './context-slice.js';
+export type { ContextSliceOptions } from './context-slice.js';
 
 // ── 内存实现 ──
 export { InMemoryMemoryStore } from './store.js';

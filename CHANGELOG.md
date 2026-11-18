@@ -128,6 +128,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.27 (2026-11-18)
+
+### fix(cognition): conceptualize 管线 contextSlice 回补——修复概念图谱零产出
+
+根因：conceptualize 输入包的 contextSlice 无任何生产者（发射端不带、handler「缺省从 session 补」的兜底从未实现），`conceptualizeAndAdmit` 以 `no_context_slice` 整批打回——审计中 170 次运行 100% 零产出，且 LLM 调用发生在门控之前（白烧）。
+
+- 新增 `harness/memory/context-slice.ts`：evidence 拆片段锚定 ±N 条实质消息（`contextWindowMessages`，缺省 2）提取语境切片；截断以锚点为中心（`contextSliceMaxChars`，缺省 4000，软上限，elision 标记可略超）；锚定域含 tool 文本（evidence 可引用工具输出）；引擎载体插槽复用 `isEngineCarrierSource` 单源过滤（turnEnd/engineHint/runStopped 等不再冒充用户发言）。
+- conceptualize handler 在 payload 缺 contextSlice 时经 `sessionStore.load(sessionId)` 回补；语境判定与 admit 门共用 `hasSufficientContext` 并前置到 LLM 之前：无语境不再烧 LLM 调用。
+- **行为变更（失败语义分层）**：`sessionStore` 未注入 → throw（装配故障，对齐 conceptGraphStore 语义）；session 读取异常/形状不符 → 新 reason `session_load_failed`（detail 带原因）；仅「确实无语境」归 `no_context_slice`。payload.contextSlice 非字符串不再被采信（此前可经 `String()` 变成 `[object Object]` 过门）。
+- 验证：全量 5306 测试绿（新增 21 个：context-slice 单测 + handler 回归，覆盖截断保锚点、载体过滤、失败分层、装配故障）；独立评审 14 项 findings 逐条核实处置。
+- 遗留（另议）：449 条存量记忆从未被概念化，需补跑；`boundary.visibility: isolated` 与按 sessionId 读会话的能力声明不一致；每事件整会话 load 的性能与 append 读时序。
+
+---
+
 ## v0.118.26 (2026-11-18)
 
 ### feat(webui): 顶栏删除 [viewMode] 标签；面板「视图模式」取值中英双版
