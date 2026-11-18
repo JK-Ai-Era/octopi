@@ -6,7 +6,8 @@ sense:
   source: schedule
   # 每日一次兜底脉搏；挂 govern 脉搏（governed 事件）+ 显式 attribute.request 增量触发
   interval: 86400000
-  runOnStart: false
+  # 重启首跳兜底（interval 计时器随重启清零、无 catch-up——同 consolidate，OP-9R 记账）
+  runOnStart: true
   cooldownMs: 86400000
   filter:
     condition: "true"

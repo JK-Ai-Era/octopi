@@ -4,7 +4,10 @@ description: 概念图巩固：衰减、晋升、GC、容量检查（事件+TTL�
 
 sense:
   source: schedule
+  # 24h 节拍 + 重启首跳兜底：interval 计时器随进程重启清零（PulseScheduler 无 catch-up，
+  # OP-9R 记账），部署重启周期 < 24h 时纯 interval 会被饿死——runOnStart 保证每次启动必跑一轮
   interval: 86400000
+  runOnStart: true
   filter:
     condition: "true"
     events: ['cognition.consolidate.request', 'session.ended', 'memory.steward.governed']

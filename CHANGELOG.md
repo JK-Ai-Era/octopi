@@ -128,6 +128,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.33 (2026-11-19)
+
+### fix(subsystems): 每日脉搏抗重启饿死——consolidate/attribute 补 runOnStart 兜底
+
+- **根因**：PulseScheduler 的周期 tick 是进程内 `setInterval`（P0c A′ 无持久相位、无逾期 catch-up）——重启周期 < interval 的长脉搏**结构性饿死**（部署每天重启数次，24h tick 永不到期）。实证：memory.steward.govern（1h）整点心跳正常而 cognition.steward.consolidate 与 wisdom.steward.attribute（均 24h）数日零自动 run。此前误判「consolidate 无调度」实为审计 `trigger.source` 不区分 pulse/manual（pulse 触发亦标 manual）。
+- **变更**：consolidate / attribute 的 `sense` 补 `runOnStart: true`（启动首跳，调度器侧已有消费方）——重启即跑一轮，衰减按日幂等、重跑无害；24h `interval` 保留为长寿命运行的节拍。attribute 的 `cooldownMs: 86400000` 不动（每日一次语义）。
+- **根治记账**：PulseScheduler 逾期 catch-up（持久化 last-fire、启动补跳）记 OP-9R——影响所有长 interval 子系统，本提交为部署层兜底。
+- **验证**：全量 5359 用例绿、`npm run build` 绿（16 个子系统资产入 dist）；行为验证随下次 serve 重启（启动即触发 consolidate：晋升/裁决自动发生）。
+
+---
+
 ## v0.118.32 (2026-11-19)
 
 ### feat(cognition): 语义种子——查询向量近邻补召回（R3 语义路径闭合）
