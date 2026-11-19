@@ -11,10 +11,11 @@
 
 import { describe, expect, it, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { AddressInfo } from 'node:net';
+import { AddressInfo, createServer as createNetServer } from 'node:net';
 
 import { createBrowserService } from '../../packages/engine/src/integration/browser/index.js';
 import {
@@ -28,6 +29,12 @@ import type {
   RegisteredTool,
   ToolExecutionContext,
 } from '@octopi-agent/core/types.js';
+import {
+  getRunScope,
+  runInScope,
+  type RunScope,
+} from '../../packages/engine/src/harness/run/run-scope.js';
+import { DefaultBrowserService } from '../../packages/engine/src/integration/browser/service.js';
 
 // 工具 handler 契约返回 unknown；测试侧经 loosen 统一松散读取（结果形状在各用例内断言）
 type ToolResult = any;
@@ -49,6 +56,8 @@ async function checkEngine(): Promise<boolean> {
     await service.dispose();
     return true;
   } catch (err) {
+    // OCTOPI_REQUIRE_BROWSER_TESTS=1：缺引擎直接 fail（发布/CI 里真实栈必须核到，不许静默跳过）
+    if (process.env.OCTOPI_REQUIRE_BROWSER_TESTS === '1') throw err;
     console.warn(
       `[browser-tools.test] browser engine unavailable — real-stack tests will be skipped: ${
         err instanceof Error ? err.message : String(err)
@@ -132,6 +141,13 @@ beforeAll(async () => {
       );
       return;
     }
+    if (url.startsWith('/popup-noopener')) {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(
+        '<html><body><p>popup page</p><a target="_blank" rel="noopener" href="/final">pop</a></body></html>',
+      );
+      return;
+    }
     if (url.startsWith('/other')) {
       res.setHeader('content-type', 'text/html; charset=utf-8');
       res.end(OTHER_HTML);
@@ -140,6 +156,48 @@ beforeAll(async () => {
     if (url.startsWith('/nav')) {
       res.setHeader('content-type', 'text/html; charset=utf-8');
       res.end(NAV_HTML);
+      return;
+    }
+    if (url.startsWith('/set-cookie')) {
+      res.setHeader('set-cookie', 'octopi_test=cookievalue123; Path=/');
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end('<html><body><p>cookie set</p></body></html>');
+      return;
+    }
+    if (url.startsWith('/echo-cookie')) {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(`<html><body><p>cookie:${req.headers.cookie ?? 'none'}</p></body></html>`);
+      return;
+    }
+    if (url.startsWith('/upload')) {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(
+        '<html><body><form method="post" action="/submit" enctype="multipart/form-data"><input type="file" name="f"><button type="submit">Send</button></form></body></html>',
+      );
+      return;
+    }
+    if (url.startsWith('/extract')) {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(
+        '<html><body><h1 class="title">Foo</h1><ul><li class="item">a</li><li class="item">b</li></ul></body></html>',
+      );
+      return;
+    }
+    if (url.startsWith('/challenge')) {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(
+        '<html><head><title>Just a moment...</title></head><body><p>Checking your browser before accessing</p></body></html>',
+      );
+      return;
+    }
+    if (url.startsWith('/xhr')) {
+      const peer = /^\/xhr-two\?peer=(\d+)/.exec(url)?.[1];
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(
+        peer
+          ? `<html><body><p>xhr page</p><script>fetch("/submit",{method:"POST",body:"a"}).then(()=>fetch("http://127.0.0.1:${Number(peer)}/submit",{method:"POST",body:"b"}))</script></body></html>`
+          : '<html><body><p>xhr page</p><script>fetch("/submit",{method:"POST",body:"x"}).then(()=>fetch("/submit",{method:"POST",body:"y"}))</script></body></html>',
+      );
       return;
     }
     res.setHeader('content-type', 'text/html; charset=utf-8');
@@ -195,8 +253,11 @@ function makeCtx(
   } as unknown as ToolExecutionContext;
 }
 
-function toolsFor(options: Parameters<typeof createBrowserTools>[1] = {}) {
-  const service = createBrowserService({ engine: 'playwright' }) as BrowserService & {
+function toolsFor(
+  options: Parameters<typeof createBrowserTools>[1] = {},
+  serviceOptions: Parameters<typeof createBrowserService>[0] = { engine: 'playwright' },
+) {
+  const service = createBrowserService(serviceOptions) as BrowserService & {
     dispose(): Promise<void>;
   };
   const tools = createBrowserTools(service, {
@@ -635,6 +696,517 @@ describe('session service', () => {
   });
 });
 
+// ── P2：attach 真实浏览器 / 持久 profile / upload / extract / 挑战 / xhr 写闸 ──
+
+describe('P2 (real stack)', () => {
+  it.skipIf(!engineAvailable)(
+    'attach drives a real browser over CDP, policy still enforced, close does not kill it (P2)',
+    async () => {
+      // 自起一个带 CDP 端口的"用户浏览器"（临时端口防冲突）
+      const port = await new Promise<number>((resolve) => {
+        const probe = createNetServer();
+        probe.listen(0, '127.0.0.1', () => {
+          const p = (probe.address() as AddressInfo).port;
+          probe.close(() => resolve(p));
+        });
+      });
+      const pw = (await import('playwright-core')) as unknown as {
+        chromium: {
+          launch(options?: unknown): Promise<{
+            isConnected(): boolean;
+            close(): Promise<void>;
+            newContext(): Promise<{
+              newPage(): Promise<{ goto(url: string): Promise<unknown>; close(): Promise<void> }>;
+              close(): Promise<void>;
+            }>;
+            contexts(): Array<{ newPage(): Promise<{ goto(url: string): Promise<unknown>; close(): Promise<void> }> }>;
+          }>;
+          connectOverCDP(endpoint: string): Promise<{
+            contexts(): Array<{
+              newPage(): Promise<{ goto(url: string): Promise<unknown>; close(): Promise<void> }>;
+            }>;
+            close(): Promise<void>;
+          }>;
+        };
+      };
+      const userBrowser = await pw.chromium.launch({
+        headless: true,
+        args: [`--remote-debugging-port=${port}`],
+      });
+      try {
+        const { service, tools } = toolsFor(
+          { urlPolicy: { deny: ['localhost'] } },
+          { engine: 'cdp-attach', attach: { endpoint: `http://127.0.0.1:${port}` } },
+        );
+        track(service);
+        const rec: Recorder = { events: [], writes: [] };
+        const ctx = makeCtx(rec, {
+          confirmEffect: vi.fn(async () => 'approve') as never,
+        });
+        const nav = await tools.get('browser_navigate')!.handler({ url: baseUrl }, ctx);
+        expect(nav.snapshot.items.length).toBeGreaterThan(0);
+        const infos = await service.list();
+        expect(infos[0]?.identity).toEqual({ kind: 'attach' });
+        // 请求层策略在 attach 会话上同样收口（302 目标被拦）
+        await expect(
+          tools.get('browser_navigate')!.handler({ url: `${baseUrl}redir` }, ctx),
+        ).rejects.toThrow(/url_not_allowed/);
+        // N2：用户侧标签（同 context、无 opener）不被 attach 守卫误关
+        const helper = await pw.chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+        try {
+          const userTab = await helper.contexts()[0].newPage();
+          await userTab.goto(`${baseUrl}other`);
+          await new Promise((r) => setTimeout(r, 300));
+          await userTab.goto(`${baseUrl}nav`); // 仍可导航 = 未被守卫关掉
+          await userTab.close();
+        } finally {
+          await helper.close();
+        }
+        await service.dispose();
+        // 关闭 = 断开连接；"用户浏览器"必须还活着且可继续工作
+        expect(userBrowser.isConnected()).toBe(true);
+        const userContext = await userBrowser.newContext();
+        const userTab = await userContext.newPage();
+        await userTab.goto(`${baseUrl}other`);
+        await userContext.close();
+      } finally {
+        await userBrowser.close();
+      }
+    },
+    60_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'persistent profile round-trips cookies across sessions (P2)',
+    async () => {
+      const profileDir = await mkdtemp(join(tmpdir(), 'octopi-profile-'));
+      const opts = { profiles: { persist: true, defaultProfile: 'p1' }, profileDir };
+      try {
+        {
+          const { service, tools } = toolsFor(opts);
+          track(service);
+          const ctx = makeCtx({ events: [], writes: [] });
+          await tools.get('browser_navigate')!.handler({ url: `${baseUrl}set-cookie` }, ctx);
+          // 关闭 = 归档 storageState
+          await tools.get('browser_close')!.handler({}, ctx);
+        }
+        expect(existsSync(join(profileDir, 'p1.json'))).toBe(true);
+        {
+          const { service, tools } = toolsFor(opts);
+          track(service);
+          const ctx = makeCtx({ events: [], writes: [] });
+          const nav = await tools.get('browser_navigate')!.handler(
+            { url: `${baseUrl}echo-cookie` },
+            ctx,
+          );
+          expect(JSON.stringify(nav.snapshot)).toContain('octopi_test=cookievalue123');
+        }
+      } finally {
+        await rm(profileDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'upload: fileUpload gate denies / approves; audit records the outbound file (P2)',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'octopi-up-'));
+      const tmpFile = join(root, 'doc.txt');
+      await writeFile(tmpFile, 'hello upload');
+      const rec: Recorder = { events: [], writes: [] };
+      const deny = vi.fn(async () => ({ decision: 'deny' as const }));
+      const approve = vi.fn(async () => ({ decision: 'approve' as const }));
+      const { service, tools } = toolsFor({ confirm: { fileUpload: true } });
+      track(service);
+      try {
+        const ctx = makeCtx(rec, { cwd: root, confirmEffect: deny as never });
+        const nav = await tools.get('browser_navigate')!.handler({ url: `${baseUrl}upload` }, ctx);
+        const fileRef = (
+          nav.snapshot.items as Array<{ ref?: string; tags?: string[] }>
+        ).find((i) => i.tags?.includes('file'))!.ref!;
+        await expect(
+          tools.get('browser_act')!.handler(
+            { action: 'upload', ref: fileRef, path: 'doc.txt' },
+            makeCtx(rec, { cwd: root, confirmEffect: deny as never }),
+          ),
+        ).rejects.toThrow(/denied/);
+        expect(rec.events.some((e) => e.event === 'browser.act.denied')).toBe(true);
+        const ok = await tools.get('browser_act')!.handler(
+          { action: 'upload', ref: fileRef, path: 'doc.txt' },
+          makeCtx(rec, { cwd: root, confirmEffect: approve as never }),
+        );
+        expect(ok.ok).toBe(true);
+        expect(approve).toHaveBeenCalled();
+        expect(
+          rec.events.some(
+            (e) => e.event === 'browser.upload' && String(e.data.path).endsWith('doc.txt'),
+          ),
+        ).toBe(true);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'extract returns real DOM data; unmatched fields are null (P2)',
+    async () => {
+      const { service, tools } = toolsFor();
+      track(service);
+      const ctx = makeCtx({ events: [], writes: [] });
+      await tools.get('browser_navigate')!.handler({ url: `${baseUrl}extract` }, ctx);
+      const out = await tools.get('browser_extract')!.handler(
+        {
+          fields: {
+            title: { selector: 'h1.title' },
+            items: { selector: 'li.item', multiple: true },
+            missing: { selector: '.nope' },
+            attr: { selector: 'h1.title', attribute: 'class' },
+          },
+        },
+        ctx,
+      );
+      expect(out.data).toEqual({
+        title: 'Foo',
+        items: ['a', 'b'],
+        missing: null,
+        attr: 'title',
+      });
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'challenge detection surfaces marker + HITL hint (P2)',
+    async () => {
+      const { service, tools } = toolsFor();
+      track(service);
+      const ctx = makeCtx({ events: [], writes: [] });
+      const nav = await tools.get('browser_navigate')!.handler(
+        { url: `${baseUrl}challenge` },
+        ctx,
+      );
+      expect(nav.challenge?.kind).toBe('interstitial');
+      expect(nav.challenge?.marker).toBe('just a moment');
+      expect(String(nav.hint)).toContain('ask_user');
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'xhr writes: gated once per method+origin, approval cache dedupes (P2)',
+    async () => {
+      postCount = 0;
+      const approve = vi.fn(async () => ({ decision: 'approve' as const }));
+      const { service, tools } = toolsFor({ confirm: { xhrWrites: true } });
+      track(service);
+      const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: approve as never });
+      await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
+      await new Promise((r) => setTimeout(r, 600));
+      expect(postCount).toBe(2); // 两次页内 POST 都放行
+      expect(approve).toHaveBeenCalledTimes(1); // 同 method+origin 只确认一次（会话级缓存）
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'xhr writes blocked at request layer when denied (P2)',
+    async () => {
+      postCount = 0;
+      const deny = vi.fn(async () => ({ decision: 'deny' as const }));
+      const { service, tools } = toolsFor({ confirm: { xhrWrites: true } });
+      track(service);
+      const rec: Recorder = { events: [], writes: [] };
+      const ctx = makeCtx(rec, { confirmEffect: deny as never });
+      await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
+      await new Promise((r) => setTimeout(r, 600));
+      expect(postCount).toBe(0);
+      expect(rec.events.some((e) => e.event === 'browser.write.blocked')).toBe(true);
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'attach sessions report engine cdp-attach (评审 F3)',
+    async () => {
+      const port = await new Promise<number>((resolve) => {
+        const probe = createNetServer();
+        probe.listen(0, '127.0.0.1', () => {
+          const p = (probe.address() as AddressInfo).port;
+          probe.close(() => resolve(p));
+        });
+      });
+      const pw = (await import('playwright-core')) as unknown as {
+        chromium: { launch(options?: unknown): Promise<{ close(): Promise<void> }> };
+      };
+      const userBrowser = await pw.chromium.launch({
+        headless: true,
+        args: [`--remote-debugging-port=${port}`],
+      });
+      try {
+        const { service, tools } = toolsFor(
+          {},
+          { engine: 'cdp-attach', attach: { endpoint: `http://127.0.0.1:${port}` } },
+        );
+        track(service);
+        const ctx = makeCtx({ events: [], writes: [] });
+        const nav = await tools.get('browser_navigate')!.handler({ url: baseUrl }, ctx);
+        expect(nav.engine).toBe('cdp-attach');
+        const infos = await service.list();
+        expect(infos[0]?.engine).toBe('cdp-attach');
+      } finally {
+        await userBrowser.close();
+      }
+    },
+    60_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'rel=noopener popups are also closed in managed mode (评审 F2)',
+    async () => {
+      const { service, tools } = toolsFor();
+      track(service);
+      const rec: Recorder = { events: [], writes: [] };
+      const ctx = makeCtx(rec);
+      // noopener 弹窗的 opener() 为 null——managed 模式必须按模式分支全关，不能只认 opener
+      const nav = await tools.get('browser_navigate')!.handler({ url: `${baseUrl}popup-noopener` }, ctx);
+      const link = (nav.snapshot.items as Array<{ ref?: string; role: string }>).find(
+        (i) => i.role === 'link',
+      )!;
+      await tools.get('browser_act')!.handler({ action: 'click', ref: link.ref }, ctx);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(
+        rec.events.some(
+          (e) =>
+            e.event === 'browser.blocked' &&
+            String((e.data as { reason?: string }).reason ?? '').includes('popup'),
+        ),
+      ).toBe(true);
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'late approval never sends the write (评审 F1 regression)',
+    async () => {
+      postCount = 0;
+      // 确认决议迟到（> gate 预算）：请求必须 failRequest，迟到批准不得发出写
+      const late = vi.fn(
+        () => new Promise((resolve) => setTimeout(() => resolve({ decision: 'approve' as const }), 1500)),
+      );
+      const { service, tools } = toolsFor({ timeoutMs: 1000, confirm: { formSubmit: true } });
+      track(service);
+      const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: late as never });
+      const nav = await tools.get('browser_navigate')!.handler({ url: `${baseUrl}postform` }, ctx);
+      const input = (nav.snapshot.items as Array<{ ref?: string; name: string }>).find(
+        (i) => i.name === 'query',
+      )!;
+      await tools
+        .get('browser_act')!.handler({ action: 'fill', ref: input.ref, value: 'x' }, ctx)
+        .catch(() => {});
+      // Enter 提交：无 DOM 预闸，纯请求层路径——请求被暂停等待确认，动作层超时后
+      // 迟到的批准不得把 POST 发出去（这正是评审 F1 的复现场景）
+      await tools
+        .get('browser_act')!.handler({ action: 'press', ref: input.ref, key: 'Enter' }, ctx)
+        .catch(() => {
+          /* 动作层超时/被拒都可接受——关键是写不得发出 */
+        });
+      await new Promise((r) => setTimeout(r, 2000));
+      expect(postCount).toBe(0);
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'corrupt profile state is quarantined and launch falls back fresh (评审 F6)',
+    async () => {
+      const profileDir = await mkdtemp(join(tmpdir(), 'octopi-corrupt-'));
+      await writeFile(join(profileDir, 'p1.json'), '{not json');
+      const { service, tools } = toolsFor({
+        profiles: { persist: true, defaultProfile: 'p1' },
+        profileDir,
+      });
+      track(service);
+      try {
+        const ctx = makeCtx({ events: [], writes: [] });
+        const nav = await tools.get('browser_navigate')!.handler({ url: baseUrl }, ctx);
+        expect(nav.snapshot.items.length).toBeGreaterThan(0);
+        // 坏档被隔离（保留现场），不是被静默删
+        const names = await (await import('node:fs/promises')).readdir(profileDir);
+        expect(names.some((n) => n.includes('.corrupt-'))).toBe(true);
+      } finally {
+        await rm(profileDir, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'extract honors maxItems / aggregate char budget and reports counts (评审 F9/N5)',
+    async () => {
+      // 聚合字符预算：全字段共享 budget，截断如实标记
+      const s1 = toolsFor({ snapshotMaxChars: 2 });
+      track(s1.service);
+      const ctx1 = makeCtx({ events: [], writes: [] });
+      await s1.tools.get('browser_navigate')!.handler({ url: `${baseUrl}extract` }, ctx1);
+      const out1 = await s1.tools
+        .get('browser_extract')!
+        .handler({ fields: { long: { selector: 'h1.title' } } }, ctx1);
+      expect(out1.data.long).toBe('Fo');
+      expect(out1.truncated).toBe(true);
+      // maxItems 截断 + counts 报命中总数（截断≠全量）+ 属性缺失 = null
+      const s2 = toolsFor();
+      track(s2.service);
+      const ctx2 = makeCtx({ events: [], writes: [] });
+      await s2.tools.get('browser_navigate')!.handler({ url: `${baseUrl}extract` }, ctx2);
+      const out2 = await s2.tools.get('browser_extract')!.handler(
+        {
+          fields: {
+            items: { selector: 'li.item', multiple: true, maxItems: 1 },
+            noattr: { selector: 'h1.title', attribute: 'data-x' },
+          },
+        },
+        ctx2,
+      );
+      expect(out2.data.items).toEqual(['a']);
+      expect(out2.truncated).toBe(true);
+      expect(out2.counts).toEqual({ items: 2 });
+      expect(out2.data.noattr).toBeNull(); // 属性缺失 = null（F13）
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'confirm.xhrWrites=false disables the xhr gate without poisoning the cache',
+    async () => {
+      postCount = 0;
+      const gate = vi.fn(async () => ({ decision: 'deny' as const }));
+      const { service, tools } = toolsFor({ confirm: { xhrWrites: false } });
+      track(service);
+      const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
+      await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
+      await new Promise((r) => setTimeout(r, 600));
+      expect(postCount).toBe(2); // 显式关闸：放行且不询问
+      expect(gate).not.toHaveBeenCalled();
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'request-layer gate sees RunScope via re-entry; approved writes land (评审 N1)',
+    async () => {
+      postCount = 0;
+      const seenScopes: Array<string | undefined> = [];
+      const gate = vi.fn(async () => {
+        // 生产 confirmEffect 按 getRunScope() 定界——CDP 回调里必须拿得到 scope
+        seenScopes.push(getRunScope()?.sessionId);
+        return { decision: 'approve' as const };
+      });
+      const { service, tools } = toolsFor({ confirm: { xhrWrites: true } });
+      track(service);
+      const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
+      const scope = { sessionId: ctx.sessionId, agentId: 'agent-1' } as RunScope;
+      await runInScope(scope, async () => {
+        await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
+      });
+      await new Promise((r) => setTimeout(r, 600));
+      expect(postCount).toBe(2); // 正向路径：批准后写真落库
+      expect(gate).toHaveBeenCalled();
+      expect(seenScopes.length).toBeGreaterThan(0);
+      expect(seenScopes.every((s) => s === ctx.sessionId)).toBe(true);
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    'approval cache is keyed by full origin incl. port (评审 F4)',
+    async () => {
+      // 第二个服务：同主机（127.0.0.1）不同端口 = 不同 origin
+      let peerPosts = 0;
+      const peer = createServer((req, res) => {
+        if (req.method === 'POST') peerPosts += 1;
+        res.end('ok');
+      });
+      await new Promise<void>((r) => peer.listen(0, '127.0.0.1', r));
+      const peerPort = (peer.address() as AddressInfo).port;
+      try {
+        postCount = 0;
+        const gate = vi.fn(async () => ({ decision: 'approve' as const }));
+        const { service, tools } = toolsFor({ confirm: { xhrWrites: true } });
+        track(service);
+        const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
+        await tools.get('browser_navigate')!.handler(
+          { url: `${baseUrl}xhr-two?peer=${peerPort}` },
+          ctx,
+        );
+        await new Promise((r) => setTimeout(r, 600));
+        expect(postCount).toBe(1);
+        expect(peerPosts).toBe(1);
+        // 两个 origin 各确认一次（hostname 键只会问一次，正是 F4 缺陷的判别点）
+        expect(gate).toHaveBeenCalledTimes(2);
+      } finally {
+        await new Promise<void>((r) => peer.close(() => r()));
+      }
+    },
+    30_000,
+  );
+
+  it('close-failure evict does not drop a relaunched session on the same key (评审 N3)', async () => {
+    // 假 port：可控的 launch/close 行为（并发交错是纯 service 语义，不需要真浏览器）
+    let seq = 0;
+    let releaseClose!: () => void;
+    let firstCloseStarted!: () => void;
+    const started = new Promise<void>((r) => (firstCloseStarted = r));
+    const port = {
+      async launch(options: { ownerKey?: string }) {
+        seq += 1;
+        const id = `bs_fake_${seq}` as never;
+        return {
+          id,
+          engine: 'playwright',
+          identity: { kind: 'incognito' },
+          ownerKey: options.ownerKey ?? '',
+          url: 'about:blank',
+          goto: async () => ({ url: 'about:blank', title: '' }),
+          snapshot: async () => ({ url: 'about:blank', title: '', items: [] }),
+          inspectAction: async () => ({ action: { kind: 'wait', ms: 0 }, sensitive: false }),
+          act: async () => ({ ok: true, url: 'about:blank', title: '' }),
+          screenshot: async () => ({ mimeType: 'image/png', data: new Uint8Array() }),
+          detectChallenge: async () => undefined,
+          extract: async () => ({ data: {}, truncated: false }),
+          close:
+            seq === 1
+              ? () =>
+                  new Promise<void>((_, rej) => {
+                    firstCloseStarted();
+                    releaseClose = () => rej(new Error('close boom'));
+                  })
+              : async () => {},
+        } as never;
+      },
+      async attach() {
+        throw new Error('n/a');
+      },
+      async list() {
+        return [];
+      },
+    };
+    const service = new DefaultBrowserService(port as never, {});
+    const p1 = await service.acquire('k');
+    const closeP = service.close('k'); // S1 关闭挂起中
+    await started;
+    const p2 = await service.acquire('k'); // closing 命中 → 重新 launch（S2）
+    expect(p2.id).not.toBe(p1.id);
+    releaseClose(); // S1 close 失败
+    await expect(closeP).rejects.toThrow('close boom');
+    // 失败路径的 evict 不得误删同 key 的 S2（身份判定）
+    expect((await service.get('k'))?.id).toBe(p2.id);
+    await service.dispose();
+  });
+});
+
 describe('assembly (config → tool registration)', () => {
   const baseCtx = {
     providers: new Map(),
@@ -666,7 +1238,7 @@ describe('assembly (config → tool registration)', () => {
     ).rejects.toThrow(/not_implemented/);
   });
 
-  it('default config registers the five browser_* tools', async () => {
+  it('default config registers all six browser_* tools', async () => {
     const tools = await assembleGlobalTools({
       ...(baseCtx as object),
       browser: {},

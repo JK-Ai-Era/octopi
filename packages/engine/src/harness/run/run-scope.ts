@@ -200,6 +200,20 @@ export function getRunScope(): RunScope | undefined {
 }
 
 /**
+ * 在既有 RunScope 上下文中执行 fn。
+ *
+ * 供 ALS 边界之外的回调（CDP/事件回调等 socket 驱动路径）重入运行期上下文——
+ * 否则宿主 `confirmEffect` 这类按 `getRunScope()` 定界的能力在回调里拿不到 scope。
+ *
+ * @param scope - 本 run 的作用域身份（handler 执行期捕获）
+ * @param fn - 在该作用域内执行的函数（同步调用其内部的 scope 读取即可）
+ * @returns fn 的返回值
+ */
+export function runInScope<T>(scope: RunScope, fn: () => T): T {
+  return runScopeStorage.run(scope, fn);
+}
+
+/**
  * 读取当前 run 的 sessionId
  *
  * @param fallback - 无 ALS 时的回退（如 Agent.contextSessionId）

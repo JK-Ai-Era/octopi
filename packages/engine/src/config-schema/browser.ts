@@ -2,8 +2,8 @@
  * browser — 浏览器操作工具段（→ engine；arch/browser-capability.md §3.8）
  *
  * 缺省 = 默认开（拍板）；`enabled: false` 显式关闭。
- * `rebrowser` / `camoufox` / `cdp-attach` / `cloud` 为后续分期槽位，
- * 运行时 fail-loud（装配拒绝），schema 先行把键形状定死。
+ * `rebrowser` / `camoufox` / `cloud` 为后续分期槽位，运行时 fail-loud（装配拒绝）；
+ * `cdp-attach` 已实现（P2：attach 用户真实 Chrome）。
  *
  * @module
  */
@@ -12,9 +12,22 @@ import { z } from 'zod';
 export const BrowserConfigSchema = z.object({
   /** 工具面注册开关（缺省 true） */
   enabled: z.boolean().optional(),
-  /** 后端引擎（auto = playwright） */
+  /** 后端引擎（auto = playwright；cdp-attach = 真实 Chrome） */
   engine: z
     .enum(['auto', 'playwright', 'rebrowser', 'camoufox', 'cdp-attach', 'cloud'])
+    .optional(),
+  /** attach 端点（engine=cdp-attach 用；缺省 http://127.0.0.1:9222） */
+  attach: z
+    .object({
+      endpoint: z.string().min(1).optional(),
+    })
+    .optional(),
+  /** 持久 profile（P2；storageState 归档于 OCTOPI_HOME/browser-profiles） */
+  profiles: z
+    .object({
+      persist: z.boolean().optional(),
+      defaultProfile: z.string().min(1).optional(),
+    })
     .optional(),
   /** 浏览器来源：chromium（管理版，octopi browser install）| chrome（系统 Chrome） */
   channel: z.enum(['chromium', 'chrome']).optional(),
@@ -50,6 +63,10 @@ export const BrowserConfigSchema = z.object({
     .object({
       formSubmit: z.boolean().optional(),
       passwordField: z.boolean().optional(),
+      /** 本地文件上传闸（P2） */
+      fileUpload: z.boolean().optional(),
+      /** 页内 fetch/XHR 外部写闸（P2；method+origin 会话级审批缓存） */
+      xhrWrites: z.boolean().optional(),
     })
     .optional(),
 });

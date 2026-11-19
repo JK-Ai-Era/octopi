@@ -15,6 +15,7 @@ import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider
 import type { SessionHistoryOptions } from '../../harness/session/history/index.js';
 import type { ToolSetConfig } from '../../harness/extension/plugin-ecosystem/tools/tool-set.js';
 import type { AskUserCallback } from '../../harness/extension/plugin-ecosystem/tools/ask-user.js';
+import { join } from 'node:path';
 import { resolveSummaryToolBindings } from '../../harness/context/capabilities/summary/tool-bindings.js';
 
 export interface GlobalToolSetContext {
@@ -165,12 +166,21 @@ export async function assembleGlobalTools(ctx: GlobalToolSetContext): Promise<Re
   if (ctx.browser?.enabled !== false) {
     const { createBrowserService } = await import('../browser/index.js');
     const browserCfg = ctx.browser ?? {};
+    if (browserCfg.profiles?.persist && !browserCfg.profiles.defaultProfile) {
+      // persist 无 defaultProfile = 没有任何会话带 profileId：配置静默不生效，必须出声（评审 F20）
+      console.warn(
+        '[tools] browser.profiles.persist is set without defaultProfile — no session will archive/restore state',
+      );
+    }
     browser = {
       service: createBrowserService(browserCfg),
       options: {
         timeoutMs: browserCfg.timeoutMs,
         snapshotMaxChars: browserCfg.snapshotMaxChars,
         confirm: browserCfg.confirm,
+        profiles: browserCfg.profiles,
+        // profile 存储按运行时 home 归位（OCTOPI_HOME/browser-profiles，不进 agent home）
+        profileDir: join(ctx.octopiHome, 'browser-profiles'),
         urlPolicy: {
           allow: browserCfg.network?.domains?.allow,
           deny: browserCfg.network?.domains?.deny,

@@ -24,15 +24,29 @@ import type {
   BrowserSession,
   BrowserSessionId,
   ElementRef,
+  ExtractSpec,
   PageAction,
   PageSnapshot,
 } from './browser-types.js';
+import { BROWSER_DEFAULT_TIMEOUT_MS } from './browser-types.js';
+import { getRunScope, runInScope } from '../../../run/run-scope.js';
 import { assertUrlAllowed, type NetworkGuardOptions } from '../../../knowledge/network-guard.js';
 import { containmentOptions, resolveToolPath } from './platform.js';
 
 export interface BrowserToolOptions {
   /** 敏感动作确认闸门（缺省全开 = 拍板） */
-  confirm?: { formSubmit?: boolean; passwordField?: boolean };
+  confirm?: {
+    formSubmit?: boolean;
+    passwordField?: boolean;
+    /** P2：本地文件上传闸 */
+    fileUpload?: boolean;
+    /** P2：页内 fetch/XHR 外部写闸（method+origin 会话级审批缓存） */
+    xhrWrites?: boolean;
+  };
+  /** 持久 profile（P2）：persist=关闭时归档 storageState；defaultProfile=隐式会话默认身份 */
+  profiles?: { persist?: boolean; defaultProfile?: string };
+  /** profile 存储目录（assemble 按 OCTOPI_HOME 注入） */
+  profileDir?: string;
   urlPolicy?: {
     /** 域名 allow（`*.suffix` 通配，匹配域及其子域）；缺省 = 不限制 */
     allow?: string[];
@@ -131,28 +145,48 @@ function normalizeDecision(raw: ConfirmOutcome | HitlDecision | undefined): 'app
 async function gateSensitiveAction(
   ctx: ToolExecutionContext,
   confirm: BrowserToolOptions['confirm'],
-  intent: { kind: 'passwordField' | 'formSubmit'; description: string },
+  intent: { kind: 'passwordField' | 'formSubmit' | 'fileUpload'; description: string },
   domain: string,
+  gateTimeoutMs: number,
+  onApproved?: () => void,
 ): Promise<void> {
-  const enabled = intent.kind === 'passwordField'
-    ? (confirm?.passwordField ?? true)
-    : (confirm?.formSubmit ?? true);
+  const enabled =
+    intent.kind === 'passwordField'
+      ? (confirm?.passwordField ?? true)
+      : intent.kind === 'fileUpload'
+        ? (confirm?.fileUpload ?? true)
+        : (confirm?.formSubmit ?? true);
   if (!enabled) return;
   const gate = ctx.confirmEffect as unknown as ConfirmGate | undefined;
   if (!gate) {
     // 缺确认通道时敏感效应拒绝执行（fail-closed，不静默放行）
     throw new Error(`denied: ${intent.kind} requires confirmation but no confirmEffect channel`);
   }
-  const decision = await gate({
-    kind: 'other',
-    description: `browser ${intent.kind === 'formSubmit' ? 'form submit' : 'password fill'}: ${intent.description}`,
-    domain,
-    timeoutMs: 120_000,
-  });
-  if (normalizeDecision(decision) === 'deny') {
+  const label =
+    intent.kind === 'formSubmit'
+      ? 'form submit'
+      : intent.kind === 'fileUpload'
+        ? 'file upload'
+        : 'password fill';
+  // 闸门预算必须 ≤ 动作预算（评审 F1/R1：迟到批准不得产生工具已报失败的效果；
+  // 宿主不守 timeoutMs 时本地 race 兜底，超时即拒）
+  const decision = await Promise.race([
+    gate({
+      kind: 'other',
+      description: `browser ${label}: ${intent.description}`,
+      domain,
+      timeoutMs: gateTimeoutMs,
+    }),
+    new Promise<'gate-timeout'>((resolve) => {
+      const t = setTimeout(() => resolve('gate-timeout'), gateTimeoutMs);
+      t.unref?.();
+    }),
+  ]);
+  if (decision === 'gate-timeout' || normalizeDecision(decision) === 'deny') {
     audit(ctx, 'browser.act.denied', { reason: intent.kind, description: intent.description });
     throw new Error(`denied: browser ${intent.kind} not approved`);
   }
+  onApproved?.();
 }
 
 function audit(ctx: ToolExecutionContext, event: string, data: Record<string, unknown>): void {
@@ -165,6 +199,15 @@ function hostOf(url: string): string {
   } catch {
     // about:blank 等无 host URL：确认意图的 domain 留空（如实缺省，不编造）
     return '';
+  }
+}
+
+/** 审批缓存键用 origin（协议+主机+端口；评审 F4：hostname 不足以区分 origin） */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return hostOf(url);
   }
 }
 
@@ -203,29 +246,55 @@ async function resolveSession(
 function buildRequestPolicy(
   ctx: ToolExecutionContext,
   opts: BrowserToolOptions,
+  approvals: Set<string>,
+  gateTimeoutMs: number,
 ): BrowserRequestPolicy {
+  // N1：CDP Fetch 回调由 socket 驱动，不继承运行期 ALS——宿主 confirmEffect 按
+  // getRunScope() 定界会拿不到 scope（无卡全拒）。在 handler 执行期捕获 scope，
+  // 回调里重入；无 scope（单测直调）则原样执行。
+  const scope = getRunScope();
+  const inScope = <T,>(fn: () => T): T => (scope ? runInScope(scope, fn) : fn());
   return {
     checkUrl: async (url: string) => {
       await assertBrowserUrlAllowed(url, opts);
     },
-    confirmWrite: async ({ method, url }) => {
-      // 请求层外部写闸门：非 GET 导航（表单提交/上传语义）复用敏感闸门
-      const gate = ctx.confirmEffect as unknown as ConfirmGate | undefined;
+    confirmWrite: async ({ method, url, documentLevel }) => {
+      const enabled = documentLevel
+        ? (opts.confirm?.formSubmit ?? true)
+        : (opts.confirm?.xhrWrites ?? true);
+      if (!enabled) return true;
+      // 审批缓存键 = method+origin（与契约/文档一致）；DOM 闸批准会预热同一键（避免同一提交问两次）
+      const cacheKey = `${method} ${originOf(url)}`;
+      if (approvals.has(cacheKey)) return true;
+      const gate = inScope(() => ctx.confirmEffect) as unknown as ConfirmGate | undefined;
       if (!gate) return false;
-      if ((opts.confirm?.formSubmit ?? true) === false) return true;
-      const decision = await gate({
-        kind: 'other',
-        description: `browser write ${method} ${redactUrl(url)}`,
-        domain: hostOf(url),
-        timeoutMs: 120_000,
-      });
-      return normalizeDecision(decision) !== 'deny';
+      // 闸门预算必须 ≤ 动作预算：超时即拒、请求 failRequest——迟到批准不得发出写（评审 F1）
+      const decision = await Promise.race([
+        inScope(() =>
+          gate({
+            kind: 'other',
+            description: `browser write ${method} ${redactUrl(url)}${documentLevel ? '' : ' (page script)'}`,
+            domain: hostOf(url),
+            timeoutMs: gateTimeoutMs,
+          }),
+        ),
+        new Promise<'gate-timeout'>((resolve) => {
+          const t = setTimeout(() => resolve('gate-timeout'), gateTimeoutMs);
+          t.unref?.();
+        }),
+      ]);
+      if (decision === 'gate-timeout') return false;
+      const allowed = normalizeDecision(decision) !== 'deny';
+      if (allowed) approvals.add(cacheKey);
+      return allowed;
     },
     record: (event) => {
-      audit(ctx, `browser.${event.kind}`, {
-        url: redactUrl(event.url),
-        ...(event.method ? { method: event.method } : {}),
-        ...(event.reason ? { reason: event.reason } : {}),
+      inScope(() => {
+        audit(ctx, `browser.${event.kind}`, {
+          url: redactUrl(event.url),
+          ...(event.method ? { method: event.method } : {}),
+          ...(event.reason ? { reason: event.reason } : {}),
+        });
       });
     },
   };
@@ -237,11 +306,34 @@ export function createBrowserTools(
   service: BrowserService,
   options: BrowserToolOptions = {},
 ): RegisteredTool[] {
-  const policyFor = (ctx: ToolExecutionContext): BrowserRequestPolicy => buildRequestPolicy(ctx, options);
-  const launchFor = (ctx: ToolExecutionContext): BrowserLaunchOptions => ({
-    ownerKey: ctx.sessionId,
-    policy: policyFor(ctx),
-  });
+  // 会话级 method+origin 审批缓存（DOM 闸与请求层闸共享；键随会话 key 归属）
+  const writeApprovals = new Map<string, Set<string>>();
+  const approvalsFor = (ctx: ToolExecutionContext): Set<string> => {
+    let set = writeApprovals.get(ctx.sessionId);
+    if (!set) {
+      set = new Set();
+      writeApprovals.set(ctx.sessionId, set);
+    }
+    return set;
+  };
+  // 闸门预算 ≤ 动作预算（评审 F1：迟到批准不得产生"工具已报失败"的写入）
+  const gateTimeoutMs = Math.max(500, (options.timeoutMs ?? BROWSER_DEFAULT_TIMEOUT_MS) - 2_000);
+  const policyFor = (ctx: ToolExecutionContext): BrowserRequestPolicy =>
+    buildRequestPolicy(ctx, options, approvalsFor(ctx), gateTimeoutMs);
+  const launchFor = (ctx: ToolExecutionContext): BrowserLaunchOptions => {
+    const profileId = options.profiles?.defaultProfile;
+    if (profileId && /[\\/]/.test(profileId)) {
+      // profileId 进文件名（storageState 路径拼接）：路径字符直接拒（防越出 profile 目录）
+      throw new Error(`browser_profiles: defaultProfile must not contain path separators: ${profileId}`);
+    }
+    return {
+      ownerKey: ctx.sessionId,
+      policy: policyFor(ctx),
+      ...(profileId ? { profileId } : {}),
+      ...(options.profileDir ? { profileDir: options.profileDir } : {}),
+      ...(options.profiles?.persist ? { persistProfile: true } : {}),
+    };
+  };
   const snapshotArgs: Record<string, ToolParameter> = {
     session: {
       type: 'string',
@@ -264,7 +356,7 @@ export function createBrowserTools(
         session: snapshotArgs.session,
       },
       capabilities: ['egress'],
-      timeoutMs: options.timeoutMs ?? 30_000,
+      timeoutMs: options.timeoutMs ?? BROWSER_DEFAULT_TIMEOUT_MS,
     },
     source: { kind: 'builtin', origin: 'browser', trustLevel: 'builtin' },
     executionMode: 'sequential',
@@ -284,7 +376,19 @@ export function createBrowserTools(
         const snapshot = await session.snapshot({
           maxChars: options.snapshotMaxChars,
         });
-        return { sessionId: session.id, engine: session.engine, ...result, snapshot };
+        const challenge = await session.detectChallenge();
+        return {
+          sessionId: session.id,
+          engine: session.engine,
+          ...result,
+          ...(challenge
+            ? {
+                challenge,
+                hint: 'challenge page detected — ask the user for help via ask_user; in attach mode the user can solve it in the open browser, then call browser_snapshot to re-check',
+              }
+            : {}),
+          snapshot,
+        };
       } catch (err) {
         audit(ctx, 'browser.navigate.failed', {
           url: redactUrl(rawUrl),
@@ -302,16 +406,28 @@ export function createBrowserTools(
         'Get a fresh snapshot of the current page (interactive elements with refs + condensed text in document order). Call this after navigating or when refs went stale. Does not launch a browser — an active session is required.',
       parameters: snapshotArgs,
       capabilities: ['egress'],
-      timeoutMs: options.timeoutMs ?? 30_000,
+      timeoutMs: options.timeoutMs ?? BROWSER_DEFAULT_TIMEOUT_MS,
     },
     source: { kind: 'builtin', origin: 'browser', trustLevel: 'builtin' },
     executionMode: 'sequential',
     handler: async (args, ctx) => {
       const session = await resolveSession(service, args.session, ctx, launchFor(ctx), false);
-      return session.snapshot({
+      const snapshot = await session.snapshot({
         interactiveOnly: Boolean(args.interactiveOnly),
         maxChars: options.snapshotMaxChars,
       });
+      // 挑战复检点（评审 F10）：hint 承诺 browser_snapshot 可复检——这里兑现
+      const challenge = await session.detectChallenge();
+      return {
+        sessionId: session.id,
+        ...snapshot,
+        ...(challenge
+          ? {
+              challenge,
+              hint: 'challenge page detected — ask the user for help via ask_user; in attach mode the user can solve it in the open browser, then call browser_snapshot to re-check',
+            }
+          : {}),
+      };
     },
   };
 
@@ -319,31 +435,44 @@ export function createBrowserTools(
     definition: {
       name: 'browser_act',
       description:
-        'Act on the current page: action=click|fill|select|check|uncheck|hover|press|scroll|wait. Use refs from the latest snapshot (stale refs error). Sensitive effects (password fills, form submits) go through a human confirmation gate; submissions are also gated at the request layer.',
+        'Act on the current page: action=click|fill|select|check|uncheck|hover|press|scroll|wait|upload. Use refs from the latest snapshot (stale refs error). Sensitive effects (password fills, form submits, file uploads) go through a human confirmation gate; submissions are also gated at the request layer.',
       parameters: {
         action: {
           type: 'string',
-          description: 'click | fill | select | check | uncheck | hover | press | scroll | wait',
+          description: 'click | fill | select | check | uncheck | hover | press | scroll | wait | upload',
         },
         ref: { type: 'string', description: 'element ref from the latest snapshot' },
         value: { type: 'string', description: 'value for fill / select' },
         key: { type: 'string', description: 'key name for press (e.g. Enter, Tab)' },
         deltaY: { type: 'number', description: 'scroll distance for scroll (default 600)' },
         ms: { type: 'number', description: 'wait duration in ms for wait (max 10000)' },
+        path: { type: 'string', description: 'file path to set for upload (workspace-relative or absolute)' },
         session: snapshotArgs.session,
       },
       capabilities: ['egress'],
-      timeoutMs: options.timeoutMs ?? 30_000,
+      timeoutMs: options.timeoutMs ?? BROWSER_DEFAULT_TIMEOUT_MS,
     },
     source: { kind: 'builtin', origin: 'browser', trustLevel: 'builtin' },
     executionMode: 'sequential',
     handler: async (args, ctx) => {
       const session = await resolveSession(service, args.session, ctx, launchFor(ctx), false);
       const action = buildPageAction(args);
+      // upload：路径过包含原语（workspace/effectPolicy 根约束），外发文件进账本
+      if (action.kind === 'upload') {
+        const cwd = ctx.cwd ?? process.cwd();
+        action.path = resolveToolPath(action.path, cwd, containmentOptions(ctx));
+        // 意图级账本（尝试）；成功后另有 browser.upload 结果条目（评审 F12）
+        audit(ctx, 'browser.upload.attempt', { path: action.path, sessionId: session.id });
+      }
       const intent = await session.inspectAction(action);
       const domain = hostOf(session.url);
       if (intent.sensitive !== false) {
-        await gateSensitiveAction(ctx, options.confirm, intent.sensitive, domain);
+        await gateSensitiveAction(ctx, options.confirm, intent.sensitive, domain, gateTimeoutMs, () => {
+          // 表单提交批准 → 预热请求层缓存（同一 POST 不再二次询问）
+          if (intent.sensitive !== false && intent.sensitive.kind === 'formSubmit') {
+            approvalsFor(ctx).add(`POST ${originOf(session.url)}`);
+          }
+        });
         audit(ctx, 'browser.act.sensitive', {
           kind: intent.sensitive.kind,
           target: intent.target,
@@ -351,7 +480,11 @@ export function createBrowserTools(
           sessionId: session.id,
         });
       }
-      return session.act(action);
+      const result = await session.act(action);
+      if (action.kind === 'upload') {
+        audit(ctx, 'browser.upload', { path: action.path, sessionId: session.id });
+      }
+      return result;
     },
   };
 
@@ -367,7 +500,7 @@ export function createBrowserTools(
         session: snapshotArgs.session,
       },
       capabilities: ['egress'],
-      timeoutMs: options.timeoutMs ?? 30_000,
+      timeoutMs: options.timeoutMs ?? BROWSER_DEFAULT_TIMEOUT_MS,
     },
     source: { kind: 'builtin', origin: 'browser', trustLevel: 'builtin' },
     executionMode: 'sequential',
@@ -404,6 +537,61 @@ export function createBrowserTools(
     },
   };
 
+  const extractTool: RegisteredTool = {
+    definition: {
+      name: 'browser_extract',
+      description:
+        'Deterministic structured extraction from the current page: fields = { name: { selector, attribute?, multiple? } } (CSS selectors). Returns real DOM data; fields with no match are null. For semantic reading use browser_snapshot instead.',
+      parameters: {
+        fields: {
+          type: 'object',
+          description:
+            'map of field name → { selector: css, attribute?: attr name (default: text), multiple?: boolean }',
+        },
+        session: snapshotArgs.session,
+      },
+      capabilities: ['egress'],
+      timeoutMs: options.timeoutMs ?? BROWSER_DEFAULT_TIMEOUT_MS,
+    },
+    source: { kind: 'builtin', origin: 'browser', trustLevel: 'builtin' },
+    executionMode: 'sequential',
+    handler: async (args, ctx) => {
+      const session = await resolveSession(service, args.session, ctx, launchFor(ctx), false);
+      const spec = parseExtractSpec(args.fields);
+      const outcome = await session.extract(spec);
+      // 聚合字符预算（评审 N5）：全字段共享 budget，截断如实标记；counts 透出命中总数
+      const budget = options.snapshotMaxChars ?? 8000;
+      let truncated = outcome.truncated;
+      let remaining = budget;
+      const trimmed: typeof outcome.data = {};
+      for (const [key, value] of Object.entries(outcome.data)) {
+        if (typeof value === 'string') {
+          const take = Math.min(value.length, Math.max(remaining, 0));
+          if (take < value.length) truncated = true;
+          trimmed[key] = value.slice(0, take);
+          remaining -= take;
+        } else if (Array.isArray(value)) {
+          trimmed[key] = value.map((s) => {
+            if (typeof s !== 'string') return s;
+            const take = Math.min(s.length, Math.max(remaining, 0));
+            if (take < s.length) truncated = true;
+            remaining -= take;
+            return s.slice(0, take);
+          });
+        } else {
+          trimmed[key] = value;
+        }
+      }
+      return {
+        sessionId: session.id,
+        url: session.url,
+        data: trimmed,
+        truncated,
+        ...(outcome.counts ? { counts: outcome.counts } : {}),
+      };
+    },
+  };
+
   const closeTool: RegisteredTool = {
     definition: {
       name: 'browser_close',
@@ -412,7 +600,7 @@ export function createBrowserTools(
         session: snapshotArgs.session,
       },
       capabilities: ['egress'],
-      timeoutMs: options.timeoutMs ?? 30_000,
+      timeoutMs: options.timeoutMs ?? BROWSER_DEFAULT_TIMEOUT_MS,
     },
     source: { kind: 'builtin', origin: 'browser', trustLevel: 'builtin' },
     executionMode: 'sequential',
@@ -428,12 +616,14 @@ export function createBrowserTools(
       }
       const keyOrId = explicit || ctx.sessionId;
       const closed = await service.close(keyOrId);
+      // 关会话即撤销写批准（KNOWN-ISSUES 语义兑现；重开会话不得沿用旧批准）
+      writeApprovals.delete(ctx.sessionId);
       audit(ctx, 'browser.close', { keyOrId, closed });
       return { ok: true, closed };
     },
   };
 
-  return [navigateTool, snapshotTool, actTool, screenshotTool, closeTool];
+  return [navigateTool, snapshotTool, actTool, screenshotTool, extractTool, closeTool];
 }
 
 function buildPageAction(args: Record<string, unknown>): PageAction {
@@ -476,6 +666,12 @@ function buildPageAction(args: Record<string, unknown>): PageAction {
       const ms = args.ms === undefined ? 0 : toFiniteNumber(args.ms, 'ms');
       return { kind: 'wait', ms };
     }
+    case 'upload': {
+      requireRef('upload', ref);
+      const path = String(args.path ?? '').trim();
+      if (!path) throw new Error('browser_act: upload requires path');
+      return { kind: 'upload', ref, path };
+    }
     default:
       throw new Error(`browser_act: unknown action: ${kind || '(missing)'}`);
   }
@@ -492,4 +688,35 @@ function toFiniteNumber(value: unknown, name: string): number {
     throw new Error(`browser_act: ${name} must be a finite number`);
   }
   return n;
+}
+
+/** 抽取规格校验：结构不对就 fail-loud（不猜语义、不静默丢字段） */
+function parseExtractSpec(raw: unknown): ExtractSpec {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('browser_extract: fields must be an object of name → { selector, ... }');
+  }
+  const spec: ExtractSpec = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const field = (value ?? {}) as {
+      selector?: unknown;
+      attribute?: unknown;
+      multiple?: unknown;
+      maxItems?: unknown;
+    };
+    if (typeof field.selector !== 'string' || !field.selector.trim()) {
+      throw new Error(`browser_extract: fields.${key}.selector must be a non-empty string`);
+    }
+    if (field.maxItems !== undefined && (!Number.isInteger(field.maxItems) || (field.maxItems as number) < 1)) {
+      throw new Error(`browser_extract: fields.${key}.maxItems must be a positive integer`);
+    }
+    spec[key] = {
+      selector: field.selector.trim(),
+      ...(typeof field.attribute === 'string' && field.attribute.trim()
+        ? { attribute: field.attribute.trim() }
+        : {}),
+      ...(field.multiple === true ? { multiple: true } : {}),
+      ...(field.maxItems === undefined ? {} : { maxItems: field.maxItems as number }),
+    };
+  }
+  return spec;
 }

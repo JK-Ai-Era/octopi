@@ -51,21 +51,33 @@ export interface BrowserLaunchOptions {
   ownerKey?: string;
   /** 请求级策略（URL 判定/写确认/账本）；缺省 = 无策略（仅裸端口直用时允许） */
   policy?: BrowserRequestPolicy;
+  /** 持久 profile ID（P2：identity.kind='profile'；storageState 归档/恢复） */
+  profileId?: string;
+  /** profile 存储目录（`OCTOPI_HOME/browser-profiles`；assemble 注入） */
+  profileDir?: string;
+  /** 关闭时归档 storageState（缺省 false；与 profileId/profileDir 同用） */
+  persistProfile?: boolean;
 }
 
 /**
  * 请求级策略（arch/browser-capability.md §3.6）。
- * 在**网络请求层**收口（`context.route` 拦截每个请求）：覆盖重定向、子资源、
+ * 在**网络请求层**收口（CDP Fetch 域逐请求暂停；`context.route` 不触发于重定向跳，
+ * 已弃用）：覆盖重定向、子资源、
  * 页内点击导航——策略判定是单一实现，DOM 层敏感标记只是提前预判。
  */
 export interface BrowserRequestPolicy {
   /** 每个网络请求的 URL 判定；抛错 = 拦截该请求 */
   checkUrl(url: string): Promise<void>;
   /**
-   * 外部写确认闸门：非 GET 的**导航请求**（表单提交/上传语义）触发；
-   * false = 拦截。fetch/XHR 侧写入 P1 只记账不闸（P2 收紧）。
+   * 外部写确认闸门：**所有非 GET 请求**触发（P2 收紧：含 fetch/XHR；P1 只闸文档导航）。
+   * `documentLevel` = 文档级提交（表单/上传语义）；false = 页内脚本写入。
+   * false = 拦截。工具层按 `method+origin` 做会话级审批缓存，避免同源重复确认。
    */
-  confirmWrite(intent: { method: string; url: string }): Promise<boolean>;
+  confirmWrite(intent: {
+    method: string;
+    url: string;
+    documentLevel: boolean;
+  }): Promise<boolean>;
   /** 账本回调（写尝试/拦截；fire-and-forget） */
   record?(event: BrowserPolicyEvent): void;
 }
@@ -77,10 +89,15 @@ export interface BrowserPolicyEvent {
   reason?: string;
 }
 
-/** attach 用户真实浏览器（P2；P1 实现必须 fail-loud） */
+/** attach 用户真实浏览器（P2；经 connectOverCDP，复用其登录/指纹） */
 export interface BrowserAttachOptions {
-  /** CDP 端点（ws://… 或 http://127.0.0.1:9222） */
+  /** CDP 端点（ws://… 或 http://127.0.0.1:9222；缺省后者） */
   endpoint?: string;
+  timeoutMs?: number;
+  /** 会话归属 key（同 launch） */
+  ownerKey?: string;
+  /** 请求级策略（同 launch；attach 会话同样逐请求收口） */
+  policy?: BrowserRequestPolicy;
 }
 
 /** 会话摘要（list） */
@@ -106,6 +123,43 @@ export interface GotoResult {
   status?: number;
 }
 
+/** 挑战页情报（启发式识别；见 arch/browser-capability.md §3.7） */
+export interface ChallengeInfo {
+  kind: 'captcha' | 'interstitial';
+  /** 命中的识别标记（如实透出，供人/模型判断） */
+  marker: string;
+}
+
+/**
+ * 确定性结构化抽取规格（P2）：字段名 → CSS 选择器 + 可选属性。
+ * 不做语义理解（那是模型自己的活）；只做 DOM 查询，结果为真实数据或 null。
+ */
+export interface ExtractFieldSpec {
+  selector: string;
+  /** 取元素属性；缺省取文本（textContent 去空白）；属性缺失 = null */
+  attribute?: string;
+  /** 取全部匹配（数组）；缺省取第一个 */
+  multiple?: boolean;
+  /** multiple 数组上限（缺省 50，防整表进上下文；超限截断） */
+  maxItems?: number;
+}
+export type ExtractSpec = Record<string, ExtractFieldSpec>;
+/**
+ * 抽取结果：字段 → 字符串 / `Array<string | null>`（multiple；属性缺失项为 null）/ null
+ * （无匹配 = null，不编造）。
+ */
+export type ExtractResult = Record<string, string | Array<string | null> | null>;
+
+/**
+ * 抽取产出（P2 预算语义，评审 N5）：数据 + 截断标记 + multiple 命中总数
+ * （`counts` 让调用方知道被 maxItems 截断前的真实条数——"50 条不是全部"）。
+ */
+export interface ExtractOutcome {
+  data: ExtractResult;
+  truncated: boolean;
+  counts?: Record<string, number>;
+}
+
 export interface SnapshotOptions {
   /** 只列可交互元素（省 token） */
   interactiveOnly?: boolean;
@@ -114,7 +168,7 @@ export interface SnapshotOptions {
 }
 
 /** 快照元素语义标签（敏感效应判定 + 语义提示） */
-export type SnapshotTag = 'submit' | 'password' | 'heading';
+export type SnapshotTag = 'submit' | 'password' | 'file' | 'heading';
 
 /** 快照条目：可交互元素（带 ref）或纯文本流 */
 export type SnapshotItem =
@@ -137,7 +191,7 @@ export interface PageSnapshot {
   truncated?: boolean;
 }
 
-/** 页面动作（可辨识联合；P1 不含 upload = P2） */
+/** 页面动作（可辨识联合） */
 export type PageAction =
   | { kind: 'click'; ref: ElementRef }
   | { kind: 'fill'; ref: ElementRef; value: string }
@@ -147,16 +201,18 @@ export type PageAction =
   | { kind: 'hover'; ref: ElementRef }
   | { kind: 'press'; key: string; ref?: ElementRef }
   | { kind: 'scroll'; deltaY: number }
-  | { kind: 'wait'; ms: number };
+  | { kind: 'wait'; ms: number }
+  /** P2：向文件输入框上传本地文件（外部写；fileUpload 闸） */
+  | { kind: 'upload'; ref: ElementRef; path: string };
 
 /** 动作意图预检（工具层确认闸门依据；基于快照元数据，不发浏览器往返） */
 export interface ActionIntent {
   action: PageAction;
   /**
    * 敏感效应分类：`false` = 常规；对象 = 需过确认闸门的不可逆外部写。
-   * `passwordField` = 向密码字段填写；`formSubmit` = 提交表单。
+   * `passwordField` = 向密码字段填写；`formSubmit` = 提交表单；`fileUpload` = 上传本地文件。
    */
-  sensitive: false | { kind: 'passwordField' | 'formSubmit'; description: string };
+  sensitive: false | { kind: 'passwordField' | 'formSubmit' | 'fileUpload'; description: string };
   /** 目标元素（审计/UI 展示） */
   target?: { role: string; name: string };
 }
@@ -209,6 +265,10 @@ export interface BrowserSession {
   inspectAction(action: PageAction): Promise<ActionIntent>;
   act(action: PageAction): Promise<ActResult>;
   screenshot(options?: ScreenshotOptions): Promise<ScreenshotResult>;
+  /** 挑战页启发式识别（captcha/interstitial；无挑战返回 undefined） */
+  detectChallenge(): Promise<ChallengeInfo | undefined>;
+  /** 确定性结构化抽取（CSS 选择器 → 真实数据；无匹配字段为 null；带截断标记与命中数） */
+  extract(spec: ExtractSpec): Promise<ExtractOutcome>;
   close(): Promise<void>;
 }
 

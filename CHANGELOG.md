@@ -129,6 +129,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.119.1 (2026-11-20)
+
+### feat(engine): browser capability P2 — cdp-attach 真实 Chrome、持久 profile、browser_extract、写闸收紧
+
+- **cdp-attach 引擎**：`browser.engine: "cdp-attach"` 经 connectOverCDP 接入用户已打开的真实 Chrome（`browser.attach.endpoint`，缺省 `http://127.0.0.1:9222`），复用真实登录/指纹（L3 持久身份）。请求层策略（CDP Fetch）在 attach 会话上**同样逐请求收口**（重定向/子资源/写闸，已实证）；会话关闭 = 只关自己开的页 + 断开连接，**不杀用户浏览器**（已实证）；弹窗收口按 opener 归属判定，不误伤用户自己的标签。
+- **持久 profile**：`browser.profiles`（`persist`/`defaultProfile`）；会话关闭时归档 storageState 至 `OCTOPI_HOME/browser-profiles/<id>.json`、启动时恢复（文件缺失 = 全新身份）；attach 会话 = 用户活身份，不归档。
+- **`browser_extract`**：确定性 CSS 选择器抽取（`fields: { selector, attribute?, multiple? }`），无匹配字段 = `null`（不编造）。
+- **挑战识别与 HITL 出口**：navigate 结果附 `challenge`（启发式标记表：Cloudflare/人机验证等）与 `hint`（引导 `ask_user`；attach 模式下用户在真实浏览器里过挑战后 `browser_snapshot` 复查）。
+- **`upload` 动作 + fileUpload 闸**：向文件输入框上传本地文件；路径过 `resolveToolPath`/`containmentOptions` 包含原语，外发文件进效应账本；闸默认开（`confirm.fileUpload`）。
+- **写闸收紧（P1 递延项收口）**：所有非 GET 请求过 `confirmWrite`（`documentLevel` 区分文档级提交与页内 fetch/XHR），工具层按 `method+origin` 做**会话级审批缓存**去重（`confirm.formSubmit`/`confirm.xhrWrites` 分闸）。
+- **配置**：`browser.attach` / `browser.profiles` / `confirm.fileUpload` / `confirm.xhrWrites`（octopi.schema.json / octopi.example.json 已同步）。
+- **独立评审修复**（两轮：blocker×3/major×9 全处置）：确认闸门超时即拒（迟到批准不得发出工具已报失败的写入）、请求层闸门重入 RunScope（CDP 回调无 ALS，宿主确认通道拿不到 scope 会无卡全拒——用 `runInScope` 捕获重入）、`rel=noopener` 弹窗收口（managed 全关；attach 仅关本页弹窗、用户标签不碰）、attach 会话 engine 如实报 `cdp-attach`、审批缓存键改 `method+origin`、profile 归档原子写 0600+损坏档隔离自愈（隔离失败拒覆盖）、close 失败摘表防僵尸+evict 身份判定防误删重开同 key 会话、extract 聚合预算+`truncated`/`counts`、snapshot 兑现挑战复检路径、captcha 类标记限标题防误伤。
+- **验证**：`tests/harness/browser-tools.test.ts` 41 例全绿（attach 真链路/cookie 往返/upload 闸/extract/挑战识别/xhr 闸 + 迟到批准/RunScope 重入/noopener 弹窗/用户标签存活/engine 标识/损坏 profile/origin 缓存键/close 交错回归）；全量套件 5450 通过。
+- **注意（KNOWN-ISSUES 已更新）**：写闸按 `method+origin` 会话级去重（已批 origin 的再写不再询问，关会话即撤销）；attach 会话只管辖自己的页（用户其他标签页不动也不设闸）；持久 profile 按 OCTOPI_HOME 共享（租户/agent 归属为开放问题）；挑战识别是启发式（漏检为已知边界）。
+
+---
+
 ## v0.119.0 (2026-11-19)
 
 ### feat(engine): 浏览器操作能力 P1 — browser_* 五件套 + Playwright 后端 + browser.* 配置

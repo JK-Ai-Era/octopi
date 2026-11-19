@@ -247,6 +247,10 @@ export interface BrowserToolConfig {
   enabled?: boolean;
   /** 后端引擎（auto = playwright；其余为分期槽位，运行时 fail-loud） */
   engine?: 'auto' | 'playwright' | 'rebrowser' | 'camoufox' | 'cdp-attach' | 'cloud';
+  /** attach 端点（engine=cdp-attach 用；缺省 http://127.0.0.1:9222） */
+  attach?: { endpoint?: string };
+  /** 持久 profile（P2；storageState 归档于 OCTOPI_HOME/browser-profiles） */
+  profiles?: { persist?: boolean; defaultProfile?: string };
   /** 浏览器来源：chromium（管理版）| chrome（系统 Chrome） */
   channel?: 'chromium' | 'chrome';
   headless?: boolean;
@@ -265,7 +269,14 @@ export interface BrowserToolConfig {
     allowPrivateNetwork?: boolean;
   };
   /** 敏感动作确认闸门（缺省全开） */
-  confirm?: { formSubmit?: boolean; passwordField?: boolean };
+  confirm?: {
+    formSubmit?: boolean;
+    passwordField?: boolean;
+    /** 本地文件上传闸（P2） */
+    fileUpload?: boolean;
+    /** 页内 fetch/XHR 外部写闸（P2） */
+    xhrWrites?: boolean;
+  };
 }
 
 /**

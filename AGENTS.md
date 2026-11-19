@@ -85,6 +85,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   archives/             # Cold archive backup *.sessions.jsonl.gz
   knowledge/            # Knowledge data plane (knowledge.db — **sole writer is Knowledge Service**; see docs/knowledge.md)
   credentials/          # Integration credentials vault (credentials.db; env/file refs or AES-GCM ciphertext)
+  browser-profiles/     # browser_* persistent login state (storageState <id>.json, 0600; lazy-created on profile persist)
   plugin-state/<id>/    # per-plugin private state dir (0700; api.stateDir — plugin runtime state, never secrets)
   agents/<id>/          # agent home
     AGENTS.md           # main persona (loaded first by loadPersona)

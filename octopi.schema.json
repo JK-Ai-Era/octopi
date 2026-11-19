@@ -3326,6 +3326,27 @@
             "cloud"
           ]
         },
+        "attach": {
+          "type": "object",
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "profiles": {
+          "type": "object",
+          "properties": {
+            "persist": {
+              "type": "boolean"
+            },
+            "defaultProfile": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
         "channel": {
           "type": "string",
           "enum": [
@@ -3407,6 +3428,12 @@
               "type": "boolean"
             },
             "passwordField": {
+              "type": "boolean"
+            },
+            "fileUpload": {
+              "type": "boolean"
+            },
+            "xhrWrites": {
               "type": "boolean"
             }
           }

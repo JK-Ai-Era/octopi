@@ -342,13 +342,17 @@
     "timeoutMs": 30000,
     "snapshotMaxChars": 8000,
     "sessionIdleTimeoutMs": 1800000,
+    "attach": { "endpoint": "http://127.0.0.1:9222" },
+    "profiles": { "persist": true, "defaultProfile": "default" },
     "network": {
       "domains": { "allow": [], "deny": [] },
       "allowPrivateNetwork": false
     },
     "confirm": {
       "formSubmit": true,
-      "passwordField": true
+      "passwordField": true,
+      "fileUpload": true,
+      "xhrWrites": true
     }
   },
 

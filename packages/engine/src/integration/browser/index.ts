@@ -29,6 +29,12 @@ export interface BrowserServiceOptions {
   enabled?: boolean;
   /** 后端引擎（auto = playwright）——工厂消费 */
   engine?: string;
+  /** attach 端点（engine=cdp-attach；缺省 http://127.0.0.1:9222）——工厂消费 */
+  attach?: { endpoint?: string };
+  /** 持久 profile（P2）：defaultProfile/persist——工具面消费（注入 launch 选项） */
+  profiles?: { persist?: boolean; defaultProfile?: string };
+  /** profile 存储目录——工具面消费 */
+  profileDir?: string;
   /** 浏览器来源：chromium（管理版）| chrome（系统 Chrome）——工厂消费 */
   channel?: 'chromium' | 'chrome';
   /** 无头开关——工厂消费 */
@@ -49,7 +55,12 @@ export interface BrowserServiceOptions {
     allowPrivateNetwork?: boolean;
   };
   /** 敏感动作确认闸门（缺省全开 = 拍板）——工具面消费 */
-  confirm?: { formSubmit?: boolean; passwordField?: boolean };
+  confirm?: {
+    formSubmit?: boolean;
+    passwordField?: boolean;
+    fileUpload?: boolean;
+    xhrWrites?: boolean;
+  };
 }
 
 /**
@@ -73,12 +84,21 @@ export function createBrowserService(options: BrowserServiceOptions = {}): Brows
         }),
         { sessionIdleTimeoutMs: options.sessionIdleTimeoutMs },
       );
+    case 'cdp-attach':
+      // P2：attach 用户真实 Chrome（launch 派发到 connectOverCDP；close=断开不杀）
+      return new DefaultBrowserService(
+        new PlaywrightBrowserPort({
+          timeoutMs: options.timeoutMs,
+          attachMode: true,
+          attachEndpoint: options.attach?.endpoint,
+        }),
+        { sessionIdleTimeoutMs: options.sessionIdleTimeoutMs },
+      );
     case 'rebrowser':
     case 'camoufox':
-    case 'cdp-attach':
     case 'cloud':
       throw new Error(
-        `not_implemented: browser engine "${engine}" lands in P2–P4 (arch/browser-capability.md §4)`,
+        `not_implemented: browser engine "${engine}" lands in P3–P4 (arch/browser-capability.md §4)`,
       );
     default:
       throw new Error(`not_implemented: unknown browser engine "${engine}"`);

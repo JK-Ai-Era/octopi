@@ -139,7 +139,8 @@ export class DefaultBrowserService implements BrowserService {
 
   /**
    * 关闭一个会话（closing 守卫 + 先关再摘表）。
-   * 失败：解 guard、保留表记录，close 可重试；成功：摘表。
+   * 失败也摘表（评审 F8）：关闭失败的会话是半死态（如归档失败但浏览器已关），
+   * 留表会毒化 acquire/get（全报 closed），代价是 close 不可重试、下次 acquire 重 launch。
    */
   private async closeSession(session: BrowserSession): Promise<boolean> {
     if (this.closing.has(session.id)) return true;
@@ -147,6 +148,7 @@ export class DefaultBrowserService implements BrowserService {
     try {
       await session.close();
     } catch (err) {
+      this.evict(session);
       this.closing.delete(session.id);
       throw err;
     }
@@ -156,7 +158,10 @@ export class DefaultBrowserService implements BrowserService {
   }
 
   private evict(session: BrowserSession): void {
-    this.byKeyMap.delete(session.ownerKey);
+    // 身份判定（评审 N3）：失败路径的 evict 可能晚于同 key 重 launch——只摘"仍是这个会话"的记录
+    if (this.byKeyMap.get(session.ownerKey) === session) {
+      this.byKeyMap.delete(session.ownerKey);
+    }
     this.byIdMap.delete(session.id);
     this.lastUsedAt.delete(session.id);
   }
@@ -173,8 +178,8 @@ export class DefaultBrowserService implements BrowserService {
       try {
         await this.closeSession(session);
       } catch {
-        // 回收失败：closeSession 已解 guard 保留记录，下次 sweep 重试；
-        // 进程级泄漏风险已记入 KNOWN-ISSUES
+        // 回收失败：closeSession 已摘表（下次 acquire 重 launch）；
+        // 极端情况下的进程级泄漏风险已记入 KNOWN-ISSUES
       }
     }
   }
