@@ -205,7 +205,56 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .center-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .center-header { padding: 10px 14px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); flex-shrink: 0; }
 .center-header-row { display: flex; justify-content: space-between; align-items: center; }
-.conversation-scroll { flex: 1; padding: 14px; overflow-y: auto; min-height: 0; }
+.conversation-scroll { flex: 1; padding: 14px 14px 14px 24px; overflow-y: auto; min-height: 0; }
+/* 会话区包裹层：turn 定位轨 / 回底按钮的绝对定位锚 */
+.conversation-area { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── turn 定位轨：贴左缘悬浮，常态半透明不挡阅读 ── */
+.turn-rail {
+  position: absolute; left: 2px; top: 8px; bottom: 8px; width: 16px;
+  display: flex; flex-direction: column; z-index: 30;
+  opacity: 0.22; transition: opacity 0.15s ease;
+}
+.turn-rail:hover, .turn-rail:focus-within { opacity: 1; }
+.turn-rail-row { flex: 1; position: relative; display: flex; align-items: center; min-height: 0; overflow: hidden; }
+.turn-rail-item {
+  width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.turn-rail-item:hover { background: var(--color-surface-3); border-radius: var(--radius-sm); }
+.turn-rail-tick {
+  display: block; width: 8px; height: 2px; border-radius: 999px;
+  background: var(--color-border-strong, #94a3b8);
+}
+.turn-rail-item:hover .turn-rail-tick { background: var(--color-text); height: 3px; }
+.turn-rail-item.active .turn-rail-tick { background: var(--color-primary, #2563eb); height: 3px; width: 11px; }
+.turn-rail-item.busy .turn-rail-tick { animation: turn-rail-pulse 0.9s ease-in-out infinite; }
+@keyframes turn-rail-pulse { 50% { opacity: 0.25; } }
+.turn-rail-tip {
+  position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%);
+  width: max-content; max-width: 320px; padding: 8px 10px;
+  background: var(--color-surface); color: var(--color-text);
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.18);
+  z-index: 40; pointer-events: none; text-align: left;
+}
+.turn-rail-tip-time { font-size: 11px; opacity: 0.6; margin-bottom: 4px; }
+.turn-rail-tip-text {
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden;
+}
+.turn-rail-tip-hint { font-size: 11px; opacity: 0.6; margin-top: 4px; }
+
+/* ── 回底悬浮按钮：上滑超过一屏时出现 ── */
+.back-to-bottom {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  z-index: 30; display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface); color: var(--color-text);
+  box-shadow: 0 6px 20px rgba(17, 24, 39, 0.16); cursor: pointer; font-size: 12px;
+}
+.back-to-bottom:hover { background: var(--color-surface-3); }
 
 /* ── Composer ── */
 .composer { border-top: 1px solid var(--color-border); padding: 12px; background: var(--color-surface); flex-shrink: 0; position: relative; }

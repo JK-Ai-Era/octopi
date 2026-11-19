@@ -1251,6 +1251,15 @@ export class OctopiClient {
   }
 
   /**
+   * 会话全部 user 角色消息记录（turn 定位索引用轻量投影）。
+   * 返回原始 MessageRecord（含 metadata），语义分类由 ConversationAdapter 统一执行。
+   */
+  async getSessionUserMessages(sessionId: string): Promise<{ messages: MessageRecord[] }> {
+    const data = await this.getJson(`/sessions/${encodeURIComponent(sessionId)}/user-messages`);
+    return (data?.data as { messages: MessageRecord[] }) ?? { messages: [] };
+  }
+
+  /**
    * 会话任务列表（只读）
    */
   async getSessionTasks(sessionId: string, options?: { agentId?: string }): Promise<SessionTaskView[]> {

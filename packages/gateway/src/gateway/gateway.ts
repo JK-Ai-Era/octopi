@@ -457,6 +457,9 @@ export function createConcurrencyGate(max: number): {
 /** 启动窗口期入站消息缓冲上限（防御性容量，超限拒收并 fail loud） */
 const PENDING_INBOUND_CAP = 100;
 
+/** user-messages 投影的字符串正文上限：消费方只做定位轨 tooltip 预览 */
+const USER_MESSAGE_PROJECTION_CHARS = 4000;
+
 export class Gateway {
   /** 已注册的 Agent */
   private agents = new Map<string, AgentDefinition>();
@@ -3854,6 +3857,34 @@ export class Gateway {
       hasMore: nextOffset < total,
       ...(live ? { live } : {}),
     };
+  }
+
+  /**
+   * 会话全部 user 角色消息记录（turn 定位索引用轻量投影）。
+   *
+   * 只做传输层过滤（role === 'user'，含机器生成的 user 角色条目）；
+   * 「哪条是真实用户 turn」的语义分类由 web 层 ConversationAdapter 统一执行，
+   * 服务端不复制该规则。index 为 session.messages 绝对下标（与分叉/截断口径一致）。
+   * 字符串正文按 USER_MESSAGE_PROJECTION_CHARS 截断：消费方只做定位轨 tooltip
+   * 预览，超长粘贴不应把整段正文推给 16px 宽的定位条（metadata 原样保留，分类不受影响）。
+   */
+  async getSessionUserMessages(
+    sessionId: string,
+  ): Promise<{ messages: Array<Message & { index: number }> }> {
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const messages: Array<Message & { index: number }> = [];
+    session.messages.forEach((m, i) => {
+      if (m.role !== 'user') return;
+      const content =
+        typeof m.content === 'string'
+          ? m.content.slice(0, USER_MESSAGE_PROJECTION_CHARS)
+          : m.content;
+      messages.push({ ...m, content, index: i });
+    });
+    return { messages };
   }
 
   /** 从流式 adapter 聚合在途 Run 现场（盲窗 overlay）；无流式 adapter 或 Run 不活跃返回 undefined */

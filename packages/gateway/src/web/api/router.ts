@@ -553,6 +553,18 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: page });
       }
 
+      // turn 定位索引：user 角色消息轻量投影（语义分类由 web 层统一执行）
+      const userMessagesMatch = relativePath.match(/^\/sessions\/([^/]+)\/user-messages$/);
+      if (userMessagesMatch && method === 'GET') {
+        try {
+          const projection = await this.gateway.getSessionUserMessages(userMessagesMatch[1]);
+          return this.json(res, 200, { ok: true, data: projection });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return this.json(res, msg.includes('not found') ? 404 : 400, { ok: false, error: msg });
+        }
+      }
+
       const branchMatch = relativePath.match(/^\/sessions\/([^/]+)\/branch$/);
       if (branchMatch && method === 'POST') {
         const body = await this.readBody(req);

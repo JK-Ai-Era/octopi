@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ErrorCard, classifyFlowError, type FlowErrorItem } from './ErrorCard';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
@@ -29,6 +29,9 @@ import { t as tc, type MessageKey } from '../i18n/core';
 import { useLang, useT } from '../i18n/react';
 import { runStatusLabelKey } from './run-status-label';
 import { reduceScrollEvent } from './conversation-follow';
+import { buildTurnMarkers, historyTurnMarkers, markerKeyOf, type TurnMarker } from './turn-rail';
+import { TurnRail } from './TurnRail';
+import { ConversationAdapter } from '@octopi-agent/gateway/web/conversation/adapter';
 
 /** WebUI 会话级 clientInstanceId（同一标签页稳定） */
 function webuiClientInstanceId(): string {
@@ -980,6 +983,20 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const conversationContentRef = useRef<HTMLDivElement | null>(null);
   /** 历史 prepend 恢复锚定进行中：抑制钉底动作（不改跟随意图），避免与锚定回顶互相拉扯 */
   const historyPrependRef = useRef(false);
+  /** user-messages 投影适配后的历史 turn 条目（未加载区间 marker 的来源） */
+  const [historyTurnItems, setHistoryTurnItems] = useState<ConversationItem[]>([]);
+  /** 回底悬浮按钮：上滑超过一屏时显示 */
+  const [showBackToBottom, setShowBackToBottom] = useState(false);
+  /** 当前视口所处 turn 的 marker key（滚动追踪） */
+  const [activeTurnKey, setActiveTurnKey] = useState<string | null>(null);
+  /** 正在加载定位的 marker key */
+  const [turnJumpBusyKey, setTurnJumpBusyKey] = useState<string | null>(null);
+  /** 视口 turn 追踪的 rAF 节流句柄 */
+  const activeTurnRafRef = useRef<number | null>(null);
+  /** 会话 id 镜像同步（跳转续体据此判会话切换；state 是旧闭包值不可靠） */
+  activeSessionIdRef.current = activeSessionId;
+  /** turn 跳转 token：最新一次点击胜出，旧跳转不得覆盖视口/忙碌态 */
+  const turnJumpTokenRef = useRef(0);
 
   // Initialize store once
   useEffect(() => {
@@ -1160,6 +1177,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     stickToBottomRef.current = follow.stickToBottom;
     pinnedScrollTopRef.current = follow.pinnedScrollTop;
 
+    // 回底按钮：上滑超过一屏显示；视口所处 turn 同步追踪
+    setShowBackToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight);
+    scheduleActiveTurnUpdate();
+
     // 临近顶部：向前加载更早历史并拼在前面（纯展示；续聊走正常装配）
     if (el.scrollTop < 80 && storeRef.current?.hasMoreHistory()) {
       void loadMoreHistory();
@@ -1194,6 +1215,70 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     }
   };
 
+  /** 视口所处 turn 追踪：rAF 节流扫 DOM 锚点，取最后一个越过视口顶部的 turn */
+  const scheduleActiveTurnUpdate = () => {
+    if (activeTurnRafRef.current !== null) return;
+    activeTurnRafRef.current = requestAnimationFrame(() => {
+      activeTurnRafRef.current = null;
+      const el = scrollRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + 24;
+      let current: string | null = null;
+      el.querySelectorAll<HTMLElement>('[data-turn-anchor]').forEach((a) => {
+        if (a.getBoundingClientRect().top <= top) current = a.dataset.turnAnchor ?? null;
+      });
+      setActiveTurnKey(current);
+    });
+  };
+
+  /** turn 定位锚点（data-turn-anchor 与 marker key 同源派生） */
+  const findTurnAnchor = (el: HTMLElement, key: string): HTMLElement | null =>
+    el.querySelector<HTMLElement>(`[data-turn-anchor="${key}"]`);
+
+  /** 回到底部：恢复粘底跟随 */
+  const backToBottom = () => {
+    enableStickToBottom();
+    setShowBackToBottom(false);
+  };
+
+  /** turn 定位跳转：未加载的 turn 先向前分页加载到 turn 首入列，再平滑定位。
+   * 跳转 token：最新一次点击胜出——加载更慢的旧跳转不得后到覆盖视口/忙碌态/误报 toast */
+  const jumpToTurn = async (marker: TurnMarker) => {
+    const scroller = scrollRef.current;
+    const store = storeRef.current;
+    const sessionId = activeSessionIdRef.current;
+    if (!scroller || !store || !sessionId) return;
+    const token = ++turnJumpTokenRef.current;
+    // 跳转即回看历史：显式离开底部，后续输出不再跟随
+    stickToBottomRef.current = false;
+    setTurnJumpBusyKey(marker.key);
+    const aborted = () => turnJumpTokenRef.current !== token || activeSessionIdRef.current !== sessionId;
+    try {
+      let anchor = findTurnAnchor(scroller, marker.key);
+      if (!anchor && typeof marker.sourceIndex === 'number') {
+        const loaded = await store.ensureUserMessageLoaded(marker.sourceIndex);
+        // prepend 渲染提交后锚点节点才存在：等提交落地再查。
+        // 当前会话事件是同步 dispatch + 同步渲染，一帧足够；有界重试兜住
+        // 将来改为过渡渲染（transition）时该假设失效的情况
+        for (let i = 0; i < 3 && loaded && !anchor && !aborted(); i++) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          anchor = findTurnAnchor(scrollRef.current ?? scroller, marker.key);
+        }
+      }
+      // 会话已切换或已有更新的跳转：本次作废，不动视口、不弹误报
+      if (aborted()) return;
+      if (!anchor) {
+        setToast(t('chatWorkspace.turnJumpFailed'));
+        return;
+      }
+      const top = anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + top - 12), behavior: 'smooth' });
+      scheduleActiveTurnUpdate();
+    } finally {
+      if (!aborted()) setTurnJumpBusyKey(null);
+    }
+  };
+
   // Auto-scroll：仅在用户仍贴近底部时跟随；上滑阅读中不打断。
   // 用 layout effect 在 DOM 变更的同一提交内钉底：若等 passive effect，下一批
   // 工具卡片可能先于钉底落地，钉底 scroll 事件会被误读成“用户上滑”（同竞态另一侧）
@@ -1213,6 +1298,36 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     observer.observe(content);
     return () => observer.disconnect();
   }, [scrollToBottom]);
+
+  // turn 定位索引：user-messages 投影适配（失败降级为只显示已加载 turn）
+  useEffect(() => {
+    const client = clientRef.current;
+    const sessionId = activeSessionId;
+    // 会话切换：定位轨/跳转/回底状态全部作废重置，旧会话的 key 不得泄漏到新会话
+    turnJumpTokenRef.current += 1;
+    setHistoryTurnItems([]);
+    setActiveTurnKey(null);
+    setTurnJumpBusyKey(null);
+    setShowBackToBottom(false);
+    if (!client || !sessionId) return;
+    let cancelled = false;
+    void client
+      .getSessionUserMessages(sessionId)
+      .then(({ messages }) => {
+        if (cancelled) return;
+        setHistoryTurnItems(ConversationAdapter.buildHistoryItems(messages, sessionId));
+      })
+      .catch(() => { /* 展示层降级：定位轨只显示已加载 turn，不打断会话 */ });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId]);
+
+  // 定位轨 marker：历史索引 ∪ 已加载用户条目（合并规则见 turn-rail）
+  const turnMarkers = useMemo(
+    () => buildTurnMarkers(historyTurnMarkers(historyTurnItems), conversationItems),
+    [historyTurnItems, conversationItems],
+  );
 
   // 切换会话时清掉待发附件，避免 A 的文件挂到 B
   useEffect(() => {
@@ -2380,6 +2495,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             )}
           </div>
 
+          <div className="conversation-area">
           <div ref={scrollRef} className="conversation-scroll" onScroll={handleConversationScroll}>
             {/* 会话流内容根节点：ResizeObserver 的观察目标（异步长高仍跟随） */}
             <div ref={conversationContentRef} className="conversation-flow">
@@ -2449,28 +2565,37 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 const isFirstUser = item.role === 'user' && item.id === firstUserItemId;
                 const userIdx =
                   item.role === 'user' ? (item as UserConversationItem).sourceIndex : undefined;
+                const card = (
+                  <ConversationItemCard
+                    key={item.id}
+                    item={item}
+                    onBranch={
+                      item.role === 'user' &&
+                      !isFirstUser &&
+                      typeof userIdx === 'number' &&
+                      userIdx > 0
+                        ? (idx) => void branchFromIndex(idx)
+                        : undefined
+                    }
+                    onEditResend={
+                      item.role === 'user' && (item as UserConversationItem).editResendable
+                        ? (idx, text) => void editAndResend(idx, text)
+                        : undefined
+                    }
+                  />
+                );
                 nodes.push({
                   id: item.id,
                   at: item.createdAt,
-                  node: (
-                    <ConversationItemCard
-                      key={item.id}
-                      item={item}
-                      onBranch={
-                        item.role === 'user' &&
-                        !isFirstUser &&
-                        typeof userIdx === 'number' &&
-                        userIdx > 0
-                          ? (idx) => void branchFromIndex(idx)
-                          : undefined
-                      }
-                      onEditResend={
-                        item.role === 'user' && (item as UserConversationItem).editResendable
-                          ? (idx, text) => void editAndResend(idx, text)
-                          : undefined
-                      }
-                    />
-                  ),
+                  // 用户气泡挂 turn 定位锚点（data-turn-anchor 与 marker key 同源）
+                  node:
+                    item.role === 'user' ? (
+                      <div key={item.id} data-turn-anchor={markerKeyOf(item as UserConversationItem)}>
+                        {card}
+                      </div>
+                    ) : (
+                      card
+                    ),
                 });
               }
 
@@ -2631,6 +2756,18 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               </div>
             )}
             </div>
+          </div>
+          <TurnRail
+            markers={turnMarkers}
+            activeKey={activeTurnKey}
+            busyKey={turnJumpBusyKey}
+            onJump={(m) => void jumpToTurn(m)}
+          />
+          {showBackToBottom && activeSessionId && (
+            <button type="button" className="back-to-bottom" onClick={backToBottom}>
+              ↓ {t('chatWorkspace.backToBottom')}
+            </button>
+          )}
           </div>
 
           {/* 对话 ↔ 输入区分割条（拖动调整输入区高度，双击复位） */}

@@ -1591,6 +1591,39 @@ export class OctopiRuntimeStore extends EventTarget {
     }
   }
 
+  /**
+   * 向上加载历史直到指定 sourceIndex 的用户消息入列（turn 定位轨跳转用）。
+   * 并发安全：loadMoreHistory 自带在途互斥，0 条但仍有历史时短等重试，不空转。
+   * 会话切换即作废（bail）：防止为旧会话的下标把新会话的历史翻穿。
+   * 故意不走 ChatWorkspace 的 prepend 锚定括号（historyPrependRef）：跳转路径依赖
+   * 浏览器 scroll anchoring，最终由调用方实测 scrollTo 定位——两套视口权威仅此
+   * 一处并存，勿扩散到其它路径。
+   *
+   * @param sourceIndex session.messages 绝对下标（UserConversationItem.sourceIndex）
+   * @returns 目标用户消息是否已入列（false = 历史耗尽 / 会话已切换仍不存在）
+   */
+  async ensureUserMessageLoaded(sourceIndex: number): Promise<boolean> {
+    const sessionId = this.chat.sessionId;
+    if (!sessionId) return false;
+    const sameSession = (): boolean => this.chat.sessionId === sessionId;
+    const found = (): boolean =>
+      this.chat.conversation.some(
+        (it) => it.role === 'user' && (it as UserConversationItem).sourceIndex === sourceIndex,
+      );
+    // 上限护栏：1000 页 = 10 万条消息，远超任何真实会话；耗尽即如实返回 false
+    for (let attempt = 0; attempt < 1000 && !found(); attempt++) {
+      if (!sameSession() || !this.historyHasMore) break;
+      const r = await this.loadMoreHistory();
+      if (!sameSession()) break;
+      if (!r.hasMore) break;
+      if (r.loaded === 0) {
+        // 0 条但仍有历史：并发加载在途或整页被过滤——短等后重试
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    return sameSession() && found();
+  }
+
   async sendMessage(content: string, options?: { model?: string; attachmentIds?: string[] }): Promise<void> {
     if (!this.chat.sessionId || !this.chat.agentId) {
       throw new Error('No active session');
