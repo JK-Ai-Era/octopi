@@ -352,7 +352,7 @@
       "formSubmit": true,
       "passwordField": true,
       "fileUpload": true,
-      "xhrWrites": true
+      "xhrWrites": false
     }
   },
 

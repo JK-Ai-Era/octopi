@@ -54,7 +54,7 @@ export interface BrowserServiceOptions {
     domains?: { allow?: string[]; deny?: string[] };
     allowPrivateNetwork?: boolean;
   };
-  /** 敏感动作确认闸门（缺省全开 = 拍板）——工具面消费 */
+  /** 敏感动作确认闸门（formSubmit/passwordField/fileUpload 缺省开；xhrWrites 缺省 false）——工具面消费 */
   confirm?: {
     formSubmit?: boolean;
     passwordField?: boolean;

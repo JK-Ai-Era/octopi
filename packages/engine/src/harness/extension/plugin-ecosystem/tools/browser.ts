@@ -261,7 +261,7 @@ function buildRequestPolicy(
     confirmWrite: async ({ method, url, documentLevel }) => {
       const enabled = documentLevel
         ? (opts.confirm?.formSubmit ?? true)
-        : (opts.confirm?.xhrWrites ?? true);
+        : (opts.confirm?.xhrWrites ?? false);
       if (!enabled) return true;
       // 审批缓存键 = method+origin（与契约/文档一致）；DOM 闸批准会预热同一键（避免同一提交问两次）
       const cacheKey = `${method} ${originOf(url)}`;

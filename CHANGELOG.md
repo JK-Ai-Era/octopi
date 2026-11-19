@@ -129,6 +129,13 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.119.2 (2026-11-20)
+
+### fix(engine): xhr 写闸缺省关闭（F5 拍板）
+
+- **行为变更**：`browser.confirm.xhrWrites` 缺省 `true` → `false`——页内 fetch/XHR 非 GET 写入**缺省不再过确认闸**（第三方 beacon 每源问询噪音，大哥 2026-11-20 拍板）。需要旧行为的部署显式设 `confirm.xhrWrites: true`（method+origin 会话级审批缓存语义不变）；文档级三闸（formSubmit/passwordField/fileUpload）缺省仍全开。
+- KNOWN-ISSUES（中英）/example 模板/arch 文档同步；新增「缺省关闭」回归用例，`tests/harness/browser-tools.test.ts` 42 例全绿。
+
 ## v0.119.1 (2026-11-20)
 
 ### feat(engine): browser capability P2 — cdp-attach 真实 Chrome、持久 profile、browser_extract、写闸收紧

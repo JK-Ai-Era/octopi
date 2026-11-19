@@ -268,13 +268,13 @@ export interface BrowserToolConfig {
     /** 私网/环回放行（缺省 false） */
     allowPrivateNetwork?: boolean;
   };
-  /** 敏感动作确认闸门（缺省全开） */
+  /** 敏感动作确认闸门（formSubmit/passwordField/fileUpload 缺省开；xhrWrites 缺省 false） */
   confirm?: {
     formSubmit?: boolean;
     passwordField?: boolean;
     /** 本地文件上传闸（P2） */
     fileUpload?: boolean;
-    /** 页内 fetch/XHR 外部写闸（P2） */
+    /** 页内 fetch/XHR 外部写闸（P2；缺省 false） */
     xhrWrites?: boolean;
   };
 }

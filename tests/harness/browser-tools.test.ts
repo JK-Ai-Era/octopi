@@ -1095,6 +1095,22 @@ describe('P2 (real stack)', () => {
   );
 
   it.skipIf(!engineAvailable)(
+    'xhr gate is off by default (2026-11-20 F5 decision)',
+    async () => {
+      postCount = 0;
+      const gate = vi.fn(async () => ({ decision: 'deny' as const }));
+      const { service, tools } = toolsFor({});
+      track(service);
+      const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
+      await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
+      await new Promise((r) => setTimeout(r, 600));
+      expect(postCount).toBe(2); // 缺省不问询直接放行（页内 beacon 不打扰）
+      expect(gate).not.toHaveBeenCalled();
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
     'request-layer gate sees RunScope via re-entry; approved writes land (评审 N1)',
     async () => {
       postCount = 0;
