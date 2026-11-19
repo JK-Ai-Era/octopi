@@ -9,7 +9,9 @@ import { InlineModelConfigSchema } from './shared.js';
 const ModelInputTypeSchema = z.enum(['text', 'image', 'audio', 'video']);
 
 const ModelCapabilitySchema = z.object({
+  /** 模型 id（请求的 `model` 字段，如 `deepseek-flash`） */
   id: z.string().min(1),
+  /** 展示名（仅 UI/清单显示；绝不进请求——请求模型 = id） */
   name: z.string().optional(),
   reasoning: z.boolean().optional(),
   input: z.array(ModelInputTypeSchema).optional(),

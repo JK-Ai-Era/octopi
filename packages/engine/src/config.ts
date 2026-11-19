@@ -1236,7 +1236,8 @@ export function flattenModels(config: ModelsConfig): NormalizedModelInfo[] {
       result.push({
         id: `${providerName}/${mc.id}`,
         provider: providerName,
-        model: mc.name ?? mc.id,
+        // 请求模型字段 = 目录 id；`name` 是纯展示名，绝不进请求（曾被误当 model 发出 → API 400）
+        model: mc.id,
         contextWindow: mc.contextWindow,
         maxTokens: mc.maxTokens,
       });

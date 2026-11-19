@@ -129,6 +129,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.119.8 (2026-11-20)
+
+### fix(engine): 展示名不再当请求模型发出（DeepSeek 400 根因）+ DeepSeek baseUrl/name 修正
+
+- **根因**：`flattenModels` 把目录 `name`（展示名）灌进 `NormalizedModelInfo.model`（请求 `model` 字段）——旧向导写的 `models:[{id}]` 无 name 才未暴露，v0.119.7 起目录带 name 落盘后请求发出 `DeepSeek Flash` → API 400。现收敛为单一契约：**id = 请求模型，name = 纯展示名**（schema 注释同步；原把 name 当请求别名的旧测试期望一并纠正）。
+- DeepSeek 目录 `name` 按拍板设为 `deepseek-flash` / `deepseek-v4-pro`（= id）；baseUrl 按厂商表改为 `https://api.deepseek.com`（Anthropic 格式端点 `https://api.deepseek.com/anthropic` 可手配 `api: anthropic-messages` 使用）。
+- 验证：全量 5473 passed / 0 failed；带展示名的旧配置走 flatten→resolve 真实链路实测请求 model 收敛为 id（既有配置免重跑 init 即修复）。
+
 ## v0.119.7 (2026-11-20)
 
 ### feat(engine): DeepSeek 模型目录更新 + 向导模型目录全量落配置

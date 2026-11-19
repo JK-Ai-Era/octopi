@@ -117,7 +117,7 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
     id: 'deepseek',
     label: 'DeepSeek',
     api: 'openai-completions',
-    baseUrl: 'https://api.deepseek.com/v1',
+    baseUrl: 'https://api.deepseek.com',
     apiKeyEnvHint: 'DEEPSEEK_API_KEY',
     keyHints: {
       zh: '在 platform.deepseek.com → API keys 创建',
@@ -127,14 +127,14 @@ export const BUILTIN_MODEL_PRESETS: readonly ProviderPreset[] = [
     models: [
       {
         id: 'deepseek-flash',
-        name: 'DeepSeek Flash',
+        name: 'deepseek-flash',
         input: ['text'],
         contextWindow: 1000000,
         maxTokens: 384000,
       },
       {
         id: 'deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
+        name: 'deepseek-v4-pro',
         input: ['text'],
         contextWindow: 1000000,
         maxTokens: 384000,

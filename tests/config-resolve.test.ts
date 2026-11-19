@@ -51,7 +51,7 @@ describe('flattenModels', () => {
     expect(flat[1]).toEqual({
       id: 'openai/gpt-5-mini',
       provider: 'openai',
-      model: 'gpt-5-mini-custom',
+      model: 'gpt-5-mini', // name 是展示名，绝不进请求 model（曾误当别名发出 → API 400）
       contextWindow: 128000,
       maxTokens: undefined,
     });
