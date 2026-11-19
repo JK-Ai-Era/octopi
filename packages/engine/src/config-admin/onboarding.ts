@@ -204,13 +204,20 @@ export function assembleOnboarding(choices: OnboardingChoices): OnboardingOutput
   if (choices.providerId === 'custom' && !baseUrl) {
     throw new Error('missing baseUrl for custom provider');
   }
+  const modelId = choices.modelId.trim();
+  const overrides = (choices.providerOverrides ?? {}) as Partial<import('../config.js').ModelProviderConfig>;
+  // 模型目录全量落配置（生成器语义）：预设模型全进目录（参考参数随行），
+  // 用户「用哪个模型？」只接线 default agent 与 level 三档；手填清单外 id 追加进目录
+  const baseModels =
+    Array.isArray(overrides.models) && overrides.models.length > 0 ? overrides.models : preset.models.map((m) => ({ ...m }));
+  const models = baseModels.some((m) => m?.id === modelId) ? [...baseModels] : [...baseModels, { id: modelId }];
   const providerConfig = expandProviderPreset(choices.providerId, {
-    ...(choices.providerOverrides ?? {}),
+    ...overrides,
     ...(envVar ? { apiKey: `\${${envVar}}` } : {}),
-    models: [{ id: choices.modelId.trim() }],
+    models,
   } as Parameters<typeof expandProviderPreset>[1]);
 
-  const modelRef = `${preset.id}/${choices.modelId.trim()}`;
+  const modelRef = `${preset.id}/${modelId}`;
   return {
     configFragment: {
       language: choices.lang,

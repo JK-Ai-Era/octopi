@@ -129,6 +129,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.119.7 (2026-11-20)
+
+### feat(engine): DeepSeek 模型目录更新 + 向导模型目录全量落配置
+
+- **模型目录**：DeepSeek 两模型改为 `deepseek-flash` / `deepseek-v4-pro`（展示名 DeepSeek Flash / DeepSeek V4 Pro），参考参数上下文 1M、单次输出最大 384K；`builtin-model-info` 内置限表同步（旧 deepseek-chat / deepseek-reasoner 条目移除）。
+- **向导行为**：`assembleOnboarding` 改为把所选 provider 的预设模型**全量**落进 `models.providers[].models`（参考参数随行），用户「用哪个模型？」只接线 default agent 默认模型与 level 三档（mini/standard/pro → 所选）；手填清单外 id 追加进目录。CLI/Web 向导共享同一生成器语义。
+- 验证：全量 5473 passed / 0 failed；PTY 冒烟落盘实测两模型全量入目录、level 三档与 `agents[].model` 均为所选 `deepseek/deepseek-v4-pro`。
+
 ## v0.119.6 (2026-11-20)
 
 ### feat(cli): init 向导 UX 批量优化 — 语言编号选择、隐藏输入占位回显、elevated 启动前知情确认

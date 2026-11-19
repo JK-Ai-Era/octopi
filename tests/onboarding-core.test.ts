@@ -29,7 +29,7 @@ function baseChoices(overrides: Partial<OnboardingChoices> = {}): OnboardingChoi
     deploymentMode: 'personal',
     providerId: 'deepseek',
     apiKey: 'sk-test-123',
-    modelId: 'deepseek-chat',
+    modelId: 'deepseek-flash',
     ...overrides,
   };
 }
@@ -74,9 +74,27 @@ describe('onboarding 核心状态机', () => {
     expect(provider.apiKey).toBe('${DEEPSEEK_API_KEY}');
     // 明文 key 只允许出现在 envLines（.env 落盘行），绝不进配置面
     expect(JSON.stringify(out.configFragment)).not.toContain('sk-test-123');
-    expect(provider.models[0].id).toBe('deepseek-chat');
+    expect(provider.models.map((m) => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-pro']); // 目录全量落配置
     expect(out.configFragment.language).toBe('zh');
     expect(out.configFragment.deploymentMode).toBe('personal');
+  });
+
+  it('assembleOnboarding：目录全量落配置，手填 id 追加；所选模型只接线 levels/agentModel', () => {
+    const out = assembleOnboarding(baseChoices({ modelId: 'deepseek-v4-pro' }));
+    const provider = out.configFragment.providers.deepseek as { models: Array<{ id: string; contextWindow?: number }> };
+    expect(provider.models.map((m) => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
+    expect(provider.models[1].contextWindow).toBe(1000000); // 参考参数随目录行落盘
+    expect(out.configFragment.agentModel).toBe('deepseek/deepseek-v4-pro');
+    expect(out.configFragment.levels).toEqual({
+      mini: { primary: 'deepseek/deepseek-v4-pro' },
+      standard: { primary: 'deepseek/deepseek-v4-pro' },
+      pro: { primary: 'deepseek/deepseek-v4-pro' },
+    });
+
+    const typed = assembleOnboarding(baseChoices({ modelId: 'my-custom-model' }));
+    const p2 = typed.configFragment.providers.deepseek as { models: Array<{ id: string }> };
+    expect(p2.models.map((m) => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-pro', 'my-custom-model']);
+    expect(typed.configFragment.agentModel).toBe('deepseek/my-custom-model');
   });
 
   it('assembleOnboarding：免 key 预设无 env 行、无 apiKey 引用', () => {

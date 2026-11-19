@@ -43,8 +43,8 @@ const BUILTIN_MODEL_INFO: Record<string, Omit<ModelInfo, 'name'>> = {
   'gemini-2.0-flash':  { contextWindow: 1000000, maxOutputTokens: 8192 },
 
   // ── DeepSeek ──
-  'deepseek-chat':     { contextWindow: 64000, maxOutputTokens: 8192 },
-  'deepseek-reasoner': { contextWindow: 64000, maxOutputTokens: 8192 },
+  'deepseek-flash':    { contextWindow: 1000000, maxOutputTokens: 384000 },
+  'deepseek-v4-pro':   { contextWindow: 1000000, maxOutputTokens: 384000 },
 
   // ── Qwen（含 Ollama 本地常见族；tag 如 :2b/:7b 会在查询时剥离） ──
   'qwen-max':          { contextWindow: 32000, maxOutputTokens: 8192 },
