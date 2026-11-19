@@ -348,6 +348,14 @@
       "domains": { "allow": [], "deny": [] },
       "allowPrivateNetwork": false
     },
+    "stealth": {
+      "fallback": "rebrowser->camoufox",
+      "humanize": {
+        "typingDelayMs": [20, 80],
+        "actionJitterMs": [100, 600],
+        "maxRetries": 2
+      }
+    },
     "confirm": "standard"
   },
 

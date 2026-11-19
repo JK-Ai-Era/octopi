@@ -175,9 +175,11 @@ export async function assembleGlobalTools(ctx: GlobalToolSetContext): Promise<Re
     browser = {
       service: createBrowserService(browserCfg),
       options: {
+        engine: browserCfg.engine,
         timeoutMs: browserCfg.timeoutMs,
         snapshotMaxChars: browserCfg.snapshotMaxChars,
         confirm: browserCfg.confirm,
+        stealth: browserCfg.stealth,
         profiles: browserCfg.profiles,
         // profile 存储按运行时 home 归位（OCTOPI_HOME/browser-profiles，不进 agent home）
         profileDir: join(ctx.octopiHome, 'browser-profiles'),

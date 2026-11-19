@@ -876,6 +876,25 @@ async function parseJsonResponse<T = unknown>(response: Response): Promise<T> {
 // Client
 // ──────────────────────────────────────
 
+/** 浏览器引擎就绪状态（GET /browser/engines） */
+export interface BrowserEngineStatusDto {
+  engine: string;
+  ready: boolean;
+  detail: string;
+}
+
+/** 浏览器安装任务视图（POST install 返回；GET install/:jobId 轮询） */
+export interface BrowserInstallJobDto {
+  id: string;
+  engine: string;
+  status: 'running' | 'done' | 'failed';
+  startedAt: string;
+  finishedAt?: string;
+  detail?: string;
+  lines: string[];
+  truncated: boolean;
+}
+
 export class OctopiClient {
   private options: Required<Pick<OctopiClientOptions, 'wsPath' | 'restPath' | 'autoReconnect' | 'reconnectBaseDelayMs' | 'reconnectMaxDelayMs' | 'now'>> & OctopiClientOptions;
   private baseUrl: string;
@@ -1019,6 +1038,44 @@ export class OctopiClient {
   async getProviders(): Promise<ProviderSummary[]> {
     const data = await this.getJson('/providers');
     return (data?.data as ProviderSummary[]) ?? [];
+  }
+
+  /** 浏览器引擎就绪状态（设置页状态卡） */
+  async getBrowserEngines(): Promise<BrowserEngineStatusDto[]> {
+    const data = await this.getJson('/browser/engines');
+    return (data?.data as BrowserEngineStatusDto[]) ?? [];
+  }
+
+  /** 启动引擎安装任务（异步：立即返回任务，输出用 pollBrowserInstall 轮询） */
+  async installBrowserEngine(engine: string): Promise<BrowserInstallJobDto> {
+    const data = await this.postJson(
+      `/browser/engines/${encodeURIComponent(engine)}/install`,
+      {},
+    );
+    return data?.data as BrowserInstallJobDto;
+  }
+
+  /** 轮询安装任务（进度输出追加在 lines；truncated=输出曾超上限被裁剪） */
+  async pollBrowserInstall(jobId: string): Promise<BrowserInstallJobDto | null> {
+    const data = await this.getJson(
+      `/browser/engines/install/${encodeURIComponent(jobId)}`,
+    );
+    return (data?.data as BrowserInstallJobDto | undefined) ?? null;
+  }
+
+  /** 当前 browser.engine + 配置 hash（设置页引擎下拉） */
+  async getBrowserConfig(): Promise<{ engine: string; hash: string }> {
+    const data = await this.getJson('/config/browser');
+    return (data?.data as { engine: string; hash: string }) ?? { engine: 'auto', hash: '' };
+  }
+
+  /** 切换 browser.engine（hash 乐观锁；新 run 生效） */
+  async setBrowserEngine(
+    engine: string,
+    hash: string,
+  ): Promise<{ hash: string; applied: string; warnings?: string[] }> {
+    const data = await this.putJson('/config/browser/engine', { engine, hash });
+    return data?.data as { hash: string; applied: string; warnings?: string[] };
   }
 
   async listSessions(agentId?: string): Promise<SessionSummary[]> {

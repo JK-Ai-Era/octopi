@@ -3320,6 +3320,7 @@
           "enum": [
             "auto",
             "playwright",
+            "stealth",
             "rebrowser",
             "camoufox",
             "cdp-attach",
@@ -3418,6 +3419,51 @@
             },
             "allowPrivateNetwork": {
               "type": "boolean"
+            }
+          }
+        },
+        "stealth": {
+          "type": "object",
+          "properties": {
+            "fallback": {
+              "type": "string",
+              "minLength": 1
+            },
+            "humanize": {
+              "type": "object",
+              "properties": {
+                "typingDelayMs": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  ]
+                },
+                "actionJitterMs": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  ]
+                },
+                "maxRetries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
             }
           }
         },

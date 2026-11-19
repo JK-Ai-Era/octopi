@@ -10,10 +10,11 @@ import { ConfigBackupPanel } from './ConfigBackupPanel';
 import { ServiceSettingsPanel } from './ServiceSettingsPanel';
 import { AppearanceSettingsPanel } from './AppearanceSettingsPanel';
 import { AboutPanel } from './AboutPanel';
+import { BrowserSettingsPanel } from './BrowserSettingsPanel';
 import { useT } from '../i18n/react';
 import type { MessageKey } from '../i18n/core';
 
-export type SettingsTab = 'models' | 'org' | 'appearance' | 'services' | 'about';
+export type SettingsTab = 'models' | 'org' | 'appearance' | 'services' | 'browser' | 'about';
 
 export interface SettingsWorkspaceProps {
   /** 顶栏帮助按钮直达「关于」等入口指定的初始分组 */
@@ -29,6 +30,7 @@ export function SettingsWorkspace({ initialTab = 'models' }: SettingsWorkspacePr
     { id: 'org', label: 'settingsWorkspace.tabOrg' },
     { id: 'appearance', label: 'settingsWorkspace.tabAppearance' },
     { id: 'services', label: 'settingsWorkspace.tabServices' },
+    { id: 'browser', label: 'settingsWorkspace.tabBrowser' },
     { id: 'about', label: 'settingsWorkspace.tabAbout' },
   ];
 
@@ -56,6 +58,7 @@ export function SettingsWorkspace({ initialTab = 'models' }: SettingsWorkspacePr
             <ConfigBackupPanel />
           </div>
         )}
+        {tab === 'browser' && <BrowserSettingsPanel />}
         {tab === 'about' && <AboutPanel />}
       </div>
     </div>

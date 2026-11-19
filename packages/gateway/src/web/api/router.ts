@@ -32,7 +32,11 @@ export interface WebApiRouterOptions {
   onboarding?: OnboardingService;
   /** 演示任务包下发面（批 3-1）；未注入时 /demo/kit 返回 available:false */
   demoKit?: DemoKitService;
+  /** 浏览器引擎安装任务面（arch/browser-capability.md §3.9）；缺省自建进程内注册表 */
+  browserInstalls?: BrowserInstallJobs;
 }
+
+import { BrowserInstallJobs } from './browser-install.js';
 
 /**
  * 配置名合法化（provider 名 / agent id 通用）：实现见 engine config-admin/name-guard.ts
@@ -47,6 +51,7 @@ export class WebApiRouter {
   private approverIdentity?: string;
   private onboarding?: OnboardingService;
   private demoKit?: DemoKitService;
+  private browserInstalls: BrowserInstallJobs;
 
   constructor(options: WebApiRouterOptions) {
     this.gateway = options.gateway;
@@ -56,6 +61,7 @@ export class WebApiRouter {
     this.approverIdentity = options.approverIdentity;
     this.onboarding = options.onboarding;
     this.demoKit = options.demoKit;
+    this.browserInstalls = options.browserInstalls ?? new BrowserInstallJobs();
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -211,6 +217,11 @@ export class WebApiRouter {
       // ── 配置管理面（arch/config-hot-reload.md）──
       if (relativePath.startsWith('/config/')) {
         return this.handleConfigAdmin(relativePath, method, req, res, url);
+      }
+
+      // ── 浏览器引擎管理面（arch/browser-capability.md §3.9；WebUI 设置页）──
+      if (relativePath.startsWith('/browser')) {
+        return this.handleBrowserAdmin(relativePath, method, req, res);
       }
 
       if (relativePath === '/providers' && method === 'GET') {
@@ -1722,6 +1733,65 @@ export class WebApiRouter {
   }
 
   /**
+   * 浏览器引擎管理面：状态 / 启动安装 / 任务轮询。
+   *
+   * 授权：host 面（apiKey 闸已验）或平台 admin——安装写 OCTOPI_HOME 并拉网络，
+   * 与配置管理同信任级但更偏宿主运维，故收紧到 host/platform-admin。
+   *
+   * @param relativePath - basePath 之后的路径
+   * @param method - HTTP 方法
+   * @param req - 请求（身份解析用）
+   * @param res - 响应
+   * @returns 恒 true（本段全权应答）
+   */
+  private async handleBrowserAdmin(
+    relativePath: string,
+    method: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<boolean> {
+    const identity = this.resolveRequestUser(req);
+    if (identity === 'invalid') {
+      return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+    }
+    if (identity !== 'host' && !identity.isPlatformAdmin) {
+      return this.json(res, 403, {
+        ok: false,
+        error: 'forbidden: browser engine admin is host/platform-admin only',
+      });
+    }
+    const jobs = this.browserInstalls;
+
+    if (relativePath === '/browser/engines' && method === 'GET') {
+      return this.json(res, 200, { ok: true, data: jobs.status() });
+    }
+
+    const installMatch = relativePath.match(/^\/browser\/engines\/([^/]+)\/install$/);
+    if (installMatch && method === 'POST') {
+      const engine = installMatch[1];
+      const started = jobs.start(engine);
+      if ('error' in started) {
+        return this.json(res, started.error.startsWith('unknown') ? 400 : 409, {
+          ok: false,
+          error: started.error,
+        });
+      }
+      return this.json(res, 200, { ok: true, data: started });
+    }
+
+    const jobMatch = relativePath.match(/^\/browser\/engines\/install\/([^/]+)$/);
+    if (jobMatch && method === 'GET') {
+      const job = jobs.get(jobMatch[1]);
+      if (!job) {
+        return this.json(res, 404, { ok: false, error: 'install job not found' });
+      }
+      return this.json(res, 200, { ok: true, data: job });
+    }
+
+    return this.json(res, 404, { ok: false, error: `unknown browser admin route: ${relativePath}` });
+  }
+
+  /**
    * 配置管理面路由（arch/config-hot-reload.md §4）：
    * GET/PUT/DELETE /config/models… + POST …/test + GET /config/presets/models
    */
@@ -1749,6 +1819,20 @@ export class WebApiRouter {
         const body = await this.readBody(req);
         const result = await apply.updateLevels(
           body?.level ?? {},
+          typeof body?.hash === 'string' ? body.hash : '',
+        );
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      // 浏览器引擎（arch/browser-capability.md §3.9；WebUI 设置页联动热生效）
+      if (relativePath === '/config/browser' && method === 'GET') {
+        return this.json(res, 200, { ok: true, data: apply.getBrowserView() });
+      }
+
+      if (relativePath === '/config/browser/engine' && method === 'PUT') {
+        const body = await this.readBody(req);
+        const result = await apply.updateBrowserEngine(
+          typeof body?.engine === 'string' ? body.engine : '',
           typeof body?.hash === 'string' ? body.hash : '',
         );
         return this.json(res, 200, { ok: true, data: result });

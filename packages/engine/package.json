@@ -1,6 +1,6 @@
 {
   "name": "@octopi-agent/engine",
-  "version": "0.119.8",
+  "version": "0.120.0",
   "description": "Octopi Engine — Harness product domains, library integrations, and embeddable Agent.run()",
   "type": "module",
   "license": "Apache-2.0",
@@ -76,7 +76,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@octopi-agent/core": "0.119.8",
+    "@octopi-agent/core": "0.120.0",
     "ajv": "^8.20.0",
     "js-yaml": "^4.3.2",
     "semver": "^7.8.6",
@@ -91,7 +91,8 @@
     "sqlite-vec": "^0.1.9",
     "unpdf": "^1.8.1",
     "xlsx": "^0.18.5",
-    "playwright-core": "^1.65.1"
+    "playwright-core": "^1.65.1",
+    "rebrowser-playwright-core": "^1.64.102"
   },
   "private": false,
   "publishConfig": {

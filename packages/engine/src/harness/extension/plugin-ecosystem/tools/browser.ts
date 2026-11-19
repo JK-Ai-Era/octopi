@@ -23,8 +23,10 @@ import type {
   BrowserService,
   BrowserSession,
   BrowserSessionId,
+  BrowserStealthConfig,
   ElementRef,
   ExtractSpec,
+  HumanizeOptions,
   PageAction,
   PageSnapshot,
 } from './browser-types.js';
@@ -40,6 +42,10 @@ export interface BrowserToolOptions {
    * （表单提交/密码/上传）；`off` = 全放开。
    */
   confirm?: 'strict' | 'standard' | 'off';
+  /** P3：引擎名（humanize 缺省启用判定用；stealth/rebrowser/camoufox = 启用） */
+  engine?: string;
+  /** stealth（P3）：humanize 拟人化节流由工具层消费（stealth 引擎缺省启用） */
+  stealth?: BrowserStealthConfig;
   /** 持久 profile（P2）：persist=关闭时归档 storageState；defaultProfile=隐式会话默认身份 */
   profiles?: { persist?: boolean; defaultProfile?: string };
   /** profile 存储目录（assemble 按 OCTOPI_HOME 注入） */
@@ -219,6 +225,44 @@ function originOf(url: string): string {
   }
 }
 
+// ── P3 拟人化节流（humanize） ──
+
+/** humanize 缺省参数（可配全覆盖；此处仅缺省值，非隐藏 tunable） */
+const DEFAULT_HUMANIZE: Required<HumanizeOptions> = {
+  typingDelayMs: [20, 80],
+  actionJitterMs: [100, 600],
+  maxRetries: 2,
+};
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** 区间 [min,max] 毫秒均匀采样（min>max 时按 min 处理，不抛不NaN） */
+function sampleRange(range: [number, number] | undefined, fallback: [number, number]): number {
+  const [min, max] = range ?? fallback;
+  const lo = Math.max(0, Math.min(min, max));
+  const hi = Math.max(lo, Math.max(min, max));
+  return lo + Math.random() * (hi - lo);
+}
+
+/**
+ * 生效 humanize 参数：显式配置优先；stealth 系引擎（stealth/rebrowser/camoufox）
+ * 缺省启用；其余引擎无配置则不启用。
+ *
+ * @param opts - 工具选项（engine + stealth.humanize）
+ * @returns 生效参数；undefined = 不启用拟人化
+ */
+export function effectiveHumanize(opts: BrowserToolOptions): Required<HumanizeOptions> | undefined {
+  const explicit = opts.stealth?.humanize;
+  if (explicit) {
+    return { ...DEFAULT_HUMANIZE, ...Object.fromEntries(Object.entries(explicit).filter(([, v]) => v !== undefined)) };
+  }
+  const engine = opts.engine;
+  if (engine === 'stealth' || engine === 'rebrowser' || engine === 'camoufox') {
+    return { ...DEFAULT_HUMANIZE };
+  }
+  return undefined;
+}
+
 // ── 会话解析（归属校验 + 按需创建） ──
 
 async function resolveSession(
@@ -332,12 +376,14 @@ export function createBrowserTools(
       // profileId 进文件名（storageState 路径拼接）：路径字符直接拒（防越出 profile 目录）
       throw new Error(`browser_profiles: defaultProfile must not contain path separators: ${profileId}`);
     }
+    const humanize = effectiveHumanize(options);
     return {
       ownerKey: ctx.sessionId,
       policy: policyFor(ctx),
       ...(profileId ? { profileId } : {}),
       ...(options.profileDir ? { profileDir: options.profileDir } : {}),
       ...(options.profiles?.persist ? { persistProfile: true } : {}),
+      ...(humanize ? { humanize } : {}),
     };
   };
   const snapshotArgs: Record<string, ToolParameter> = {
@@ -370,22 +416,21 @@ export function createBrowserTools(
       const rawUrl = String(args.url ?? '');
       // 预检（fail-fast + 高质量错误）；请求层拦截是权威兜底（重定向/子资源全覆盖）
       await assertBrowserUrlAllowed(rawUrl, options);
-      const session = await resolveSession(service, args.session, ctx, launchFor(ctx), true);
       // 用归一化 href 导航（与判定目标一致，避免同 URL 双形态）
       const target = new URL(rawUrl).href;
-      try {
-        const result = await session.goto(target, {
+      const runOnce = async (s: BrowserSession) => {
+        const result = await s.goto(target, {
           waitUntil: 'load',
           timeoutMs: options.timeoutMs,
         });
-        audit(ctx, 'browser.navigate', { url: redactUrl(result.url), sessionId: session.id });
-        const snapshot = await session.snapshot({
+        audit(ctx, 'browser.navigate', { url: redactUrl(result.url), sessionId: s.id });
+        const snapshot = await s.snapshot({
           maxChars: options.snapshotMaxChars,
         });
-        const challenge = await session.detectChallenge();
+        const challenge = await s.detectChallenge();
         return {
-          sessionId: session.id,
-          engine: session.engine,
+          sessionId: s.id,
+          engine: s.engine,
           ...result,
           ...(challenge
             ? {
@@ -395,6 +440,23 @@ export function createBrowserTools(
             : {}),
           snapshot,
         };
+      };
+      try {
+        const session = await resolveSession(service, args.session, ctx, launchFor(ctx), true);
+        const out = await runOnce(session);
+        // P3：挑战驱动的后端轮换（stealth 链）——换后端重试一次，仍命中走 HITL 出口
+        if (out.challenge && typeof service.rotateAfterChallenge === 'function') {
+          const rotated = await service.rotateAfterChallenge(ctx.sessionId);
+          if (rotated) {
+            audit(ctx, 'browser.challenge.rotate', {
+              url: redactUrl(target),
+              fromSessionId: session.id,
+            });
+            const retrySession = await resolveSession(service, args.session, ctx, launchFor(ctx), true);
+            return await runOnce(retrySession);
+          }
+        }
+        return out;
       } catch (err) {
         audit(ctx, 'browser.navigate.failed', {
           url: redactUrl(rawUrl),
@@ -486,7 +548,26 @@ export function createBrowserTools(
           sessionId: session.id,
         });
       }
-      const result = await session.act(action);
+      // P3 拟人化：动作前抖动（humanize 启用时）+ 有界重试（退避随次数放大）
+      const humanize = effectiveHumanize(options);
+      if (humanize) {
+        await sleep(sampleRange(humanize.actionJitterMs, DEFAULT_HUMANIZE.actionJitterMs));
+      }
+      const maxRetries = humanize?.maxRetries ?? 0;
+      let result: Awaited<ReturnType<BrowserSession['act']>>;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          result = await session.act(action);
+          break;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          // stale_ref（ref 过期）与策略拒绝不是瞬态：重试只会重复错误，直接抛
+          if (attempt >= maxRetries || /stale_ref|^denied:/.test(message)) throw err;
+          await sleep(
+            sampleRange(humanize?.actionJitterMs, DEFAULT_HUMANIZE.actionJitterMs) * (attempt + 1),
+          );
+        }
+      }
       if (action.kind === 'upload') {
         audit(ctx, 'browser.upload', { path: action.path, sessionId: session.id });
       }

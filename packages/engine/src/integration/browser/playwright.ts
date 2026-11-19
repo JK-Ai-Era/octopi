@@ -37,6 +37,7 @@ import type {
   PageAction,
   PageSnapshot,
   ScreenshotOptions,
+  HumanizeOptions,
   ScreenshotResult,
   SnapshotItem,
   SnapshotOptions,
@@ -47,6 +48,8 @@ import type {
 interface PwLocator {
   click(options?: unknown): Promise<void>;
   fill(value: string, options?: unknown): Promise<void>;
+  /** 逐键敲入（P3 拟人化 fill 用） */
+  pressSequentially(text: string, options?: unknown): Promise<void>;
   selectOption(value: string, options?: unknown): Promise<unknown>;
   check(options?: unknown): Promise<void>;
   uncheck(options?: unknown): Promise<void>;
@@ -77,8 +80,10 @@ interface PwBrowserContext {
   close(): Promise<void>;
   newCDPSession(page: PwPage): Promise<PwCDPSession>;
   storageState(options?: unknown): Promise<unknown>;
+  /** 路由级拦截（Firefox 后端策略用；重定向跟随跳不触发——须逐跳走查） */
+  route(pattern: string, handler: (route: PwRoute) => unknown): Promise<void>;
 }
-interface PwBrowser {
+export interface PwBrowser {
   newContext(options?: unknown): Promise<PwBrowserContext>;
   contexts(): PwBrowserContext[];
   close(): Promise<void>;
@@ -100,6 +105,26 @@ interface CdpRequestPaused {
   requestId: string;
   request: { url: string; method: string };
   resourceType?: string;
+}
+
+/** route 拦截请求（Firefox 策略用；与 CDP Fetch 的字段语义对齐） */
+interface PwRouteRequest {
+  url(): string;
+  method(): string;
+  resourceType(): string;
+}
+interface PwRoute {
+  request(): PwRouteRequest;
+  /** 以本请求为基发起取数（可覆写 url/method；maxRedirects:0 = 看见每一跳） */
+  fetch(options?: unknown): Promise<PwRouteResponse>;
+  continue(): Promise<void>;
+  abort(errorCode?: string): Promise<void>;
+  fulfill(options: unknown): Promise<void>;
+}
+interface PwRouteResponse {
+  status(): number;
+  headers(): Record<string, string>;
+  body(): Promise<Uint8Array>;
 }
 
 // ── 页内 DOM 走查（page.evaluate 序列化到浏览器执行；最小结构类型，不引 lib.dom） ──
@@ -167,7 +192,32 @@ const CHALLENGE_MARKERS: Array<{ kind: ChallengeInfo['kind']; marker: string; ti
 
 
 
-let pwModulePromise: Promise<PwModule> | undefined;
+const driverPromises = new Map<string, Promise<PwModule>>();
+
+/**
+ * 按 specifier 解析 playwright 系驱动（每个 specifier 单飞缓存）。
+ * P3：rebrowser 后端 = `rebrowser-playwright-core`（drop-in，API 同构）；
+ * camoufox 后端经自定义 launcher 注入，不经此函数。
+ */
+async function resolveDriver(spec: string): Promise<PwModule> {
+  let promise = driverPromises.get(spec);
+  if (!promise) {
+    promise = (async () => {
+      // 变量 specifier：编译期零解析（可选依赖缺席时 tsc 也能过）；运行期解析缺席即 fail-loud
+      try {
+        return (await import(spec)) as unknown as PwModule;
+      } catch (err) {
+        driverPromises.delete(spec); // 允许安装后重试
+        throw new Error(
+          `not_implemented: browser engine not installed (${spec}) — run "octopi browser install"`,
+          { cause: err },
+        );
+      }
+    })();
+    driverPromises.set(spec, promise);
+  }
+  return promise;
+}
 
 /** profile 文件存在性（不存在 = 全新身份，从零开始；不抛） */
 async function fileExists(path: string): Promise<boolean> {
@@ -189,25 +239,6 @@ async function quarantineProfileState(path: string): Promise<boolean> {
     // 隔离失败：调用方禁用 persist（不得覆盖现场）；后续 launch 仍会撞同一错（fail-loud 仍在）
     return false;
   }
-}
-
-async function resolvePlaywright(): Promise<PwModule> {
-  if (!pwModulePromise) {
-    pwModulePromise = (async () => {
-      // 变量 specifier：编译期零解析（可选依赖缺席时 tsc 也能过）；运行期解析缺席即 fail-loud
-      const spec = 'playwright-core';
-      try {
-        return (await import(spec)) as unknown as PwModule;
-      } catch (err) {
-        pwModulePromise = undefined; // 允许安装后重试
-        throw new Error(
-          'not_implemented: browser engine not installed (playwright-core) — run "octopi browser install"',
-          { cause: err },
-        );
-      }
-    })();
-  }
-  return pwModulePromise;
 }
 
 /** chromium 启动失败→安装指引（二进制缺失 fail-loud，不静默换引擎） */
@@ -335,6 +366,8 @@ export class PlaywrightBrowserSession implements BrowserSession {
       closeMode?: 'managed' | 'attach';
       /** 持久 profile 归档（managed + persist 才生效；attach 是用户活身份，不归档） */
       profile?: { id: string; dir: string; persist: boolean };
+      /** P3 拟人化（逐键打字延迟在 fill 生效；区间每键随机采样） */
+      humanize?: HumanizeOptions;
     },
   ) {
     this.id = `bs_${randomUUID()}` as BrowserSessionId;
@@ -500,9 +533,23 @@ export class PlaywrightBrowserSession implements BrowserSession {
       case 'click':
         await (await locatorFor(action.ref)).click({ timeout: this.actionTimeoutMs });
         break;
-      case 'fill':
-        await (await locatorFor(action.ref)).fill(action.value, { timeout: this.actionTimeoutMs });
+      case 'fill': {
+        const locator = await locatorFor(action.ref);
+        const typing = this.sessionOptions?.humanize?.typingDelayMs;
+        if (typing) {
+          // P3 拟人化：逐键敲入（每键延迟在区间内随机采样），行为面接近真人
+          const [lo, hi] = typing;
+          const min = Math.max(0, Math.min(lo, hi));
+          const span = Math.abs(hi - lo);
+          for (const ch of action.value) {
+            await locator.pressSequentially(ch, { timeout: this.actionTimeoutMs });
+            await this.page.waitForTimeout(min + Math.random() * span);
+          }
+        } else {
+          await locator.fill(action.value, { timeout: this.actionTimeoutMs });
+        }
         break;
+      }
       case 'select':
         await (await locatorFor(action.ref)).selectOption(action.value, {
           timeout: this.actionTimeoutMs,
@@ -690,6 +737,18 @@ export class PlaywrightBrowserPort implements BrowserPort {
       attachMode?: boolean;
       /** attach 默认 CDP 端点 */
       attachEndpoint?: string;
+      /** P3：驱动模块 specifier（缺省 'playwright-core'；rebrowser = 'rebrowser-playwright-core'） */
+      driver?: string;
+      /** P3：会话引擎标识（缺省 playwright） */
+      engine?: BrowserEngineId;
+      /** P3：请求策略实现——cdp-fetch（Chromium 缺省）| route-walk（Firefox 逐跳走查） */
+      policyMode?: 'cdp-fetch' | 'route-walk';
+      /** P3：自定义启动器（camoufox 等自带驱动的后端）；缺省 pw.chromium.launch */
+      launcher?: (opts: {
+        headless: boolean;
+        channel?: 'chromium' | 'chrome';
+        timeoutMs?: number;
+      }) => Promise<PwBrowser>;
     } = {},
   ) {}
 
@@ -703,14 +762,23 @@ export class PlaywrightBrowserPort implements BrowserPort {
         policy: options?.policy,
       });
     }
-    const pw = await resolvePlaywright();
     const channel = options?.channel ?? this.defaults.channel;
+    const headless = options?.headless ?? this.defaults.headless ?? true;
     let browser: PwBrowser;
     try {
-      browser = await pw.chromium.launch({
-        headless: options?.headless ?? this.defaults.headless ?? true,
-        ...(channel === 'chrome' ? { channel: 'chrome' } : {}),
-      });
+      if (this.defaults.launcher) {
+        browser = await this.defaults.launcher({
+          headless,
+          channel,
+          timeoutMs: options?.timeoutMs ?? this.defaults.timeoutMs,
+        });
+      } else {
+        const pw = await resolveDriver(this.defaults.driver ?? 'playwright-core');
+        browser = await pw.chromium.launch({
+          headless,
+          ...(channel === 'chrome' ? { channel: 'chrome' } : {}),
+        });
+      }
     } catch (err) {
       throw mapLaunchError(err);
     }
@@ -783,7 +851,9 @@ export class PlaywrightBrowserPort implements BrowserPort {
       {
         identity: profile ? { kind: 'profile', profileId: profile.id } : { kind: 'incognito' },
         closeMode: 'managed',
+        ...(this.defaults.engine ? { engine: this.defaults.engine } : {}),
         ...(profile ? { profile } : {}),
+        ...(options?.humanize ? { humanize: options.humanize } : {}),
       },
     );
     try {
@@ -847,9 +917,11 @@ export class PlaywrightBrowserPort implements BrowserPort {
   /**
    * 请求级策略安装（每请求收口：URL 判定 + 非 GET 导航写闸 + 账本）。
    *
-   * 实现走 **CDP Fetch 域**（网络栈级逐请求暂停）：`context.route` 在重定向跟随跳
-   * 上不触发（实证：302 目标由网络栈内部跟走、route 看不到）——路由级拦截会漏掉
-   * 正是策略最该管的跳转目标，故弃用（评审 B2）。
+   * Chromium 系走 **CDP Fetch 域**（网络栈级逐请求暂停）：`context.route` 在重定向
+   * 跟随跳上不触发（实证：302 目标由网络栈内部跟走、route 看不到）——路由级拦截
+   * 会漏掉正是策略最该管的跳转目标，故 Chromium 弃用 route（评审 B2）。Firefox 系
+   * （camoufox）无 CDP Fetch 域，走 {@link installRequestPolicyRouteWalk} 逐跳走查
+   * 同等语义（P3）。
    */
   private async installRequestPolicy(
     context: PwBrowserContext,
@@ -858,6 +930,10 @@ export class PlaywrightBrowserPort implements BrowserPort {
     onBlock: (url: string, reason: string) => void,
   ): Promise<void> {
     if (!policy) return; // 裸端口直用（无策略注入）不做拦截
+    if ((this.defaults.policyMode ?? 'cdp-fetch') === 'route-walk') {
+      await this.installRequestPolicyRouteWalk(context, policy, onBlock);
+      return;
+    }
     const cdp = await context.newCDPSession(page);
     // 审计/回执回调的抛错不得影响请求终局（否则请求悬停到超时）——统一吞在 safe 调用里
     const safeRecord = (event: Parameters<NonNullable<BrowserRequestPolicy['record']>>[0]): void => {
@@ -923,13 +999,98 @@ export class PlaywrightBrowserPort implements BrowserPort {
   }
 
   /**
+   * 路由级策略（P3：Firefox/camoufox 后端——Juggler 无 CDP Fetch 域）。
+   *
+   * `context.route` 同样不触发于重定向跟随跳，故**逐跳走查**：`route.fetch` 以
+   * `maxRedirects: 0` 把每一跳摊在明面，每跳都过 URL 策略与写闸，最终响应
+   * `route.fulfill` 回填——与 CDP Fetch 路径语义对齐（arch §3.6 同等语义）。
+   * 307/308 保留方法（写随跳走、闸跟着走）；301/302/303 降级 GET（丢 body）。
+   * 残余边界（KNOWN-ISSUES）：WS/ServiceWorker 请求不经 route。
+   */
+  private async installRequestPolicyRouteWalk(
+    context: PwBrowserContext,
+    policy: BrowserRequestPolicy,
+    onBlock: (url: string, reason: string) => void,
+  ): Promise<void> {
+    // 审计/回执回调的抛错不得影响请求终局（否则请求悬停到超时）——统一吞在 safe 调用里
+    const safeRecord = (event: Parameters<NonNullable<BrowserRequestPolicy['record']>>[0]): void => {
+      try {
+        policy.record?.(event);
+      } catch {
+        /* 审计回调自身抛错：吞掉（终局动作优先，悬停比丢一条账更糟） */
+      }
+    };
+    const safeBlock = (url: string, reason: string): void => {
+      try {
+        onBlock(url, reason);
+      } catch {
+        /* 拦截回执抛错：吞掉（同上） */
+      }
+    };
+    await context.route('**/*', (route) => {
+      void (async () => {
+        const req = route.request();
+        let url = req.url();
+        let method = req.method();
+        const documentLevel = req.resourceType() === 'Document';
+        try {
+          // 逐跳走查（10 跳为安全界，非部署旋钮）：每跳过 URL 策略 + 写闸
+          for (let hop = 0; hop < 10; hop++) {
+            await policy.checkUrl(url);
+            if (WRITE_METHODS.has(method)) {
+              safeRecord({ kind: 'write.attempt', url, method });
+              const allowed = await policy.confirmWrite({ method, url, documentLevel });
+              if (!allowed) {
+                const reason = `denied: browser write ${method} not approved`;
+                safeBlock(url, reason);
+                safeRecord({ kind: 'write.blocked', url, method, reason });
+                await route.abort('blockedbyclient').catch(() => {
+                  /* 页已关：请求自然终止 */
+                });
+                return;
+              }
+            }
+            const resp = await route.fetch({
+              url,
+              method,
+              maxRedirects: 0,
+              ...(method === 'GET' || method === 'HEAD' ? { postData: '' } : {}),
+            });
+            const status = resp.status();
+            if (status >= 300 && status < 400) {
+              const headers = resp.headers();
+              const location = headers['location'] ?? headers['Location'];
+              if (!location) break; // 无 Location 的 3xx：原样回填（无下一跳可走查）
+              url = new URL(location, url).toString();
+              // 307/308 保留方法（写随跳走）；其余依规降级 GET（丢 body）
+              if (status !== 307 && status !== 308) method = 'GET';
+              continue;
+            }
+            await route.fulfill({ response: resp });
+            return;
+          }
+          throw new Error('denied: too many redirects (10 hops)');
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          safeBlock(url, reason);
+          safeRecord({ kind: 'blocked', url, method, reason });
+          await route.abort('blockedbyclient').catch(() => {
+            /* 页已关：请求自然终止 */
+          });
+        }
+      })();
+    });
+  }
+
+  /**
    * attach 用户真实浏览器（P2；connectOverCDP，复用其登录/指纹）。
    *
    * 安全语义（已实证）：策略经 CDP Fetch 同样逐请求收口；`browser.close()` = 断开
    * 连接、不杀用户浏览器；会话关闭只关我们开的页（closeMode='attach'）。
    */
   async attach(options?: BrowserAttachOptions): Promise<BrowserSession> {
-    const pw = await resolvePlaywright();
+    // attach 恒为 Chromium CDP（用户真实 Chrome）；与 launcher/driver 旋钮无关
+    const pw = await resolveDriver('playwright-core');
     const endpoint = options?.endpoint ?? this.defaults.attachEndpoint ?? 'http://127.0.0.1:9222';
     let browser: PwBrowser;
     try {

@@ -32,3 +32,5 @@
 - **弹窗按单页契约即开即关**：`target="_blank"` / `window.open` 的新窗口不在会话请求策略覆盖内（CDP 拦截按 page target 挂）；会立即关闭+记账，但弹窗首个请求存在与关闭的竞态窗口（出生即接管为后续增强）。
 - **持久 profile 按 OCTOPI_HOME 共享**：`browser.profiles.defaultProfile` 让同一运行时下所有 agent 共享一份登录态；租户/agent 级 profile 归属是开放问题（`arch/browser-capability.md` §5）。会话内对某 `method+origin` 批过一次写闸后，同形状的后续写入（含表单批准后的页内脚本写）不再询问。
 - **截图落盘为文件，不是内联图像**：工具结果在 LLM 边界是纯文本——`browser_screenshot` 返回文件路径，模型「看不到」图像。
+- **stealth 是缓释不是免疫**：`rebrowser` 补自动化泄漏（Runtime.enable、navigator.webdriver、栈指纹），但其文档明示不覆盖 `HeadlessChrome` UA 标记与指纹面（canvas/WebGL/字体）——该轴由 `camoufox`（异构引擎/指纹）或 `cdp-attach`（真实浏览器）覆盖。CAPTCHA 级评分还计入 IP 信誉；`stealth.humanize` 只对行为/时序轴起作用。
+- **camoufox 后端残余边界**：不经 `context.route` 的请求（WebSocket、ServiceWorker fetch）绕过逐跳重定向走查；`camoufox-js` 是实验性移植版（Apify）且 peer 钉 `playwright-core <1.63`——故走隔离 provider 目录（`browser-providers/camoufox`），版本钉与原生依赖不入宿主依赖树。

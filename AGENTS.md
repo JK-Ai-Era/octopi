@@ -86,6 +86,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   knowledge/            # Knowledge data plane (knowledge.db — **sole writer is Knowledge Service**; see docs/knowledge.md)
   credentials/          # Integration credentials vault (credentials.db; env/file refs or AES-GCM ciphertext)
   browser-profiles/     # browser_* persistent login state (storageState <id>.json, 0600; lazy-created on profile persist)
+  browser-providers/<id>/ # P3 isolated browser providers (camoufox: own camoufox-js + self-consistent playwright-core; never in the host dependency tree)
   plugin-state/<id>/    # per-plugin private state dir (0700; api.stateDir — plugin runtime state, never secrets)
   agents/<id>/          # agent home
     AGENTS.md           # main persona (loaded first by loadPersona)

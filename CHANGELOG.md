@@ -129,6 +129,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.120.0 (2026-11-20)
+
+### feat(webui): 浏览器引擎管理面进设置页（install WebUI 化）
+
+- **设置页新增「浏览器」分组**（BrowserSettingsPanel）：引擎状态卡（就绪/缺失 + 判定依据，含 stealth 链缺员提示）→ 一键安装（`playwright|rebrowser|camoufox|stealth`）→ 进度控制台（2s 轮询任务输出，超限截断显式标记）→ 引擎下拉热生效（config hash 乐观锁，新 run 生效）。
+- **单一实现**：安装/探测逻辑抽到 engine `integration/browser/install.ts`（`probeEngines` + `installEngine(onProgress)`），`octopi browser install` CLI 改薄壳共用——CLI 与 WebUI 永不分叉。
+- **gateway**：`GET /browser/engines`（状态）、`POST /browser/engines/:engine/install`（异步任务；同引擎并发闸 409）、`GET /browser/engines/install/:jobId`（轮询）；`GET /config/browser` + `PUT /config/browser/engine`（hash 乐观锁热切换）。授权收紧 host/平台 admin；任务为进程内注册表（daemon 重启丢任务可接受——安装幂等，重跑即可）。
+- **修复（P3 带出）**：`resolveCamoufoxJsCliPath` 只拼路径不查存在性——provider 缺席时假阳性（状态卡会放大成谎报），补 `existsSync` 判定；二进制探测改平台感知多候选（macOS `~/Library/Caches` 约定曾误判缺失）。
+- **验证**：新增 `tests/gateway-browser-install.test.ts` 12 例（任务生命周期/失败落账/并发闸/输出截断/路由 400-404-409/config 乐观锁/探测形状）；全量套件 **5475 通过 / 0 失败**。
+
 ## v0.119.8 (2026-11-20)
 
 ### fix(engine): 展示名不再当请求模型发出（DeepSeek 400 根因）+ DeepSeek baseUrl/name 修正
@@ -166,6 +176,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 - 新增 20 例：掩码帧渲染（键入/粘贴/重绘/换行/Ctrl-U/自定义前缀）、privilegedAck 读写（顶层语义、保留既有 effectPolicy 字段、schema fail-loud 不写坏文件）、LoginPage（密钥显形条件、apiKey 第三错误态、防枚举文案、陈旧密钥清理）、init 缺省 mode=project。
 - 验证：全量 5472 passed / 0 failed；eslint + root/webui tsc + `arch/check-sync.sh` 全绿；PTY 冒烟（80 列换行帧上移重画、明文泄漏检查 False、93 字符 Key 粘贴反馈）。
+
+## v0.119.5 (2026-11-20)
+
+### feat(engine): P3 stealth 双后端 + 拟人化节流（浏览器批次收官）
+
+- **新增后端**：`rebrowser`（rebrowser-playwright-core drop-in，默认 stealth 后端；复用 playwright Chromium 二进制，请求策略仍走 CDP Fetch）+ `camoufox`（定制 Firefox，指纹差异化备选；**隔离 provider 安装**——camoufox-js 及其 `playwright-core <1.63` peer/原生依赖锁在 `browser-providers/camoufox/`，运行期绝对路径 import，不污染宿主依赖树）。
+- **engine 新增 `"stealth"`**：按 `browser.stealth.fallback`（缺省 `rebrowser->camoufox`）建链；挑战页检出 → `rotateAfterChallenge`（契约可选原语）**per-key** 轮换到下一后端重试一次 → 仍命中走 HITL 出口。
+- **请求策略双实现**：Chromium 系 = CDP Fetch（不变）；Firefox 系 = `context.route` + **逐跳走查**（`route.fetch(maxRedirects:0)` 摊平每一跳，307/308 保留方法的重定向不再能绕闸；跳转目标每跳复验——route 原生看不见重定向跟随跳的缺口由此补上）。
+- **humanize 拟人化**（`browser.stealth.humanize`，stealth 系引擎缺省启用）：动作间抖动 `actionJitterMs`、fill 逐键敲入 `typingDelayMs`（每键区间随机采样）、有界重试 `maxRetries`（stale_ref/策略拒绝为非瞬态不重试）；全部可配。
+- **`octopi browser install [playwright|rebrowser|camoufox|stealth]`** 多引擎安装（camoufox = provider 自动搭建 + 定制 Firefox 下载）。
+- **验证**：route-walk 判别用例（307 保留方法写逐跳闸、denied 跳转目标拦截、GET 跳转复验）+ 链轮换/工具层编排/humanize 专项 11 例；全量套件 **5463 通过 / 0 失败**。
+- **已知边界**（KNOWN-ISSUES 中英）：rebrowser 不覆盖 `HeadlessChrome` UA/指纹面（该轴靠 camoufox/cdp-attach）；camoufox 的 WS/ServiceWorker 请求不经 route；camoufox-js 为 experimental 移植版（故隔离安装）。
 
 ## v0.119.4 (2026-11-20)
 
