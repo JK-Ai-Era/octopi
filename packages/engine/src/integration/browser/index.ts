@@ -25,6 +25,13 @@ export {
   resolveCamoufoxJsCliPath,
 } from './camoufox.js';
 export { parseFallbackChain, StealthFallbackService } from './stealth.js';
+export {
+  installEngine,
+  probeEngines,
+  type EngineStatus,
+  type InstallableEngine,
+  type InstallResult,
+} from './install.js';
 
 /**
  * `browser.*` 配置块形状（createBrowserService 的入参）。

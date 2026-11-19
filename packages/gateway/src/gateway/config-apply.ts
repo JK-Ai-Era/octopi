@@ -469,6 +469,58 @@ export class ConfigApplyService {
   }
 
   /**
+   * 浏览器引擎视图（WebUI 设置页）：engine + hash（乐观锁）。
+   *
+   * @returns 当前 browser.engine（缺省 auto）与配置 hash
+   */
+  getBrowserView(): { engine: string; hash: string } {
+    const { raw, hash } = this.deps.configAdmin.read();
+    const browser = (raw.browser ?? {}) as Record<string, unknown>;
+    return {
+      engine: typeof browser.engine === 'string' ? browser.engine : 'auto',
+      hash,
+    };
+  }
+
+  /**
+   * 更新 browser.engine（生效边界 = 配置热生效 L1：新 run 生效，在跑 run 用旧配置跑完——
+   * 浏览器服务按 run 装配，无需运行时 apply）。
+   *
+   * @param engine - 引擎名（auto | playwright | stealth | rebrowser | camoufox | cdp-attach | cloud）
+   * @param expectedHash - 乐观锁 hash（手改并发冲突时写层报错）
+   * @returns 写结果（新 hash / backupPath / warnings）
+   */
+  async updateBrowserEngine(engine: string, expectedHash: string): Promise<ConfigApplyResult> {
+    const allowed = new Set([
+      'auto',
+      'playwright',
+      'stealth',
+      'rebrowser',
+      'camoufox',
+      'cdp-attach',
+      'cloud',
+    ]);
+    if (!allowed.has(engine)) {
+      throw new Error(`unknown browser engine "${engine}"`);
+    }
+    const written = await this.deps.configAdmin.write((raw) => {
+      setJsonPath(raw, ['browser', 'engine'], engine);
+    }, expectedHash);
+    this.audit('browser.engine.update', `切换浏览器引擎为 ${engine}`, {
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
+    return {
+      hash: written.hash,
+      applied: 'next-run',
+      affectedAgents: [],
+      backupPath: written.backupPath,
+      warnings: written.warnings,
+    };
+  }
+
+  /**
    * 连通测试 + 模型清单拉取（不落盘）
    *
    * 缺省字段（apiKey/baseUrl/api）回落到盘上已存 provider——编辑现有 provider

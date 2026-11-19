@@ -12,6 +12,7 @@
  *
  * @module
  */
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -54,7 +55,8 @@ export function resolveCamoufoxJsCliPath(): string | null {
       'dist',
       '__main__.js',
     );
-    return entry;
+    // 必须查存在性：仅拼路径会在 provider 缺席时返回假阳性（状态卡会放大成谎报）
+    return existsSync(entry) ? entry : null;
   } catch {
     return null;
   }

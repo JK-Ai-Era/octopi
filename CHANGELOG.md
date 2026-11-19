@@ -129,6 +129,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.120.0 (2026-11-20)
+
+### feat(webui): 浏览器引擎管理面进设置页（install WebUI 化）
+
+- **设置页新增「浏览器」分组**（BrowserSettingsPanel）：引擎状态卡（就绪/缺失 + 判定依据，含 stealth 链缺员提示）→ 一键安装（`playwright|rebrowser|camoufox|stealth`）→ 进度控制台（2s 轮询任务输出，超限截断显式标记）→ 引擎下拉热生效（config hash 乐观锁，新 run 生效）。
+- **单一实现**：安装/探测逻辑抽到 engine `integration/browser/install.ts`（`probeEngines` + `installEngine(onProgress)`），`octopi browser install` CLI 改薄壳共用——CLI 与 WebUI 永不分叉。
+- **gateway**：`GET /browser/engines`（状态）、`POST /browser/engines/:engine/install`（异步任务；同引擎并发闸 409）、`GET /browser/engines/install/:jobId`（轮询）；`GET /config/browser` + `PUT /config/browser/engine`（hash 乐观锁热切换）。授权收紧 host/平台 admin；任务为进程内注册表（daemon 重启丢任务可接受——安装幂等，重跑即可）。
+- **修复（P3 带出）**：`resolveCamoufoxJsCliPath` 只拼路径不查存在性——provider 缺席时假阳性（状态卡会放大成谎报），补 `existsSync` 判定；二进制探测改平台感知多候选（macOS `~/Library/Caches` 约定曾误判缺失）。
+- **验证**：新增 `tests/gateway-browser-install.test.ts` 12 例（任务生命周期/失败落账/并发闸/输出截断/路由 400-404-409/config 乐观锁/探测形状）；全量套件 **5475 通过 / 0 失败**。
+
 ## v0.119.5 (2026-11-20)
 
 ### feat(engine): P3 stealth 双后端 + 拟人化节流（浏览器批次收官）
