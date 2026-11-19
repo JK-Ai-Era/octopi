@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ErrorCard, classifyFlowError, type FlowErrorItem } from './ErrorCard';
 import { ContextRuntimePanel } from './ContextRuntimePanel';
@@ -28,6 +28,7 @@ import { getConsoleKey, getRegistryToken } from '../console-key';
 import { t as tc, type MessageKey } from '../i18n/core';
 import { useLang, useT } from '../i18n/react';
 import { runStatusLabelKey } from './run-status-label';
+import { reduceScrollEvent } from './conversation-follow';
 
 /** WebUI 会话级 clientInstanceId（同一标签页稳定） */
 function webuiClientInstanceId(): string {
@@ -973,6 +974,12 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const scrollRef = useRef<HTMLDivElement | null>(null);
   /** 跟随输出滚到底；用户上滑后暂停，回到底部或新一轮回复再恢复 */
   const stickToBottomRef = useRef(true);
+  /** 最近一次程序滚动钉底后的实际 scrollTop：scroll 回调据此区分自家钉底与用户上滑 */
+  const pinnedScrollTopRef = useRef<number | null>(null);
+  /** 会话流内容根节点：ResizeObserver 观察其尺寸变化，异步长高时继续跟随 */
+  const conversationContentRef = useRef<HTMLDivElement | null>(null);
+  /** 历史 prepend 恢复锚定进行中：抑制钉底动作（不改跟随意图），避免与锚定回顶互相拉扯 */
+  const historyPrependRef = useRef(false);
 
   // Initialize store once
   useEffect(() => {
@@ -1128,11 +1135,13 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     if (agentDefault) setSelectedModelId(agentDefault);
   }, [agentId, agents, modelCatalog.agents, activeSessionId]);
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  };
+    // 浏览器把 scrollTop 钳到 scrollHeight - clientHeight；读回钳后值作为“自家钉底”锚点
+    pinnedScrollTopRef.current = el.scrollTop;
+  }, []);
 
   /** 新一轮 agent 回复 / 打开会话时恢复粘底跟随 */
   const enableStickToBottom = () => {
@@ -1143,8 +1152,13 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const handleConversationScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    // 阈值内视为“在底部”：轻微布局抖动不会打断跟随
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 48;
+    // 归属后再更新跟随意图：自家钉底的回响不得误判成用户上滑（conversation-follow）
+    const follow = reduceScrollEvent(
+      { stickToBottom: stickToBottomRef.current, pinnedScrollTop: pinnedScrollTopRef.current },
+      { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight },
+    );
+    stickToBottomRef.current = follow.stickToBottom;
+    pinnedScrollTopRef.current = follow.pinnedScrollTop;
 
     // 临近顶部：向前加载更早历史并拼在前面（纯展示；续聊走正常装配）
     if (el.scrollTop < 80 && storeRef.current?.hasMoreHistory()) {
@@ -1156,6 +1170,9 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const el = scrollRef.current;
     const store = storeRef.current;
     if (!store || !store.hasMoreHistory()) return;
+    // prepend 期间抑制钉底动作（跟随意图不动）：布局/RO 钉底会与下方“锚定回顶”互相拉扯。
+    // 意图必须留给事件归约判定——加载 0 条时没有任何滚动事件，改意图会让跟随永久停摆
+    historyPrependRef.current = true;
     const prevHeight = el?.scrollHeight ?? 0;
     const prevTop = el?.scrollTop ?? 0;
     try {
@@ -1167,15 +1184,35 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     if (el) {
       requestAnimationFrame(() => {
         el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
+        // 下一任务才解除抑制：本帧 rAF 之后的 ResizeObserver 步骤仍在抑制窗口内
+        setTimeout(() => {
+          historyPrependRef.current = false;
+        }, 0);
       });
+    } else {
+      historyPrependRef.current = false;
     }
   };
 
-  // Auto-scroll：仅在用户仍贴近底部时跟随；上滑阅读中不打断
-  useEffect(() => {
-    if (!stickToBottomRef.current) return;
+  // Auto-scroll：仅在用户仍贴近底部时跟随；上滑阅读中不打断。
+  // 用 layout effect 在 DOM 变更的同一提交内钉底：若等 passive effect，下一批
+  // 工具卡片可能先于钉底落地，钉底 scroll 事件会被误读成“用户上滑”（同竞态另一侧）
+  useLayoutEffect(() => {
+    if (!stickToBottomRef.current || historyPrependRef.current) return;
     scrollToBottom();
-  }, [conversationItems, stream, questions, approvals, clientToolCalls, renderedWebViews]);
+  }, [conversationItems, stream, questions, approvals, clientToolCalls, renderedWebViews, scrollToBottom]);
+
+  // 工具卡片展开、图片/iframe 加载等“无新事件的长高”也要跟随
+  useEffect(() => {
+    const content = conversationContentRef.current;
+    if (!content || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (!stickToBottomRef.current || historyPrependRef.current) return;
+      scrollToBottom();
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [scrollToBottom]);
 
   // 切换会话时清掉待发附件，避免 A 的文件挂到 B
   useEffect(() => {
@@ -1313,7 +1350,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     await store.openSession(sessionId);
     const state = store.getState();
     // 打开会话始终从底部开始看
-    stickToBottomRef.current = true;
+    enableStickToBottom();
     setActiveSessionId(sessionId);
     activeSessionIdRef.current = sessionId;
     // 点子会话下钻时左栏保持主会话选中（其余入口：高亮跟随打开的会话）
@@ -1593,7 +1630,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
    * activeSessionIdRef/状态重置/文件卡清空/模型刷新缺一即状态分叉）。
    */
   const activateCreatedSession = async (created: { id: string }) => {
-    stickToBottomRef.current = true;
+    enableStickToBottom();
     setActiveSessionId(created.id);
     activeSessionIdRef.current = created.id;
     setSidebarSessionId(created.id);
@@ -1734,7 +1771,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       if (latest) {
         // S7：目标会话已打开则跳过（refreshSessions 的 sessions 事件监听器可能已自动打开）
         if (store.getState().chat.sessionId !== latest.id) {
-          stickToBottomRef.current = true;
+          enableStickToBottom();
           await openSession(latest.id);
         }
       } else {
@@ -1766,7 +1803,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     setActionError(null);
     try {
       const created = await store.branchSession(parent, beforeIndex);
-      stickToBottomRef.current = true;
+      enableStickToBottom();
       setActiveSessionId(created.id);
       activeSessionIdRef.current = created.id;
       // 分支是用户选择的新会话：左栏高亮跟随（否则高亮停在旧会话上）
@@ -1794,7 +1831,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     setActionError(null);
     try {
       await store.editAndResend(userMessageIndex, content);
-      stickToBottomRef.current = true;
+      enableStickToBottom();
       setRunStatus(store.getState().chat.runStatus);
       setStream('');
       setTasks(store.getTasks());
@@ -2344,6 +2381,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
           </div>
 
           <div ref={scrollRef} className="conversation-scroll" onScroll={handleConversationScroll}>
+            {/* 会话流内容根节点：ResizeObserver 的观察目标（异步长高仍跟随） */}
+            <div ref={conversationContentRef} className="conversation-flow">
             {!activeSessionId && (
               <div className="panel empty-hint">
                 <div className="empty-hint-title">{t('chatWorkspace.welcome')}</div>
@@ -2591,6 +2630,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 </div>
               </div>
             )}
+            </div>
           </div>
 
           {/* 对话 ↔ 输入区分割条（拖动调整输入区高度，双击复位） */}
