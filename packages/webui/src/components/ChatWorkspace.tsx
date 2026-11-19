@@ -29,7 +29,7 @@ import { t as tc, type MessageKey } from '../i18n/core';
 import { useLang, useT } from '../i18n/react';
 import { runStatusLabelKey } from './run-status-label';
 import { reduceScrollEvent } from './conversation-follow';
-import { createViewportAuthority } from './viewport-authority';
+import { createViewportAuthority, shouldApplyCompensation } from './viewport-authority';
 import { buildTurnMarkers, historyTurnMarkers, markerKeyOf, type TurnMarker } from './turn-rail';
 import { TurnRail } from './TurnRail';
 import { ConversationAdapter } from '@octopi-agent/gateway/web/conversation/adapter';
@@ -983,7 +983,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   /** 会话流内容根节点：ResizeObserver 观察其尺寸变化，异步长高时继续跟随 */
   const conversationContentRef = useRef<HTMLDivElement | null>(null);
   /** 视口写权威：分页回顶 restore 与 turn 跳转定位互斥（协议见 viewport-authority.ts）。
-   * 有持有者期间粘底钉底与临近顶部自动加载自抑——不动跟随意图，只抑制程序滚动写入 */
+   * 职责：①程序写互斥与补偿让路 ②程序滚动回响不参与跟随意图判定 ③自动加载入口闸 */
   const viewportAuthorityRef = useRef(createViewportAuthority());
   /** user-messages 投影适配后的历史 turn 条目（未加载区间 marker 的来源） */
   const [historyTurnItems, setHistoryTurnItems] = useState<ConversationItem[]>([]);
@@ -1171,13 +1171,17 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const handleConversationScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    // 归属后再更新跟随意图：自家钉底的回响不得误判成用户上滑（conversation-follow）
-    const follow = reduceScrollEvent(
-      { stickToBottom: stickToBottomRef.current, pinnedScrollTop: pinnedScrollTopRef.current },
-      { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight },
-    );
-    stickToBottomRef.current = follow.stickToBottom;
-    pinnedScrollTopRef.current = follow.pinnedScrollTop;
+    // 程序滚动（分页回顶 / 跳转定位）的回响不参与跟随意图判定：restore 的盲写
+    // 曾把回到底部的用户拽回旧位、其事件把跟随永久打断。仅真实用户滚动定意图
+    if (!viewportAuthorityRef.current.isProgrammaticScroll()) {
+      // 归属后再更新跟随意图：自家钉底的回响不得误判成用户上滑（conversation-follow）
+      const follow = reduceScrollEvent(
+        { stickToBottom: stickToBottomRef.current, pinnedScrollTop: pinnedScrollTopRef.current },
+        { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight },
+      );
+      stickToBottomRef.current = follow.stickToBottom;
+      pinnedScrollTopRef.current = follow.pinnedScrollTop;
+    }
 
     // 回底按钮：上滑超过一屏显示；视口所处 turn 同步追踪
     setShowBackToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight);
@@ -1229,8 +1233,18 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
           authority.release(owner);
           return;
         }
-        el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-        // 下一任务才解除权威：本帧 rAF 之后的 ResizeObserver 步骤仍在抑制窗口内
+        const delta = el.scrollHeight - prevHeight;
+        // 只在「用户仍停留在原阅读位」时回顶。加载期间移动过视口（回到最底部、
+        // 点了回到底部）就不得把人拽回旧位置——盲写（含 0 条加载的 prevTop+0）
+        // 会把人拽离底部并让其 scroll 事件误杀粘底跟随。候选二（prevTop+delta）
+        // 是 scroll anchoring 已补偿到位的情形：写入只消除 ≤容差的下方长高残差，
+        // 并非严格无操作；残差超容差时跳过更正确（anchoring 已保持视觉位置）
+        if (shouldApplyCompensation({ scrollTop: el.scrollTop, prevTop, delta })) {
+          authority.markScrolled(owner); // 程序写：其 scroll 回响不得改变跟随意图
+          el.scrollTop = prevTop + delta;
+        }
+        // 下一任务再解除权威。回响派发时序无规范保证（可能落在解除之后），
+        // 但补偿写保持距底距离不变，晚到回响按距离重算得到相同意图，结果无害
         setTimeout(() => authority.release(owner), 0);
       });
     } else {
@@ -1327,7 +1341,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   // 用 layout effect 在 DOM 变更的同一提交内钉底：若等 passive effect，下一批
   // 工具卡片可能先于钉底落地，钉底 scroll 事件会被误读成“用户上滑”（同竞态另一侧）
   useLayoutEffect(() => {
-    if (!stickToBottomRef.current || viewportAuthorityRef.current.isHeld()) return;
+    // 钉底不视「视口写权威」自抑：加载在途曾把工具完成时的钉底整个压制（内容
+    // 长在视口外无人管）。与 restore 的冲突由其「仍停留原位」守卫裁决——钉底
+    // 挪过视口后 restore 自然让路
+    if (!stickToBottomRef.current) return;
     scrollToBottom();
   }, [conversationItems, stream, questions, approvals, clientToolCalls, renderedWebViews, scrollToBottom]);
 
@@ -1336,7 +1353,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const content = conversationContentRef.current;
     if (!content || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
-      if (!stickToBottomRef.current || viewportAuthorityRef.current.isHeld()) return;
+      if (!stickToBottomRef.current) return;
       scrollToBottom();
     });
     observer.observe(content);

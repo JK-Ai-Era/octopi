@@ -128,6 +128,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.41 (2026-11-19)
+
+### fix(webui): 回底后工具耗时场景粘底跟随失效——回顶盲写误杀 + 加载在途压制钉底
+
+- **症状**（浏览器实测）：手动上滑后拉回最底部（或点"回到底部"），工具执行稍慢（助理回复晚出）时新内容被挤到视口外，自动滚动不再恢复。
+- **根因**（上滑回底动作触发「临近顶部自动加载」路径的两个缺陷）：① `loadMoreHistory` 持有视口写权威覆盖**整个 fetch**，工具恰在窗口内完成时钉底/RO 被整体压制，内容长在视口外无人跟随；② 回顶 restore `scrollTop = prevTop + delta` 盲写假设用户仍在触发时的旧位置（顶部附近）——用户已回到底部时被拽回顶部，该 scroll 事件距底 >48px 把跟随意图**永久打断**（此后无滚动事件可再判定）。
+- **修复**（三件套）：① `shouldApplyCompensation`（viewport-authority 纯函数 + 6 例测试，容差常量化）——restore 仅在「视口仍停在原阅读位」时落地（候选二覆盖 scroll anchoring 已补偿位），用户移动过即让路，钉底与 restore 的冲突由该判定裁决（**钉底不再视写权威自抑**）；② 程序滚动回响不参与跟随意图判定（`isProgrammaticScroll`：持有者已 markScrolled 的窗口内 scroll 事件跳过意图重算）；③ 写权威引入世代号，`reset()`（会话切换）后陈旧补偿一律让路（修评审#2：旧会话 restore 不得落到新会话做无归属写）。
+- **不变量备忘**：stayed 判定（非 isHeld）是 pin-vs-restore 的唯一仲裁者，勿删；意图判定在程序滚动窗口内是**有意弱化**（restore 窗口≈1 帧、跳转窗口 ≤scrollend/800ms）；24px 容差=anchoring 残差允许量。
+- **已知取舍**：跳转平滑滚动窗口内的用户滚动意图延后到下一事件（≤800ms）；`enableStickToBottom`（发消息/应答）在跳转中会以钉底取消该跳转（新意图胜出，可接受）；C7 让路的补偿写（跳转接管未滚动）其回响按距离重算相同意图，无害。
+- **验证**：全量 5409 用例绿（viewport-authority 13 例含世代/补偿判定回归）；根构建绿；eslint 绿（tests/memory 既有漂移 14 条无关）。独立评审确认两根因、无 blocker；浏览器复验建议按原始复现（上滑→回底→慢工具）走一轮。
+
+---
+
 ## v0.118.40 (2026-11-19)
 
 ### fix(gateway): user-messages 投影信封安全截断——定位轨预览显示用户原文而非信封头
