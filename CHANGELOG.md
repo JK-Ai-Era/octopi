@@ -129,6 +129,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.119.3 (2026-11-20)
+
+### fix(engine): 确认闸配置改单一三档（F5 二轮拍板）
+
+- **行为/配置变更（breaking）**：`browser.confirm` 由布尔组合（`formSubmit/passwordField/fileUpload/xhrWrites`）改为**单一三档枚举**，旧键零兼容移除：`"all"` = 所有非 GET 过闸（含页内 fetch/XHR）；`"document"`（缺省）= 仅文档级（表单提交/密码/上传）；`"off"` = 全放开。档位→单闸映射收敛为唯一实现 `confirmGateEnabled`（DOM 闸与请求层闸共用）。
+- 升级指引：原 `confirm.xhrWrites: true`（或全布尔 true）→ `"all"`；v0.119.2 缺省状态 → `"document"`（或省略）；原全关 → `"off"`。
+- KNOWN-ISSUES（中英）/example 模板/arch/schema 同步；档位映射穷举单测 + 既有用例三档化，`tests/harness/browser-tools.test.ts` 43 例全绿。
+
 ## v0.119.2 (2026-11-20)
 
 ### fix(engine): xhr 写闸缺省关闭（F5 拍板）

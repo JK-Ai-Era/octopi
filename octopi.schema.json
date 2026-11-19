@@ -3422,21 +3422,12 @@
           }
         },
         "confirm": {
-          "type": "object",
-          "properties": {
-            "formSubmit": {
-              "type": "boolean"
-            },
-            "passwordField": {
-              "type": "boolean"
-            },
-            "fileUpload": {
-              "type": "boolean"
-            },
-            "xhrWrites": {
-              "type": "boolean"
-            }
-          }
+          "type": "string",
+          "enum": [
+            "all",
+            "document",
+            "off"
+          ]
         }
       }
     },

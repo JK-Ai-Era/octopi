@@ -20,6 +20,7 @@ import { AddressInfo, createServer as createNetServer } from 'node:net';
 import { createBrowserService } from '../../packages/engine/src/integration/browser/index.js';
 import {
   createBrowserTools,
+  confirmGateEnabled,
   domainMatches,
   assertBrowserUrlAllowed,
 } from '../../packages/engine/src/harness/extension/plugin-ecosystem/tools/browser.js';
@@ -454,11 +455,11 @@ describe('browser tools (real stack)', () => {
   );
 
   it.skipIf(!engineAvailable)(
-    'gate can be disabled via confirm.passwordField=false',
+    'confirm:off disables every gate (password fill passes without prompting)',
     async () => {
       const rec: Recorder = { events: [], writes: [] };
       const confirmEffect = vi.fn(async () => 'deny');
-      const { service, tools } = toolsFor({ confirm: { passwordField: false } });
+      const { service, tools } = toolsFor({ confirm: 'off' });
       track(service);
       const ctx = makeCtx(rec, { confirmEffect: confirmEffect as never });
       const nav = await tools.get('browser_navigate')!.handler({ url: baseUrl }, ctx);
@@ -817,7 +818,7 @@ describe('P2 (real stack)', () => {
       const rec: Recorder = { events: [], writes: [] };
       const deny = vi.fn(async () => ({ decision: 'deny' as const }));
       const approve = vi.fn(async () => ({ decision: 'approve' as const }));
-      const { service, tools } = toolsFor({ confirm: { fileUpload: true } });
+      const { service, tools } = toolsFor({ confirm: 'document' });
       track(service);
       try {
         const ctx = makeCtx(rec, { cwd: root, confirmEffect: deny as never });
@@ -900,7 +901,7 @@ describe('P2 (real stack)', () => {
     async () => {
       postCount = 0;
       const approve = vi.fn(async () => ({ decision: 'approve' as const }));
-      const { service, tools } = toolsFor({ confirm: { xhrWrites: true } });
+      const { service, tools } = toolsFor({ confirm: 'all' });
       track(service);
       const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: approve as never });
       await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
@@ -916,7 +917,7 @@ describe('P2 (real stack)', () => {
     async () => {
       postCount = 0;
       const deny = vi.fn(async () => ({ decision: 'deny' as const }));
-      const { service, tools } = toolsFor({ confirm: { xhrWrites: true } });
+      const { service, tools } = toolsFor({ confirm: 'all' });
       track(service);
       const rec: Recorder = { events: [], writes: [] };
       const ctx = makeCtx(rec, { confirmEffect: deny as never });
@@ -996,7 +997,7 @@ describe('P2 (real stack)', () => {
       const late = vi.fn(
         () => new Promise((resolve) => setTimeout(() => resolve({ decision: 'approve' as const }), 1500)),
       );
-      const { service, tools } = toolsFor({ timeoutMs: 1000, confirm: { formSubmit: true } });
+      const { service, tools } = toolsFor({ timeoutMs: 1000, confirm: 'all' });
       track(service);
       const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: late as never });
       const nav = await tools.get('browser_navigate')!.handler({ url: `${baseUrl}postform` }, ctx);
@@ -1079,11 +1080,11 @@ describe('P2 (real stack)', () => {
   );
 
   it.skipIf(!engineAvailable)(
-    'confirm.xhrWrites=false disables the xhr gate without poisoning the cache',
+    'explicit confirm:document keeps page-script writes ungated (no cache poisoning)',
     async () => {
       postCount = 0;
       const gate = vi.fn(async () => ({ decision: 'deny' as const }));
-      const { service, tools } = toolsFor({ confirm: { xhrWrites: false } });
+      const { service, tools } = toolsFor({ confirm: 'document' });
       track(service);
       const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
       await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
@@ -1094,8 +1095,27 @@ describe('P2 (real stack)', () => {
     30_000,
   );
 
+  it('confirmGateEnabled maps the three tiers (single source of truth)', () => {
+    // 缺省 document：文档级过闸、页内 XHR 不闸
+    expect(confirmGateEnabled(undefined, 'formSubmit')).toBe(true);
+    expect(confirmGateEnabled(undefined, 'passwordField')).toBe(true);
+    expect(confirmGateEnabled(undefined, 'fileUpload')).toBe(true);
+    expect(confirmGateEnabled(undefined, 'xhr')).toBe(false);
+    // all：所有非 GET 过闸
+    expect(confirmGateEnabled('all', 'xhr')).toBe(true);
+    expect(confirmGateEnabled('all', 'formSubmit')).toBe(true);
+    // document：显式与缺省同义
+    expect(confirmGateEnabled('document', 'xhr')).toBe(false);
+    expect(confirmGateEnabled('document', 'formSubmit')).toBe(true);
+    // off：全放开
+    expect(confirmGateEnabled('off', 'formSubmit')).toBe(false);
+    expect(confirmGateEnabled('off', 'passwordField')).toBe(false);
+    expect(confirmGateEnabled('off', 'fileUpload')).toBe(false);
+    expect(confirmGateEnabled('off', 'xhr')).toBe(false);
+  });
+
   it.skipIf(!engineAvailable)(
-    'xhr gate is off by default (2026-11-20 F5 decision)',
+    'page-script writes are ungated at the default document tier (2026-11-20)',
     async () => {
       postCount = 0;
       const gate = vi.fn(async () => ({ decision: 'deny' as const }));
@@ -1120,7 +1140,7 @@ describe('P2 (real stack)', () => {
         seenScopes.push(getRunScope()?.sessionId);
         return { decision: 'approve' as const };
       });
-      const { service, tools } = toolsFor({ confirm: { xhrWrites: true } });
+      const { service, tools } = toolsFor({ confirm: 'all' });
       track(service);
       const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
       const scope = { sessionId: ctx.sessionId, agentId: 'agent-1' } as RunScope;
@@ -1150,7 +1170,7 @@ describe('P2 (real stack)', () => {
       try {
         postCount = 0;
         const gate = vi.fn(async () => ({ decision: 'approve' as const }));
-        const { service, tools } = toolsFor({ confirm: { xhrWrites: true } });
+        const { service, tools } = toolsFor({ confirm: 'all' });
         track(service);
         const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
         await tools.get('browser_navigate')!.handler(

@@ -34,15 +34,12 @@ import { assertUrlAllowed, type NetworkGuardOptions } from '../../../knowledge/n
 import { containmentOptions, resolveToolPath } from './platform.js';
 
 export interface BrowserToolOptions {
-  /** 敏感动作确认闸门（缺省全开 = 拍板） */
-  confirm?: {
-    formSubmit?: boolean;
-    passwordField?: boolean;
-    /** P2：本地文件上传闸 */
-    fileUpload?: boolean;
-    /** P2：页内 fetch/XHR 外部写闸（method+origin 会话级审批缓存） */
-    xhrWrites?: boolean;
-  };
+  /**
+   * 敏感动作确认闸门三档（2026-11-20 拍板，替代布尔组合）：
+   * `all` = 所有非 GET 过闸（含页内 fetch/XHR）；`document`（缺省）= 仅文档级
+   * （表单提交/密码/上传）；`off` = 全放开。
+   */
+  confirm?: 'all' | 'document' | 'off';
   /** 持久 profile（P2）：persist=关闭时归档 storageState；defaultProfile=隐式会话默认身份 */
   profiles?: { persist?: boolean; defaultProfile?: string };
   /** profile 存储目录（assemble 按 OCTOPI_HOME 注入） */
@@ -142,6 +139,22 @@ function normalizeDecision(raw: ConfirmOutcome | HitlDecision | undefined): 'app
     : 'deny';
 }
 
+/**
+ * 确认闸三档 → 单闸开关的唯一映射（DOM 闸与请求层闸共用；勿在调用点手写档位判断）。
+ *
+ * @param confirm - 三档配置（缺省 `document`）
+ * @param kind - 闸门种类（`xhr` = 页内 fetch/XHR 外部写）
+ * @returns 该闸在当前档位下是否启用
+ */
+export function confirmGateEnabled(
+  confirm: BrowserToolOptions['confirm'],
+  kind: 'passwordField' | 'formSubmit' | 'fileUpload' | 'xhr',
+): boolean {
+  const level = confirm ?? 'document';
+  if (level === 'off') return false;
+  return kind === 'xhr' ? level === 'all' : true;
+}
+
 async function gateSensitiveAction(
   ctx: ToolExecutionContext,
   confirm: BrowserToolOptions['confirm'],
@@ -150,12 +163,7 @@ async function gateSensitiveAction(
   gateTimeoutMs: number,
   onApproved?: () => void,
 ): Promise<void> {
-  const enabled =
-    intent.kind === 'passwordField'
-      ? (confirm?.passwordField ?? true)
-      : intent.kind === 'fileUpload'
-        ? (confirm?.fileUpload ?? true)
-        : (confirm?.formSubmit ?? true);
+  const enabled = confirmGateEnabled(confirm, intent.kind);
   if (!enabled) return;
   const gate = ctx.confirmEffect as unknown as ConfirmGate | undefined;
   if (!gate) {
@@ -259,9 +267,7 @@ function buildRequestPolicy(
       await assertBrowserUrlAllowed(url, opts);
     },
     confirmWrite: async ({ method, url, documentLevel }) => {
-      const enabled = documentLevel
-        ? (opts.confirm?.formSubmit ?? true)
-        : (opts.confirm?.xhrWrites ?? false);
+      const enabled = confirmGateEnabled(opts.confirm, documentLevel ? 'formSubmit' : 'xhr');
       if (!enabled) return true;
       // 审批缓存键 = method+origin（与契约/文档一致）；DOM 闸批准会预热同一键（避免同一提交问两次）
       const cacheKey = `${method} ${originOf(url)}`;

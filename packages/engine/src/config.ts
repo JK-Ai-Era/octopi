@@ -268,15 +268,12 @@ export interface BrowserToolConfig {
     /** 私网/环回放行（缺省 false） */
     allowPrivateNetwork?: boolean;
   };
-  /** 敏感动作确认闸门（formSubmit/passwordField/fileUpload 缺省开；xhrWrites 缺省 false） */
-  confirm?: {
-    formSubmit?: boolean;
-    passwordField?: boolean;
-    /** 本地文件上传闸（P2） */
-    fileUpload?: boolean;
-    /** 页内 fetch/XHR 外部写闸（P2；缺省 false） */
-    xhrWrites?: boolean;
-  };
+  /**
+   * 敏感动作确认闸门三档（2026-11-20 拍板）：
+   * `all` = 所有非 GET 过闸（含页内 fetch/XHR）；`document`（缺省）= 仅文档级
+   * （表单提交/密码/上传）；`off` = 全放开。
+   */
+  confirm?: 'all' | 'document' | 'off';
 }
 
 /**

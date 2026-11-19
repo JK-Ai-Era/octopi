@@ -54,13 +54,12 @@ export interface BrowserServiceOptions {
     domains?: { allow?: string[]; deny?: string[] };
     allowPrivateNetwork?: boolean;
   };
-  /** 敏感动作确认闸门（formSubmit/passwordField/fileUpload 缺省开；xhrWrites 缺省 false）——工具面消费 */
-  confirm?: {
-    formSubmit?: boolean;
-    passwordField?: boolean;
-    fileUpload?: boolean;
-    xhrWrites?: boolean;
-  };
+  /**
+   * 敏感动作确认闸门三档（2026-11-20 拍板）——工具面消费：
+   * `all` = 所有非 GET 过闸（含页内 fetch/XHR）；`document`（缺省）= 仅文档级
+   * （表单提交/密码/上传）；`off` = 全放开。
+   */
+  confirm?: 'all' | 'document' | 'off';
 }
 
 /**

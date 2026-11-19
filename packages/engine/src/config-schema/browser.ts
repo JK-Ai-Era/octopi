@@ -58,15 +58,10 @@ export const BrowserConfigSchema = z.object({
       allowPrivateNetwork: z.boolean().optional(),
     })
     .optional(),
-  /** 敏感动作确认闸门（formSubmit/passwordField/fileUpload 缺省开；xhrWrites 缺省 false——2026-11-20 拍板） */
-  confirm: z
-    .object({
-      formSubmit: z.boolean().optional(),
-      passwordField: z.boolean().optional(),
-      /** 本地文件上传闸（P2） */
-      fileUpload: z.boolean().optional(),
-      /** 页内 fetch/XHR 外部写闸（P2；method+origin 会话级审批缓存；缺省 false） */
-      xhrWrites: z.boolean().optional(),
-    })
-    .optional(),
+  /**
+   * 敏感动作确认闸门三档（2026-11-20 拍板）：
+   * `all` = 所有非 GET 过闸（含页内 fetch/XHR）；`document`（缺省）= 仅文档级
+   * （表单提交/密码/上传）；`off` = 全放开。
+   */
+  confirm: z.enum(['all', 'document', 'off']).optional(),
 });

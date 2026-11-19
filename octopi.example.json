@@ -348,12 +348,7 @@
       "domains": { "allow": [], "deny": [] },
       "allowPrivateNetwork": false
     },
-    "confirm": {
-      "formSubmit": true,
-      "passwordField": true,
-      "fileUpload": true,
-      "xhrWrites": false
-    }
+    "confirm": "document"
   },
 
   "web": {
