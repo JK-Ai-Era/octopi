@@ -36,6 +36,11 @@ export interface GlobalToolSetContext {
   webSearch?: Parameters<
     typeof import('../web-search/factory.js').resolveWebSearchProviders
   >[0];
+  /**
+   * octopi.json browser 块（缺省 = 默认开，engine auto）。
+   * 显式 `enabled: false` 不注册 browser_*；未实现引擎 fail-loud 拒装配。
+   */
+  browser?: Parameters<typeof import('../browser/index.js').createBrowserService>[0];
   /** credentials.requireBindings */
   requireCredentialBindings?: boolean;
   /** security.network.allowPrivateNetwork */
@@ -155,9 +160,31 @@ export async function assembleGlobalTools(ctx: GlobalToolSetContext): Promise<Re
     }
   }
 
+  // ── browser_*（默认开；enabled:false 显式关闭；未实现引擎 fail-loud 不 try/catch） ──
+  let browser: ToolSetConfig['browser'];
+  if (ctx.browser?.enabled !== false) {
+    const { createBrowserService } = await import('../browser/index.js');
+    const browserCfg = ctx.browser ?? {};
+    browser = {
+      service: createBrowserService(browserCfg),
+      options: {
+        timeoutMs: browserCfg.timeoutMs,
+        snapshotMaxChars: browserCfg.snapshotMaxChars,
+        confirm: browserCfg.confirm,
+        urlPolicy: {
+          allow: browserCfg.network?.domains?.allow,
+          deny: browserCfg.network?.domains?.deny,
+        },
+        allowPrivateNetwork:
+          browserCfg.network?.allowPrivateNetwork ?? ctx.allowPrivateNetwork ?? false,
+      },
+    };
+  }
+
   const { createToolSet } = await import('../../harness/extension/plugin-ecosystem/tools/tool-set.js');
   const { all } = createToolSet({
     webSearch,
+    browser,
     summary: summarySupport,
     sessionHistory,
     documentPort: ctx.documentPort,

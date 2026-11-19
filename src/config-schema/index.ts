@@ -57,6 +57,7 @@ export {
   ObserverConfigSchema,
 } from '@octopi-agent/engine/config-schema/observability.js';
 export { WebSearchConfigSchema } from '@octopi-agent/engine/config-schema/web-search.js';
+export { BrowserConfigSchema } from '@octopi-agent/engine/config-schema/browser.js';
 export { SubsystemsConfigSchema } from '@octopi-agent/engine/config-schema/subsystems.js';
 export { WebConfigSchema } from './webui.js';
 export { GatewayOverrideConfigSchema } from '@octopi-agent/gateway/config-schema/gateway.js';

@@ -4,12 +4,15 @@ import type { SessionTaskService } from '../../../session/tasks/service.js';
 import type { SessionHistoryPort } from '../../../session/history/index.js';
 import type { WebSearchProvider } from './web-search-types.js';
 import type { AskUserCallback } from './ask-user.js';
+import type { BrowserService } from './browser-types.js';
+import type { BrowserToolOptions } from './browser.js';
 
 import { getBuiltinTools } from './builtin.js';
 import { createMemoryTools } from './memory.js';
 import { createSessionTaskTools } from '../../../session/tasks/tools.js';
 import { createAskUserTool } from './ask-user.js';
 import { createWebSearchTool } from './web-search.js';
+import { createBrowserTools } from './browser.js';
 import { createSessionHistoryTools } from './session-history.js';
 import { createDelegationTools } from './delegation.js';
 
@@ -29,6 +32,11 @@ export interface ToolSetConfig {
     provider: WebSearchProvider;
     defaultLimit?: number;
     timeoutMs?: number;
+  };
+  /** 浏览器会话服务；未提供时不注册 browser_* */
+  browser?: {
+    service: BrowserService;
+    options?: BrowserToolOptions;
   };
   /** Summary 公用能力（http_request / file_read L1/L2） */
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
@@ -72,6 +80,9 @@ export function createToolSet(config?: ToolSetConfig): ToolSet {
             timeoutMs: config.webSearch.timeoutMs,
           }),
         ]
+      : []),
+    ...(config?.browser
+      ? createBrowserTools(config.browser.service, config.browser.options)
       : []),
     ...(config?.sessionHistory
       ? createSessionHistoryTools({

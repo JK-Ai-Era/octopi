@@ -3309,6 +3309,110 @@
         }
       }
     },
+    "browser": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "engine": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "playwright",
+            "rebrowser",
+            "camoufox",
+            "cdp-attach",
+            "cloud"
+          ]
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "chromium",
+            "chrome"
+          ]
+        },
+        "headless": {
+          "type": "boolean"
+        },
+        "timeoutMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "snapshotMaxChars": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sessionIdleTimeoutMs": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "viewport": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "height": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "width",
+            "height"
+          ]
+        },
+        "locale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "network": {
+          "type": "object",
+          "properties": {
+            "domains": {
+              "type": "object",
+              "properties": {
+                "allow": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "deny": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            },
+            "allowPrivateNetwork": {
+              "type": "boolean"
+            }
+          }
+        },
+        "confirm": {
+          "type": "object",
+          "properties": {
+            "formSubmit": {
+              "type": "boolean"
+            },
+            "passwordField": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
     "delegation": {
       "type": "object",
       "properties": {

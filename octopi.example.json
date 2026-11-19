@@ -334,6 +334,24 @@
     }
   },
 
+  "browser": {
+    "enabled": true,
+    "engine": "auto",
+    "channel": "chromium",
+    "headless": true,
+    "timeoutMs": 30000,
+    "snapshotMaxChars": 8000,
+    "sessionIdleTimeoutMs": 1800000,
+    "network": {
+      "domains": { "allow": [], "deny": [] },
+      "allowPrivateNetwork": false
+    },
+    "confirm": {
+      "formSubmit": true,
+      "passwordField": true
+    }
+  },
+
   "web": {
     "dir": "./web",
     "host": "local",

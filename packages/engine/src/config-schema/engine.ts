@@ -40,6 +40,7 @@ import {
 } from './governance.js';
 import { ObservabilityConfigSchema, ObserverConfigSchema } from './observability.js';
 import { WebSearchConfigSchema } from './web-search.js';
+import { BrowserConfigSchema } from './browser.js';
 import { SubsystemsConfigSchema } from './subsystems.js';
 
 /** engine 拥有的顶层配置段（不含 web / gateway 外挂段） */
@@ -93,6 +94,8 @@ export const engineConfigSchema = z.object({
   observer: ObserverConfigSchema,
   concurrency: ConcurrencyConfigSchema.optional(),
   webSearch: WebSearchConfigSchema.optional(),
+  /** 浏览器操作工具段（arch/browser-capability.md）；缺省默认开 */
+  browser: BrowserConfigSchema.optional(),
   /**
    * 委派编排（`arch/delegation.md` §8）。
    *

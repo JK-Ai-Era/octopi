@@ -69,6 +69,7 @@ const CLASSIFICATION: Record<string, Classification> = {
   observer: { kind: 'mapped', target: 'observer' },
   concurrency: { kind: 'mapped', target: 'concurrency' },
   webSearch: { kind: 'host-consumed', where: 'daemon web_search factory (src/cli/daemon.ts)' },
+  browser: { kind: 'mapped', target: 'browser' },
   delegation: { kind: 'mapped', target: 'delegation' },
   gateway: {
     kind: 'host-consumed',
@@ -128,6 +129,7 @@ function fullyPopulatedConfig(): NormalizedHarnessConfig {
     observability: { level: 3, traceDir: '/tmp/traces' },
     observer: {},
     concurrency: { providerPool: { slots: [{ provider: 'test' }] } },
+    browser: { engine: 'auto', confirm: { formSubmit: true } },
     delegation: { maxActiveDelegationsPerSession: 2 },
   } as unknown as NormalizedHarnessConfig;
 }

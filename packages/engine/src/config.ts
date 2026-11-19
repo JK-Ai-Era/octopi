@@ -241,6 +241,33 @@ export interface WebSearchToolConfig {
   providers?: Record<string, WebSearchProviderSlot>;
 }
 
+/** browser_* 工具顶层配置（arch/browser-capability.md §3.8） */
+export interface BrowserToolConfig {
+  /** 工具面注册开关（缺省 true = 拍板默认开） */
+  enabled?: boolean;
+  /** 后端引擎（auto = playwright；其余为分期槽位，运行时 fail-loud） */
+  engine?: 'auto' | 'playwright' | 'rebrowser' | 'camoufox' | 'cdp-attach' | 'cloud';
+  /** 浏览器来源：chromium（管理版）| chrome（系统 Chrome） */
+  channel?: 'chromium' | 'chrome';
+  headless?: boolean;
+  /** 工具/动作超时（毫秒，默认 30000） */
+  timeoutMs?: number;
+  /** 快照序列化预算（字符，默认 8000） */
+  snapshotMaxChars?: number;
+  /** 会话空闲回收（毫秒；<=0 不回收；缺省 1800000 = 30 分钟） */
+  sessionIdleTimeoutMs?: number;
+  viewport?: { width: number; height: number };
+  locale?: string;
+  network?: {
+    /** 域名 allow/deny（deny 优先；`*.suffix` 通配；缺省无限制） */
+    domains?: { allow?: string[]; deny?: string[] };
+    /** 私网/环回放行（缺省 false） */
+    allowPrivateNetwork?: boolean;
+  };
+  /** 敏感动作确认闸门（缺省全开） */
+  confirm?: { formSubmit?: boolean; passwordField?: boolean };
+}
+
 /**
  * Session 配置（合并了旧的 store + session 节点）
  */
@@ -1137,6 +1164,8 @@ export interface HarnessConfig {
   };
   /** 网络搜索配置（web_search 工具） */
   webSearch?: WebSearchToolConfig;
+  /** 浏览器操作配置（browser_* 工具；缺省默认开） */
+  browser?: BrowserToolConfig;
   /** Web UI 运行配置 */
   web?: {
     /** Web UI 源码目录（含 package.json）；未设置时按 CLI 内置顺序探测 */

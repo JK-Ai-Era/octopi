@@ -367,6 +367,7 @@ async function main(): Promise<void> {
     summary: config.summary,
     levelMap: config.levels,
     webSearch: config.webSearch,
+    browser: config.browser,
     requireCredentialBindings: Boolean(config.credentials?.requireBindings),
     allowPrivateNetwork: Boolean(config.security?.network?.allowPrivateNetwork),
     askUser: (question, options, context) =>

@@ -1127,6 +1127,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     summary: config.summary,
     levelMap: config.models?.level,
     webSearch: config.webSearch,
+    browser: config.browser,
     requireCredentialBindings: Boolean(config.credentials?.requireBindings),
     allowPrivateNetwork: Boolean(config.security?.network?.allowPrivateNetwork),
     askUser: (question, options, context) =>

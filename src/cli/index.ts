@@ -85,6 +85,11 @@ async function main(): Promise<void> {
     case 'webui':
       await webuiCommand(args);
       break;
+    case 'browser': {
+      const { browserCommand } = await import('./browser.js');
+      await browserCommand(args);
+      break;
+    }
     case 'plugin':
       await pluginCommand(args);
       break;

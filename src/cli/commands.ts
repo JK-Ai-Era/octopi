@@ -35,6 +35,8 @@ Commands:
   webui stop        Stop the Web UI server
   webui restart     Restart the Web UI server
   webui status      Show Web UI server status
+  browser install   Install the managed Chromium for browser_* tools (engine-matched;
+                       or use browser.channel="chrome" for system Chrome, no download)
   plugin init       Scaffold a new plugin project
   plugin doctor [dir]  Check a plugin (manifest/schema, engine range, entry,
                        state-dir permissions, deployed-copy drift); --into <root>, --json

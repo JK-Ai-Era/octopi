@@ -128,6 +128,8 @@ export interface GatewayConfig {
   summary?: import('@octopi-agent/engine/config.js').HarnessConfig['summary'];
   /** web search（web_search 工具面装配用） */
   webSearch?: import('@octopi-agent/engine/config.js').HarnessConfig['webSearch'];
+  /** browser（browser_* 工具面装配用；缺省默认开） */
+  browser?: import('@octopi-agent/engine/config.js').HarnessConfig['browser'];
   /** models.embedding — 向量检索配置（memory 等共用） */
   embedding?: import('@octopi-agent/engine/config.js').EmbeddingModelConfig;
   /** models.providers — 供 embedding 继承 baseUrl/apiKey */
