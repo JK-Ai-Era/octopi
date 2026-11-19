@@ -129,6 +129,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.119.5 (2026-11-20)
+
+### feat(engine): P3 stealth 双后端 + 拟人化节流（浏览器批次收官）
+
+- **新增后端**：`rebrowser`（rebrowser-playwright-core drop-in，默认 stealth 后端；复用 playwright Chromium 二进制，请求策略仍走 CDP Fetch）+ `camoufox`（定制 Firefox，指纹差异化备选；**隔离 provider 安装**——camoufox-js 及其 `playwright-core <1.63` peer/原生依赖锁在 `browser-providers/camoufox/`，运行期绝对路径 import，不污染宿主依赖树）。
+- **engine 新增 `"stealth"`**：按 `browser.stealth.fallback`（缺省 `rebrowser->camoufox`）建链；挑战页检出 → `rotateAfterChallenge`（契约可选原语）**per-key** 轮换到下一后端重试一次 → 仍命中走 HITL 出口。
+- **请求策略双实现**：Chromium 系 = CDP Fetch（不变）；Firefox 系 = `context.route` + **逐跳走查**（`route.fetch(maxRedirects:0)` 摊平每一跳，307/308 保留方法的重定向不再能绕闸；跳转目标每跳复验——route 原生看不见重定向跟随跳的缺口由此补上）。
+- **humanize 拟人化**（`browser.stealth.humanize`，stealth 系引擎缺省启用）：动作间抖动 `actionJitterMs`、fill 逐键敲入 `typingDelayMs`（每键区间随机采样）、有界重试 `maxRetries`（stale_ref/策略拒绝为非瞬态不重试）；全部可配。
+- **`octopi browser install [playwright|rebrowser|camoufox|stealth]`** 多引擎安装（camoufox = provider 自动搭建 + 定制 Firefox 下载）。
+- **验证**：route-walk 判别用例（307 保留方法写逐跳闸、denied 跳转目标拦截、GET 跳转复验）+ 链轮换/工具层编排/humanize 专项 11 例；全量套件 **5463 通过 / 0 失败**。
+- **已知边界**（KNOWN-ISSUES 中英）：rebrowser 不覆盖 `HeadlessChrome` UA/指纹面（该轴靠 camoufox/cdp-attach）；camoufox 的 WS/ServiceWorker 请求不经 route；camoufox-js 为 experimental 移植版（故隔离安装）。
+
 ## v0.119.4 (2026-11-20)
 
 ### fix(engine): 三档取值改直白命名（F5 三轮）

@@ -1,20 +1,30 @@
 /**
  * integration/browser — 浏览器后端集成（arch/browser-capability.md §3）
  *
- * 后端矩阵（§3.3）：P1 = playwright；rebrowser / camoufox / cdp-attach / cloud
- * 为后续分期槽位——显式配置未实现引擎时 fail-loud 拒绝装配（不静默降级）。
+ * 后端矩阵（§3.3）：playwright / rebrowser / camoufox / cdp-attach 已实现；
+ * cloud 为 P4 槽位——显式配置未实现引擎时 fail-loud 拒绝装配（不静默降级）。
  */
 
 import type {
   BrowserService,
+  BrowserStealthConfig,
 } from '../../harness/extension/plugin-ecosystem/tools/browser-types.js';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { DefaultBrowserService } from './service.js';
 import { PlaywrightBrowserPort } from './playwright.js';
+import { createCamoufoxLauncher } from './camoufox.js';
+import { parseFallbackChain, StealthFallbackService } from './stealth.js';
 
 export { DefaultBrowserService } from './service.js';
 export { PlaywrightBrowserPort, PlaywrightBrowserSession } from './playwright.js';
+export {
+  camoufoxProviderDir,
+  createCamoufoxLauncher,
+  loadCamoufoxProvider,
+  resolveCamoufoxJsCliPath,
+} from './camoufox.js';
+export { parseFallbackChain, StealthFallbackService } from './stealth.js';
 
 /**
  * `browser.*` 配置块形状（createBrowserService 的入参）。
@@ -60,6 +70,8 @@ export interface BrowserServiceOptions {
    * （表单提交/密码/上传）；`off` = 全放开。
    */
   confirm?: 'strict' | 'standard' | 'off';
+  /** stealth（P3）：fallback 链由服务层消费；humanize 透传工具层 */
+  stealth?: BrowserStealthConfig;
 }
 
 /**
@@ -94,10 +106,46 @@ export function createBrowserService(options: BrowserServiceOptions = {}): Brows
         { sessionIdleTimeoutMs: options.sessionIdleTimeoutMs },
       );
     case 'rebrowser':
+      // P3 默认 stealth 后端：drop-in 补丁版 playwright-core（同 API、同 Chromium 二进制；
+      // 补 Runtime.enable 泄漏/webdriver 标记；请求策略仍走 CDP Fetch）
+      return new DefaultBrowserService(
+        new PlaywrightBrowserPort({
+          headless: options.headless,
+          channel: options.channel,
+          timeoutMs: options.timeoutMs,
+          viewport: options.viewport,
+          locale: options.locale,
+          driver: 'rebrowser-playwright-core',
+          engine: 'rebrowser',
+        }),
+        { sessionIdleTimeoutMs: options.sessionIdleTimeoutMs },
+      );
     case 'camoufox':
+      // P3 备选 stealth 后端：隔离 provider 的定制 Firefox（指纹差异化；无 CDP Fetch
+      // 域 → 请求策略走 route 逐跳走查）
+      return new DefaultBrowserService(
+        new PlaywrightBrowserPort({
+          headless: options.headless,
+          timeoutMs: options.timeoutMs,
+          viewport: options.viewport,
+          locale: options.locale,
+          engine: 'camoufox',
+          policyMode: 'route-walk',
+          launcher: createCamoufoxLauncher(),
+        }),
+        { sessionIdleTimeoutMs: options.sessionIdleTimeoutMs },
+      );
+    case 'stealth': {
+      // P3 隐身链：按 stealth.fallback（缺省 rebrowser->camoufox）建链；挑战命中有界轮换
+      const chainNames = parseFallbackChain(options.stealth?.fallback);
+      const chain = chainNames.map(
+        (name) => createBrowserService({ ...options, engine: name }) as DefaultBrowserService,
+      );
+      return new StealthFallbackService(chain);
+    }
     case 'cloud':
       throw new Error(
-        `not_implemented: browser engine "${engine}" lands in P3–P4 (arch/browser-capability.md §4)`,
+        `not_implemented: browser engine "${engine}" lands in P4 (arch/browser-capability.md §4)`,
       );
     default:
       throw new Error(`not_implemented: unknown browser engine "${engine}"`);
@@ -114,6 +162,22 @@ export function resolvePlaywrightCliPath(): string | null {
   try {
     const require = createRequire(import.meta.url);
     const pkgPath = require.resolve('playwright-core/package.json');
+    return join(dirname(pkgPath), 'cli.js');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 解析 rebrowser-playwright-core 自带 CLI 路径（P3：rebrowser Chromium 安装用）。
+ * 同 `resolvePlaywrightCliPath` 解析方式（fork 同布局）。
+ *
+ * @returns cli.js 绝对路径；未安装时返回 null（调用方 fail-loud）
+ */
+export function resolveRebrowserCliPath(): string | null {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkgPath = require.resolve('rebrowser-playwright-core/package.json');
     return join(dirname(pkgPath), 'cli.js');
   } catch {
     return null;

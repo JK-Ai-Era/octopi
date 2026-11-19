@@ -36,6 +36,12 @@ import {
   type RunScope,
 } from '../../packages/engine/src/harness/run/run-scope.js';
 import { DefaultBrowserService } from '../../packages/engine/src/integration/browser/service.js';
+import { PlaywrightBrowserPort } from '../../packages/engine/src/integration/browser/playwright.js';
+import {
+  parseFallbackChain,
+  StealthFallbackService,
+} from '../../packages/engine/src/integration/browser/stealth.js';
+import { effectiveHumanize } from '../../packages/engine/src/harness/extension/plugin-ecosystem/tools/browser.js';
 
 // 工具 handler 契约返回 unknown；测试侧经 loosen 统一松散读取（结果形状在各用例内断言）
 type ToolResult = any;
@@ -117,11 +123,46 @@ beforeAll(async () => {
       res.end('<html><body>submitted</body></html>');
       return;
     }
+    if (url.startsWith('/redir307ext')) {
+      // 307 保留 POST → 跨主机目标（localhost）：跳转目标必须逐跳复验（先于 /redir307 判定）
+      res.statusCode = 307;
+      res.setHeader('location', `http://localhost:${(server.address() as AddressInfo).port}/submit`);
+      res.end();
+      return;
+    }
+    if (url.startsWith('/redir307')) {
+      // 307 保留方法：POST 随跳走——route-walk 闸必须看到每一跳（先于 /redir 判定）
+      res.statusCode = 307;
+      res.setHeader('location', '/submit');
+      res.end();
+      return;
+    }
     if (url.startsWith('/redir')) {
       // 302 → 另一主机名（localhost vs 127.0.0.1）：路由级策略必须复验目标
       res.statusCode = 302;
       res.setHeader('location', `http://localhost:${(server.address() as AddressInfo).port}/final`);
       res.end();
+      return;
+    }
+    if (url.startsWith('/xhr307ext')) {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(
+        '<html><body><p>xhr307ext</p><script>fetch("/redir307ext", {method: "POST", body: "x"}).catch(()=>{})</script></body></html>',
+      );
+      return;
+    }
+    if (url.startsWith('/redir307ext')) {
+      // 307 保留 POST → 跨主机目标（localhost）：跳转目标必须逐跳复验
+      res.statusCode = 307;
+      res.setHeader('location', `http://localhost:${(server.address() as AddressInfo).port}/submit`);
+      res.end();
+      return;
+    }
+    if (url.startsWith('/xhr307')) {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end(
+        '<html><body><p>xhr307</p><script>fetch("/redir307", {method: "POST", body: "x"})</script></body></html>',
+      );
       return;
     }
     if (url.startsWith('/final')) {
@@ -1263,15 +1304,28 @@ describe('assembly (config → tool registration)', () => {
     await expect(
       assembleGlobalTools({
         ...(baseCtx as object),
-        browser: { engine: 'camoufox' },
+        browser: { engine: 'cloud' },
       } as never),
     ).rejects.toThrow(/not_implemented/);
     await expect(
       assembleGlobalTools({
         ...(baseCtx as object),
-        browser: { engine: 'cloud' },
+        browser: { engine: 'no-such-engine' },
       } as never),
     ).rejects.toThrow(/not_implemented/);
+  });
+
+  it('P3 stealth engines assemble; missing deps fail loud at launch', async () => {
+    for (const engine of ['rebrowser', 'camoufox', 'stealth'] as const) {
+      const tools = await assembleGlobalTools({
+        ...(baseCtx as object),
+        browser: { engine },
+      } as never);
+      expect(
+        tools.some((t) => t.definition.name === 'browser_navigate'),
+        `engine=${engine} should register tools`,
+      ).toBe(true);
+    }
   });
 
   it('default config registers all six browser_* tools', async () => {
@@ -1289,5 +1343,305 @@ describe('assembly (config → tool registration)', () => {
     ]) {
       expect(names).toContain(n);
     }
+  });
+});
+
+// ── P3：stealth 双后端 / route-walk 策略 / fallback 链 / humanize ──
+
+describe('P3: route-walk 请求策略（Firefox 后端语义；Chromium 上验证实现）', () => {
+  it.skipIf(!engineAvailable)(
+    'completes a 307 method-preserving walk with the write gate on hop 1',
+    async () => {
+      postCount = 0;
+      const gate = vi.fn(async () => ({ decision: 'approve' as const }));
+      const service = track(new DefaultBrowserService(new PlaywrightBrowserPort({ policyMode: 'route-walk' }) as never, {}));
+      const tools = createBrowserTools(service, {
+        allowPrivateNetwork: true,
+        confirm: 'strict',
+        engine: 'playwright',
+      });
+      const byName = new Map(tools.map((t) => [t.definition.name, loosen(t)]));
+      const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
+      await byName.get('browser_navigate')!.handler({ url: `${baseUrl}xhr307` }, ctx);
+      await new Promise((r) => setTimeout(r, 800));
+      expect(gate.mock.calls.length).toBeGreaterThanOrEqual(1); // hop1 过写闸
+      expect(postCount).toBe(1); // 307 保留 POST、walk 把最终响应送达
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    're-checks redirect hops: a denied hop target blocks the preserved write',
+    async () => {
+      postCount = 0;
+      const gate = vi.fn(async () => ({ decision: 'approve' as const }));
+      const service = track(new DefaultBrowserService(new PlaywrightBrowserPort({ policyMode: 'route-walk' }) as never, {}));
+      const tools = createBrowserTools(service, {
+        allowPrivateNetwork: true,
+        confirm: 'strict',
+        engine: 'playwright',
+        urlPolicy: { deny: ['localhost'] },
+      });
+      const byName = new Map(tools.map((t) => [t.definition.name, loosen(t)]));
+      const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
+      // /xhr307ext → fetch POST /redir307ext（127.0.0.1，过闸批准）→ 307 → localhost/submit（denied）
+      await byName.get('browser_navigate')!.handler({ url: `${baseUrl}xhr307ext` }, ctx);
+      await new Promise((r) => setTimeout(r, 800));
+      expect(postCount).toBe(0); // 跳转目标被逐跳复验拦下（无 walk 时网络栈会偷送成功）
+    },
+    30_000,
+  );
+
+  it.skipIf(!engineAvailable)(
+    're-checks GET redirect targets too (the B2 scenario on route-walk)',
+    async () => {
+      finalCount = 0;
+      const service = track(new DefaultBrowserService(new PlaywrightBrowserPort({ policyMode: 'route-walk' }) as never, {}));
+      const tools = createBrowserTools(service, {
+        allowPrivateNetwork: true,
+        engine: 'playwright',
+        urlPolicy: { deny: ['localhost'] },
+      });
+      const byName = new Map(tools.map((t) => [t.definition.name, loosen(t)]));
+      const ctx = makeCtx({ events: [], writes: [] });
+      // /redir 302 → localhost/final（denied 主机）：跳转目标必须复验
+      await byName
+        .get('browser_navigate')!
+        .handler({ url: `${baseUrl}redir` }, ctx)
+        .catch(() => {});
+      await new Promise((r) => setTimeout(r, 300));
+      expect(finalCount).toBe(0);
+    },
+    30_000,
+  );
+});
+
+describe('P3: stealth fallback 链', () => {
+  function stubService(name: string) {
+    const acquired: string[] = [];
+    const closed: string[] = [];
+    const sessions = new Map<string, { id: string; ownerKey: string }>();
+    const service = {
+      async acquire(key: string) {
+        acquired.push(key);
+        const s = { id: `bs-${name}-${key}`, ownerKey: key };
+        sessions.set(key, s);
+        return s;
+      },
+      async get(key: string) {
+        return sessions.get(key);
+      },
+      async byId(id: string) {
+        for (const s of sessions.values()) if (s.id === id) return s;
+        return undefined;
+      },
+      async close(key: string) {
+        closed.push(key);
+        return sessions.delete(key);
+      },
+      async list() {
+        return [];
+      },
+      async dispose() {
+        sessions.clear();
+      },
+    } as unknown as BrowserService;
+    return { service, acquired, closed };
+  }
+
+  it('rotates per key, stops at chain end, and lands new acquires on the next backend', async () => {
+    const a = stubService('a');
+    const b = stubService('b');
+    const svc = new StealthFallbackService([a.service, b.service]);
+    expect(await svc.rotateAfterChallenge('k1')).toBe(true);
+    expect(a.closed).toContain('k1');
+    expect(await svc.rotateAfterChallenge('k1')).toBe(false); // 链穷尽 → HITL
+    // per-key：k2 不受 k1 影响，从链头开始
+    expect(await svc.rotateAfterChallenge('k2')).toBe(true);
+    await svc.acquire('k3');
+    expect(a.acquired).toContain('k3');
+    await svc.rotateAfterChallenge('k3');
+    await svc.acquire('k3');
+    expect(b.acquired).toContain('k3'); // 轮换后落下一后端
+  });
+
+  it('parseFallbackChain: 默认链 / 保序去重 / 白名单 fail-loud', () => {
+    expect(parseFallbackChain()).toEqual(['rebrowser', 'camoufox']);
+    expect(parseFallbackChain('camoufox->rebrowser->camoufox')).toEqual(['camoufox', 'rebrowser']);
+    expect(() => parseFallbackChain('cloud')).toThrow(/invalid_config/);
+    expect(() => parseFallbackChain('->')).toThrow(/empty/);
+  });
+});
+
+describe('P3: 挑战轮换编排（工具层）', () => {
+  function stubChallengeService(opts: { rotateResult: () => boolean; onGoto?: () => void }) {
+    const counters = { gotos: 0, rotates: 0 };
+    const session = {
+      id: 'bs-stub' as const,
+      engine: 'rebrowser',
+      ownerKey: 'sess-1',
+      url: 'https://example.com/',
+      async goto() {
+        counters.gotos += 1;
+        opts.onGoto?.();
+        return { url: 'https://example.com/', title: 'Just a moment...' };
+      },
+      async snapshot() {
+        return { url: 'https://example.com/', title: 'Just a moment...', items: [], truncated: false };
+      },
+      async detectChallenge() {
+        return { kind: 'interstitial', marker: 'just a moment' };
+      },
+    };
+    const service = {
+      async acquire() {
+        return session;
+      },
+      async get() {
+        return session;
+      },
+      async byId() {
+        return session;
+      },
+      async close() {
+        return true;
+      },
+      async list() {
+        return [];
+      },
+      async dispose() {},
+      async rotateAfterChallenge() {
+        counters.rotates += 1;
+        return opts.rotateResult();
+      },
+    } as unknown as BrowserService;
+    return { service, counters };
+  }
+
+  it('retries once on the next backend, then surfaces the challenge (HITL)', async () => {
+    const { service, counters } = stubChallengeService({ rotateResult: () => true });
+    const tools = createBrowserTools(service, { allowPrivateNetwork: true, engine: 'playwright' });
+    const byName = new Map(tools.map((t) => [t.definition.name, loosen(t)]));
+    const out = await byName
+      .get('browser_navigate')!
+      .handler({ url: 'https://example.com/' }, makeCtx({ events: [], writes: [] }));
+    expect(counters.rotates).toBe(1); // 只轮换一次（有界）
+    expect(counters.gotos).toBe(2); // 原跑 + 轮换后重试
+    expect(out.challenge).toBeTruthy(); // 仍命中 → HITL 出口
+    expect(out.hint).toMatch(/ask the user/);
+  });
+
+  it('no rotation primitive = straight to HITL (single-engine services)', async () => {
+    const { service, counters } = stubChallengeService({ rotateResult: () => true });
+    delete (service as unknown as Record<string, unknown>).rotateAfterChallenge;
+    const tools = createBrowserTools(service, { allowPrivateNetwork: true, engine: 'playwright' });
+    const byName = new Map(tools.map((t) => [t.definition.name, loosen(t)]));
+    const out = await byName
+      .get('browser_navigate')!
+      .handler({ url: 'https://example.com/' }, makeCtx({ events: [], writes: [] }));
+    expect(counters.gotos).toBe(1);
+    expect(out.challenge).toBeTruthy();
+  });
+});
+
+describe('P3: humanize 拟人化节流', () => {
+  it('effectiveHumanize: 显式优先 / stealth 系缺省启用 / 其余关闭', () => {
+    expect(effectiveHumanize({})).toBeUndefined();
+    expect(effectiveHumanize({ engine: 'playwright' })).toBeUndefined();
+    expect(effectiveHumanize({ engine: 'stealth' })?.typingDelayMs).toEqual([20, 80]);
+    expect(effectiveHumanize({ engine: 'rebrowser' })?.maxRetries).toBe(2);
+    expect(effectiveHumanize({ engine: 'camoufox' })?.actionJitterMs).toEqual([100, 600]);
+    // 显式覆盖（含置零关闭）
+    expect(
+      effectiveHumanize({ engine: 'stealth', stealth: { humanize: { maxRetries: 0, typingDelayMs: [0, 0] } } }),
+    ).toMatchObject({ maxRetries: 0, typingDelayMs: [0, 0] });
+  });
+
+  it.skipIf(!engineAvailable)(
+    'types per key with typingDelayMs (real stack)',
+    async () => {
+      const { service, tools } = toolsFor({
+        stealth: { humanize: { typingDelayMs: [50, 50], actionJitterMs: [0, 0] } },
+      });
+      track(service);
+      const ctx = makeCtx({ events: [], writes: [] });
+      const nav = await tools.get('browser_navigate')!.handler({ url: `${baseUrl}postform` }, ctx);
+      const input = (nav.snapshot.items as Array<{ ref?: string; name: string }>).find(
+        (i) => i.name === 'query',
+      )!;
+      const started = Date.now();
+      await tools.get('browser_act')!.handler({ action: 'fill', ref: input.ref, value: 'abcd' }, ctx);
+      const elapsed = Date.now() - started;
+      // 4 键 × 50ms/键，阈值打八折容 timer 粗化抖动；无逐键路径时实测 <150ms
+      expect(elapsed).toBeGreaterThanOrEqual(4 * 40);
+    },
+    30_000,
+  );
+
+  it('retries transient act failures up to maxRetries; never retries stale_ref', async () => {
+    const makeSession = (fail: (n: number) => Error | undefined) => {
+      const counters = { attempts: 0 };
+      const session = {
+        id: 'bs-s',
+        engine: 'playwright',
+        ownerKey: 'sess-1',
+        url: 'https://example.com/',
+        async inspectAction() {
+          return { sensitive: false as const, target: 'x' };
+        },
+        async act() {
+          counters.attempts += 1;
+          const err = fail(counters.attempts);
+          if (err) throw err;
+          return { ok: true };
+        },
+      };
+      const service = {
+        async acquire() {
+          return session;
+        },
+        async get() {
+          return session;
+        },
+        async byId() {
+          return session;
+        },
+        async close() {
+          return true;
+        },
+        async list() {
+          return [];
+        },
+        async dispose() {},
+      } as unknown as BrowserService;
+      return { service, counters };
+    };
+
+    // 瞬态失败：第 1/2 次抛、第 3 次成功（maxRetries=2 用满）
+    const flaky = makeSession((n) => (n < 3 ? new Error('transient boom') : undefined));
+    const tools1 = createBrowserTools(flaky.service, {
+      allowPrivateNetwork: true,
+      engine: 'stealth',
+      stealth: { humanize: { actionJitterMs: [0, 0], maxRetries: 2 } },
+    });
+    const byName1 = new Map(tools1.map((t) => [t.definition.name, loosen(t)]));
+    const out = await byName1
+      .get('browser_act')!
+      .handler({ action: 'click', ref: 'r1-e1' }, makeCtx({ events: [], writes: [] }));
+    expect(flaky.counters.attempts).toBe(3);
+    expect(out).toEqual({ ok: true });
+
+    // stale_ref 是契约错误非瞬态：一次即抛
+    const stale = makeSession(() => new Error('stale_ref: r1-e1 (epoch 1)'));
+    const tools2 = createBrowserTools(stale.service, {
+      allowPrivateNetwork: true,
+      engine: 'stealth',
+      stealth: { humanize: { actionJitterMs: [0, 0], maxRetries: 2 } },
+    });
+    const byName2 = new Map(tools2.map((t) => [t.definition.name, loosen(t)]));
+    await expect(
+      byName2.get('browser_act')!.handler({ action: 'click', ref: 'r1-e1' }, makeCtx({ events: [], writes: [] })),
+    ).rejects.toThrow(/stale_ref/);
+    expect(stale.counters.attempts).toBe(1);
   });
 });

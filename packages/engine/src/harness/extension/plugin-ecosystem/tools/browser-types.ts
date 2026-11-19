@@ -29,6 +29,24 @@ export type BrowserEngineId =
   | 'cdp-attach'
   | 'cloud';
 
+/** 拟人化节流参数（P3；区间 [min,max] 毫秒随机；0 = 关闭该维度） */
+export interface HumanizeOptions {
+  /** 逐键打字延迟区间（默认 [20, 80]） */
+  typingDelayMs?: [number, number];
+  /** 动作间抖动区间（默认 [100, 600]） */
+  actionJitterMs?: [number, number];
+  /** 动作重试上限（默认 2；有界重试，禁止重试风暴） */
+  maxRetries?: number;
+}
+
+/** stealth 配置（P3；arch/browser-capability.md §3.5/§3.6） */
+export interface BrowserStealthConfig {
+  /** engine=stealth 的后端链（`->` 分隔，缺省 `rebrowser->camoufox`） */
+  fallback?: string;
+  /** 行为拟人化节流（stealth 引擎缺省启用） */
+  humanize?: HumanizeOptions;
+}
+
 /** 会话身份三型 */
 export interface BrowserIdentity {
   kind: 'incognito' | 'profile' | 'attach';
@@ -51,6 +69,8 @@ export interface BrowserLaunchOptions {
   ownerKey?: string;
   /** 请求级策略（URL 判定/写确认/账本）；缺省 = 无策略（仅裸端口直用时允许） */
   policy?: BrowserRequestPolicy;
+  /** P3：拟人化节流参数（会话消费逐键打字延迟；工具层消费抖动/重试） */
+  humanize?: HumanizeOptions;
   /** 持久 profile ID（P2：identity.kind='profile'；storageState 归档/恢复） */
   profileId?: string;
   /** profile 存储目录（`OCTOPI_HOME/browser-profiles`；assemble 注入） */
@@ -247,6 +267,16 @@ export interface BrowserPort {
   list(): Promise<BrowserSessionInfo[]>;
 }
 
+/** stealth 链服务（P3）的挑战轮换原语；非链式服务不实现（工具层视同链穷尽） */
+export interface StealthRotatable {
+  /**
+   * 挑战驱动的后端轮换：关掉该 key 当前会话并切到链上下一后端。
+   *
+   * @param sessionKey - 会话归属 key（acquire 时的 key）
+   * @returns true=已轮换（调用方重新 acquire 重试一次）；false=链已穷尽（走 HITL）
+   */
+  rotateAfterChallenge(sessionKey: string): Promise<boolean>;
+}
 /** 单会话页面面（P1 单页；多标签 P2+） */
 export interface BrowserSession {
   readonly id: BrowserSessionId;
@@ -286,6 +316,11 @@ export interface BrowserService {
   byId(id: BrowserSessionId): Promise<BrowserSession | undefined>;
   /** 关闭会话（隐式 key 或显式 ID 同参）；返回是否确实关闭过 */
   close(sessionKeyOrId: string): Promise<boolean>;
+  /**
+   * P3（可选）：挑战驱动的后端轮换（stealth 链）。true=已切下一后端（调用方重新
+   * acquire 重试一次）；false=链已穷尽（走 HITL）。非链式服务不实现（视同 false）。
+   */
+  rotateAfterChallenge?(sessionKey: string): Promise<boolean>;
   list(): Promise<BrowserSessionInfo[]>;
   /** 进程/装配生命周期收尾：关掉全部会话并停止回收定时器 */
   dispose(): Promise<void>;

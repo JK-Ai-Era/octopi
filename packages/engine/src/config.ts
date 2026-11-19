@@ -7,6 +7,7 @@ import type { ModelConfig as _ModelConfig } from './harness/shared/types/agent-d
 import { getRunScope } from './harness/run/run-scope.js';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { PluginProviderModelEntry } from './harness/extension/plugin-ecosystem/plugins/api.js';
+import type { BrowserStealthConfig } from './harness/extension/plugin-ecosystem/tools/browser-types.js';
 import { DEFAULT_CONTEXT_WINDOW } from '@octopi-agent/core/types/model-info.js';
 
 /** 产品默认上下文窗口（与 core/types/model-info 一致，未声明能力时按此预算） */
@@ -245,8 +246,8 @@ export interface WebSearchToolConfig {
 export interface BrowserToolConfig {
   /** 工具面注册开关（缺省 true = 拍板默认开） */
   enabled?: boolean;
-  /** 后端引擎（auto = playwright；其余为分期槽位，运行时 fail-loud） */
-  engine?: 'auto' | 'playwright' | 'rebrowser' | 'camoufox' | 'cdp-attach' | 'cloud';
+  /** 后端引擎（auto = playwright；stealth = 隐身链；rebrowser / camoufox = 单后端直钉） */
+  engine?: 'auto' | 'playwright' | 'stealth' | 'rebrowser' | 'camoufox' | 'cdp-attach' | 'cloud';
   /** attach 端点（engine=cdp-attach 用；缺省 http://127.0.0.1:9222） */
   attach?: { endpoint?: string };
   /** 持久 profile（P2；storageState 归档于 OCTOPI_HOME/browser-profiles） */
@@ -268,6 +269,8 @@ export interface BrowserToolConfig {
     /** 私网/环回放行（缺省 false） */
     allowPrivateNetwork?: boolean;
   };
+  /** stealth（P3）：fallback 链由服务层消费；humanize 透传工具层 */
+  stealth?: BrowserStealthConfig;
   /**
    * 敏感动作确认闸门三档（2026-11-20 拍板）：
    * `strict` = 所有非 GET 过闸（含页内 fetch/XHR）；`standard`（缺省）= 仅文档级
