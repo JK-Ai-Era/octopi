@@ -16,6 +16,10 @@ export const zh = {
   'loginPage.password': '密码',
   'loginPage.errorInvalidCredentials': '用户名或密码不正确',
   'loginPage.errorUnreachable': '无法连接登录服务，请检查服务状态后重试',
+  'loginPage.errorApiKey': '访问密钥缺失或不正确——请填入管理员分发的访问密钥后重试',
+  'loginPage.accessKey': '访问密钥',
+  'loginPage.accessKeyPlaceholder': '向部署管理员索取访问密钥',
+  'loginPage.accessKeyHint': '部署级访问密钥，由部署管理员分发（自建部署可在 octopi.json → channels[].apiKey 查看）。本机访问已自动配置；远程/局域网访问需在此填入。',
   'loginPage.busy': '登录中…',
   'loginPage.submit': '登录',
 
@@ -148,6 +152,11 @@ export const en: Record<keyof typeof zh, string> = {
   'loginPage.password': 'Password',
   'loginPage.errorInvalidCredentials': 'Incorrect username or password',
   'loginPage.errorUnreachable': 'Cannot reach the sign-in service; check the service status and retry',
+  'loginPage.errorApiKey': 'Access key missing or incorrect — enter the key distributed by your admin and retry',
+  'loginPage.accessKey': 'Access key',
+  'loginPage.accessKeyPlaceholder': 'Ask your deployment administrator for the key',
+  'loginPage.accessKeyHint':
+    'Deployment access key distributed by your administrator (self-hosted: octopi.json → channels[].apiKey). Local access is configured automatically; remote/LAN access needs it entered here.',
   'loginPage.busy': 'Signing in…',
   'loginPage.submit': 'Sign in',
 

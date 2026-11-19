@@ -154,6 +154,79 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 
 .panel { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); }
 
+/* ── Login (m4 登录页) ── */
+.login-shell {
+  position: relative; /* .login-topbar 的定位锚 */
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow: auto;
+}
+
+.login-topbar {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 12px 32px rgba(17, 24, 39, 0.06);
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.login-brand { display: flex; align-items: baseline; gap: 8px; }
+.login-brand-name { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+.login-brand-tag {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.login-heading { display: flex; flex-direction: column; gap: 6px; }
+.login-title { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.2; }
+.login-hint { margin: 0; font-size: var(--text-sm); color: var(--color-muted); line-height: 1.5; }
+
+.login-form { display: flex; flex-direction: column; gap: 14px; }
+.login-field { display: flex; flex-direction: column; gap: 5px; }
+.login-label { font-size: var(--text-sm); font-weight: 600; }
+.login-field input {
+  font-weight: 400;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+}
+.login-field input::placeholder { color: var(--color-muted); opacity: 0.7; }
+.login-field input:focus-visible {
+  outline: none;
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0 0 2px var(--color-focus);
+}
+.login-field-hint { font-weight: 400; color: var(--color-muted); line-height: 1.5; }
+
+.login-error {
+  border: 1px solid var(--color-error);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.login-submit { width: 100%; padding: 9px 12px; font-weight: 600; }
+
 /* ── Layout ── */
 .app-shell { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 

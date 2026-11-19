@@ -114,7 +114,18 @@ export async function initCommand(args: CliArgs): Promise<string | undefined> {
     webRequested: args.web === true && args.cliMode !== true,
     adminName: process.env.OCTOPI_ADMIN_NAME,
   });
-  if (interactive) console.log(onboarding.completed ? `\n✅ 初始化完成：${result.configPath}` : '\n⚠️ 向导中止——配置未改，重跑 octopi init 继续。');
+  if (interactive) {
+    // 文案=行为（m5）：中途退出但已保存时不得谎报「配置未改」；未落盘的 Web 交接不得谎报「完成」
+    console.log(
+      onboarding.completed && onboarding.saved
+        ? `\n✅ 初始化完成：${result.configPath}`
+        : onboarding.completed
+          ? `\n✅ 已打开 Web 向导——配置将在向导完成后写入：${result.configPath}`
+          : onboarding.saved
+            ? `\n⚠️ 向导未走完——此前步骤已保存：${result.configPath}（重跑 octopi init 可继续）`
+            : '\n⚠️ 向导中止——配置未改，重跑 octopi init 继续。',
+    );
+  }
   if (onboarding.launchChat) {
     await chatCommand(args);
   }

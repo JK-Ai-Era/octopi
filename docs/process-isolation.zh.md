@@ -329,7 +329,8 @@ Windows 边界（如实声明）：win-job 助手服务（OP-ISO-1）落地之�
 | 层 | 省略 `mode` 时 | 目的 |
 |----|----------------|------|
 | **引擎 / 库** | **`workspace`**（secure-by-default） | 嵌入方漏配也不会全盘放开 |
-| **`octopi init` / `octopi.example.json`** | 显式 `"mode": "host"` | 评估 / 本机自动化开箱即全能力 |
+| **`octopi init`** | 显式 `"mode": "project"` | 编码 agent 缺省档：文件 L2 严格，shell/网络放行；工具 cwd = `workspace/<sessionId>`（`toolIsolation: session-subdir`） |
+| **`octopi.example.json`** | 显式 `"mode": "host"` | 评估用全机全能力演示 |
 
 `project` 是 **编码模式，不是隔离模式**：文件 L2 严格，但 shell 在进程牢笼就绪前仍可能碰到 root 外路径。
 

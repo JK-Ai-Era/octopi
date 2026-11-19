@@ -202,10 +202,11 @@ export function generateDefaultConfig(homeDir: string, agentId: string = 'defaul
       injectionSensitivity: 'medium',
       allowedPaths: [],
     },
-    // 评估/本机自动化：显式 host（全能力）。嵌入/多租户请改 workspace|untrusted；
+    // 编码 agent 档（project）：文件读写收在 workspace/事务根（strict 围栏），
+    // shell 与网络放行；要全机无围栏请显式改 "host"，不可信输入用 workspace|untrusted；
     // 省略 mode 时 engine 缺省为 workspace（secure-by-default）。
     effectPolicy: {
-      mode: 'host',
+      mode: 'project',
     },
     channels: [
       {

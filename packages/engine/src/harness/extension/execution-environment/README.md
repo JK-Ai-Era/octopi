@@ -41,7 +41,7 @@
 }
 ```
 
-**引擎缺省 `mode` = `workspace`**（未写 `mode` 时，secure-by-default）。**脚手架**（`octopi init` / `octopi.example.json`）显式写 `"mode": "host"`，便于评估全能力。下表为命名预设展开：
+**引擎缺省 `mode` = `workspace`**（未写 `mode` 时，secure-by-default）。**脚手架**：`octopi init` 缺省 `"mode": "project"`（编码 agent 档）；`octopi.example.json` 显式写 `"mode": "host"` 演示全机全能力。下表为命名预设展开：
 
 | mode | L2 | shellEscape | toolIsolation | onClose |
 |------|----|-------------|---------------|---------|

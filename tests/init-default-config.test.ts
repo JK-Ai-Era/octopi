@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 interface Scaffolded {
   channels?: Array<{ type: string; apiKey?: string }>;
+  effectPolicy?: { mode?: string };
 }
 
 describe('generateDefaultConfig — 默认随机 apiKey', () => {
@@ -17,5 +18,13 @@ describe('generateDefaultConfig — 默认随机 apiKey', () => {
     expect(httpA?.apiKey).toBeTruthy();
     expect((httpA?.apiKey ?? '').length).toBeGreaterThanOrEqual(32);
     expect(httpA?.apiKey).not.toBe(httpB?.apiKey);
+  });
+});
+
+describe('generateDefaultConfig — effectPolicy.mode', () => {
+  it('init 缺省 project（编码 agent 档）；全机 host 由用户显式改', async () => {
+    const { generateDefaultConfig } = await import('../src/init.js');
+    const cfg = generateDefaultConfig('/tmp/octopi-c') as Scaffolded;
+    expect(cfg.effectPolicy?.mode).toBe('project');
   });
 });

@@ -18,7 +18,6 @@ const lineQueue: string[] = [];
 let lineWaiter: ((line: string) => void) | null = null;
 let closed = false;
 let exhausted = false;
-let originalWrite: ((s: string) => void) | undefined;
 
 /** stdin 是否已耗尽（EOF）——向导据此优雅中止，不再绕无效输入死循环 */
 export function stdinExhausted(): boolean {
@@ -66,34 +65,155 @@ function nextLine(): Promise<string> {
 }
 
 /**
- * 静音/恢复共享 readline 的渲染（隐藏输入用）。
+ * 隐藏输入的占位回显（逐字符 '*'）——帧渲染纯逻辑（测试直驱 absorb 的写入序列）。
  *
  * 单一 stdin 消费者原则（评审 B4）：隐藏输入不另开 readline——第二接口会与
- * 共享队列同吃 stdin（key 进队列 + 双重回显）。这里只临时接管共享接口的
- * 输出渲染（_writeToOutput 是 readline 唯一静音点），行仍走 nextLine 队列。
+ * 共享队列同吃 stdin（key 进队列 + 双重回显）。行仍走 nextLine 队列。
+ *
+ * 拦截点是共享 rl 的 output 面（write 级），不是 _writeToOutput。PTY 实证
+ * （Node 24）：键入回显逐字经 _writeToOutput，但退格/方向键/Ctrl-U 触发的整行
+ * 重绘里，光标与擦除转义直接写 output，只有文本经 _writeToOutput（且带 rl 的
+ * prompt，缺省 '> '）——只静音 _writeToOutput 会让退格把提示行清成「> …」残影。
+ * 这里整帧自绘：普通键入逐字输出 '*'（粘贴即成串 '*'），编辑事件整帧重画
+ * （提示 + '*'×当前长度），readline 的原始渲染一律吞掉。
+ *
+ * 换行帧：帧超过一行时（长 API Key 常见）重画要先上移到帧首行再清（\r 回不到
+ * 上一行）。行数按显示宽度估算（CJK/全角=2 列），偏大无害（多清一空行）、
+ * 终端中途缩放只影响美观。已知取舍：方向键移到行中再插字符时显示光标落在帧尾，
+ * 行缓冲本身不受影响（Enter 语义正确）；含 ESC 与文本的合并写入整体丢弃、
+ * 紧跟方向键后粘贴 '> ' 开头内容会被误判为重绘（帧自纠，无泄漏）；非 TTY（管道）
+ * 下无回显流，行为与原先一致。
  */
-function setEchoMuted(muted: boolean, promptText: string): void {
-  const iface = getRl() as unknown as { _writeToOutput?: (s: string) => void };
-  if (muted) {
-    originalWrite = iface._writeToOutput?.bind(iface);
-    iface._writeToOutput = (s: string): void => {
-      if (s.includes(promptText)) process.stdout.write(promptText); // 只显示提示，吞掉键入渲染
-    };
-  } else if (originalWrite) {
-    iface._writeToOutput = originalWrite;
-    originalWrite = undefined;
+export interface MaskedEcho {
+  /** 吞掉 readline 的一条渲染写入，必要时向 write 输出占位帧 */
+  absorb(chunk: string): void;
+  /** 当前占位长度（= 行缓冲可见长度） */
+  readonly length: number;
+}
+
+/** 显示宽度估算（CJK/全角=2 列；只用于换行帧行数，偏大无害） */
+function displayWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0) ?? 0;
+    const wide =
+      (cp >= 0x1100 && cp <= 0x115f) ||
+      (cp >= 0x2e80 && cp <= 0xa4cf) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe30 && cp <= 0xfe6f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6);
+    w += wide ? 2 : 1;
   }
+  return w;
+}
+
+/**
+ * 构造占位回显帧渲染器。
+ *
+ * @param promptText - 提示文本（整帧重画时保留可见）
+ * @param write - 帧输出（写真实 stdout）
+ * @param opts.columns - 终端列数取值（缺省 process.stdout.columns ?? 80）
+ * @param opts.redrawPrefix - rl 整行重绘的行首前缀（rl prompt；缺省 '> '）
+ * @returns 占位回显器
+ */
+export function createMaskedEcho(
+  promptText: string,
+  write: (s: string) => void,
+  opts: { columns?: () => number; redrawPrefix?: string } = {},
+): MaskedEcho {
+  const redrawPrefix = opts.redrawPrefix ?? '> ';
+  const columns = opts.columns ?? ((): number => process.stdout.columns ?? 80);
+  const promptWidth = displayWidth(promptText);
+  let len = 0;
+  let rows = 1; // 上一帧占用行数（换行帧重画需先上移）
+  let afterControl = false;
+  const frameRows = (): number => Math.max(1, Math.ceil((promptWidth + len) / Math.max(1, columns())));
+  return {
+    absorb(chunk: string): void {
+      if (chunk === '') return;
+      if (chunk === '\r' || chunk === '\n' || chunk === '\r\n') return; // Enter：换行由 askText 显式输出（非 TTY 同样成立）
+      if (chunk.includes('\x1b')) {
+        afterControl = true; // 光标/擦除转义：帧自绘后不转发
+        return;
+      }
+      if (afterControl && chunk.startsWith(redrawPrefix)) {
+        // rl 整行重绘（文本带 rl prompt）：按行内容重算占位长度并整帧重画
+        len = Array.from(chunk.slice(redrawPrefix.length)).length;
+        afterControl = false;
+        const up = rows > 1 ? `\x1b[${rows - 1}A` : '';
+        write(`\r${up}\x1b[0J${promptText}${'*'.repeat(len)}`);
+        rows = frameRows();
+        return;
+      }
+      afterControl = false;
+      len += Array.from(chunk).length;
+      write('*'.repeat(Array.from(chunk).length));
+      rows = frameRows();
+    },
+    get length(): number {
+      return len;
+    },
+  };
+}
+
+let maskedIface: { output?: unknown } | undefined;
+let maskedRealOutput: unknown;
+let maskedEcho: MaskedEcho | undefined;
+
+/**
+ * 开/关共享 readline 的占位回显（隐藏输入用）。
+ *
+ * @param masked - true = 开启 '*' 占位回显并吞掉原始渲染；false = 恢复原样
+ * @param promptText - 提示文本（整帧重画时保留可见）
+ */
+function setEchoMasked(masked: boolean, promptText: string): void {
+  if (!masked) {
+    // 只在确有挂起掩码时恢复；否则不得经 getRl() 顺手建出一个 readline（非交互路径的副作用）
+    if (maskedIface) {
+      maskedIface.output = maskedRealOutput;
+      maskedIface = undefined;
+      maskedRealOutput = undefined;
+      maskedEcho = undefined;
+    }
+    return;
+  }
+  const iface = getRl() as unknown as { output?: unknown; getPrompt?: () => string };
+  maskedIface = iface;
+  maskedRealOutput = iface.output;
+  const real = (iface.output ?? process.stdout) as { write: (s: string) => unknown };
+  // 重绘前缀跟 rl 的实际 prompt 走（缺省 '> '；若日后给 createInterface 传 prompt 不会静默失配）
+  const redrawPrefix = iface.getPrompt?.() || '> ';
+  maskedEcho = createMaskedEcho(
+    promptText,
+    (s) => {
+      real.write(s);
+    },
+    { redrawPrefix },
+  );
+  iface.output = new Proxy(real, {
+    get(target, prop): unknown {
+      if (prop === 'write')
+        return (s: unknown): boolean => {
+          maskedEcho?.absorb(String(s));
+          return true;
+        };
+      const v = Reflect.get(target, prop);
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
 }
 
 /** 关闭共享 readline（向导结束时调用） */
 export function closePrompts(): void {
+  setEchoMasked(false, ''); // 恢复 output 面（挂起的隐藏输入被 EOF 打断时不留代理）
   rl?.close();
   rl = undefined;
   lineQueue.length = 0;
   lineWaiter = null;
   closed = false;
   exhausted = false;
-  originalWrite = undefined;
 }
 
 /**
@@ -101,7 +221,8 @@ export function closePrompts(): void {
  *
  * @param question - 问题文案（含提示）
  * @param opts.default - 回车默认值（可空）
- * @param opts.hidden - 隐藏输入（API Key 用；非 TTY 下退化明文读）
+ * @param opts.hidden - 隐藏输入（密码/API Key 用）：内容不回显，逐字符以 '*' 占位
+ *   （含粘贴反馈；非 TTY 管道下无回显流，明文读入但不回显）
  * @returns 用户输入（trim）；EOF 返回默认值 ?? ''
  */
 export async function askText(
@@ -113,11 +234,11 @@ export async function askText(
   const promptText = `${question}${suffix}: `;
 
   if (opts.hidden) {
-    // 隐藏输入：共享 rl 上临时静音渲染（单一 stdin 消费者，评审 B4）；非 TTY 管道下静音无副作用
+    // 隐藏输入：共享 rl 上 '*' 占位回显（单一 stdin 消费者，评审 B4）；非 TTY 管道下无回显流
     process.stdout.write(promptText);
-    setEchoMuted(true, promptText);
+    setEchoMasked(true, promptText);
     const answer = await nextLine();
-    setEchoMuted(false, promptText);
+    setEchoMasked(false, promptText);
     process.stdout.write('\n');
     return answer.trim() || def;
   }
@@ -133,12 +254,15 @@ export async function askText(
  * @param question - 问题文案
  * @param options - 选项（id + 展示文案）
  * @param opts.defaultId - 回车默认项（缺省第一项）
+ * @param opts.hint - 自定义提示行（缺省中文「选择 (1-N，回车=…，b=回上一步)」；
+ *   语言未定的首步用它给双语 chrome）
+ * @param opts.invalidHint - 自定义非法输入提示（缺省中文）
  * @returns 选中 id；输入 `b` 返回 '__back__'
  */
 export async function choose(
   question: string,
   options: Array<{ id: string; label: string; hint?: string }>,
-  opts: { defaultId?: string } = {},
+  opts: { defaultId?: string; hint?: string; invalidHint?: string } = {},
 ): Promise<string> {
   const defId = opts.defaultId ?? options[0]?.id;
   process.stdout.write(`\n${question}\n`);
@@ -150,7 +274,7 @@ export async function choose(
   const defIndex = Math.max(0, options.findIndex((o) => o.id === defId)) + 1;
 
   for (;;) {
-    const raw = await askText(`选择 (1-${options.length}，回车=${defIndex}，b=回上一步)`, {
+    const raw = await askText(opts.hint ?? `选择 (1-${options.length}，回车=${defIndex}，b=回上一步)`, {
       default: String(defIndex),
     });
     if (raw === 'b') return '__back__';
@@ -158,7 +282,7 @@ export async function choose(
     if (Number.isInteger(n) && n >= 1 && n <= options.length) return options[n - 1].id;
     const byId = options.find((o) => o.id === raw);
     if (byId) return byId.id;
-    process.stdout.write(`请输入 1-${options.length} 之间的数字\n`);
+    process.stdout.write(`${opts.invalidHint ?? `请输入 1-${options.length} 之间的数字`}\n`);
   }
 }
 

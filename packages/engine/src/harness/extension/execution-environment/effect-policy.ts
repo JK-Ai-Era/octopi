@@ -33,8 +33,8 @@ export type EffectRunMode = 'workspace' | 'project' | 'host' | 'untrusted';
 
 /**
  * Engine default when `effectPolicy.mode` is omitted (secure-by-default).
- * Scaffold/`octopi init` / `octopi.example.json` set `mode: "host"` explicitly
- * so evaluation gets full capability; embedders who omit `mode` get `workspace`.
+ * `octopi init` scaffolds `mode: "project"` (coding-agent profile);
+ * `octopi.example.json` sets `mode: "host"` explicitly for full local capability.
  * See `docs/process-isolation.md`.
  */
 export const DEFAULT_EFFECT_RUN_MODE: EffectRunMode = 'workspace';
@@ -151,7 +151,8 @@ export type SecurityDegradation =
 export interface EffectPolicyConfig {
   /**
    * Omitted = `DEFAULT_EFFECT_RUN_MODE` (**workspace**, secure-by-default).
-   * Scaffold/config templates set `"mode": "host"` explicitly for local evaluation.
+   * `octopi init` scaffolds `"mode": "project"` (coding-agent profile);
+   * `octopi.example.json` demonstrates `"mode": "host"` explicitly for full local capability.
    */
   mode?: EffectRunMode;
   /**

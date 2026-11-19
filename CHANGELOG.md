@@ -129,6 +129,28 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.119.6 (2026-11-20)
+
+### feat(cli): init 向导 UX 批量优化 — 语言编号选择、隐藏输入占位回显、elevated 启动前知情确认
+
+- 语言步骤改为编号两选项（`1. English / 2. 中文`），提示 chrome 双语；隐藏输入（密码/确认/API Key）改为逐字符 `*` 占位回显（接管 readline output 面的帧渲染器 `createMaskedEcho`：粘贴成串反馈、退格/方向键/Ctrl-U 整帧重画、换行帧先上移再清）。顺带修复了退格会把提示行清成 rl 默认 `> ` 残影的显示缺陷。
+- services 步启动前的 elevated 知情确认：管理员权限 init 先给风险告知，确认启动即写顶层 `effectPolicy.privilegedAck: user-confirmed-at-init-<ISO>` 再拉起服务，拒绝则不启动并给出可执行出路；`--yes` 无从交互确认，改为显式告警（声明必须是人的显式表态，不代写）。`privilegedAck` 维持 ops-privileged-mode §8 的部署级总声明语义（init 写入即长期有效）——收紧为按用途声明需重开该决策，本批未动。
+- `OnboardingResult` 新增 `saved`：完成语按「完成 / 已保存未走完 / Web 交接未落盘 / 未改」四分，修掉「保存退出后谎报配置未改」与「Web 交接谎报完成」两处文案失真。
+
+### feat(webui): 登录页重设计 + 访问密钥准入路径（修登录 401）
+
+- 登录页重设计为居中登录卡片（对齐 DESIGN.md：中性底、单一主动作、focus 环、双主题），右上语言/主题切换；表单 label/hint 语义化（htmlFor/aria-describedby）。
+- **修复** `Unauthorized: invalid or missing API key`：init 默认随机 `channels[].apiKey` 后浏览器无从获得密钥——登录页在缺钥匙时出现「访问密钥」输入框（本机 loopback 自动下发时不打扰；远程/局域网访问凭管理员分发的密钥准入）；apiKey 闸 401 独立为第三错误态（不再冒充「无法连接」），密码错维持防枚举文案；密钥只在登录成功后持久化，密钥框空提交清掉陈旧缓存。
+
+### feat(cli): init 脚手架 effectPolicy.mode 缺省 host → project
+
+- **行为变更（仅影响新 init，既有配置不动）**：`octopi init` 生成配置的 `effectPolicy.mode` 由 `host` 改为 `project`（编码 agent 档：文件 L2 strict、shell/网络放行、工具 cwd = `workspace/<sessionId>`）；要全机无围栏请显式改 `host`（`octopi.example.json` 仍演示 host）。docs（EN+ZH）与引擎注释同步修正「init 写 host」的过期表述。
+
+### test: 向导掩码帧 / privilegedAck / LoginPage / init 缺省
+
+- 新增 20 例：掩码帧渲染（键入/粘贴/重绘/换行/Ctrl-U/自定义前缀）、privilegedAck 读写（顶层语义、保留既有 effectPolicy 字段、schema fail-loud 不写坏文件）、LoginPage（密钥显形条件、apiKey 第三错误态、防枚举文案、陈旧密钥清理）、init 缺省 mode=project。
+- 验证：全量 5472 passed / 0 failed；eslint + root/webui tsc + `arch/check-sync.sh` 全绿；PTY 冒烟（80 列换行帧上移重画、明文泄漏检查 False、93 字符 Key 粘贴反馈）。
+
 ## v0.119.4 (2026-11-20)
 
 ### fix(engine): 三档取值改直白命名（F5 三轮）

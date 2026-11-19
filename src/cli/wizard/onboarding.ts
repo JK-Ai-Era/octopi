@@ -12,7 +12,7 @@
  * @module
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import {
   DEPLOYMENT_MODES,
@@ -44,6 +44,8 @@ export interface OnboardingResult {
   launchChat: boolean;
   /** 是否走完全部步骤（EOF/中止时 false——调用方不得谎报「完成」） */
   completed: boolean;
+  /** 选择是否已落盘（commit 点发生过；中途退出但已保存时调用方不得谎报「配置未改」） */
+  saved: boolean;
 }
 
 /** 运行选项 */
@@ -93,6 +95,54 @@ function spawnCli(args: string[]): Promise<number> {
 
 type ProbeLabels = Record<ProbeErrorKind, string>;
 
+/**
+ * 顶层 effectPolicy.privilegedAck 读取（elevated 启动闸门的声明面；daemon 只认顶层，同 `<top>` 口径）。
+ *
+ * @param configPath - 配置文件路径
+ * @returns 声明字符串；缺失/损坏按「未声明」处理（落盘路径会 fail-loud）
+ */
+export function readTopLevelPrivilegedAck(configPath: string): string | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(configPath, 'utf8')) as { effectPolicy?: { privilegedAck?: unknown } };
+    const ack = raw.effectPolicy?.privilegedAck;
+    return typeof ack === 'string' && ack.trim() ? ack : undefined;
+  } catch {
+    // 吞掉读取/解析失败（文件缺失或损坏）——按「未声明」处理；损坏配置会在落盘/启动路径 fail-loud
+    return undefined;
+  }
+}
+
+/**
+ * 把 privileged 声明写进顶层 effectPolicy（启动闸门的显式表态；值表达「用户 init 时确认」）。
+ * 落盘前整文件 schema 校验 fail-loud（同 mergeConfigFragment 的 M15 口径，不写坏文件）。
+ *
+ * @param configPath - 配置文件路径
+ * @param ack - 声明值（任意非空字符串）
+ */
+export function writePrivilegedAckDeclaration(configPath: string, ack: string): void {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch (e) {
+    throw new Error(`onboarding_privileged_ack: 配置读取/解析失败（${String(e)}）——未写盘`);
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('onboarding_privileged_ack: 配置不是 JSON 对象——未写盘');
+  }
+  const cfg = raw as Record<string, unknown>;
+  const ep = cfg.effectPolicy;
+  if (ep !== undefined && (typeof ep !== 'object' || ep === null || Array.isArray(ep))) {
+    throw new Error('onboarding_privileged_ack: effectPolicy 不是对象——未写盘');
+  }
+  cfg.effectPolicy = { ...((ep as Record<string, unknown>) ?? {}), privilegedAck: ack };
+  const parsed = OctopiConfigSchema.safeParse(cfg);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.slice(0, 3).map((i) => `${i.path.map(String).join('.')}: ${i.message}`);
+    throw new Error(`onboarding_privileged_ack: 合并后配置未过 schema（${issues.join('; ')}）——未写盘`);
+  }
+  writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+}
+
 function probeLabels(zh: boolean): ProbeLabels {
   // 文案单源在 engine error-copy（批 3-2 四份单源化）；码表由 PROBE_ERROR_KINDS 派生
   const lang = zh ? 'zh' : 'en';
@@ -123,8 +173,10 @@ async function runInteractive(opts: RunOnboardingOptions): Promise<OnboardingRes
 
   let state: OnboardingMachineState = initialOnboardingState();
   let launchChat = false;
+  let saved = false;
   const commit = async (): Promise<void> => {
     const applied = await applyOnboarding(choices, applyDeps(opts));
+    saved = true;
     // M3：降级显式——demo 播种失败的警告必须透出到 CLI（此前静默丢弃）
     if (applied.demoWarning) {
       console.warn(`\n⚠️  ${choices.lang === 'en' ? 'Demo kit not seeded:' : '示例任务包未播种：'}${applied.demoWarning}`);
@@ -149,7 +201,7 @@ async function runInteractive(opts: RunOnboardingOptions): Promise<OnboardingRes
     if (transition.notice === 'back-at-first') console.log('已经是第一步了。'); // m13：空栈回退给提示，不静默绕圈
     if (transition.commit !== 'none') await commit(); // B2/m5/防御落盘——时机由状态机决定
   }
-  return { configPath: opts.configPath, launchChat, completed: state.completed };
+  return { configPath: opts.configPath, launchChat, completed: state.completed, saved };
 }
 
 /** 单步渲染执行（渲染 + 采集；动作翻译成状态机事件） */
@@ -161,11 +213,22 @@ async function runStep(
   const zh = choices.lang === 'zh';
   switch (step) {
     case 'welcome': {
-      const raw = await askText(
-        zh ? '三分钟让你的 agent 跑起来。先选界面语言 / Get your agent running in 3 minutes. Language first.' : 'Get your agent running in 3 minutes. Pick your language.',
-        { default: choices.lang },
+      // 第一步定界面语言（后续全部文案随它切双语）；此时语言未定，问题与 chrome 都给双语
+      const defIndex = choices.lang === 'en' ? 1 : 2;
+      const picked = await choose(
+        '三分钟让你的 agent 跑起来。先选界面语言 / Get your agent running in 3 minutes. Pick your language.',
+        [
+          { id: 'en', label: 'English' },
+          { id: 'zh', label: '中文' },
+        ],
+        {
+          defaultId: choices.lang,
+          hint: `选择 / pick (1-2，回车=${defIndex}，b=回上一步 / back)`,
+          invalidHint: '请输入 1-2 之间的数字 / enter a number 1-2',
+        },
       );
-      choices.lang = raw === 'en' ? 'en' : 'zh';
+      if (picked === '__back__') return { event: { kind: 'back' } };
+      choices.lang = picked === 'en' ? 'en' : 'zh';
       return { event: { kind: 'next' } };
     }
     case 'init-mode': {
@@ -313,10 +376,50 @@ async function runStep(
       }
     }
     case 'services': {
+      // 高权限 init 的启动前知情确认（elevated 声明闸门的 UX 面）：与其启动后被
+      // privileged_declaration_required 拒绝，不如先告知风险；确认启动即把声明写进
+      // 顶层 effectPolicy.privilegedAck（值表达「用户 init 时确认」），拒绝则不启动。
+      const { isProcessElevated } = await import(
+        '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js'
+      );
+      const needsAck = (await isProcessElevated()) && !readTopLevelPrivilegedAck(opts.configPath);
+      if (needsAck) {
+        console.log(
+          zh
+            ? '\n⚠️  当前终端以系统管理员（root/admin）高权限运行——启动后 Octopi 将具备系统级权限。'
+            : '\n⚠️  This terminal is elevated (root/admin) — Octopi would run with system-level privileges.',
+        );
+        console.log(
+          zh
+            ? '   选 y 启动即表示你明确知悉并接受特权部署；向导会把该声明写入配置顶层 effectPolicy.privilegedAck。'
+            : '   Starting confirms you understand and accept a privileged deployment; the wizard records it as top-level effectPolicy.privilegedAck.',
+        );
+        console.log(
+          zh
+            ? '   不接受请选 n（稍后改用普通权限终端启动）。'
+            : '   Decline with n to start later from a regular (non-elevated) terminal.',
+        );
+      }
       const go = await confirm(zh ? '现在启动服务？（gateway + webui）' : 'Start services now? (gateway + webui)', { defaultYes: true });
       if (!go) {
         console.log(zh ? '稍后手动启动：octopi serve start && octopi webui start' : 'Start later with: octopi serve start && octopi webui start');
+        if (needsAck) {
+          console.log(
+            zh
+              ? '   注意：未写入 privilegedAck 时高权限直接启动会被拒——请改用普通权限终端，或手动在配置顶层 effectPolicy 加 privilegedAck。'
+              : '   Note: elevated startup is refused without privilegedAck — use a non-elevated terminal, or add top-level effectPolicy.privilegedAck manually.',
+          );
+        }
         return { event: { kind: 'next' } };
+      }
+      if (needsAck) {
+        const ts = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+        writePrivilegedAckDeclaration(opts.configPath, `user-confirmed-at-init-${ts}`);
+        console.log(
+          zh
+            ? '✅ 已写入 effectPolicy.privilegedAck（用户 init 时确认的特权声明）。'
+            : '✅ effectPolicy.privilegedAck recorded (user confirmed the privileged deployment at init).',
+        );
       }
       const cfg = opts.configPath ? ['--config', opts.configPath] : []; // B2 附：配置透传
       const rc1 = await spawnCli(['serve', 'start', ...cfg]);
@@ -370,7 +473,18 @@ async function runNonInteractive(opts: RunOnboardingOptions): Promise<Onboarding
     // M3：--yes 路径同权透出（降级显式不因非交互而消失）
     console.warn(`\n⚠️  ${choices.lang === 'en' ? 'Demo kit not seeded:' : '示例任务包未播种：'}${applied.demoWarning}`);
   }
-  return { configPath: opts.configPath, launchChat: false, completed: true };
+  // 高权限 --yes 无从交互确认——只告警不代写声明（privilegedAck 必须是人的显式表态）
+  const { isProcessElevated } = await import(
+    '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js'
+  );
+  if ((await isProcessElevated()) && !readTopLevelPrivilegedAck(opts.configPath)) {
+    console.warn(
+      choices.lang === 'en'
+        ? '\n⚠️  Elevated (root/admin) init: serve will refuse to start until top-level effectPolicy.privilegedAck is declared — or start from a non-elevated terminal.'
+        : '\n⚠️  高权限（root/admin）init：serve 启动会被拒，直到在顶层 effectPolicy.privilegedAck 显式声明——或改用普通权限终端启动。',
+    );
+  }
+  return { configPath: opts.configPath, launchChat: false, completed: true, saved: true };
 }
 
 /**
@@ -409,7 +523,7 @@ async function runWebHandoff(opts: RunOnboardingOptions): Promise<OnboardingResu
     console.log('     octopi serve start');
     console.log('   首启时终端会打印「🧙 首启配置向导」链接（含一次性 setup token）；');
     console.log('   或在这里继续命令行向导：octopi init --cli');
-    return { configPath: opts.configPath, launchChat: false, completed: false };
+    return { configPath: opts.configPath, launchChat: false, completed: false, saved: false };
   }
   let target = webUrl;
   try {
@@ -425,7 +539,7 @@ async function runWebHandoff(opts: RunOnboardingOptions): Promise<OnboardingResu
   }
   console.log(`🌐 打开 Web 向导：${target}`);
   openBrowser(target);
-  return { configPath: opts.configPath, launchChat: false, completed: true };
+  return { configPath: opts.configPath, launchChat: false, completed: true, saved: false };
 }
 
 /**

@@ -40,7 +40,7 @@ Implementation status and open items: [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) 
 
 **Development notes (runtime semantics already fixed by the constitution):**
 
-- `effectPolicy` (default `host`): tool effect mode + L2 + turn undo (file/memory/shell snapshot) + host-gate + `shellJournal`/`undoLimit`; `toolIsolation` covers cwd layout only (I5). Multi-session file writes use `session-subdir` or `project` mode. LLM tool calls require `purpose` (brief action description).
+- `effectPolicy` (omitting `mode` defaults to `workspace`; `octopi init` scaffolds `project`): tool effect mode + L2 + turn undo (file/memory/shell snapshot) + host-gate + `shellJournal`/`undoLimit`; `toolIsolation` covers cwd layout only (I5). Multi-session file writes use `session-subdir` or `project` mode. LLM tool calls require `purpose` (brief action description).
 - compact key = `(sessionId, agentId)`; do not share one agent compact under a bare sessionId (E4)
 - Shared capabilities `harness/context/capabilities/`: summary/compact are **not** LLM tool surfaces; tools only consume `SummaryPort`; prompt/policy/algorithms must not go into `plugin-ecosystem/tools`; E4 session compact state does not live in capabilities
 - Before a tool result enters the main session: the **L1 hard cap** (`maxReturnChars`) must apply; “return the full text first, then let the Agent call summary” is forbidden as the main anti-overflow path

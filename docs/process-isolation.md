@@ -399,7 +399,8 @@ Related (still true):
 | Layer | Omitted `mode` behavior | Purpose |
 |-------|-------------------------|---------|
 | **Engine / library** | **`workspace`** (secure-by-default) | Embedders who forget to configure stay contained |
-| **`octopi init` / `octopi.example.json`** | Explicit `"mode": "host"` | Evaluation and local automation get full capability out of the box |
+| **`octopi init`** | Explicit `"mode": "project"` | Coding-agent default: file L2 strict, shell/network open; tool cwd = `workspace/<sessionId>` (`toolIsolation: session-subdir`) |
+| **`octopi.example.json`** | Explicit `"mode": "host"` | Full local capability demonstrated for evaluation |
 
 `project` is a **coding** mode, not an isolation mode: file L2 is strict, but shell may touch paths outside roots until process jail is available.
 
