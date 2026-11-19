@@ -818,7 +818,7 @@ describe('P2 (real stack)', () => {
       const rec: Recorder = { events: [], writes: [] };
       const deny = vi.fn(async () => ({ decision: 'deny' as const }));
       const approve = vi.fn(async () => ({ decision: 'approve' as const }));
-      const { service, tools } = toolsFor({ confirm: 'document' });
+      const { service, tools } = toolsFor({ confirm: 'standard' });
       track(service);
       try {
         const ctx = makeCtx(rec, { cwd: root, confirmEffect: deny as never });
@@ -901,7 +901,7 @@ describe('P2 (real stack)', () => {
     async () => {
       postCount = 0;
       const approve = vi.fn(async () => ({ decision: 'approve' as const }));
-      const { service, tools } = toolsFor({ confirm: 'all' });
+      const { service, tools } = toolsFor({ confirm: 'strict' });
       track(service);
       const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: approve as never });
       await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
@@ -917,7 +917,7 @@ describe('P2 (real stack)', () => {
     async () => {
       postCount = 0;
       const deny = vi.fn(async () => ({ decision: 'deny' as const }));
-      const { service, tools } = toolsFor({ confirm: 'all' });
+      const { service, tools } = toolsFor({ confirm: 'strict' });
       track(service);
       const rec: Recorder = { events: [], writes: [] };
       const ctx = makeCtx(rec, { confirmEffect: deny as never });
@@ -997,7 +997,7 @@ describe('P2 (real stack)', () => {
       const late = vi.fn(
         () => new Promise((resolve) => setTimeout(() => resolve({ decision: 'approve' as const }), 1500)),
       );
-      const { service, tools } = toolsFor({ timeoutMs: 1000, confirm: 'all' });
+      const { service, tools } = toolsFor({ timeoutMs: 1000, confirm: 'strict' });
       track(service);
       const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: late as never });
       const nav = await tools.get('browser_navigate')!.handler({ url: `${baseUrl}postform` }, ctx);
@@ -1080,11 +1080,11 @@ describe('P2 (real stack)', () => {
   );
 
   it.skipIf(!engineAvailable)(
-    'explicit confirm:document keeps page-script writes ungated (no cache poisoning)',
+    'explicit confirm:standard keeps page-script writes ungated (no cache poisoning)',
     async () => {
       postCount = 0;
       const gate = vi.fn(async () => ({ decision: 'deny' as const }));
-      const { service, tools } = toolsFor({ confirm: 'document' });
+      const { service, tools } = toolsFor({ confirm: 'standard' });
       track(service);
       const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
       await tools.get('browser_navigate')!.handler({ url: `${baseUrl}xhr` }, ctx);
@@ -1096,17 +1096,17 @@ describe('P2 (real stack)', () => {
   );
 
   it('confirmGateEnabled maps the three tiers (single source of truth)', () => {
-    // 缺省 document：文档级过闸、页内 XHR 不闸
+    // 缺省 standard：文档级过闸、页内 XHR 不闸
     expect(confirmGateEnabled(undefined, 'formSubmit')).toBe(true);
     expect(confirmGateEnabled(undefined, 'passwordField')).toBe(true);
     expect(confirmGateEnabled(undefined, 'fileUpload')).toBe(true);
     expect(confirmGateEnabled(undefined, 'xhr')).toBe(false);
-    // all：所有非 GET 过闸
-    expect(confirmGateEnabled('all', 'xhr')).toBe(true);
-    expect(confirmGateEnabled('all', 'formSubmit')).toBe(true);
-    // document：显式与缺省同义
-    expect(confirmGateEnabled('document', 'xhr')).toBe(false);
-    expect(confirmGateEnabled('document', 'formSubmit')).toBe(true);
+    // strict：所有非 GET 过闸
+    expect(confirmGateEnabled('strict', 'xhr')).toBe(true);
+    expect(confirmGateEnabled('strict', 'formSubmit')).toBe(true);
+    // standard：显式与缺省同义
+    expect(confirmGateEnabled('standard', 'xhr')).toBe(false);
+    expect(confirmGateEnabled('standard', 'formSubmit')).toBe(true);
     // off：全放开
     expect(confirmGateEnabled('off', 'formSubmit')).toBe(false);
     expect(confirmGateEnabled('off', 'passwordField')).toBe(false);
@@ -1115,7 +1115,7 @@ describe('P2 (real stack)', () => {
   });
 
   it.skipIf(!engineAvailable)(
-    'page-script writes are ungated at the default document tier (2026-11-20)',
+    'page-script writes are ungated at the default standard tier (2026-11-20)',
     async () => {
       postCount = 0;
       const gate = vi.fn(async () => ({ decision: 'deny' as const }));
@@ -1140,7 +1140,7 @@ describe('P2 (real stack)', () => {
         seenScopes.push(getRunScope()?.sessionId);
         return { decision: 'approve' as const };
       });
-      const { service, tools } = toolsFor({ confirm: 'all' });
+      const { service, tools } = toolsFor({ confirm: 'strict' });
       track(service);
       const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
       const scope = { sessionId: ctx.sessionId, agentId: 'agent-1' } as RunScope;
@@ -1170,7 +1170,7 @@ describe('P2 (real stack)', () => {
       try {
         postCount = 0;
         const gate = vi.fn(async () => ({ decision: 'approve' as const }));
-        const { service, tools } = toolsFor({ confirm: 'all' });
+        const { service, tools } = toolsFor({ confirm: 'strict' });
         track(service);
         const ctx = makeCtx({ events: [], writes: [] }, { confirmEffect: gate as never });
         await tools.get('browser_navigate')!.handler(

@@ -60,8 +60,8 @@ export const BrowserConfigSchema = z.object({
     .optional(),
   /**
    * 敏感动作确认闸门三档（2026-11-20 拍板）：
-   * `all` = 所有非 GET 过闸（含页内 fetch/XHR）；`document`（缺省）= 仅文档级
+   * `strict` = 所有非 GET 过闸（含页内 fetch/XHR）；`standard`（缺省）= 仅文档级
    * （表单提交/密码/上传）；`off` = 全放开。
    */
-  confirm: z.enum(['all', 'document', 'off']).optional(),
+  confirm: z.enum(['strict', 'standard', 'off']).optional(),
 });

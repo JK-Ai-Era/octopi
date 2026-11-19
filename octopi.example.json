@@ -348,7 +348,7 @@
       "domains": { "allow": [], "deny": [] },
       "allowPrivateNetwork": false
     },
-    "confirm": "document"
+    "confirm": "standard"
   },
 
   "web": {

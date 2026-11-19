@@ -129,6 +129,13 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.119.4 (2026-11-20)
+
+### fix(engine): 三档取值改直白命名（F5 三轮）
+
+- **配置值变更（breaking，零兼容换名）**：`browser.confirm` 三档取值 `all | document | off` → **`strict | standard | off`**（大哥选定强度阶梯式：严格/标准/关闭），档位语义与缺省（`standard`）不变。升级对照：`all`→`strict`、`document`→`standard`、`off` 不变。
+- 映射实现 `confirmGateEnabled`、类型/Zod/schema/example/KNOWN-ISSUES（中英）/arch 全链路同步；43 例测试全绿。
+
 ## v0.119.3 (2026-11-20)
 
 ### fix(engine): 确认闸配置改单一三档（F5 二轮拍板）

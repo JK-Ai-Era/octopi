@@ -27,7 +27,7 @@
 
 - **浏览器没有网络层出口限制**：`browser.network` 在拦截层把关每个请求（含重定向），但浏览器进程本身是开放的网络通道（代理/白名单出口为后续增强）。
 - **浏览器 DNS 不在 connect 时复验**：`assertUrlAllowed` 只校验解析期地址——浏览器引擎内没有 DNS rebinding TOCTOU 闭合（与 network-guard 同一注记）。
-- **写闸按 method+origin 会话级去重**：`browser.confirm` 三档开关——`"all"` 所有非 GET 过闸（含页内 fetch/XHR）；`"document"`（缺省）仅文档级过闸（表单/上传/密码）；`"off"` 全放开。闸开时对 `POST https://x` 批过一次，同会话内该源的后续写入不再询问（关会话即撤销）。
+- **写闸按 method+origin 会话级去重**：`browser.confirm` 三档开关——`"strict"` 所有非 GET 过闸（含页内 fetch/XHR）；`"standard"`（缺省）仅文档级过闸（表单/上传/密码）；`"off"` 全放开。闸开时对 `POST https://x` 批过一次，同会话内该源的后续写入不再询问（关会话即撤销）。
 - **attach 会话只管自己的页**：`cdp-attach` 模式下请求策略/确认闸只覆盖会话页面（其弹窗是即关不辖）；用户真实浏览器里的其他标签页不受管辖、不设闸。
 - **弹窗按单页契约即开即关**：`target="_blank"` / `window.open` 的新窗口不在会话请求策略覆盖内（CDP 拦截按 page target 挂）；会立即关闭+记账，但弹窗首个请求存在与关闭的竞态窗口（出生即接管为后续增强）。
 - **持久 profile 按 OCTOPI_HOME 共享**：`browser.profiles.defaultProfile` 让同一运行时下所有 agent 共享一份登录态；租户/agent 级 profile 归属是开放问题（`arch/browser-capability.md` §5）。会话内对某 `method+origin` 批过一次写闸后，同形状的后续写入（含表单批准后的页内脚本写）不再询问。

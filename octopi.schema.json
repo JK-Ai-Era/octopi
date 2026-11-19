@@ -3424,8 +3424,8 @@
         "confirm": {
           "type": "string",
           "enum": [
-            "all",
-            "document",
+            "strict",
+            "standard",
             "off"
           ]
         }

@@ -36,10 +36,10 @@ import { containmentOptions, resolveToolPath } from './platform.js';
 export interface BrowserToolOptions {
   /**
    * 敏感动作确认闸门三档（2026-11-20 拍板，替代布尔组合）：
-   * `all` = 所有非 GET 过闸（含页内 fetch/XHR）；`document`（缺省）= 仅文档级
+   * `strict` = 所有非 GET 过闸（含页内 fetch/XHR）；`standard`（缺省）= 仅文档级
    * （表单提交/密码/上传）；`off` = 全放开。
    */
-  confirm?: 'all' | 'document' | 'off';
+  confirm?: 'strict' | 'standard' | 'off';
   /** 持久 profile（P2）：persist=关闭时归档 storageState；defaultProfile=隐式会话默认身份 */
   profiles?: { persist?: boolean; defaultProfile?: string };
   /** profile 存储目录（assemble 按 OCTOPI_HOME 注入） */
@@ -142,7 +142,7 @@ function normalizeDecision(raw: ConfirmOutcome | HitlDecision | undefined): 'app
 /**
  * 确认闸三档 → 单闸开关的唯一映射（DOM 闸与请求层闸共用；勿在调用点手写档位判断）。
  *
- * @param confirm - 三档配置（缺省 `document`）
+ * @param confirm - 三档配置（缺省 `standard`）
  * @param kind - 闸门种类（`xhr` = 页内 fetch/XHR 外部写）
  * @returns 该闸在当前档位下是否启用
  */
@@ -150,9 +150,9 @@ export function confirmGateEnabled(
   confirm: BrowserToolOptions['confirm'],
   kind: 'passwordField' | 'formSubmit' | 'fileUpload' | 'xhr',
 ): boolean {
-  const level = confirm ?? 'document';
+  const level = confirm ?? 'standard';
   if (level === 'off') return false;
-  return kind === 'xhr' ? level === 'all' : true;
+  return kind === 'xhr' ? level === 'strict' : true;
 }
 
 async function gateSensitiveAction(
