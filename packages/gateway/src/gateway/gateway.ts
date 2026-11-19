@@ -46,6 +46,7 @@ import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.j
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import { applyUserTitle, maybeUpdateSessionTitle } from './session-title.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
+import { projectUserMessageContent } from '../web/conversation/projection.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import { createHmac, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -456,9 +457,6 @@ export function createConcurrencyGate(max: number): {
 
 /** 启动窗口期入站消息缓冲上限（防御性容量，超限拒收并 fail loud） */
 const PENDING_INBOUND_CAP = 100;
-
-/** user-messages 投影的字符串正文上限：消费方只做定位轨 tooltip 预览 */
-const USER_MESSAGE_PROJECTION_CHARS = 4000;
 
 export class Gateway {
   /** 已注册的 Agent */
@@ -3865,8 +3863,9 @@ export class Gateway {
    * 只做传输层过滤（role === 'user'，含机器生成的 user 角色条目）；
    * 「哪条是真实用户 turn」的语义分类由 web 层 ConversationAdapter 统一执行，
    * 服务端不复制该规则。index 为 session.messages 绝对下标（与分叉/截断口径一致）。
-   * 字符串正文按 USER_MESSAGE_PROJECTION_CHARS 截断：消费方只做定位轨 tooltip
-   * 预览，超长粘贴不应把整段正文推给 16px 宽的定位条（metadata 原样保留，分类不受影响）。
+   * content 经 projectUserMessageContent 变换：取用户原文后截断并重新定形为合法
+   * turn_start 信封——信封不得被截断破坏（engine 不变量，详见 projection.ts）；
+   * metadata 原样保留，分类不受影响。
    */
   async getSessionUserMessages(
     sessionId: string,
@@ -3878,11 +3877,7 @@ export class Gateway {
     const messages: Array<Message & { index: number }> = [];
     session.messages.forEach((m, i) => {
       if (m.role !== 'user') return;
-      const content =
-        typeof m.content === 'string'
-          ? m.content.slice(0, USER_MESSAGE_PROJECTION_CHARS)
-          : m.content;
-      messages.push({ ...m, content, index: i });
+      messages.push({ ...m, content: projectUserMessageContent(m.content), index: i });
     });
     return { messages };
   }

@@ -128,6 +128,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.40 (2026-11-19)
+
+### fix(gateway): user-messages 投影信封安全截断——定位轨预览显示用户原文而非信封头
+
+- **症状**：turn 定位轨悬停预览中，未加载 turn 显示 `<turn_start …>` 信封原文而非用户输入。
+- **根因**（v0.118.38 S5 的错误截断）：user 消息 content 是整段 turn_start 信封（`<user_message>` 段位于数千字符的 turn_context/boilerplate 之后），投影层对原始 content 做 `slice(0, 4000)` 把信封结构裁断——engine `extractUserMessageText` 找不到 `<user_message>` 段即退化为原样返回。这同时违反了 engine 明文不变量「用户原文不得截断信封」（截断点必须在提取后的语义层，不得在结构层）。
+- **修复**：新增 `web/conversation/projection.ts` 的 `projectUserMessageContent`——用 engine 同源提取器取出用户原文、截断（仍 4000 字符限载荷）、再经 `formatTurnStartContent` 重新定形为合法信封（原文转义嵌入，结构永不被破坏）；非信封 user 消息（`<turn_end/>` 锚点/机器条目）原样投影，`isChatReplayHidden` 的 source 判定不受影响。消费方（ConversationAdapter 分类/取文）零改动。
+- **验证**：新增 4 例回归测试（含"信封 >4000 字符时提取仍得用户原文"、伪影标签转义往返、turn_end 隐藏保持）；全量 5402 用例绿；根构建绿；eslint 绿（tests/memory 既有基线漂移 14 条与本次无关）。
+
+---
+
 ## v0.118.39 (2026-11-19)
 
 ### fix(webui): turn 定位轨两缺陷——tooltip 被裁剪 + 首点跳转被回顶 restore 掐断
