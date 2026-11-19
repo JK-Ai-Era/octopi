@@ -29,6 +29,7 @@ import { t as tc, type MessageKey } from '../i18n/core';
 import { useLang, useT } from '../i18n/react';
 import { runStatusLabelKey } from './run-status-label';
 import { reduceScrollEvent } from './conversation-follow';
+import { createViewportAuthority } from './viewport-authority';
 import { buildTurnMarkers, historyTurnMarkers, markerKeyOf, type TurnMarker } from './turn-rail';
 import { TurnRail } from './TurnRail';
 import { ConversationAdapter } from '@octopi-agent/gateway/web/conversation/adapter';
@@ -981,8 +982,9 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const pinnedScrollTopRef = useRef<number | null>(null);
   /** 会话流内容根节点：ResizeObserver 观察其尺寸变化，异步长高时继续跟随 */
   const conversationContentRef = useRef<HTMLDivElement | null>(null);
-  /** 历史 prepend 恢复锚定进行中：抑制钉底动作（不改跟随意图），避免与锚定回顶互相拉扯 */
-  const historyPrependRef = useRef(false);
+  /** 视口写权威：分页回顶 restore 与 turn 跳转定位互斥（协议见 viewport-authority.ts）。
+   * 有持有者期间粘底钉底与临近顶部自动加载自抑——不动跟随意图，只抑制程序滚动写入 */
+  const viewportAuthorityRef = useRef(createViewportAuthority());
   /** user-messages 投影适配后的历史 turn 条目（未加载区间 marker 的来源） */
   const [historyTurnItems, setHistoryTurnItems] = useState<ConversationItem[]>([]);
   /** 回底悬浮按钮：上滑超过一屏时显示 */
@@ -1187,13 +1189,30 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     }
   };
 
+  /** 等平滑滚动落定再交还视口权威（scrollend 事件；不支持时超时兜底） */
+  const waitScrollEnd = (el: HTMLElement): Promise<void> =>
+    new Promise((resolve) => {
+      let done = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        el.removeEventListener('scrollend', finish);
+        resolve();
+      };
+      el.addEventListener('scrollend', finish);
+      timer = setTimeout(finish, 800);
+    });
+
   const loadMoreHistory = async () => {
     const el = scrollRef.current;
     const store = storeRef.current;
+    const authority = viewportAuthorityRef.current;
     if (!store || !store.hasMoreHistory()) return;
-    // prepend 期间抑制钉底动作（跟随意图不动）：布局/RO 钉底会与下方“锚定回顶”互相拉扯。
-    // 意图必须留给事件归约判定——加载 0 条时没有任何滚动事件，改意图会让跟随永久停摆
-    historyPrependRef.current = true;
+    // 他人（turn 跳转）持有视口权威期间不发起加载：定位过程不容第三方写滚动
+    if (authority.isHeld()) return;
+    const owner = authority.take();
     const prevHeight = el?.scrollHeight ?? 0;
     const prevTop = el?.scrollTop ?? 0;
     try {
@@ -1204,14 +1223,18 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     // prepend 后把视口钉在原先那条消息上，避免跳动
     if (el) {
       requestAnimationFrame(() => {
+        // 补偿写让路：仅当接管者已执行视口写才丢弃——跳转未滚动/放弃跳转时
+        // 本页 prepend 的修补仍须落地，否则视口留在偏移处（C7）
+        if (authority.shouldDropCompensation(owner)) {
+          authority.release(owner);
+          return;
+        }
         el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-        // 下一任务才解除抑制：本帧 rAF 之后的 ResizeObserver 步骤仍在抑制窗口内
-        setTimeout(() => {
-          historyPrependRef.current = false;
-        }, 0);
+        // 下一任务才解除权威：本帧 rAF 之后的 ResizeObserver 步骤仍在抑制窗口内
+        setTimeout(() => authority.release(owner), 0);
       });
     } else {
-      historyPrependRef.current = false;
+      authority.release(owner);
     }
   };
 
@@ -1251,12 +1274,26 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const token = ++turnJumpTokenRef.current;
     // 跳转即回看历史：显式离开底部，后续输出不再跟随
     stickToBottomRef.current = false;
+    // 全程持有视口权威：分页期间无人回顶/加载，平滑滚动尾巴不被 restore 掐断
+    const authority = viewportAuthorityRef.current;
+    const owner = authority.take();
     setTurnJumpBusyKey(marker.key);
     const aborted = () => turnJumpTokenRef.current !== token || activeSessionIdRef.current !== sessionId;
+    // 分页看门狗：网关无响应（如事件循环冻结）时不无限持有视口权威
+    let pagingTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       let anchor = findTurnAnchor(scroller, marker.key);
+      let timedOut = false;
       if (!anchor && typeof marker.sourceIndex === 'number') {
-        const loaded = await store.ensureUserMessageLoaded(marker.sourceIndex);
+        const loaded = await Promise.race([
+          store.ensureUserMessageLoaded(marker.sourceIndex),
+          new Promise<false>((resolve) => {
+            pagingTimer = setTimeout(() => {
+              timedOut = true;
+              resolve(false);
+            }, 30_000);
+          }),
+        ]);
         // prepend 渲染提交后锚点节点才存在：等提交落地再查。
         // 当前会话事件是同步 dispatch + 同步渲染，一帧足够；有界重试兜住
         // 将来改为过渡渲染（transition）时该假设失效的情况
@@ -1268,13 +1305,20 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       // 会话已切换或已有更新的跳转：本次作废，不动视口、不弹误报
       if (aborted()) return;
       if (!anchor) {
-        setToast(t('chatWorkspace.turnJumpFailed'));
+        setToast(t(timedOut ? 'chatWorkspace.turnJumpTimeout' : 'chatWorkspace.turnJumpFailed'));
         return;
       }
       const top = anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      scroller.scrollTo({ top: Math.max(0, scroller.scrollTop + top - 12), behavior: 'smooth' });
+      const target = Math.max(0, scroller.scrollTop + top - 12);
+      if (Math.abs(target - scroller.scrollTop) > 2) {
+        authority.markScrolled(owner);
+        scroller.scrollTo({ top: target, behavior: 'smooth' });
+        await waitScrollEnd(scroller);
+      }
       scheduleActiveTurnUpdate();
     } finally {
+      clearTimeout(pagingTimer);
+      authority.release(owner);
       if (!aborted()) setTurnJumpBusyKey(null);
     }
   };
@@ -1283,7 +1327,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   // 用 layout effect 在 DOM 变更的同一提交内钉底：若等 passive effect，下一批
   // 工具卡片可能先于钉底落地，钉底 scroll 事件会被误读成“用户上滑”（同竞态另一侧）
   useLayoutEffect(() => {
-    if (!stickToBottomRef.current || historyPrependRef.current) return;
+    if (!stickToBottomRef.current || viewportAuthorityRef.current.isHeld()) return;
     scrollToBottom();
   }, [conversationItems, stream, questions, approvals, clientToolCalls, renderedWebViews, scrollToBottom]);
 
@@ -1292,7 +1336,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const content = conversationContentRef.current;
     if (!content || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
-      if (!stickToBottomRef.current || historyPrependRef.current) return;
+      if (!stickToBottomRef.current || viewportAuthorityRef.current.isHeld()) return;
       scrollToBottom();
     });
     observer.observe(content);
@@ -1303,8 +1347,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   useEffect(() => {
     const client = clientRef.current;
     const sessionId = activeSessionId;
-    // 会话切换：定位轨/跳转/回底状态全部作废重置，旧会话的 key 不得泄漏到新会话
+    // 会话切换：定位轨/跳转/回底状态全部作废重置，旧会话的 key 不得泄漏到新会话。
+    // 视口权威一并复位：在途跳转的持有全部作废，否则其 waitScrollEnd 尾巴会把
+    // 新会话的粘底钉底压住数百毫秒（C5）——旧持有者的 release 会因标记过期自然落空
     turnJumpTokenRef.current += 1;
+    viewportAuthorityRef.current.reset();
     setHistoryTurnItems([]);
     setActiveTurnKey(null);
     setTurnJumpBusyKey(null);

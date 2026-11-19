@@ -216,10 +216,12 @@ pre { font-family: var(--font-mono); font-size: 13px; }
   opacity: 0.22; transition: opacity 0.15s ease;
 }
 .turn-rail:hover, .turn-rail:focus-within { opacity: 1; }
-.turn-rail-row { flex: 1; position: relative; display: flex; align-items: center; min-height: 0; overflow: hidden; }
+.turn-rail-row { flex: 1; position: relative; display: flex; align-items: center; min-height: 0; }
 .turn-rail-item {
   width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
+  /* 裁剪密集行的 tick 渗色只能放按钮级——放在 row 会把行外 tooltip 整个裁掉 */
+  overflow: hidden;
 }
 .turn-rail-item:hover { background: var(--color-surface-3); border-radius: var(--radius-sm); }
 .turn-rail-tick {

@@ -1595,9 +1595,9 @@ export class OctopiRuntimeStore extends EventTarget {
    * 向上加载历史直到指定 sourceIndex 的用户消息入列（turn 定位轨跳转用）。
    * 并发安全：loadMoreHistory 自带在途互斥，0 条但仍有历史时短等重试，不空转。
    * 会话切换即作废（bail）：防止为旧会话的下标把新会话的历史翻穿。
-   * 故意不走 ChatWorkspace 的 prepend 锚定括号（historyPrependRef）：跳转路径依赖
-   * 浏览器 scroll anchoring，最终由调用方实测 scrollTo 定位——两套视口权威仅此
-   * 一处并存，勿扩散到其它路径。
+   * 本方法只加载内容、不写视口：视口写入由 webui 的视口写权威协议
+   * （viewport-authority.ts）统一仲裁——跳转调用方持有权威期间，prepend 不做
+   * 回顶补偿，最终定位以调用方实测 scrollTo 为准。
    *
    * @param sourceIndex session.messages 绝对下标（UserConversationItem.sourceIndex）
    * @returns 目标用户消息是否已入列（false = 历史耗尽 / 会话已切换仍不存在）

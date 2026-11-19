@@ -139,6 +139,7 @@ export const zh = {
   'chatWorkspace.turnJumpHint': '点击跳转到该轮输入',
   'chatWorkspace.turnLoadJumpHint': '点击加载并跳转到该轮输入',
   'chatWorkspace.turnJumpFailed': '目标消息已不存在（可能已被截断或编辑重发）',
+  'chatWorkspace.turnJumpTimeout': '定位超时：会话加载无响应，已放弃本次跳转',
   'chatWorkspace.abort': '中止',
   // 空态
   'chatWorkspace.welcome': '欢迎 👋',
@@ -337,6 +338,7 @@ export const en: Record<keyof typeof zh, string> = {
   'chatWorkspace.turnJumpHint': 'Click to jump to this turn',
   'chatWorkspace.turnLoadJumpHint': 'Click to load and jump to this turn',
   'chatWorkspace.turnJumpFailed': 'Target message no longer exists (truncated or edited)',
+  'chatWorkspace.turnJumpTimeout': 'Jump timed out: session not responding; gave up',
   'chatWorkspace.abort': 'Abort',
   'chatWorkspace.welcome': 'Welcome 👋',
   'chatWorkspace.welcomeHintPrefix': 'Pick an assistant on the left, then click ',

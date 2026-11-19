@@ -128,6 +128,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.118.39 (2026-11-19)
+
+### fix(webui): turn 定位轨两缺陷——tooltip 被裁剪 + 首点跳转被回顶 restore 掐断
+
+- **tooltip 不显示（v0.118.38 回归）**：为防密集行 tick 渗色给 `.turn-rail-row` 加的 `overflow: hidden` 把绝对定位在行外的 tooltip 整个裁掉了。裁剪移到按钮级（`.turn-rail-item`，tick 是其唯一子元素，等效防渗色），行恢复可见溢出。教训：给共享容器加裁剪前先枚举其浮层子元素。
+- **首点未加载定位点抖动不跳、二点才中**：跳转的分页/平滑滚动期间，「临近顶部自动加载」路径的 prepend 回顶 restore（`scrollTop = prevTop + delta`，delta 被跳转自身的翻页撑大）会掐断跳转的平滑滚动（CSSOM-View：写 scrollTop 即中止进行中的平滑滚动）；二点时目标已加载零等待故干净。修复：视口写入统一「写权威」协议（新增纯模块 `viewport-authority.ts` + 6 例交织语义测试）——同一时刻仅一个持有者可写 scrollTop（分页回顶 / 跳转定位互斥，后取者胜），跳转全程持权到滚动落定（scrollend，800ms 兜底）；补偿写（回顶）仅在「接管者已执行视口写」时让路，跳转放弃/未滚动时修补照常落地不丢。
+- **权威协议加固**（独立评审 C5/C6）：会话切换复位权威（在途跳转的 waitScrollEnd 尾巴不再压住新会话粘底钉底）；跳转分页加 30s 看门狗（网关无响应——如事件循环冻结——不再无限持有权威），超时如实 toast（新文案 key `turnJumpTimeout`）。
+- **验证**：全量 5398 用例绿（新增 viewport-authority 6 例）；根构建绿；eslint 绿（tests/memory 既有基线漂移 14 条与本次无关）。jsdom 无布局引擎，建议浏览器复验两条原始症状（hover 弹层、未加载定位点首点跳转）。
+
+---
+
 ## v0.118.38 (2026-11-19)
 
 ### feat(webui): 会话历史长程导航——turn 定位轨 + 回底悬浮按钮
