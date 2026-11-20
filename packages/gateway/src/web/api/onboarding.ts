@@ -27,6 +27,8 @@ import {
   type OnboardingStepId,
 } from '@octopi-agent/engine/config-admin/onboarding.js';
 import { pickLocalized } from '@octopi-agent/engine/config-admin/i18n.js';
+import { getProviderPreset } from '@octopi-agent/engine/config-admin/model-presets.js';
+import { requiresAdminPassword } from '@octopi-agent/engine/config-admin/onboarding-apply.js';
 import type { ProbeErrorKind } from '@octopi-agent/engine/config-admin/error-copy.js';
 import {
   applyOnboarding,
@@ -49,6 +51,11 @@ export interface OnboardingRender {
     modelId?: string;
     hasApiKey?: boolean;
     hasAdminPassword?: boolean;
+    /**
+     * 该部署形态是否要求 admin 密码（②③模式恒 true；个人模式仅远程绑定时 true）。
+     * UI 据此决定是否显示密码框——只按「模式」判断会让个人+远程绑定用户无从输密码。
+     */
+    adminPasswordRequired?: boolean;
   };
   notice?: 'back-at-first';
   /** M-6 热应用结果：true=已即时生效（新会话即用新配置）；false=失败（见 hotApplyError，仍需重启）；undefined=未热应用 */
@@ -66,6 +73,8 @@ export interface OnboardingRender {
     languages: Array<{ id: string; label: string }>;
     deploymentModes: Array<{ id: string; label: string; description: string }>;
     providers: Array<{ id: string; label: string; keyHint: string; api: string; defaultBaseUrl: string }>;
+    /** 当前所选 provider 的模型预设（选择器用；允许手填 —— 预设只是候选，不是白名单） */
+    models: Array<{ id: string; label: string; contextWindow?: number }>;
   };
 }
 
@@ -233,7 +242,14 @@ export class OnboardingService {
   private async submitInner(event: OnboardingEvent, stepData?: Partial<OnboardingChoices>): Promise<OnboardingRender> {
     const s = this.session;
     if (!s) throw new Error('onboarding_no_session: 向导会话不存在或已结束');
-    if (stepData) s.choices = mergeOnboardingChoices(s.choices, stepData);
+    if (stepData) {
+      // 「是否需要密码」按**合并后**的模式 + 远程绑定判定：切到 personal 且本机部署才清残留密码；
+      // 个人 + 远程绑定（或②③）必须保留用户刚输入的密码。
+      const nextMode = stepData.deploymentMode ?? s.choices.deploymentMode;
+      s.choices = mergeOnboardingChoices(s.choices, stepData, {
+        adminPasswordRequired: requiresAdminPassword(nextMode, this.deps.configPath),
+      });
+    }
     s.notice = undefined;
 
     if (event.kind === 'next' && s.state.current !== null) {
@@ -302,6 +318,18 @@ export class OnboardingService {
         api: pr.api,
         defaultBaseUrl: pr.baseUrl,
       })),
+      // 模型预设跟随「当前所选 provider」（会话已选 → 草稿尚未落盘的 provider 也覆盖不到，
+      // 故用已保存值；provider 一旦提交就会刷新）。手填仍允许：预设只是候选。
+      models: (() => {
+        const id = this.session?.choices.providerId;
+        const preset = id ? getProviderPreset(id) : undefined;
+        // 预设模型只有 id/name（无多语言 label 字段）——直接用 name，不做不存在的 labels 查询。
+        return (preset?.models ?? []).map((m) => ({
+          id: m.id,
+          label: m.name ?? m.id,
+          ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}),
+        }));
+      })(),
     };
     const s = this.session;
     const stepCount = ONBOARDING_STEPS.length;
@@ -320,6 +348,7 @@ export class OnboardingService {
         modelId: s.choices.modelId,
         hasApiKey: Boolean(s.choices.apiKey),
         hasAdminPassword: Boolean(s.choices.adminPassword),
+        adminPasswordRequired: requiresAdminPassword(s.choices.deploymentMode, this.deps.configPath),
       },
       notice: s.notice,
       probeError: s.probeError,

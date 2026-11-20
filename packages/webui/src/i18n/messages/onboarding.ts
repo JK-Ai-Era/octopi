@@ -6,6 +6,8 @@
  * @module
  */
 
+import { MIN_ADMIN_PASSWORD_LENGTH } from '@octopi-agent/engine/config-admin/password-policy.js';
+
 export const zh = {
   'loginPage.title': '登录',
   'loginPage.hintMultiOrg': '多组织部署——请输入组织、用户名与密码。',
@@ -126,6 +128,8 @@ export const zh = {
   'onboardingWizard.adminPasswordConfirmLabel': '再输一遍',
   'onboardingWizard.next': '下一步',
   'onboardingWizard.passwordMismatch': '两次输入的密码不一致',
+  'onboardingWizard.adminPasswordRequired': `组织模式必须设置 admin 密码（至少 ${MIN_ADMIN_PASSWORD_LENGTH} 位）`,
+  'onboardingWizard.adminPasswordKeep': '已设置，留空保持不变',
   'onboardingWizard.providerTitle': '选择模型服务',
   'onboardingWizard.baseUrlLabel': 'Base URL（OpenAI 兼容接口地址）',
   'onboardingWizard.apiKeyTitle': '录入 API Key',
@@ -133,8 +137,9 @@ export const zh = {
   'onboardingWizard.apiKeyHintSuffix': 'Key 只保存在本机（.env，0600），不会明文进配置。',
   'onboardingWizard.apiKeyPlaceholderSet': '已录入（留空保持不变）',
   'onboardingWizard.modelTitle': '选择模型',
-  'onboardingWizard.modelHint': '填一个模型 id（如 deepseek-flash）；不确定就用服务默认。',
+  'onboardingWizard.modelHint': '从预设里选一个，或改为手填模型 id。',
   'onboardingWizard.modelIdLabel': '模型 id',
+  'onboardingWizard.modelManual': '手动输入模型 id',
   'onboardingWizard.probeTitle': '测通',
   'onboardingWizard.probeHint': '用你填的配置真发一次请求验证。',
   'onboardingWizard.probeRetry': '重试测通',
@@ -294,6 +299,8 @@ export const en: Record<keyof typeof zh, string> = {
   'onboardingWizard.adminPasswordConfirmLabel': 'Enter it again',
   'onboardingWizard.next': 'Next',
   'onboardingWizard.passwordMismatch': 'The two passwords do not match',
+  'onboardingWizard.adminPasswordRequired': `The org modes require an admin password (at least ${MIN_ADMIN_PASSWORD_LENGTH} characters)`,
+  'onboardingWizard.adminPasswordKeep': 'Already set — leave blank to keep it',
   'onboardingWizard.providerTitle': 'Choose a model service',
   'onboardingWizard.baseUrlLabel': 'Base URL (OpenAI-compatible endpoint)',
   'onboardingWizard.apiKeyTitle': 'Enter the API Key',
@@ -302,8 +309,9 @@ export const en: Record<keyof typeof zh, string> = {
     'The key is stored on this machine only (.env, 0600) and never enters the config in plaintext.',
   'onboardingWizard.apiKeyPlaceholderSet': 'already set (leave empty to keep it)',
   'onboardingWizard.modelTitle': 'Choose a model',
-  'onboardingWizard.modelHint': 'Enter a model id (e.g. deepseek-flash); when unsure, use the service default.',
+  'onboardingWizard.modelHint': 'Pick one of the presets, or switch to entering a model id manually.',
   'onboardingWizard.modelIdLabel': 'Model id',
+  'onboardingWizard.modelManual': 'Enter a model id manually',
   'onboardingWizard.probeTitle': 'Connection test',
   'onboardingWizard.probeHint': 'Send one real request with the config you entered to verify it.',
   'onboardingWizard.probeRetry': 'Retry test',

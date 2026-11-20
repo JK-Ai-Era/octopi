@@ -143,6 +143,19 @@ export function resolveWebUiPort(configPath?: string, override?: number): number
   return readConfigWebSettings(configPath).port ?? DEFAULT_WEBUI_PORT;
 }
 
+/**
+ * 解析 WebUI 实际监听地址（供探测用；`web.host` 缺省/通配时回落回环）。
+ *
+ * 探测必须打到真正在听的地址：`web.host` 配成具体 IP 或主机名时 WebUI 只绑那个地址，
+ * 写死 127.0.0.1 会 100% 误判「未启动」。
+ *
+ * @param configPath - 配置文件路径
+ * @returns 监听地址（可直接用于构造 URL）
+ */
+export function resolveWebUiProbeHost(configPath?: string): string {
+  return resolveListenHost(readConfigWebSettings(configPath).host);
+}
+
 /** 读取配置中的 web.dir */
 function readConfigWebDir(configPath?: string): string | undefined {
   return readConfigWebSettings(configPath).dir;
@@ -206,26 +219,77 @@ export function findPidOnVitePorts(expectedPort?: number): { pid: number; port: 
  */
 const WEBUI_IDENTITY_MARKER = '__OCTOPI_GATEWAY__';
 
+/** 探测结果：区分「还没起来」与「端口上是别人的东西」——两者的下一步动作不同 */
+export type WebUiProbeResult = 'ours' | 'absent' | 'foreign';
+
 /**
- * HTTP 指纹探针：判定端口上的监听者是否 WebUI 实例。
+ * 探测端口上是否为我们的 WebUI（身份指纹：GET /octopi-config.js 含 __OCTOPI_GATEWAY__）。
  *
- * 命中：GET /octopi-config.js 返回 2xx 且内容含 {@link WEBUI_IDENTITY_MARKER}。
- * 连接失败 / 非 2xx / 无指纹 → false——**不认领**（端口上的陌生进程不是 WebUI）。
+ * `waitMs` 用于**刚启动**的判断：`startWebUi` 是 spawnDetached 后立即返回，子进程绑定端口
+ * 需要时间——Windows 上首次启动 Node 子进程常超过 1 秒，一次 1.5s 的探测会把「正在启动」
+ * 误判成「未启动」。处等待期内按 150ms 轮询，进程真正起来后才会 200。
  *
- * @param port - 待探测端口
- * @returns true = WebUI 实例
+ * @param port - WebUI 端口
+ * @param opts.waitMs - 最长等待时长（默认 0 = 单次探测）
+ * @returns 探测结论
  */
-export async function probeWebUiIdentity(port: number): Promise<boolean> {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/octopi-config.js`, {
-      signal: AbortSignal.timeout(1500),
-    });
-    if (!res.ok) return false;
-    return (await res.text()).includes(WEBUI_IDENTITY_MARKER);
-  } catch {
-    // 连接拒绝/超时/非 HTTP 服务：无法证明是 WebUI，一律不认领
-    return false;
+export async function probeWebUiState(
+  port: number,
+  opts: { waitMs?: number; host?: string } = {},
+): Promise<WebUiProbeResult> {
+  const deadline = Date.now() + (opts.waitMs ?? 0);
+  const host = normalizeProbeHost(opts.host);
+  // 见到的「有响应但不是我们」：连接成功说明端口有人在听，重试不会变成本实例
+  let sawResponse = false;
+  const attempt = async (): Promise<WebUiProbeResult> => {
+    try {
+      const res = await fetch(`http://${host}:${port}/octopi-config.js`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      sawResponse = true;
+      if (!res.ok) return 'foreign';
+      return (await res.text()).includes(WEBUI_IDENTITY_MARKER) ? 'ours' : 'foreign';
+    } catch {
+      // 连接拒绝/超时/非 HTTP 服务：此刻还不能证明端口上有什么
+      return 'absent';
+    }
+  };
+  for (;;) {
+    const r = await attempt();
+    if (r === 'ours') return 'ours';
+    if (Date.now() >= deadline) return sawResponse ? 'foreign' : 'absent';
+    await new Promise((r) => setTimeout(r, 150));
   }
+}
+
+/**
+ * 布尔便捷包装（只关心「能不能用」的调用点用这个）。
+ *
+ * @param port - WebUI 端口
+ * @param opts.waitMs - 最长等待时长
+ * @param opts.host - 实际监听地址
+ * @returns 是否确认为我们的 WebUI
+ */
+export async function probeWebUiIdentity(
+  port: number,
+  opts: { waitMs?: number; host?: string } = {},
+): Promise<boolean> {
+  return (await probeWebUiState(port, opts)) === 'ours';
+}
+
+/**
+ * 把监听地址折算成可探测地址：通配监听（0.0.0.0 / ::）回落回环，IPv6 加方括号。
+ *
+ * @param host - 监听地址（undefined = 缺省回环）
+ * @returns 用于构造 URL 的 host 片段
+ */
+function normalizeProbeHost(host?: string): string {
+  const h = (host ?? '').trim();
+  if (!h || h === '0.0.0.0' || h === '::' || h === '::0') return '127.0.0.1';
+  if (h === '::1') return '[::1]';
+  // 已是 IPv6 字面量（含冒号且未带括号）：加方括号
+  if (h.includes(':') && !h.startsWith('[')) return `[${h}]`;
+  return h;
 }
 
 /**

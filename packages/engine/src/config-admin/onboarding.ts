@@ -8,6 +8,7 @@
  */
 
 import { expandProviderPreset, getProviderPreset, listProviderPresets } from './model-presets.js';
+import { MIN_ADMIN_PASSWORD_LENGTH, checkAdminPassword } from './password-policy.js';
 import type { ProductLang, LocalizedText } from './i18n.js';
 import { pickLocalized } from './i18n.js';
 
@@ -156,6 +157,20 @@ export function validateStep(step: OnboardingStepId, choices: OnboardingChoices)
       if (mode === 'multi-organization' && !String(choices.orgName ?? '').trim()) {
         return zh ? '请填写组织名称' : 'Enter an organization name';
       }
+      // ②③模式 admin 密码必填——必须**在本步**拦住。此前只在落盘前（onboarding-apply）校验，
+      // 于是用户能带着「组织模式但无密码」的无效状态一路走到第 7 步测通才被打断，
+      // 且中途无任何提示（真机复现）。规则单源在 password-policy（长度与文案同一常量）。
+      if (mode !== 'personal') {
+        const bad = checkAdminPassword(choices.adminPassword);
+        if (bad === 'required') {
+          return zh ? '②③ 部署模式需要设置 admin 密码' : 'The org deployment modes require an admin password';
+        }
+        if (bad === 'too_short') {
+          return zh
+            ? `admin 密码至少 ${MIN_ADMIN_PASSWORD_LENGTH} 位`
+            : `The admin password must be at least ${MIN_ADMIN_PASSWORD_LENGTH} characters`;
+        }
+      }
       return '';
     }
     case 'provider': {
@@ -263,12 +278,35 @@ const ONBOARDING_CHOICE_FIELDS: ReadonlyArray<keyof OnboardingChoices> = [
   'modelId',
 ];
 
-export function mergeOnboardingChoices(base: OnboardingChoices, patch: Partial<OnboardingChoices>): OnboardingChoices {
+export function mergeOnboardingChoices(
+  base: OnboardingChoices,
+  patch: Partial<OnboardingChoices>,
+  opts: {
+    /**
+     * 该部署形态是否要求 admin 密码（由调用方按模式 + 是否远程绑定判定）。
+     * 缺省 false = 按「不需要密码」清理残留值。
+     */
+    adminPasswordRequired?: boolean;
+  } = {},
+): OnboardingChoices {
   const out = { ...base };
   // MINOR-1：白名单合并（只认 OnboardingChoices 顶层字段；HTTP 层透传对象不能塞任意键）
   for (const key of ONBOARDING_CHOICE_FIELDS) {
     const v = patch[key];
     if (v !== undefined) (out as Record<string, unknown>)[key] = v;
+  }
+  // provider 变更 → 清掉旧 provider 的 modelId：它是「provider 下的模型」，换了 provider 就不再
+  // 成立。不清会把手填脏值带进新 provider（真机复现：openai 的模型名被写进 deepseek 配置，
+  // 到第 7 步测通才失败）。调用方若同时显式给了 modelId（如回退后原 provider 重选），以显式值为准。
+  if (patch.providerId !== undefined && patch.providerId !== base.providerId && patch.modelId === undefined) {
+    out.modelId = ''; // 非可选字段：空串即「未选模型」，由 model 步校验拦住
+  }
+  // 不需要密码的形态不接受 adminPassword/orgName：卡片文案承诺「无需账号密码」，
+  // 残留值会在落盘时给 default 用户设密码（静默与承诺相反）。
+  // 需要密码时（②③，或「个人 + 远程绑定」）**不能清**——否则用户刚输的密码被抹掉。
+  if (!opts.adminPasswordRequired) {
+    out.adminPassword = undefined;
+    out.orgName = out.deploymentMode === 'personal' ? undefined : out.orgName;
   }
   return out;
 }

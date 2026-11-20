@@ -36,7 +36,7 @@ import type { ApplyOnboardingDeps } from '@octopi-agent/engine/config-admin/onbo
 import type { ProductLang } from '@octopi-agent/engine/config-admin/i18n.js';
 import { OctopiConfigSchema } from '../../config-schema/index.js';
 import { expandEnvPlaceholders } from '../../config.js';
-import { probeWebUiIdentity, resolveWebUiPort } from '../webui.js';
+import { probeWebUiIdentity, resolveWebUiPort, resolveWebUiProbeHost } from '../webui.js';
 import { askText, choose, closePrompts, confirm, stdinExhausted } from './prompt.js';
 
 /** 向导结果（不含任何 secret —— m10） */
@@ -506,7 +506,10 @@ async function runStep(
       } else {
         // serve start 对 Web UI 失败是 soft（dist 缺失/端口被占只告警，退出码仍 0）——
         // 这里补一次实测，失败明说下一步，不把「Web UI 没起来」吞成「全部就绪」
-        const webOk = await probeWebUiIdentity(resolveWebUiPort(opts.configPath));
+        const webOk = await probeWebUiIdentity(resolveWebUiPort(opts.configPath), {
+          waitMs: 8000,
+          host: resolveWebUiProbeHost(opts.configPath),
+        });
         if (!webOk) {
           console.log(
             zh
@@ -519,7 +522,9 @@ async function runStep(
     }
     case 'first-chat': {
       // 收尾宣称前先核实 Web UI 活着（serve start 对 Web UI 是 soft 容错）——
-      // 没起来就如实给启动指引，不宣称一个死端口「全部就绪」
+      // 没起来就如实给启动指引，不宣称一个死端口「全部就绪」。
+      // 不传 waitMs：这一步用户可能刚选完「稍后手动启动」，端口必然拒绝连接，
+      // 等满窗口只会让每次拒绝启动的人都白等好几秒（体感倒退）。
       const webPort = resolveWebUiPort(opts.configPath);
       const webOk = await probeWebUiIdentity(webPort);
       console.log(
@@ -643,7 +648,7 @@ async function runWebHandoff(opts: RunOnboardingOptions): Promise<OnboardingResu
   }
 
   const { readSetupToken, setupWizardUrl } = await import('../helpers.js');
-  const { probeWebUiIdentity } = await import('../webui.js');
+  const { probeWebUiState } = await import('../webui.js');
   const setupTok = readSetupToken(opts.octopiHome);
   if (!setupTok) {
     // 无 token = 向导已完成/已过期/非首启：诚实说明，不静默开控制台首页（那里没有向导）
@@ -659,15 +664,22 @@ async function runWebHandoff(opts: RunOnboardingOptions): Promise<OnboardingResu
 
   // serve start 对 Web UI 是 soft 失败（dist 缺失/端口占用只告警、退出码仍 0）——
   // 这里补一次实测，否则会打开一个打不开的页面还宣称成功。
-  const webOk = await probeWebUiIdentity(webPort);
-  if (!webOk) {
+  const webState = await probeWebUiState(webPort, {
+    waitMs: 8000,
+    host: resolveWebUiProbeHost(opts.configPath),
+  });
+  if (webState !== 'ours') {
     console.log(
-      zh
-        ? `⚠️  Web UI 未启动成功（serve start 对 Web UI 失败是容错的）。\n   稍后可运行：octopi webui start，然后用这条链接进入向导：`
-        : `⚠️ Web UI did not start (serve start tolerates Web UI failures).\n   Start it later with: octopi webui start, then open the wizard link:`,
+      webState === 'foreign'
+        ? zh
+          ? `⚠️  端口 ${webPort} 上已有别的程序/另一个 OCTOPI_HOME 的 Web UI 在监听，向导界面不是本实例的。\n   改端口后重试：在配置里设 web.port，或先 octopi webui stop。向导链接：`
+          : `⚠️ Port ${webPort} is already serving something else (another instance's Web UI).\n   Change web.port or run octopi webui stop, then retry. Wizard link:`
+        : zh
+          ? `⚠️  Web UI 未启动成功（serve start 对 Web UI 失败是容错的）。\n   稍后可运行：octopi webui start，然后用这条链接进入向导：`
+          : `⚠️ Web UI did not start (serve start tolerates Web UI failures).\n   Start it later with: octopi webui start, then open the wizard link:`,
     );
     console.log(`   ${setupWizardUrl(setupTok.token, webPort, 'localhost')}`);
-    return { configPath: opts.configPath, launchChat: false, completed: true, saved: false };
+    return { configPath: opts.configPath, launchChat: false, completed: false, saved: false };
   }
 
   const target = setupWizardUrl(setupTok.token, webPort, 'localhost');

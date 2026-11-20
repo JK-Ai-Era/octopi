@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { restrictToOwner } from '../file-mode.js';
 import { join } from 'node:path';
 import { apiKeyEnvVar, assembleOnboarding } from './onboarding.js';
+import { MIN_ADMIN_PASSWORD_LENGTH, checkAdminPassword } from './password-policy.js';
 import type { OnboardingChoices, OnboardingOutput } from './onboarding.js';
 import { expandEnvValues } from './env.js';
 import { classifyErrorKind, type ProbeErrorKind } from './error-copy.js';
@@ -146,10 +147,16 @@ export async function seedDeploymentRegistry(
     }
     const tenantName = choices.deploymentMode === 'multi-organization' ? (choices.orgName ?? 'default') : 'default';
     const tenant = registry.ensureTenant(tenantName, tenantName === 'default' ? 'default' : undefined);
-    if (!choices.adminPassword) throw new Error('onboarding_admin_password_required: ②③模式 admin 必须设密码');
+    const badPw = checkAdminPassword(choices.adminPassword);
+    if (badPw === 'required') throw new Error('onboarding_admin_password_required: ②③模式 admin 必须设密码');
+    if (badPw === 'too_short') {
+      throw new Error(`onboarding_admin_password_too_short: admin 密码至少 ${MIN_ADMIN_PASSWORD_LENGTH} 位`);
+    }
+    // 过了上面两道 = 非空且够长；显式收窄，避免后续把 string|undefined 传给 setUserPassword
+    const adminPassword: string = (choices.adminPassword ?? '').trim();
     const existing = registry.getUserInTenant(tenant.tenantId, adminName);
     if (existing) {
-      await registry.setUserPassword(existing.userId, choices.adminPassword);
+      await registry.setUserPassword(existing.userId, adminPassword);
       return;
     }
     const elsewhere = registry.getUserByName(adminName);
@@ -215,8 +222,25 @@ export function isRemoteBind(configPath: string): boolean {
     const hosts = [raw.web?.host, ...(raw.channels ?? []).map((c) => c.host)];
     return hosts.some((h) => h === 'lan' || h === '0.0.0.0');
   } catch {
+    // 配置缺失/不可读 = 无从判定远程绑定；按「本机」处理（不是错误路径：首启时配置可能刚脚手架）
     return false;
   }
+}
+
+/**
+ * 该部署形态是否需要 admin 密码（UI 据此决定是否显示密码输入）。
+ *
+ * 判据与服务端强制点保持一致：②③模式必填；个人模式**仅当远程绑定**时必填
+ * （`applyOnboarding` 的 onboarding_password_required）。此前 UI 只按「模式」判断，
+ * 导致个人+远程绑定时界面没有密码框、提交才被拒——用户无从修正。
+ *
+ * @param deploymentMode - 所选部署模式
+ * @param configPath - 配置文件路径（判定远程绑定）
+ * @returns 是否需要密码
+ */
+export function requiresAdminPassword(deploymentMode: string, configPath: string): boolean {
+  if (deploymentMode !== 'personal') return true;
+  return isRemoteBind(configPath);
 }
 
 /** applyOnboarding 依赖（渲染器/宿主注入；测试可替换） */

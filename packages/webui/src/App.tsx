@@ -103,7 +103,9 @@ export default function App() {
   }
   if (wizardDue) {
     return (
-      <div className="app-shell">
+      // 向导页不套 app-shell（它是 height:100vh + overflow:hidden 的聊天外壳）：
+      // 套上会把超长的第 3/4 步内容裁掉且无法滚动——用可滚动的 wizard-shell。
+      <div className="wizard-shell">
         <OnboardingWizard
           onDone={() => {
             setWizardDue(false);

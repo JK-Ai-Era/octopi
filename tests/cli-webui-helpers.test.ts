@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer as createTcpServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import {
   findWebDist,
   readWebUiPidFile,
@@ -15,7 +16,7 @@ import {
   removeWebUiPidFile,
   getWebUiPidPath,
 } from '../src/cli/helpers.js';
-import { resolveWebUiPort, findPidOnVitePorts, findUntrackedWebUiInstance, probeWebUiIdentity, readGatewayPort, readGitStatusPollSeconds } from '../src/cli/webui.js';
+import { resolveWebUiPort, findPidOnVitePorts, findUntrackedWebUiInstance, probeWebUiIdentity, probeWebUiState, readGatewayPort, readGitStatusPollSeconds } from '../src/cli/webui.js';
 import { gatewayConfigScript, webConfigScript, webUiServeArgs, resolveGatewayApiKey } from '../src/cli/helpers.js';
 import { WebConfigSchema } from '../src/config-schema/webui.js';
 import { spawnDetached, killProcess, findPidOnPort, delay } from '../src/cli/process-utils.js';
@@ -437,3 +438,74 @@ describe('m11 裸命令分派前提', () => {
     expect(h.command).toBe('help');
   });
 });
+
+describe('probeWebUiState：区分「未起」与「端口被别人占用」', () => {
+  test('无人监听 → absent（不是 foreign，也不该等满窗口）', async () => {
+    const port = await reservePort();
+    expect(await probeWebUiState(port)).toBe('absent');
+  });
+
+  test('端口有 HTTP 但没有 WebUI 指纹 → foreign（提示端口冲突，而不是「未启动」）', async () => {
+    const port = await reservePort();
+    const srv = createHttpServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/javascript' });
+      res.end('window.__OTHER_APP__ = 1;');
+    });
+    await new Promise<void>((r) => srv.listen(port, '127.0.0.1', () => r()));
+    try {
+      expect(await probeWebUiState(port)).toBe('foreign');
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+  });
+
+  test('带 WebUI 指纹 → ours', async () => {
+    const port = await reservePort();
+    const srv = createHttpServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/javascript' });
+      res.end('window.__OCTOPI_GATEWAY__ = { port: 1 };');
+    });
+    await new Promise<void>((r) => srv.listen(port, '127.0.0.1', () => r()));
+    try {
+      expect(await probeWebUiState(port)).toBe('ours');
+      expect(await probeWebUiIdentity(port)).toBe(true);
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+  });
+
+  test('waitMs：进程稍后才起，等待窗口内能等到（Windows 慢启动的回归锚）', async () => {
+    const port = await reservePort();
+    const srv = createHttpServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/javascript' });
+      res.end('window.__OCTOPI_GATEWAY__ = null;');
+    });
+    // 300ms 后才开始监听
+    const startLater = new Promise<void>((r) => setTimeout(() => r(), 300));
+    const listening = startLater.then(
+      () => new Promise<void>((r) => srv.listen(port, '127.0.0.1', () => r())),
+    );
+    try {
+      expect(await probeWebUiState(port, { waitMs: 3000 })).toBe('ours');
+    } finally {
+      await listening.catch(() => {});
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+  });
+});
+
+/**
+ * 拿一个空闲端口（先绑再放，避免与真实服务冲突）。
+ *
+ * @returns 空闲端口号
+ */
+async function reservePort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const s = createTcpServer();
+    s.once('error', reject);
+    s.listen(0, '127.0.0.1', () => {
+      const p = (s.address() as { port: number }).port;
+      s.close(() => resolve(p));
+    });
+  });
+}

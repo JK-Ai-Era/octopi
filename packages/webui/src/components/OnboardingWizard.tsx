@@ -25,6 +25,7 @@ interface WizardRender {
     modelId?: string;
     hasApiKey?: boolean;
     hasAdminPassword?: boolean;
+    adminPasswordRequired?: boolean;
   };
   notice?: 'back-at-first';
   probeError?: { kind: ProbeErrorKind; message: string };
@@ -35,6 +36,7 @@ interface WizardRender {
     languages: Array<{ id: string; label: string }>;
     deploymentModes: Array<{ id: string; label: string; description: string }>;
     providers: Array<{ id: string; label: string; keyHint: string; api: string; defaultBaseUrl: string }>;
+    models: Array<{ id: string; label: string; contextWindow?: number }>;
   };
 }
 
@@ -76,8 +78,16 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
   }, []);
 
   const submit = async (event: { kind: string; save?: boolean }, extra?: Record<string, unknown>): Promise<void> => {
-    // M-4：密码二次确认是硬校验（此前收集了但不比对，形同装饰）
-    if (event.kind === 'next' && draft.adminPassword !== undefined && draft.adminPassword !== adminPassword2) {
+    // M-4：密码二次确认是硬校验（此前收集了但不比对，形同装饰）。
+    // 只在「当前是组织模式」时比对：切回个人模式后确认框已卸载，若还拿残留的
+    // draft.adminPassword 比对，会报「两次输入不一致」而用户根本无处修正（死锁）。
+    const draftMode = (draft.deploymentMode as string | undefined) ?? render?.choices.deploymentMode ?? 'personal';
+    if (
+      event.kind === 'next' &&
+      draftMode !== 'personal' &&
+      draft.adminPassword !== undefined &&
+      draft.adminPassword !== adminPassword2
+    ) {
       setError(t('onboardingWizard.passwordMismatch'));
       return;
     }
@@ -90,6 +100,8 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
       });
       setRender(r);
       setDraft({});
+      // 确认框也一并清空：否则回退再进本步时它仍留着上一轮明文，二次确认形同虚设。
+      setAdminPassword2('');
       if (r.completed) onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -109,7 +121,6 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
   }
 
   const step = render.step;
-  const mode = render.choices.deploymentMode ?? 'personal';
   const body = ((): JSX.Element => {
     switch (step) {
       case 'welcome':
@@ -145,7 +156,15 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
             </div>
           </div>
         );
-      case 'deployment-mode':
+      case 'deployment-mode': {
+        // 选中态必须取自「未提交的草稿优先」：只读 render.choices.deploymentMode（服务端已保存值）
+        // 会导致点第二/第三项毫无视觉反馈、密码框也不出现——用户以为选不中（真机上就是这样）。
+        const selectedMode =
+          (draft.deploymentMode as string | undefined) ?? render.choices.deploymentMode ?? 'personal';
+        // 是否显示密码框：按服务端同源判据（②③恒需；个人仅在远程绑定时需）。
+        // 只看 selectedMode 会让「个人+远程绑定」用户完全没有输密码的入口，提交才被拒。
+        const pwRequired =
+          selectedMode !== 'personal' || render.choices.adminPasswordRequired === true;
         return (
           <div className="wizard-step">
             <h2>{t('onboardingWizard.deploymentTitle')}</h2>
@@ -153,7 +172,9 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
               {render.options.deploymentModes.map((o) => (
                 <button
                   key={o.id}
-                  className={mode === o.id ? 'btn-primary wizard-card wizard-card-tall' : 'btn-secondary wizard-card wizard-card-tall'}
+                  type="button"
+                  aria-pressed={selectedMode === o.id}
+                  className={selectedMode === o.id ? 'btn-primary wizard-card wizard-card-tall' : 'btn-secondary wizard-card wizard-card-tall'}
                   onClick={() => setDraft((d) => ({ ...d, deploymentMode: o.id }))}
                 >
                   <b>{o.label}</b>
@@ -161,29 +182,69 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
                 </button>
               ))}
             </div>
-            {mode !== 'personal' && (
+            {pwRequired && (
               <div className="wizard-form">
-                {mode === 'multi-organization' && (
+                {selectedMode === 'multi-organization' && (
                   <label className="small">
                     {t('onboardingWizard.orgNameLabel')}
-                    <input value={String(draft.orgName ?? render.choices.orgName ?? '')} onChange={(e) => setDraft((d) => ({ ...d, orgName: e.target.value }))} />
+                    <input
+                      value={String(draft.orgName ?? render.choices.orgName ?? '')}
+                      onChange={(e) => setDraft((d) => ({ ...d, orgName: e.target.value }))}
+                    />
                   </label>
                 )}
                 <label className="small">
                   {t('onboardingWizard.adminPasswordLabel')}
-                  <input type="password" onChange={(e) => setDraft((d) => ({ ...d, adminPassword: e.target.value }))} />
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={String(draft.adminPassword ?? '')}
+                    onChange={(e) => setDraft((d) => ({ ...d, adminPassword: e.target.value }))}
+                    placeholder={
+                      render.choices.hasAdminPassword
+                        ? t('onboardingWizard.adminPasswordKeep')
+                        : undefined
+                    }
+                  />
                 </label>
+                {/* 已设置过密码时（回退重进本步），服务端仍保留着它，留空即保持原值——
+                    此时不该喊「必填」并标红，否则界面与真实状态自相矛盾。 */}
+                {!String(draft.adminPassword ?? '').trim() && !render.choices.hasAdminPassword && (
+                  <div className="small status-error">{t('onboardingWizard.adminPasswordRequired')}</div>
+                )}
                 <label className="small">
                   {t('onboardingWizard.adminPasswordConfirmLabel')}
-                  <input type="password" value={adminPassword2} onChange={(e) => setAdminPassword2(e.target.value)} />
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={adminPassword2}
+                    onChange={(e) => setAdminPassword2(e.target.value)}
+                  />
                 </label>
               </div>
             )}
-            <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
-              {t('onboardingWizard.next')}
-            </button>
+            <div className="wizard-nav">
+              <button
+                className="btn-primary"
+                onClick={() =>
+                  // 只提交当前模式相关字段：不要求密码时必须显式清空 adminPassword/orgName，
+                  // 否则切回 personal 后残留的密码会被服务端白名单合并、落盘时给 default 用户设上
+                  // （卡片文案承诺「无需账号密码」，那是静默与承诺相反的副作用）。
+                  void submit(
+                    { kind: 'next' },
+                    pwRequired
+                      ? { deploymentMode: selectedMode }
+                      : { deploymentMode: 'personal', adminPassword: '', orgName: '' },
+                  )
+                }
+                disabled={busy}
+              >
+                {t('onboardingWizard.next')}
+              </button>
+            </div>
           </div>
         );
+      }
       case 'provider': {
         const isCustom = draft.providerId === 'custom' || render.choices.providerId === 'custom';
         return (
@@ -252,22 +313,60 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
             </button>
           </div>
         );
-      case 'model':
+      case 'model': {
+        const presetModels = render.options.models ?? [];
+        const current = String(draft.modelId ?? render.choices.modelId ?? '');
+        const manual = draft.manualModel === true || (current !== '' && !presetModels.some((m) => m.id === current));
         return (
           <div className="wizard-step">
             <h2>{t('onboardingWizard.modelTitle')}</h2>
             <p className="small muted">{t('onboardingWizard.modelHint')}</p>
+            {presetModels.length > 0 && !manual && (
+              <div className="wizard-cards">
+                {presetModels.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    aria-pressed={current === m.id}
+                    className={current === m.id ? 'btn-primary wizard-card wizard-card-tall' : 'btn-secondary wizard-card wizard-card-tall'}
+                    onClick={() => void submit({ kind: 'next' }, { modelId: m.id })}
+                  >
+                    <b>{m.label}</b>
+                    <span className="small muted">
+                      {m.id}
+                      {m.contextWindow ? ` · ${Math.round(m.contextWindow / 1000)}k ctx` : ''}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="wizard-form">
-              <label className="small">
-                {t('onboardingWizard.modelIdLabel')}
-                <input value={String(draft.modelId ?? render.choices.modelId ?? '')} onChange={(e) => setDraft((d) => ({ ...d, modelId: e.target.value }))} />
-              </label>
+              {(manual || presetModels.length === 0) && (
+                <label className="small">
+                  {t('onboardingWizard.modelIdLabel')}
+                  <input
+                    value={current}
+                    onChange={(e) => setDraft((d) => ({ ...d, modelId: e.target.value }))}
+                    placeholder="gpt-6.1-terra / deepseek-flash / …"
+                  />
+                </label>
+              )}
             </div>
-            <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
-              {t('onboardingWizard.next')}
-            </button>
+            {presetModels.length > 0 && !manual && (
+              <button className="btn-ghost small" type="button" onClick={() => setDraft((d) => ({ ...d, manualModel: true, modelId: '' }))}>
+                {t('onboardingWizard.modelManual')}
+              </button>
+            )}
+            {(manual || presetModels.length === 0) && (
+              <div className="wizard-nav">
+                <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
+                  {t('onboardingWizard.next')}
+                </button>
+              </div>
+            )}
           </div>
         );
+      }
       case 'probe':
         return (
           <div className="wizard-step">
@@ -350,12 +449,23 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
           </div>
         </div>
       )}
-      <div className="small muted">
-        {t('onboardingWizard.footerTitle')}
-        {step && render.stepCount > 0 && (
+      {step && render.stepCount > 0 ? (
+        <div className="wizard-progress">
+          <span>{t('onboardingWizard.footerTitle')}</span>
+          <div
+            className="wizard-progress-bar"
+            role="progressbar"
+            aria-valuenow={render.stepIndex}
+            aria-valuemin={1}
+            aria-valuemax={render.stepCount}
+          >
+            <div className="wizard-progress-fill" style={{ width: `${(render.stepIndex / render.stepCount) * 100}%` }} />
+          </div>
           <span>{t('onboardingWizard.stepProgress', { index: render.stepIndex, count: render.stepCount })}</span>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="small muted">{t('onboardingWizard.footerTitle')}</div>
+      )}
       {body}
       {error && <div className="small status-error" style={{ marginTop: 8 }}>{error}</div>}
       {render.notice === 'back-at-first' && <div className="small muted">{t('onboardingWizard.backAtFirst')}</div>}

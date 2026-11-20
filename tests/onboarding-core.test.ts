@@ -19,6 +19,7 @@ import {
 } from '../packages/engine/src/config-admin/onboarding.js';
 import { initialOnboardingState, nextStep, mergeOnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 import { getProviderPreset } from '../packages/engine/src/config-admin/model-presets.js';
+import { MIN_ADMIN_PASSWORD_LENGTH } from '../packages/engine/src/config-admin/password-policy.js';
 import type { OnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 import { classifyProbeError, mergeConfigFragment, writeEnvLine } from '../packages/engine/src/config-admin/onboarding-apply.js';
 import { expectRestrictedToOwner } from './helpers/file-mode.js';
@@ -212,5 +213,75 @@ describe('评审回归锚（del-20f0cd79）', () => {
     const merged = mergeOnboardingChoices(base, { evil: 1, providerId: 'y' } as never) as unknown as Record<string, unknown>;
     expect(merged.evil).toBeUndefined();
     expect(merged.providerId).toBe('y');
+  });
+
+  describe('模式切换的字段清理（真机复现的两个静默副作用）', () => {
+    it('切回 personal（本机）丢弃残留密码/组织名——不静默给 default 用户设密码', () => {
+      const base = baseChoices({
+        deploymentMode: 'organization',
+        adminPassword: 'S3cret!pw',
+        orgName: 'acme',
+      });
+      const merged = mergeOnboardingChoices(base, { deploymentMode: 'personal' });
+      expect(merged.adminPassword).toBeUndefined();
+      expect(merged.orgName).toBeUndefined();
+      expect(merged.deploymentMode).toBe('personal');
+    });
+
+    it('需要密码时不清（个人+远程绑定 / ②③）——否则刚输入的密码被抹掉', () => {
+      const base = baseChoices({ deploymentMode: 'personal' });
+      const merged = mergeOnboardingChoices(
+        base,
+        { adminPassword: 'S3cret!pw' },
+        { adminPasswordRequired: true },
+      );
+      expect(merged.adminPassword).toBe('S3cret!pw');
+    });
+
+    it('provider 变更清空 modelId（旧 provider 的模型名不得带进新 provider）', () => {
+      const base = baseChoices({ providerId: 'openai', modelId: 'gpt-6.1-terra' });
+      const merged = mergeOnboardingChoices(base, { providerId: 'deepseek' });
+      expect(merged.modelId).toBe('');
+      expect(merged.providerId).toBe('deepseek');
+    });
+
+    it('provider 未变但显式给了 modelId 时保留该值', () => {
+      const base = baseChoices({ providerId: 'deepseek', modelId: 'deepseek-flash' });
+      const merged = mergeOnboardingChoices(base, { modelId: 'deepseek-v4-pro' });
+      expect(merged.modelId).toBe('deepseek-v4-pro');
+    });
+  });
+
+  describe('deployment-mode 校验（本步就拦住无效状态）', () => {
+    it('组织模式缺密码 → 报出（不再等到第 7 步才爆）', () => {
+      const err = validateStep('deployment-mode', baseChoices({ deploymentMode: 'organization' }));
+      expect(err).toContain('admin');
+    });
+
+    it('组织模式密码短于下限 → 报出（文案与实现同一常量）', () => {
+      const err = validateStep(
+        'deployment-mode',
+        baseChoices({ deploymentMode: 'organization', adminPassword: 'short' }),
+      );
+      expect(err).toContain(String(MIN_ADMIN_PASSWORD_LENGTH));
+    });
+
+    it('组织模式密码合格 → 通过；个人模式无密码 → 通过', () => {
+      expect(
+        validateStep(
+          'deployment-mode',
+          baseChoices({ deploymentMode: 'organization', adminPassword: 'S3cret!pw' }),
+        ),
+      ).toBe('');
+      expect(validateStep('deployment-mode', baseChoices({ deploymentMode: 'personal' }))).toBe('');
+    });
+
+    it('多组织模式缺组织名 → 报出', () => {
+      const err = validateStep(
+        'deployment-mode',
+        baseChoices({ deploymentMode: 'multi-organization', adminPassword: 'S3cret!pw' }),
+      );
+      expect(err).toContain('组织');
+    });
   });
 });

@@ -131,6 +131,62 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.13 (2026-11-21)
+
+### fix(onboarding): Web 向导五项缺陷（误报未启动 / 模式选不中 / 不能滚动 / 模型无预设 / 密码校验太晚）
+
+真机（Windows）报告的五个问题，逐项按根因修：
+
+- **WebUI 已启动却提示「未启动成功」**：`startWebUi` 是 spawnDetached 后立即返回，子进程绑定端口需要
+  时间（Windows 首次启动 Node 子进程常 > 1 秒），而探测只给一次 1.5s 的机会。探测改为一组
+  （`probeWebUiState` 返回 `ours`/`absent`/`foreign`），「刚启动」的调用点传 8s 等待窗口。
+  同时修掉两个会让它在别的部署上必错的地方：探测地址曾写死 `127.0.0.1`（`web.host` 配成具体 IP /
+  主机名时 WebUI 只绑那个地址，100% 误判），现跟随 `resolveListenHost` 并由
+  `resolveWebUiProbeHost()` 导出；「端口被别的进程/另一个 OCTOPI_HOME 占用」与「还没起来」
+  此前被合并成同一句「未启动」，现分 `foreign`/`absent` 并给出不同指引（端口冲突 ≠ 重启 webui）。
+  `first-chat` 步不再传等待窗口——用户若刚选「稍后手动启动」，固定等满会白等数秒。
+
+- **部署模式点第二项毫无反应**：选中态只读服务端已保存值（`render.choices.deploymentMode`），
+  点卡片只改了草稿，界面自然不动。改为草稿优先 + `aria-pressed`，并让选中卡片与未选卡片有真实
+  视觉差（此前只换 class 名，两套外观几乎一样）。提交时带上当前选中项，不依赖隐式草稿合并。
+
+- **页面不能向下滚动**：向导页被套进 `.app-shell`（`height:100vh` + `overflow:hidden` 的聊天外壳），
+  超长步骤被裁掉。改用可滚动的 `.wizard-shell`。
+
+- **模型 id 只能手填**：`render().options` 新增 `models`（按当前 provider 取预设），模型步改为预设
+  卡片 + 「手动输入」切换；预设只是候选，手填仍允许。
+
+- **admin 密码校验太晚**：原来只在落盘前（`onboarding-apply`）校验，用户能带着「组织模式但无密码」
+  的无效状态走到第 7 步测通才被打断。校验下沉到状态机 `validateStep('deployment-mode')`，本步即拦。
+
+向导 UI 一并改善：独立可滚动外壳、卡片 hover/选中强视觉差 + 勾号（绝对定位，只给有选择语义的卡片，
+避免 init-mode 的「Web」按钮恒显 ✓）、顶栏进度条（替代原来的小字）、focus ring、密码输入即时提示。
+
+### fix(onboarding): 模式/provider 切换的残留字段（评审 del-1a5e429c 发现，均实测复现）
+
+- **个人模式被静默设密码**：选组织模式填好密码后切回「个人使用」，残留的 `adminPassword` 仍被
+  白名单合并并提交，落盘时 `personal` 分支会给 default 用户设上密码——与卡片文案「无需账号密码」
+  正好相反。`mergeOnboardingChoices` 增加 `adminPasswordRequired` 判据（由调用方按模式 + 远程绑定
+  判定）：不需要密码的形态清空 `adminPassword`/`orgName`，需要时保留用户刚输入的值。
+- **密码确认框死锁**：切回个人模式后确认框已卸载，但比对条件仍看残留密码 → 报「两次输入不一致」
+  而用户无处修正。比对限定在「当前需要密码」时。
+- **换 provider 带脏 modelId**：provider 变更时清空 `modelId`（旧 provider 的模型名曾被写进新
+  provider，到测通才失败），前端也因此不再把「值不在预设里」自动锁进手填模式。
+- **个人 + 远程绑定无从输密码**：`applyOnboarding` 要求该形态必须设密码，但 UI 只在非 personal
+  模式显示密码框。新增 `requiresAdminPassword(mode, configPath)` 作为服务端与 UI 的共同判据，
+  render 暴露 `adminPasswordRequired`，密码框据此显示（含个人+远程）。
+- **「至少 8 位」曾是假规则**：文案承诺了长度下限，代码只判非空。抽出零依赖模块
+  `config-admin/password-policy.ts`（常量 + `checkAdminPassword`），状态机、落盘终检、i18n 文案
+  三处共用同一值。该模块独立成文件的原因：webui 的 tsconfig `paths` 指向 engine **源码**，
+  若把常量留在 `onboarding.ts` 会把整棵引擎源码拉进前端类型检查（触发既有未使用变量报错）。
+- 重进部署模式步时，已设置的密码不再被标红「必填」（用 `hasAdminPassword` 表示「已设置」）；
+  确认框在提交成功后清空（此前回退再进仍留上一轮明文）。
+
+验证：`npm run lint` 绿；全量 **555 files / 5619 tests 通过**（新增引擎侧 8 条 + 前端 7 条 +
+探测 4 条，并做变异验证确认它们能捕获原 bug）；端到端实跑（隔离 `OCTOPI_HOME` + 独立端口）确认
+「切回 personal → hasAdminPassword=false / adminPasswordRequired=false」与
+「换 provider → modelId=''」。
+
 ## v0.121.12 (2026-11-21)
 
 ### fix(gateway): Web 向导面在全新部署上被 Bearer 闸 401 拦住（setup 链接无法使用）
