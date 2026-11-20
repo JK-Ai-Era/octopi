@@ -552,19 +552,25 @@ export class ConfigApplyService {
       };
     }
     const rawKey = typeof merged.apiKey === 'string' ? merged.apiKey : '';
-    // 探针模型：/models 404 时用首个已配模型发一次最小对话（仅 openai-completions 生效）
-    const firstModel = Array.isArray(merged.models) ? (merged.models[0] as { id?: unknown } | undefined) : undefined;
+    // 探针模型：清单接口不可用时用首个已配模型发一次最小对话
+    const mergedModels = Array.isArray(merged.models) ? merged.models : [];
+    const knownModels = mergedModels
+      .map((m) => {
+        if (typeof m === 'string') return { id: m };
+        const entry = m as { id?: unknown; name?: unknown };
+        const id = typeof entry?.id === 'string' ? entry.id : typeof entry?.name === 'string' ? entry.name : '';
+        if (!id) return null;
+        return typeof entry?.name === 'string' && entry.name ? { id, name: entry.name } : { id };
+      })
+      .filter((m): m is { id: string; name?: string } => m !== null);
     const probeModel =
-      typeof firstModel?.id === 'string' && firstModel.id.length > 0
-        ? firstModel.id
-        : typeof merged.defaultModel === 'string'
-          ? merged.defaultModel
-          : undefined;
+      knownModels[0]?.id ?? (typeof merged.defaultModel === 'string' ? merged.defaultModel : undefined);
     return discoverProviderModels({
       baseUrl: expandEnvPlaceholders(String(merged.baseUrl ?? '')),
       apiKey: expandEnvPlaceholders(rawKey),
       api: merged.api === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions',
       ...(probeModel ? { probeModel } : {}),
+      ...(knownModels.length ? { knownModels } : {}),
     });
   }
 

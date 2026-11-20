@@ -834,6 +834,10 @@ export interface DiscoverModelsResultDto {
   ok: boolean;
   models: Array<{ id: string; name?: string }>;
   error?: string;
+  /** 连通已确认但清单拿不到（端点无 /models 路由）；models 为已配置清单 */
+  degraded?: boolean;
+  /** degraded 时的人类可读说明 */
+  note?: string;
 }
 
 /** provider 预设条目（生成器/表单默认值） */

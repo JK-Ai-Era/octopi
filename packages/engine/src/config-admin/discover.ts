@@ -1,16 +1,18 @@
 /**
  * 模型清单拉取式发现（arch/config-hot-reload.md §5.1，P1）
  *
- * 连通测试 = 拉取模型列表：成功即证明 baseUrl/key 有效，顺手填充表单清单。
- * openai-completions → `GET {baseUrl}/models`（Bearer）；
- * anthropic-messages → `GET {baseUrl}/v1/models`（x-api-key + anthropic-version）。
+ * 首选免费路径：`GET {base}/models`（openai-completions）/ `GET {base}/v1/models`
+ * （anthropic-messages，x-api-key + anthropic-version）。
  *
- * **`/models` 不是 OpenAI 兼容面的必有路由**：Mistral 的官方 OpenAI 端点
- * （`https://api.mistral.ai/openai/v1`）与 Gemini 的兼容端点都只提供
- * `chat/completions`，`/models` 返回 404。此时不能把「路由缺失」判成
- * 「baseUrl / key 无效」——若调用方给了 `probeModel`，回退到一次最小对话
- * 请求（`max_tokens: 1`）验证连通，并把结果标记为 `degraded`，
- * 让 UI 如实告知「模型清单拉不到，但连通已确认」。
+ * **`/models` 不是任何兼容面的承诺路由**，且缺失时状态码不可靠：
+ * - MiMo 的 Anthropic 端点（`https://api.xiaomimimo.com/anthropic`）没有
+ *   `/v1/models` → 404；
+ * - 火山方舟（`https://ark.cn-beijing.volces.com/api/plan`）**先鉴权后路由**，
+ *   任何路径未带 key 都是 401，无论路由是否存在 → 401 不能直接判成「key 无效」。
+ *
+ * 因此模型清单拿不到时（非 2xx），只要调用方给了 `probeModel`，就用一次最小对话
+ * 请求（`max_tokens: 1`）判定真实连通性，把「清单可用」与「端点+鉴权可用」两件事
+ * 分开报：对话成功 → `ok: true` + `degraded: true`；对话 401/403 → 真鉴权失败。
  *
  * @module
  */
@@ -23,22 +25,27 @@ export interface DiscoverModelsRequest {
   /** 超时（毫秒），缺省 10s */
   timeoutMs?: number;
   /**
-   * `/models` 路由缺失（404）时用于最小对话探针的模型 id。
-   * 缺省则不做回退，直接把 404 作为失败返回（无模型可探）。
+   * 模型清单拉不到时用于最小对话探针的模型 id。
+   * 缺省则不做回退，原样返回清单请求的失败（无模型可探）。
    */
   probeModel?: string;
+  /**
+   * 调用方已配置的模型清单：degraded 结果回填它，
+   * 让 UI 拿到「已配置的模型」而不是只有探针那一条。
+   */
+  knownModels?: Array<{ id: string; name?: string }>;
 }
 
 /** 发现结果（失败不抛错：UI 需要展示原因） */
 export interface DiscoverModelsResult {
   ok: boolean;
-  /** 发现的模型 id 清单（ok=false 时为空；degraded 时为探针模型本身） */
+  /** 发现的模型 id 清单（ok=false 时为空；degraded 时为已知清单或探针模型） */
   models: Array<{ id: string; name?: string }>;
   /** 失败原因（ok=true 时 undefined） */
   error?: string;
   /**
-   * 连通已确认但清单拿不全：厂商端点没有 `/models` 路由，仅用最小对话请求验证。
-   * 调用方应据此提示用户手填模型参数，而不是当作完整清单使用。
+   * 连通已确认但清单拉不到：端点没有 `/models` 路由（或该路由受网关策略拦截），
+   * 仅用最小对话请求验证过端点与鉴权。调用方应提示用户手填模型参数。
    */
   degraded?: boolean;
   /** degraded 时的人类可读说明 */
@@ -51,39 +58,64 @@ type ChatProbeOutcome =
   | { kind: 'auth'; status: number }
   | { kind: 'error'; status: number };
 
+/** 各协议的最小对话请求形态 */
+function buildProbeRequest(
+  api: DiscoverModelsRequest['api'],
+  base: string,
+  apiKey: string,
+  model: string,
+): { url: string; headers: Record<string, string>; body: string } {
+  if (api === 'anthropic-messages') {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'anthropic-version': '2023-06-01',
+    };
+    if (apiKey) headers['x-api-key'] = apiKey;
+    return {
+      url: `${base}/v1/messages`,
+      headers,
+      body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+    };
+  }
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+  return {
+    url: `${base}/chat/completions`,
+    headers,
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: 'ping' }],
+      max_tokens: 1,
+      stream: false,
+    }),
+  };
+}
+
 /**
- * 用一次最小对话请求验证 baseUrl/key（`/models` 缺失时的回退路径）
+ * 用一次最小对话请求验证 baseUrl/key
  *
+ * @param api - 协议（决定路径与鉴权头）
  * @param base - 已去掉尾斜杠的 baseUrl
- * @param apiKey - 明文 key（空串则不带 Authorization）
+ * @param apiKey - 明文 key（空串则不带鉴权头）
  * @param model - 探针模型 id
  * @param timeoutMs - 超时（毫秒）
- * @returns 探针结论（ok / 鉴权失败 / 其它错误），网络异常归入 error(0)
+ * @returns 探针结论；400/422 视为连通成立（鉴权已过，只是请求本身被模型层拒绝）
  */
 async function probeChat(
+  api: DiscoverModelsRequest['api'],
   base: string,
   apiKey: string,
   model: string,
   timeoutMs: number,
 ): Promise<ChatProbeOutcome> {
+  const { url, headers, body } = buildProbeRequest(api, base, apiKey, model);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-    const res = await fetch(`${base}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 1,
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-    if (res.ok) return { kind: 'ok' };
+    const res = await fetch(url, { method: 'POST', headers, body, signal: controller.signal });
     if (res.status === 401 || res.status === 403) return { kind: 'auth', status: res.status };
+    // 400 / 422 = 鉴权与路由都通，只是请求内容（如模型名）被拒；连通成立。
+    if (res.ok || res.status === 400 || res.status === 422) return { kind: 'ok' };
     return { kind: 'error', status: res.status };
   } catch {
     // 网络层异常（DNS / TLS / abort）与 HTTP 错误在调用方都归为「不可用」，
@@ -97,9 +129,10 @@ async function probeChat(
 /** 拉取模型清单（连通测试同源） */
 export async function discoverProviderModels(req: DiscoverModelsRequest): Promise<DiscoverModelsResult> {
   const base = req.baseUrl.replace(/\/+$/, '');
-  const url = req.api === 'anthropic-messages' ? `${base}/v1/models` : `${base}/models`;
+  const isAnthropic = req.api === 'anthropic-messages';
+  const url = isAnthropic ? `${base}/v1/models` : `${base}/models`;
   const headers: Record<string, string> = {};
-  if (req.api === 'anthropic-messages') {
+  if (isAnthropic) {
     if (req.apiKey) headers['x-api-key'] = req.apiKey;
     headers['anthropic-version'] = '2023-06-01';
   } else if (req.apiKey) {
@@ -112,16 +145,19 @@ export async function discoverProviderModels(req: DiscoverModelsRequest): Promis
   try {
     const res = await fetch(url, { headers, signal: controller.signal });
     if (!res.ok) {
-      // 404 = 该端点没有 /models 路由（不是鉴权问题）：OpenAI 兼容面不承诺它。
-      // 有探针模型时改走最小对话请求，把「连通」与「清单可用」两件事分开报。
-      if (res.status === 404 && req.api === 'openai-completions' && req.probeModel) {
-        const probe = await probeChat(base, req.apiKey, req.probeModel, timeoutMs);
+      // 只有状态码有歧义时才回退：404 缺路由、401/403 可能是网关先鉴权后路由、
+      // 405 是不允许该方法。5xx / 429 是端点自身状态，照实报，不拿探针掩盖。
+      const ambiguous = res.status === 404 || res.status === 401
+        || res.status === 403 || res.status === 405;
+      if (ambiguous && req.probeModel) {
+        const probe = await probeChat(req.api, base, req.apiKey, req.probeModel, timeoutMs);
         if (probe.kind === 'ok') {
+          const known = req.knownModels?.length ? req.knownModels : [{ id: req.probeModel }];
           return {
             ok: true,
-            models: [{ id: req.probeModel }],
+            models: known,
             degraded: true,
-            note: `该端点无 /models 路由，已用最小对话请求（${req.probeModel}）确认连通；模型参数请手填`,
+            note: `该端点未提供模型清单接口（${url} 返回 HTTP ${res.status}），已用最小对话请求（${req.probeModel}）确认端点与鉴权可用；模型参数请以官方文档为准`,
           };
         }
         return {
@@ -129,8 +165,8 @@ export async function discoverProviderModels(req: DiscoverModelsRequest): Promis
           models: [],
           error:
             probe.kind === 'auth'
-              ? `HTTP ${probe.status}（/models 404；对话探针鉴权失败，请检查 key）`
-              : `HTTP ${probe.status || 'network error'}（/models 404；对话探针同样失败，请检查 baseUrl）`,
+              ? `HTTP ${probe.status}（清单接口 ${res.status}；对话探针鉴权失败，请检查 key 与 baseUrl 所属区域）`
+              : `HTTP ${probe.status || 'network error'}（清单接口 ${res.status}；对话探针同样失败，请检查 baseUrl）`,
         };
       }
       return { ok: false, models: [], error: `HTTP ${res.status} ${res.statusText}` };

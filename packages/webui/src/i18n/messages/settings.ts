@@ -47,6 +47,7 @@ export const zh = {
   'modelSettings.baseUrlRequired': 'baseUrl 不能为空',
   'modelSettings.modelsRequired': '至少配置一个模型（或点「拉取模型列表」自动填充）',
   'modelSettings.testOk': '✓ 连通成功，发现 {count} 个模型',
+  'modelSettings.testOkDegraded': '✓ 连通成功，但该端点不提供模型清单（模型参数请按官方文档填写）',
   'modelSettings.testFailed': '✗ 连通失败：{error}',
   'modelSettings.unknownError': '未知错误',
   'modelSettings.numberMustBeNumber': '{label} 必须是数字：{value}',
@@ -202,6 +203,8 @@ export const en: Record<keyof typeof zh, string> = {
   'modelSettings.modelsRequired':
     'Configure at least one model (or click "Fetch model list" to fill it automatically)',
   'modelSettings.testOk': '✓ Connected, found {count} models',
+  'modelSettings.testOkDegraded':
+    '✓ Connected, but this endpoint does not expose a model list (fill model parameters per the vendor docs)',
   'modelSettings.testFailed': '✗ Connection failed: {error}',
   'modelSettings.unknownError': 'unknown error',
   'modelSettings.numberMustBeNumber': '{label} must be a number: {value}',

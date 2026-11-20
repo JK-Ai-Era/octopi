@@ -16,7 +16,12 @@ import type { ModelInfo } from '@octopi-agent/core/types.js';
  * key = 模型名称（支持前缀匹配的精确名称）
  */
 const BUILTIN_MODEL_INFO: Record<string, Omit<ModelInfo, 'name'>> = {
-  // ── OpenAI ──
+  // ── OpenAI（2026-11 官方模型页：四个 GPT-6 系均 1,050,000 / 128,000） ──
+  'gpt-6.2-astra':   { contextWindow: 1050000, maxOutputTokens: 128000 },
+  'gpt-6.2-sol':     { contextWindow: 1050000, maxOutputTokens: 128000 },
+  'gpt-6.1-terra':   { contextWindow: 1050000, maxOutputTokens: 128000 },
+  'gpt-6-luna':      { contextWindow: 1050000, maxOutputTokens: 128000 },
+  // 旧代际仍在 full catalog，保留兜底
   'gpt-5.5':         { contextWindow: 256000, maxOutputTokens: 32768 },
   'gpt-5.5-mini':    { contextWindow: 128000, maxOutputTokens: 16384 },
   'gpt-4o':          { contextWindow: 128000, maxOutputTokens: 16384 },
@@ -28,7 +33,10 @@ const BUILTIN_MODEL_INFO: Record<string, Omit<ModelInfo, 'name'>> = {
   'o3-mini':         { contextWindow: 200000, maxOutputTokens: 100000 },
   'o4-mini':         { contextWindow: 200000, maxOutputTokens: 100000 },
 
-  // ── Anthropic ──
+  // ── Anthropic（Claude 5.5 代：1M / 128K） ──
+  'claude-opus-5-5':    { contextWindow: 1000000, maxOutputTokens: 128000 },
+  'claude-sonnet-5-5':  { contextWindow: 1000000, maxOutputTokens: 128000 },
+  'claude-haiku-5-5':   { contextWindow: 1000000, maxOutputTokens: 128000 },
   'claude-opus-4-6':    { contextWindow: 200000, maxOutputTokens: 32000 },
   'claude-sonnet-4-6':  { contextWindow: 200000, maxOutputTokens: 16000 },
   'claude-haiku-4-5':   { contextWindow: 200000, maxOutputTokens: 8192 },
@@ -36,17 +44,31 @@ const BUILTIN_MODEL_INFO: Record<string, Omit<ModelInfo, 'name'>> = {
   'claude-3.5-haiku':   { contextWindow: 200000, maxOutputTokens: 8192 },
   'claude-3-opus':      { contextWindow: 200000, maxOutputTokens: 4096 },
 
-  // ── Google ──
+  // ── Google（Gemini 4：1M / 64K） ──
+  'gemini-4-carbon':    { contextWindow: 1048576, maxOutputTokens: 65536 },
+  'gemini-4-neon':      { contextWindow: 1048576, maxOutputTokens: 65536 },
+  'gemini-4-hydrogen':  { contextWindow: 1048576, maxOutputTokens: 65536 },
+  'gemini-4-argon':     { contextWindow: 1048576, maxOutputTokens: 65536 },
   'gemini-2.5-pro':    { contextWindow: 1000000, maxOutputTokens: 65536 },
   'gemini-2.5-flash':  { contextWindow: 1000000, maxOutputTokens: 65536 },
   'gemini-2.0-pro':    { contextWindow: 2000000, maxOutputTokens: 8192 },
   'gemini-2.0-flash':  { contextWindow: 1000000, maxOutputTokens: 8192 },
 
-  // ── DeepSeek ──
-  'deepseek-flash':    { contextWindow: 1000000, maxOutputTokens: 384000 },
-  'deepseek-v4-pro':   { contextWindow: 1000000, maxOutputTokens: 384000 },
+  // ── DeepSeek（官方：1M / 384K） ──
+  'deepseek-flash':    { contextWindow: 1048576, maxOutputTokens: 393216 },
+  'deepseek-v4-pro':   { contextWindow: 1048576, maxOutputTokens: 393216 },
 
-  // ── Qwen（含 Ollama 本地常见族；tag 如 :2b/:7b 会在查询时剥离） ──
+  // ── Qwen / Kimi / GLM（2026-11 当前主力） ──
+  'qwen4-max':         { contextWindow: 1000000, maxOutputTokens: 131072 },
+  'qwen3.7-plus':      { contextWindow: 1000000, maxOutputTokens: 131072 },
+  'qwen3.8-flash':     { contextWindow: 1000000, maxOutputTokens: 131072 },
+  'kimi-k3.1-pro':     { contextWindow: 1048576, maxOutputTokens: 131072 },
+  'kimi-k3.1-pro-highspeed': { contextWindow: 1048576, maxOutputTokens: 131072 },
+  'kimi-k3':           { contextWindow: 1048576, maxOutputTokens: 131072 },
+  'glm-5.3':           { contextWindow: 1000000, maxOutputTokens: 131072 },
+  'glm-5.3-flash':     { contextWindow: 1000000, maxOutputTokens: 131072 },
+
+  // ── Qwen 旧代际（含 Ollama 本地常见族；tag 如 :2b/:7b 会在查询时剥离） ──
   'qwen-max':          { contextWindow: 32000, maxOutputTokens: 8192 },
   'qwen-plus':         { contextWindow: 131072, maxOutputTokens: 8192 },
   'qwen-turbo':        { contextWindow: 131072, maxOutputTokens: 8192 },

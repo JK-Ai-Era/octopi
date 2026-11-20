@@ -130,6 +130,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.4 (2026-11-20)
+
+### fix(engine,gateway,webui): 设置页「测试连通」不再把「端点没有模型清单」误报成连接失败
+
+- **现象**（大哥实报）：设置里点「测试连通并拉取模型列表」，已配通的 provider 显示失败——`mimo` / `mimo-coding` 报 `HTTP 404 Not Found`，`volcengine` 那几条报 `HTTP 401 Unauthorized`。
+- **根因**：设置页走 `discoverProviderModels`，它把「连通测试」等同于「拉模型清单」，且对 `anthropic-messages` 硬编码 `GET {base}/v1/models`。而：
+  - MiMo 的 Anthropic 端点（`https://api.xiaomimimo.com/anthropic`、`https://token-plan-cn.xiaomimimo.com/anthropic`）**没有** `/v1/models` → 404；
+  - 火山方舟（`https://ark.cn-beijing.volces.com/api/{plan,coding}`）**先鉴权后路由**，`/v1/models` 带正确 key 仍返回 401 —— 401 不能证明 key 无效。
+  向导侧的 `isAvailable()` 是发对话请求，所以向导能通过、设置页不能，两条路径判定口径分叉。
+- **修复**：探测统一为「先免费探清单，拿不到再探对话」，且只在**状态码有歧义**（404 / 401 / 403 / 405）时回退对话探针——5xx / 429 照实报，不被掩盖。对话通过（2xx 或 400/422：鉴权与路由都通、仅请求内容被拒）→ 判连通成立；对话 401/403 才判鉴权失败。`discoverProviderModels` 与 `OpenAIProvider.isAvailable()` 同一口径。
+- **degraded 语义**：清单拿不到但连通成立时返回 `ok: true` + `degraded: true` + `note`，`models` 回填调用方已配置的清单（`knownModels`）。设置页据此显示「✓ 连通成功，但该端点不提供模型清单（模型参数请按官方文档填写）」，不再冒充「发现 N 个模型」，也不覆盖用户已填的模型行。`DiscoverModelsResultDto` 补 `degraded` / `note`。
+- **实测**（用本机 `~/.octopi/octopi.json` 的真实 key 跑同一代码路径）：8 个 provider 全部通过——`ollama` / `bailian` / `deepseek` 正常拿到清单；`xiaomi` / `xiaomi-coding` / `volcengine-agent-plan` / `volcengine-coding-plan` / `volcengine-coding-plan2` 走 degraded 路径确认连通。
+- **同步代际**（同批）：`src/init.ts` 脚手架默认模型与 `octopi.example.json` 从 `gpt-5.5`/`gpt-5-mini`、`claude-4-6` 更新到 GPT-6 系（1,050,000 / 128,000）与 Claude 5.5 系（1M / 128K）；`builtin-model-info.ts` 兜底表补齐 GPT-6 / Claude 5.5 / Gemini 4 / DeepSeek / Qwen4 / Kimi K3.1 / GLM-5.3，旧代际条目保留（官方仍在目录中，删掉会让老配置失去兜底）。脚手架档位 `mini/standard/pro` 依次映射 luna/terra/astra，属脚手架默认值，非厂商声明的档位分级。
+- **测试**：`tests/provider-probe-fallback.test.ts` 扩到 16 用例（真实本地 HTTP 服务）：openai/anthropic × 404/401 × 对话成功/失败、`knownModels` 回填、5xx 不回退、401+400 的 400 视为连通、anthropic 用 `x-api-key` 而非 Bearer。
+- **验证**：`npm test tests/provider-probe-fallback.test.ts`（16）、`tests/builtin-model-info.test.ts`（8）、`tests/config-admin.test.ts`（19）、`tests/init-default-config.test.ts`、`tests/config-unwired-keys.test.ts` 全绿；全量 `npm test` 548 文件 / 5545 用例通过；`npm run lint` 通过。
+
 ## v0.121.3 (2026-11-20)
 
 ### fix(engine,gateway): 连通性探测在端点无 `/models` 路由时回退到最小对话请求（mistral / gemini 形态）

@@ -170,15 +170,17 @@ export function generateDefaultConfig(homeDir: string, agentId: string = 'defaul
           apiKey: '${OPENAI_API_KEY}',
           api: 'openai-completions',
           models: [
-            { id: 'gpt-5.5', name: 'gpt-5.5', contextWindow: 256000, maxTokens: 32768 },
-            { id: 'gpt-5-mini', name: 'gpt-5-mini', contextWindow: 128000, maxTokens: 16384 },
+            { id: 'gpt-6.2-astra', name: 'gpt-6.2-astra', contextWindow: 1050000, maxTokens: 128000 },
+            { id: 'gpt-6.1-terra', name: 'gpt-6.1-terra', contextWindow: 1050000, maxTokens: 128000 },
+            { id: 'gpt-6-luna', name: 'gpt-6-luna', contextWindow: 1050000, maxTokens: 128000 },
           ],
         },
       },
+      // 脚手架档位：astra=最强、terra=均衡、luna=最轻（按官方模型页顺序取，非厂商声明的「档位」）
       level: {
-        mini: { primary: 'openai/gpt-5-mini' },
-        standard: { primary: 'openai/gpt-5.5' },
-        pro: { primary: 'openai/gpt-5.5' },
+        mini: { primary: 'openai/gpt-6-luna' },
+        standard: { primary: 'openai/gpt-6.1-terra' },
+        pro: { primary: 'openai/gpt-6.2-astra' },
       },
     },
     agents: [
@@ -186,7 +188,7 @@ export function generateDefaultConfig(homeDir: string, agentId: string = 'defaul
         id: agentId,
         home: agentHome,
         workspace: agentWorkspaceDir(homeDir, undefined, agentId),
-        model: 'openai/gpt-5.5',
+        model: 'openai/gpt-6.2-astra',
         skillDirectory: join(agentHome, 'skills'),
         tools: { allow: ['*'] },
       },

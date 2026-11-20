@@ -299,10 +299,13 @@ export class OpenAIProvider implements ModelProvider {
   /**
    * 检查 provider 是否可用
    *
-   * 先探 `GET {baseUrl}/models`（免费、顺手）；若该端点**没有** `/models` 路由（404），
-   * 回退到一次最小对话请求——OpenAI 兼容面并不承诺 `/models`，Mistral 的
-   * `/openai/v1` 与 Gemini 的 `/v1beta/openai` 都是「有 chat、无 models」。
-   * 只有 404 才回退：401/403 是真鉴权失败，不能被探针掩盖。
+   * 先探 `GET {baseUrl}/models`（免费、顺手）；拿不到清单时再用一次最小对话请求
+   * 判定真实连通——`/models` 不是 OpenAI 兼容面的承诺路由：Mistral 的
+   * `/openai/v1`、Gemini 的 `/v1beta/openai` 都没有它，而火山方舟这类网关
+   * **先鉴权后路由**，未知路径同样回 401。
+   *
+   * 因此 404 / 401 / 403 / 405 时不直接下结论，交给对话探针：
+   * 对话通过（2xx 或 400/422）才算可用；对话 401/403 才判鉴权失败。
    */
   async isAvailable(): Promise<boolean> {
     try {
@@ -313,7 +316,10 @@ export class OpenAIProvider implements ModelProvider {
       });
       if (response.ok) return true;
       const probeModel = this.defaultModel ?? this.models[0];
-      if (response.status !== 404 || !probeModel) return false;
+      // 5xx / 429 是端点自身状态，不拿探针掩盖
+      const ambiguous = response.status === 404 || response.status === 401
+        || response.status === 403 || response.status === 405;
+      if (!ambiguous || !probeModel) return false;
       const probe = await this.fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -329,7 +335,8 @@ export class OpenAIProvider implements ModelProvider {
         signal: AbortSignal.timeout(5000),
         dispatcher: this.dispatcher,
       });
-      return probe.ok;
+      // 400/422 = 鉴权与路由都通，只是请求内容（如模型名）被拒；连通成立。
+      return probe.ok || probe.status === 400 || probe.status === 422;
     } catch {
       return false;
     }

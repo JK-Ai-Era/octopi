@@ -9,9 +9,9 @@
 
   "models": {
     "level": {
-      "mini": { "primary": "openai/gpt-5-mini" },
-      "standard": { "primary": "openai/gpt-5.5" },
-      "pro": { "primary": "openai/gpt-5.5" }
+      "mini": { "primary": "openai/gpt-6-luna" },
+      "standard": { "primary": "openai/gpt-6.1-terra" },
+      "pro": { "primary": "openai/gpt-6.2-astra" }
     },
     "providers": {
       "openai": {
@@ -19,8 +19,9 @@
         "apiKey": "${OPENAI_API_KEY}",
         "api": "openai-completions",
         "models": [
-          { "id": "gpt-5.5", "name": "gpt-5.5", "contextWindow": 256000, "maxTokens": 32768 },
-          { "id": "gpt-5-mini", "name": "gpt-5-mini", "contextWindow": 128000, "maxTokens": 16384 }
+          { "id": "gpt-6.2-astra", "name": "gpt-6.2-astra", "contextWindow": 1050000, "maxTokens": 128000 },
+          { "id": "gpt-6.1-terra", "name": "gpt-6.1-terra", "contextWindow": 1050000, "maxTokens": 128000 },
+          { "id": "gpt-6-luna", "name": "gpt-6-luna", "contextWindow": 1050000, "maxTokens": 128000 }
         ]
       },
       "anthropic": {
@@ -28,8 +29,8 @@
         "apiKey": "${ANTHROPIC_API_KEY}",
         "api": "anthropic-messages",
         "models": [
-          { "id": "claude-sonnet-4-6", "name": "claude-sonnet-4-6", "contextWindow": 200000, "maxTokens": 16000 },
-          { "id": "claude-opus-4-6", "name": "claude-opus-4-6", "contextWindow": 200000, "maxTokens": 32000 }
+          { "id": "claude-sonnet-5-5", "name": "claude-sonnet-5-5", "contextWindow": 1000000, "maxTokens": 128000 },
+          { "id": "claude-opus-5-5", "name": "claude-opus-5-5", "contextWindow": 1000000, "maxTokens": 128000 }
         ]
       }
     },
@@ -49,7 +50,7 @@
     "home": "~/.octopi/agents/assistant",
     "workspace": "~/.octopi/workspace/assistant",
     "skillDirectory": "~/.octopi/agents/assistant/skills",
-    "model": "openai/gpt-5.5",
+    "model": "openai/gpt-6.2-astra",
     "tools": { "allow": ["*"] }
   }],
 

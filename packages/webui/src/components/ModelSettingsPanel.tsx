@@ -289,7 +289,13 @@ export function ModelSettingsPanel() {
     try {
       const result = await client.testModelProvider(form.name.trim() || 'test', formToProviderConfig(form));
       if (result.ok) {
-        setTestResult(t('modelSettings.testOk', { count: result.models.length }));
+        // degraded = 端点没有模型清单接口，探测已用最小对话请求确认连通；
+        // 此时 models 是「已配置清单」回填，不能说成「发现了 N 个模型」。
+        setTestResult(
+          result.degraded
+            ? t('modelSettings.testOkDegraded')
+            : t('modelSettings.testOk', { count: result.models.length }),
+        );
         // 拉取式发现：未声明的模型合并进表单（已有的不动）
         setForm((prev) => {
           const known = new Set(prev.models.map((m) => m.id));
