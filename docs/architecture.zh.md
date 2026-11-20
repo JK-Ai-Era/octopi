@@ -237,7 +237,6 @@ harness/context/
 ├── summarize.ts
 ├── compact-key.ts          # E4：compact 键 (sessionId, agentId)
 ├── default-context-engine.ts   # 消息窗口入口（状态键含 agentId）
-├── smart-router.ts             # 智能路由决策
 ├── message-selector.ts         # 四区域消息选择
 ├── budget-allocator.ts         # Token 预算分配
 ├── token-estimator.ts          # HeuristicTokenEstimator

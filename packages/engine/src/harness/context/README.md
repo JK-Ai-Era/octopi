@@ -21,8 +21,7 @@
 - `summarize.ts` — 摘要 provider 挑选（`models.level.mini` → standard → 主模型）；Builder/config 自动挂 `createProviderSummarize`
 
 ### 窗口管理
-- DefaultContextEngine — 消息窗口入口（预算 → 选择 → 路由 → 压缩）；内部状态键默认含 **agentId**（E4）；压缩执行（手动/proactive/overflow）**统一委托** `capabilities/compact`
-- SmartRouter — 路由决策（fits / compact；B′ 后「只打码不摘要」路由已删）
+- DefaultContextEngine — 消息窗口入口（预算 → 选择 → 压缩）；内部状态键默认含 **agentId**（E4）；压缩执行（手动/proactive/overflow）**统一委托** `capabilities/compact`
 - DefaultMessageSelector — 四区域消息选择
 - HeuristicTokenEstimator — 启发式 Token 估算
 - **compact-key.ts** — `compactStateKey(sessionId, agentId)`（宪法 E4）
@@ -49,7 +48,6 @@
 - assembler.ts — system prompt 装配器
 - layers.ts — 薄层适配 + createDefaultLayers
 - default-context-engine.ts — 消息窗口引擎（E4 状态；结构压缩委托 capabilities）
-- smart-router.ts — 智能路由
 - message-selector.ts — 四区域选择
 - budget-allocator.ts — 消息侧 Token 预算分配
 - token-estimator.ts / token-estimate-fns.ts / token-constants.ts — 估算（跨域经 `context/index.ts` 门面；浏览器可直连 token 模块）

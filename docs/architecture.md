@@ -235,7 +235,6 @@ harness/context/
 ├── summarize.ts
 ├── compact-key.ts          # E4: compact key (sessionId, agentId)
 ├── default-context-engine.ts   # message-window entry (state key includes agentId)
-├── smart-router.ts             # smart-routing decisions
 ├── message-selector.ts         # four-region message selection
 ├── budget-allocator.ts         # token budget allocation
 ├── token-estimator.ts          # HeuristicTokenEstimator

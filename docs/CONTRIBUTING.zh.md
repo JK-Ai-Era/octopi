@@ -7,22 +7,35 @@
 ## 环境要求
 
 - Node.js >= 24（持久层使用内置 `node:sqlite`，无需原生 SQLite 扩展编译）
-- TypeScript >= 5.0
+- TypeScript 6.0.x（根包/engine/gateway 构建；`packages/webui` 用 5.5.x）；两者都来自
+  `devDependencies`，`npm install` 即可
 
 ## 开发命令
 
 ```bash
-# 构建
-npm run build          # tsc 编译
+# 构建（根包 + 四个子包）
+npm run build          # clean → core → engine → gateway → webui → 根 tsc → 资产 → schema → bin
 
-# 测试
-npm test               # 运行所有测试（node --experimental-vm-modules）
-npx vitest run         # 等效命令
-npx vitest watch       # 监听模式
+# 测试——统一走 npm 脚本：它替你带上 --experimental-vm-modules
+npm test               # 全量套件（根 tests/** 与 packages/webui 测试）
+npm run test:coverage
 
-# 开发
-npm run dev            # tsc --watch
+# 单个文件 / 名称过滤
+npm test -- tests/core-engine.test.ts
+npm test -- -t "SecurityGuard"
+
+# 类型检查
+npm run lint           # eslint + 测试类型检查 + webui tsc
+npm run typecheck      # 测试类型检查（对已知错误基线）
+
+# 开发（各包各自 watch 自己的 tsc 目标）
+npm run dev            # 仅根 src/（tsc --watch）
+npm --prefix packages/engine run dev   # 单包 watch；core/gateway 同理
+npm run web            # webui vite dev server
 ```
+
+`npm test` / `npm run test:coverage` 已带上 `--experimental-vm-modules`。裸 `npx vitest run` 当前
+也能跑，但走 npm 脚本能保证所有贡献者用同一套 flag。
 
 ## 架构分层
 
@@ -30,10 +43,13 @@ npm run dev            # tsc --watch
 
 | 层 | 目录 | 职责 | 依赖 |
 |---|---|---|---|
-| Loop | `packages/core/src/loop/` | 纯执行循环 | 仅依赖 Core 类型 |
+| Loop | `packages/core/src/loop/` | 纯执行循环（`agentLoop`、`callModel`） | 仅依赖 Core 类型 |
 | Core | `packages/core/src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
 | Harness | `packages/engine/src/harness/` | 产品域组织（见 `docs/domains.md`） | 依赖 Core + Loop |
 | Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | 外部系统适配 | 依赖 Core + Loop + Harness |
+
+套件包（`src/cli/`、`src/init.ts`、配置 IO）不在这四层之内，负责把它们组合起来；
+`packages/webui` 是由 gateway 托管的预构建控制台。
 
 详细架构见 [docs/architecture.zh.md](./architecture.zh.md)；长期不变量见 [架构宪法](./north-star.zh.md)。
 实现状态与开放项见 [docs/KNOWN-ISSUES.zh.md](./KNOWN-ISSUES.zh.md) 与 [CHANGELOG](../CHANGELOG.md)。
@@ -59,31 +75,33 @@ npm run dev            # tsc --watch
 ## 测试规范
 
 ```bash
-# 运行全部测试
+# 全量测试
 npm test
 
-# 运行单个测试文件
-npx vitest run tests/core-engine.test.ts
+# 单个测试文件
+npm test -- tests/core-engine.test.ts
 
-# 运行匹配的测试
-npx vitest run -t "SecurityGuard"
+# 按测试名过滤
+npm test -- -t "SecurityGuard"
 ```
 
-**测试文件命名：** `tests/<module>.test.ts`
+**测试文件命名：** `tests/<module>.test.ts`（webui 组件测试与源码同目录，形如
+`packages/webui/src/**/*.test.{ts,tsx}`，同一次运行会一起收）。
 
-**当前测试分布：** 见仓库 `tests/**`（含 `tests/harness/context/capabilities/` 公用能力）
+**当前测试分布：** 见仓库 `tests/**`（summary/compact/document 公用能力测试在
+`tests/harness/capabilities/`）。
 
 | 测试领域 | 覆盖范围 |
 |---|---|
 | Loop 协议 | agentLoop 纯函数、callModel、错误分类、terminate/finishReason/phase 契约 |
 | Harness 门面 | Agent.run、AgentBuilder、SessionAwareRunner、可靠性包装 |
 | 安全 | SecurityGuard、RiskEvaluator、DefaultRiskPolicy、ShellParser |
-| 上下文管理 | ContextEngine、SmartRouter、MessageSelector、Compressor、ContextLayer/Assembler、主动摘要 |
-| 公用能力 capabilities | SummaryPort/L1L2/structured/oversized、CompactEngine、tools 接线（`tests/harness/context/capabilities/`） |
+| 上下文管理 | ContextEngine、DefaultMessageSelector、BudgetAllocator、turn 信封、ContextLayer/Assembler、主动摘要 |
+| 公用能力 capabilities | SummaryPort 类型 / `summarizeFn` 注入、CompactEngine、document 端口（`tests/harness/capabilities/`） |
 | 会话任务 / 过程监督 | SessionTaskService、task_* 工具、DefaultRunGuard |
 | Plugin 系统 | Manifest-first Loader、贡献注册表、PluginManager Hook |
 | Skill 管理 | SkillManager 两阶段加载 |
-| 工具系统 | ToolRegistry、工具版本管理 |
+| 工具系统 | DefaultToolBus、工具注册/替换、插件工具授权 |
 | 自主子系统 | SubsystemRuntime、SenseEngine、ThinkExecutor、SignalBus |
 | 委派 | DelegateService、DelegateTransport、AgentRegistry、RunnerChildRunPort |
 | 并发控制 | ProviderPool、SessionGate、RateLimiter |
@@ -113,6 +131,7 @@ npx vitest run -t "SecurityGuard"
 | Observer / 配置 `observer` | `docs/observer-domain.md` + `docs/architecture.md` + `octopi.schema.json` / `octopi.example.json` |
 | 公用能力 summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `packages/engine/src/harness/README.md` + `packages/engine/src/harness/context/README.md` + schema/example；内部规格（不对外） |
 | 修改层间依赖 / 分层 | `docs/architecture.md`；不得违反 [架构宪法](./north-star.zh.md) 与本文件「依赖方向」 |
+| 模块增删改名、文件移动、`arch/*.md` 结构树变更 | `bash arch/check-sync.sh` 必须通过（见 `arch/sync-protocol.md`）；红灯当门禁处理，绝不削弱检查器。**仅维护者适用**：`arch/` 被 gitignore（内部交接文档），新克隆里没有 `arch/check-sync.sh` |
 | 修改架构不变量 | **`docs/north-star.md`**（须显式评审）+ `CHANGELOG.md` |
 | 测试数量变化 | `README.md` + `CHANGELOG.md` |
 

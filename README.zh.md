@@ -187,26 +187,65 @@ npm install -g octopi-agent
 ### 三分钟跑通第一次对话
 
 ```bash
-octopi serve start
+octopi init
 ```
 
-全新机器上它会脚手架 `OCTOPI_HOME`，并在终端打印你的专属配置向导链接：
+全新机器上，`octopi init` **就是**首启体验：它脚手架 `OCTOPI_HOME`，然后带你在终端里走完配置向导。
+状态机共九步；终端模式自动选中命令行，所以你要答的是八步：
+
+```text
+语言 → 部署模式 → 模型服务 → API Key → 选模型
+     → 连通性测通 → 起服务 → 第一句话
+```
+
+- **部署模式是真实决策，不是走过场**：*个人使用*（本机单人、免登录）、*单组织多用户*（一个组织、多人、
+  组织内共享知识库）、*多组织多租户*（一套部署上互相隔离的多个组织）。两种组织模式会要求设 admin
+  密码——输两遍，落盘存的是 scrypt 哈希。
+- **API Key 绝不写进 `octopi.json`**：它落 `OCTOPI_HOME/.env`，配置里只留 `${VAR}` 占位。向导在落盘前
+  会真测一遍 provider，失败都带出路（重试 / 重新录 key / 换 provider / 保存并退出）。
+- **配置即时生效**——向导先写盘再起服务，Web 向导还会把配置热应用进运行中的 gateway。
+  若对**已在跑**的 gateway 重跑 `octopi init`，需要重启服务（或改走控制台配置页）：CLI 向导不做热应用。
+
+向导收尾会问你要不要直接起服务、直接开聊，并**打印控制台访问密钥**（脚手架时随机生成的
+`channels[type=http].apiKey`）。本机访问无需它；局域网或远程访问时，把它填进 WebUI 登录页的
+「访问密钥」栏。
+
+```bash
+octopi serve start   # gateway + Web 控制台（向导可以直接替你起）
+octopi chat          # 终端 TUI 对话，同一个 agent、同一份配置
+octopi doctor        # 诊断部署/配置，不需要 LLM
+```
+
+裸跑 `octopi` 同一规则：未初始化 → 进 init 向导；已初始化 → 进终端对话。
+
+**偏好浏览器？** `octopi init --web` 交给 Web 向导（需要 gateway 已在跑，否则它会让你先
+`octopi serve start`）。全新部署上 `octopi serve start` 会签发 setup 链接并打印在该终端
+（30 分钟内有效，向导完成后即吊销）：
 
 ```text
 🧙 首启配置向导（Web）：http://localhost:8180/?setup=<token>
 ```
 
-（`8180` 是默认端口；配置了 `web.port` 时以终端打印的链接为准。）
+（`8180` 是默认端口；配置了 `web.port` 时以终端打印的链接为准。）命令行向导与 Web 向导共享同一状态机、
+写同一份配置——任选其一。
 
-打开链接走完九步向导（语言 → 模型服务 → API Key → 选模型 → …）。完成后配置**即时生效**——
-浏览器打开 `http://localhost:8180` 进入 Web 控制台，直接开会话开聊。
-
-喜欢终端？
+**非交互**（CI、dotfiles、脚本化安装）——`--yes` 跳过向导，全部取自 flag 与环境变量，
+因此不做任何探针：
 
 ```bash
-octopi init      # 同款九步向导，在终端里走
-octopi chat      # 立刻和你的 agent 对话
-octopi doctor    # 检查环境
+OCTOPI_API_KEY=sk-… octopi init --yes --provider deepseek --model deepseek-flash
+```
+
+`--yes` 取默认值 + 环境变量：`OCTOPI_API_KEY`（需要 key 的预设必填——只有免钥的 `ollama` 可省）、
+`OCTOPI_DEPLOYMENT_MODE`、`OCTOPI_ADMIN_PASSWORD`（组织模式必填）、`OCTOPI_ORG_NAME`、
+`OCTOPI_ADMIN_NAME`、`OCTOPI_LANG`。默认值：provider = `ollama`，部署模式 = `personal`。
+`--web` 交给浏览器向导，`--cli` 强制走命令行。
+
+**第二个 agent**（旅程 B）有自己的向导——选类型、取名并告诉它怎么称呼你、拿到挂资料的指引、然后试聊。
+它要求部署已初始化（registry 里得有用户）：
+
+```bash
+octopi agent new
 ```
 
 ### 嵌入代码
@@ -214,17 +253,35 @@ octopi doctor    # 检查环境
 ```typescript
 import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
 
-const { agent, runner } = await new AgentBuilder()
-  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
+const { runner, runtime } = await new AgentBuilder()
+  .model(new OpenAIProvider({
+    apiKey: process.env.OPENAI_API_KEY!,
+    models: ['gpt-6.1-terra'],
+    defaultModel: 'gpt-6.1-terra',
+  }))
   .persona('./my-agent')
   .build();
 
-for await (const event of runner.handle('session-1', userMessage)) {
+const userMessage = { role: 'user' as const, content: 'hello', timestamp: Date.now() };
+
+for await (const event of runner.handle('session-1', userMessage, {
+  systemPrompt: '', // 交给 runner 每轮解析 persona（改文件下一轮即生效）
+  agentId: 'default',
+  sessionId: 'session-1',
+})) {
   if (event.type === 'llm_stream_delta') {
-    process.stdout.write(event.data.delta);
+    process.stdout.write(String(event.data?.delta ?? ''));
   }
 }
+
+runtime?.dispose(); // 自主子系统持有定时器——dispose 后进程才能退出
 ```
+
+`runner.handle()` 是会话感知入口：会话生命周期与写回都由它负责。`systemPrompt` 留空时由 runner 每轮
+解析 persona（改 `AGENTS.md` 下一轮即生效）；传字符串则把该 prompt 钉死在本次调用上。若只要单个 agent、
+不需要宿主会话存储，`build({ mode: 'core' })` + `agent.run()` 是库层路径。已有配置文件的宿主可以跳过
+builder：`buildFromConfigFile()` 返回 `agentId → BuiltAgent` 的 `Map`（含 `agent`、`runner`、
+`runtime` 等）。
 
 ### 文件即配置
 
@@ -246,11 +303,15 @@ my-agent/
 
 ### 挂载 MCP 服务器
 
-```typescript
-import { AgentBuilder, createSdkMcpClient } from 'octopi-agent';
+MCP SDK 客户端是 Integration 适配器——从子路径导入，不在包根：
 
-const { agent, runner } = await new AgentBuilder()
-  .model('gpt-4o')
+```typescript
+import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
+import { createSdkMcpClient } from '@octopi-agent/engine/integration';
+
+const { agent, runner, mcpManager, runtime } = await new AgentBuilder()
+  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY!, models: ['gpt-6.1-terra'], defaultModel: 'gpt-6.1-terra' }))
+  .persona('./my-agent')
   .mcpClientFactory(createSdkMcpClient)
   .mcp({
     id: 'filesystem',
@@ -259,7 +320,16 @@ const { agent, runner } = await new AgentBuilder()
     args: ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
   })
   .build();
+
+// 与上面的循环相同，只是工具面里多了这个 MCP 服务器的工具
+console.log(agent.context.tools?.map((t) => t.name));
+
+await mcpManager.disconnectAll(); // MCP 服务器是子进程，不断开会挂住进程
+runtime?.dispose();
 ```
+
+工具以 `{serverId}__{toolName}` 命名空间注册（分隔符为 `__`），上面这个服务器注册的工具都挂在
+`filesystem` 前缀下——两个服务器提供同名工具也不会撞。
 
 ---
 
@@ -299,13 +369,13 @@ const { agent, runner } = await new AgentBuilder()
 npm test
 ```
 
-240+ 测试文件，三层纪律：单元（Mock）、**录制回放**（确定性回归）、E2E 真实 API——外加 `ChaosProvider` 故障注入和架构依赖检查。测试不是覆盖率表演；它是不变量保持不变的方法。
+550+ 测试文件，三层纪律：单元（Mock）、**录制回放**（确定性回归）、E2E 真实 API——外加 `ChaosProvider` 故障注入和架构依赖检查。测试不是覆盖率表演；它是不变量保持不变的方法。
 
 ---
 
 ## 现状与边界
 
-Octopi 处于 v0.8x，迭代很快。诚实地说清边界：
+Octopi 处于 pre-1.0，迭代很快。诚实地说清边界：
 
 - **部署假设**：单进程是 v1 现实；跨进程需要分布式 Session Lease（进程内租约已有）。
 - **协作域**标注 `status: incomplete`——语义已定义，部分实现分期交付。

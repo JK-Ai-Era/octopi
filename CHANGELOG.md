@@ -131,6 +131,58 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.11 (2026-11-21)
+
+### docs(readme,contributing): Quick Start 对齐 init 首启旅程，修正跑不通的入口与代码示例
+
+README（英中同改）的 Quick Start 此前仍以 `octopi serve start` 为主线、把 `octopi init` 写成
+「喜欢终端？」的备选——与实现相反。重写后的主路径为 `npm i -g octopi-agent` → `octopi init`
+→ 三分钟到第一句话，并补齐此前缺失的旅程事实：九步状态机在 CLI 下自动省去 init-mode（答八步）；
+部署模式三选（个人 / 单组织 / 多组织，后两者设 admin 密码）；密钥落 `OCTOPI_HOME/.env` 而配置只留
+`${VAR}`；向导收尾打印 `channels[type=http].apiKey` 作为 WebUI 登录页的访问密钥；裸 `octopi`
+未初始化→向导、已初始化→chat；`serve start` 的 setup 链接仅出现在全新部署；`init --yes` 的六个
+环境变量与默认值；`octopi agent new`（旅程 B）。
+
+**两处代码示例此前照抄即失败**（tsc 实测）：嵌入示例缺 `RunConfig`（`handle` 第三个参数必填）且
+`event.data` 未收窄；MCP 示例从包根 import `createSdkMcpClient`，而它只在
+`@octopi-agent/engine/integration` 子路径导出（已用 node 实测包根为 `undefined`）。两段示例重写后
+`tsc --strict` 通过、并以 stub provider 实跑到 `run_end`，同时补上 `runtime.dispose()` 与
+`mcpManager.disconnectAll()`——自主子系统持有定时器、MCP 服务器是子进程，不清理则进程不退出。
+嵌入示例改传 `systemPrompt: ''`：传 build 时的 persona 快照会让 runner 跳过 persona 解析器，
+`AGENTS.md` 的热更新对该调用失效。
+
+**按独立评审核实的偏差一并修正**（评审 del-fc038371，逐条回代码复核）：
+- 「配置即时生效」改为限定表述——CLI 向导只写盘，对已在跑的 gateway 重跑 `octopi init` 不热生效
+  （gateway 无配置监听，`applyFromDisk` 只由 Web 向导的 `onConfigApplied` 调用）。
+- setup 链接不再称「一次性、只打印终端」：token 落 `setup-token.json`（0600）且 30 分钟内可复用，
+  完成时吊销。
+- `--yes` 示例补 `OCTOPI_API_KEY`：需要 key 的预设（如 deepseek）缺 key 会在落盘前抛错；
+  同处注明 `--yes` 不做探针。
+- `agent new` 的「挂资料」实为指引（CLI 侧诚实降级），补上「怎么称呼你」一步与「需已初始化」前提。
+- `buildFromConfigFile()` 实为 `Map<agentId, BuiltAgent>`，不是普通对象。
+
+同步订正 README 的两处过期口径：测试文件数（240+ → 550+，实测 553 文件）与版本表述（`v0.8x` →
+`pre-1.0`）。
+
+`docs/CONTRIBUTING*.md`（英中同改）修正跑不通或指错位置的入口：测试命令从裸 `npx vitest run` /
+`npx vitest watch` 改为 `npm test -- <file>` 与 `npm test -- -t "<name>"`（由 npm 脚本统一带
+`--experimental-vm-modules`）；TypeScript 口径改为「6.0.x（webui 5.5.x，来自 devDependencies）」；
+build 链补 `postbuild-bin`；分层表补 Loop 层符号与 suite/webui 的位置；测试表删去已不存在的
+`ToolRegistry` / 「工具版本管理」、`SmartRouter` / `Compressor`，capabilities 路径从
+`tests/harness/context/capabilities/` 改为实测存在的 `tests/harness/capabilities/`，webui 测试扩展名
+改为 `*.test.{ts,tsx}`；SummaryPort 改为「类型 / `summarizeFn` 注入」（v0.98.10 起 CompactEngine 拒
+`summaryPort`）；文档同步表补 `bash arch/check-sync.sh` 门禁并标注**仅维护者适用**（`arch/` 被
+gitignore，新克隆里没有该脚本）。
+
+连带修掉三处仍在引用已删实现的文档（否则与新 CONTRIBUTING 的「Module README Sync」自相矛盾）：
+`harness/context/README.md` 的 `SmartRouter` 与 `smart-router.ts` 条目、
+`plugin-ecosystem/README.md` 的 `ToolRegistry`（实为 `DefaultToolBus`）、
+`docs/architecture.md` / `.zh.md` 目录树里的 `smart-router.ts`。
+
+验证：`tsc --strict` 校验两段 README 示例通过并以 stub provider 实跑；`npm test -- <file>`、
+`npm test -- -t "SecurityGuard"`、`npm run typecheck` 实跑通过；`bash arch/check-sync.sh` 绿。
+无代码行为变更——仅文档与版本号。
+
 ## v0.121.10 (2026-11-21)
 
 ### docs(constitution): add section F — web and network access

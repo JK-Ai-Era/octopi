@@ -7,22 +7,36 @@
 ## Requirements
 
 - Node.js >= 24 (the persistence layer uses built-in `node:sqlite`; no native SQLite extension build)
-- TypeScript >= 5.0
+- TypeScript 6.0.x for the root/engine/gateway build (`packages/webui` stays on 5.5.x); both come from
+  `devDependencies`, so `npm install` is enough
 
 ## Development Commands
 
 ```bash
-# Build
-npm run build          # tsc compile
+# Build (root + all four packages)
+npm run build          # clean → core → engine → gateway → webui → root tsc → assets → schema → bin
 
-# Test
-npm test               # run all tests (node --experimental-vm-modules)
-npx vitest run         # equivalent command
-npx vitest watch       # watch mode
+# Test — always go through the npm script: it supplies --experimental-vm-modules
+npm test               # full suite (root tests/** plus packages/webui tests)
+npm run test:coverage
 
-# Development
-npm run dev            # tsc --watch
+# A single file / a filtered subset
+npm test -- tests/core-engine.test.ts
+npm test -- -t "SecurityGuard"
+
+# Typecheck
+npm run lint           # eslint + tests typecheck + webui tsc
+npm run typecheck      # tests typecheck against the known-error baseline
+
+# Development (each package watches its own tsc target)
+npm run dev            # root src/ only (tsc --watch)
+npm --prefix packages/engine run dev   # per-package watch; repeat for core/gateway
+npm run web            # webui vite dev server
 ```
+
+`npm test` and `npm run test:coverage` set `--experimental-vm-modules` for you. A bare
+`npx vitest run` works for the current suite, but going through the npm scripts keeps every
+contributor on the same flags.
 
 ## Architecture Layers
 
@@ -30,10 +44,13 @@ The project uses a four-layer onion architecture + DDD domain organization:
 
 | Layer | Directory | Responsibility | Dependencies |
 |---|---|---|---|
-| Loop | `packages/core/src/loop/` | Pure execution loop | Core types only |
+| Loop | `packages/core/src/loop/` | Pure execution loop (`agentLoop`, `callModel`) | Core types only |
 | Core | `packages/core/src/core/` | Mechanism primitives + interface contracts + core types | No external dependencies |
 | Harness | `packages/engine/src/harness/` | Product domain organization (see `docs/domains.md`) | Core + Loop |
 | Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | External system adapters | Core + Loop + Harness |
+
+The suite package (`src/cli/`, `src/init.ts`, config IO) sits outside the four layers and composes them;
+`packages/webui` is the prebuilt console served by the gateway.
 
 For the detailed architecture see [docs/architecture.md](./architecture.md); for long-term invariants see the [Architecture Constitution](./north-star.md).
 Implementation status and open items: [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) and [CHANGELOG](../CHANGELOG.md).
@@ -59,31 +76,33 @@ Implementation status and open items: [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) 
 ## Testing Standards
 
 ```bash
-# Run all tests
+# Full suite
 npm test
 
-# Run a single test file
-npx vitest run tests/core-engine.test.ts
+# A single test file
+npm test -- tests/core-engine.test.ts
 
-# Run matching tests
-npx vitest run -t "SecurityGuard"
+# Matching test names
+npm test -- -t "SecurityGuard"
 ```
 
-**Test file naming:** `tests/<module>.test.ts`
+**Test file naming:** `tests/<module>.test.ts` (webui component tests live beside their source under
+`packages/webui/src/**/*.test.{ts,tsx}` and are picked up by the same run).
 
-**Current test distribution:** see the repository `tests/**` (including shared capabilities under `tests/harness/context/capabilities/`)
+**Current test distribution:** see the repository `tests/**` (shared-capability tests for
+summary/compact/document live under `tests/harness/capabilities/`).
 
 | Test area | Coverage |
 |---|---|
 | Loop protocol | agentLoop pure functions, callModel, error classification, terminate/finishReason/phase contracts |
 | Harness facade | Agent.run, AgentBuilder, SessionAwareRunner, reliability wrappers |
 | Security | SecurityGuard, RiskEvaluator, DefaultRiskPolicy, ShellParser |
-| Context management | ContextEngine, SmartRouter, MessageSelector, Compressor, ContextLayer/Assembler, proactive summary |
-| Shared capabilities | SummaryPort/L1L2/structured/oversized, CompactEngine, tools wiring (`tests/harness/context/capabilities/`) |
+| Context management | ContextEngine, DefaultMessageSelector, BudgetAllocator, turn envelopes, ContextLayer/Assembler, proactive summary |
+| Shared capabilities | SummaryPort types / `summarizeFn` injection, CompactEngine, document Port (`tests/harness/capabilities/`) |
 | Session tasks / process supervision | SessionTaskService, task_* tools, DefaultRunGuard |
 | Plugin system | Manifest-first loader, contribution registry, PluginManager hooks |
 | Skill management | SkillManager two-phase loading |
-| Tool system | ToolRegistry, tool versioning |
+| Tool system | DefaultToolBus, tool registration/replace, plugin tool authorization |
 | Autonomous subsystem | SubsystemRuntime, SenseEngine, ThinkExecutor, SignalBus |
 | Delegation | DelegateService, DelegateTransport, AgentRegistry, RunnerChildRunPort |
 | Concurrency | ProviderPool, SessionGate, RateLimiter |
@@ -113,6 +132,7 @@ npx vitest run -t "SecurityGuard"
 | Observer / `observer` config | `docs/observer-domain.md` + `docs/architecture.md` + `octopi.schema.json` / `octopi.example.json` |
 | Shared capabilities summary/compact | `docs/context-layer-contracts.md` + `docs/architecture.md` + `packages/engine/src/harness/README.md` + `packages/engine/src/harness/context/README.md` + schema/example; internal spec (not public) |
 | Change inter-layer dependencies / layering | `docs/architecture.md`; must not violate the [Architecture Constitution](./north-star.md) or this file’s “dependency direction” |
+| Module add/remove/rename, moved files, structure trees in `arch/*.md` | `bash arch/check-sync.sh` must be green (see `arch/sync-protocol.md`); treat red as a gate, never weaken the checker. **Maintainer-only**: `arch/` is gitignored (internal handoff docs), so a fresh clone has no `arch/check-sync.sh` |
 | Change architecture invariants | **`docs/north-star.md`** (explicit review required) + `CHANGELOG.md` |
 | Test count changes | `README.md` + `CHANGELOG.md` |
 

@@ -10,7 +10,7 @@ Plugin 系统、Skill 管理、工具注册、MCP 集成、对话斜杠命令。
 ## 职责
 
 - PluginLoader / PluginContributionRegistry — manifest-first 加载、暂存与有效贡献发布；PluginManager 消费 Hook
-- ToolRegistry — 工具注册中心（Agent 调用面）
+- ToolBus（DefaultToolBus）— 工具注册中心（Agent 调用面）
 - SkillManager — 两阶段加载（启动时元数据 + LLM 按需加载）；`command` 字段可桥接 `/name`
 - McpManager — MCP Client 管理
 - CommandRouter — 会话内 `/xxx`：parse / 注册 / 冲突裁决 / execute；`sessionOps` 由 Host 落地

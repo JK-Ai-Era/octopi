@@ -289,29 +289,79 @@ npm install -g octopi-agent
 ### Three minutes to your first conversation
 
 ```bash
-octopi serve start
+octopi init
 ```
 
-On a fresh machine this scaffolds `OCTOPI_HOME` and prints a personal setup
-link in the terminal:
+On a fresh machine `octopi init` **is** the first-run experience: it scaffolds
+`OCTOPI_HOME` and then walks you through the setup wizard in your terminal. The
+state machine has nine steps; terminal mode auto-selects CLI, so you answer
+eight:
+
+```text
+language → deployment mode → model provider → API key → model
+         → connectivity probe → start services → first message
+```
+
+- **Deployment mode** is a real decision, not a formality: *personal* (just you
+  on this machine, no login), *organization* (one org, several users, shared
+  knowledge base), *multi-organization* (isolated orgs on one deployment). The
+  two org modes ask for an admin password — typed twice, stored hashed.
+- **API key** is never written into `octopi.json`: it lands in
+  `OCTOPI_HOME/.env` while the config keeps a `${VAR}` placeholder. The wizard
+  probes the provider before it commits, and every failure comes with a way out
+  (retry, re-enter the key, switch provider, save and exit).
+- **Config takes effect immediately** — the wizard writes before it starts
+  services, and the Web wizard hot-applies into the running gateway. If you
+  re-run `octopi init` against an already-running gateway, restart it (or change
+  config through the console) — the CLI wizard does not hot-apply.
+
+When the wizard finishes it offers to start services and to chat right away,
+and prints the console access key (the random `channels[type=http].apiKey`
+scaffolded for you). Local access needs nothing; for LAN or remote access paste
+that key into the WebUI login page's "Access key" field.
+
+```bash
+octopi serve start   # gateway + web console; the wizard can do this for you
+octopi chat          # TUI chat, same agent, same config
+octopi doctor        # diagnose deployment/config, no LLM needed
+```
+
+Bare `octopi` follows the same rule: uninitialized → the init wizard,
+initialized → TUI chat.
+
+**Prefer the browser?** `octopi init --web` hands off to the Web wizard (it needs
+the gateway running; otherwise it tells you to run `octopi serve start` first).
+On a fresh deployment `octopi serve start` issues a setup link, printed in that
+terminal (valid for 30 minutes, revoked once the wizard completes):
 
 ```text
 🧙 First-run setup wizard (Web): http://localhost:8180/?setup=<token>
 ```
 
-(Port `8180` is the default; if you set `web.port`, use that value — the terminal prints the exact link.)
+(Port `8180` is the default; with `web.port` set, trust the printed link.) The
+CLI and Web wizards share one state machine and write the same config — pick
+either.
 
-Open it and walk the nine-step wizard (language → model provider → API key →
-pick a model → …). When you finish, the config takes effect immediately —
-open the web console at `http://localhost:8180`, open a session and just
-start chatting.
-
-Prefer the terminal?
+**Non-interactive** (CI, dotfiles, scripted installs) — `--yes` skips the wizard
+and reads everything from flags plus env, so nothing is probed:
 
 ```bash
-octopi init      # the same nine-step wizard, in your terminal
-octopi chat      # talk to your agent right away
-octopi doctor    # verify the environment
+OCTOPI_API_KEY=sk-… octopi init --yes --provider deepseek --model deepseek-flash
+```
+
+`--yes` takes defaults plus env: `OCTOPI_API_KEY` (required by presets that need
+a key — omit it only for keyless `ollama`), `OCTOPI_DEPLOYMENT_MODE`,
+`OCTOPI_ADMIN_PASSWORD` (required by the org modes), `OCTOPI_ORG_NAME`,
+`OCTOPI_ADMIN_NAME`, `OCTOPI_LANG`. Defaults: provider `ollama`, deployment mode
+`personal`. `--web` hands off to the browser wizard; `--cli` forces the terminal
+one.
+
+**A second agent** (journey B) is a wizard of its own — pick a type, name it and
+say how it should address you, get pointed at attaching material, then try it.
+It needs an initialized deployment (the registry must have a user):
+
+```bash
+octopi agent new
 ```
 
 ### Embed in code
@@ -319,17 +369,37 @@ octopi doctor    # verify the environment
 ```typescript
 import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
 
-const { agent, runner } = await new AgentBuilder()
-  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY! }))
+const { runner, runtime } = await new AgentBuilder()
+  .model(new OpenAIProvider({
+    apiKey: process.env.OPENAI_API_KEY!,
+    models: ['gpt-6.1-terra'],
+    defaultModel: 'gpt-6.1-terra',
+  }))
   .persona('./my-agent')
   .build();
 
-for await (const event of runner.handle('session-1', userMessage)) {
+const userMessage = { role: 'user' as const, content: 'hello', timestamp: Date.now() };
+
+for await (const event of runner.handle('session-1', userMessage, {
+  systemPrompt: '', // let the runner resolve persona per run (hot-reload aware)
+  agentId: 'default',
+  sessionId: 'session-1',
+})) {
   if (event.type === 'llm_stream_delta') {
-    process.stdout.write(event.data.delta);
+    process.stdout.write(String(event.data?.delta ?? ''));
   }
 }
+
+runtime?.dispose(); // autonomous subsystems hold timers — dispose so the process can exit
 ```
+
+`runner.handle()` is the session-aware entry: it owns the session lifecycle and
+write-back. Leaving `systemPrompt` empty lets the runner resolve persona per run
+(editing `AGENTS.md` takes effect on the next message); passing a string pins
+that prompt for the call. For a single agent with no host session store,
+`build({ mode: 'core' })` plus `agent.run()` is the library-level path. Hosts
+that already have a config file can skip the builder: `buildFromConfigFile()`
+returns a `Map` of `agentId → BuiltAgent` (`agent`, `runner`, `runtime`, …).
 
 ### Files as configuration
 
@@ -353,11 +423,16 @@ SQLite store — it is *grown*, not hand-written. See [docs/memory.md](./docs/me
 
 ### Mount MCP servers
 
-```typescript
-import { AgentBuilder, createSdkMcpClient } from 'octopi-agent';
+The MCP SDK client is an Integration adapter — import it from its subpath, not
+the package root:
 
-const { agent, runner } = await new AgentBuilder()
-  .model('gpt-4o')
+```typescript
+import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
+import { createSdkMcpClient } from '@octopi-agent/engine/integration';
+
+const { agent, runner, mcpManager, runtime } = await new AgentBuilder()
+  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY!, models: ['gpt-6.1-terra'], defaultModel: 'gpt-6.1-terra' }))
+  .persona('./my-agent')
   .mcpClientFactory(createSdkMcpClient)
   .mcp({
     id: 'filesystem',
@@ -366,7 +441,17 @@ const { agent, runner } = await new AgentBuilder()
     args: ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
   })
   .build();
+
+// same loop as above, now with the MCP server's tools in the tool set
+console.log(agent.context.tools?.map((t) => t.name));
+
+await mcpManager.disconnectAll(); // MCP servers keep child processes alive
+runtime?.dispose();
 ```
+
+Tools arrive namespaced as `{serverId}__{toolName}` (separator `__`), so the
+server above registers its own tools under a `filesystem` prefix — two servers
+advertising the same tool name cannot collide.
 
 ---
 
@@ -413,7 +498,7 @@ const { agent, runner } = await new AgentBuilder()
 npm test
 ```
 
-240+ test files on a three-tier discipline: unit (mocks), **record/replay**
+550+ test files on a three-tier discipline: unit (mocks), **record/replay**
 (deterministic regressions), and E2E against real APIs — plus `ChaosProvider`
 fault injection and architecture dependency checks. Testing is not coverage
 theater; it is how the invariants stay invariant.
@@ -422,7 +507,7 @@ theater; it is how the invariants stay invariant.
 
 ## Status & boundaries
 
-Octopi is v0.8x and moving fast. Being honest about the edges:
+Octopi is pre-1.0 and moving fast. Being honest about the edges:
 
 - **Deployment assumption**: single process is the v1 reality; cross-process
   requires a distributed Session Lease (in-process lease exists today).
