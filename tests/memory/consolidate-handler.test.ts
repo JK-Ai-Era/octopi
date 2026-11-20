@@ -124,7 +124,7 @@ describe('consolidate merge_llm_adjudication', () => {
       },
     );
 
-    expect(out.act.status).toBe('success');
+    expect(out.act?.status).toBe('success');
     const graph = await store.getFullGraph();
     expect(graph.nodes).toHaveLength(1);
     // canonicalKind 生效：幸存行 kind 从 construct 变 method；description 空侧吸收
@@ -168,7 +168,7 @@ describe('consolidate merge_llm_adjudication', () => {
         ),
       },
     );
-    expect(out.act.status).toBe('success');
+    expect(out.act?.status).toBe('success');
     const data = out.signals[0]!.data as { adjudication: Record<string, number> };
     expect(data.adjudication.keptSplit).toBe(1);
     const rows = (await store.listMergeCandidates()).filter((c) => c.id === near.candidateId);
@@ -218,11 +218,11 @@ describe('consolidate merge_llm_adjudication', () => {
         [DEP_LLM_PORT]: mockLlm(() => '这不是 JSON', requests),
       },
     );
-    expect(out.act.status).toBe('failed'); // fail-loud
+    expect(out.act?.status).toBe('failed'); // fail-loud
     expect(requests.length).toBeGreaterThanOrEqual(2); // completion-guard 完整性重试后仍失败
     expect(await store.listMergeCandidates()).toHaveLength(1); // 候选未被误动
     // 显式降级：decay/promote/capacity 不被 LLM 故障吞掉
-    expect(String(out.act.messages?.[0]?.content ?? '')).toContain('decayed=');
+    expect(String(out.act?.messages?.[0]?.content ?? '')).toContain('decayed=');
     expect(out.signals.some((s) => s.action === 'alert')).toBe(true);
   });
 
@@ -237,10 +237,10 @@ describe('consolidate merge_llm_adjudication', () => {
         [DEP_MEMORY_STORE_KEY]: await memoryStoreWith(),
       },
     );
-    expect(out.act.status).toBe('failed');
-    expect(String(out.act.error)).toContain('llmPort');
+    expect(out.act?.status).toBe('failed');
+    expect(String(out.act?.error)).toContain('llmPort');
     expect(out.signals.some((s) => s.action === 'alert')).toBe(true);
-    expect(String(out.act.messages?.[0]?.content ?? '')).toContain('decayed=');
+    expect(String(out.act?.messages?.[0]?.content ?? '')).toContain('decayed=');
   });
 
   it('无可裁决候选时不烧 LLM，照常完成', async () => {
@@ -254,7 +254,7 @@ describe('consolidate merge_llm_adjudication', () => {
         [DEP_LLM_PORT]: mockLlm(decideAll('drop'), requests),
       },
     );
-    expect(out.act.status).toBe('success');
+    expect(out.act?.status).toBe('success');
     expect(requests).toHaveLength(0);
   });
 
@@ -276,7 +276,7 @@ describe('consolidate merge_llm_adjudication', () => {
         ),
       },
     );
-    expect(out.act.status).toBe('success');
+    expect(out.act?.status).toBe('success');
     const graph = await store.getFullGraph();
     expect(graph.nodes).toHaveLength(2); // 未合并
     expect(graph.nodes.map((n) => n.kind).sort()).toEqual(['construct', 'entity']);
@@ -302,7 +302,7 @@ describe('consolidate merge_llm_adjudication', () => {
         ),
       },
     );
-    expect(out.act.status).toBe('success');
+    expect(out.act?.status).toBe('success');
     const data = out.signals[0]!.data as { adjudication: Record<string, number> };
     expect(data.adjudication.unresolved).toBe(1);
     expect(await store.listMergeCandidates()).toHaveLength(1); // 留池
@@ -335,7 +335,7 @@ describe('consolidate merge_llm_adjudication', () => {
         [DEP_LLM_PORT]: mockLlm(decideAll('keep_split'), requests),
       },
     );
-    expect(out.act.status).toBe('success');
+    expect(out.act?.status).toBe('success');
     expect(requests).toHaveLength(0); // 免 LLM
     const data = out.signals[0]!.data as { adjudication: Record<string, number> };
     expect(data.adjudication.autoMerged).toBe(1);
@@ -364,7 +364,7 @@ describe('consolidate merge_llm_adjudication', () => {
         [DEP_LLM_PORT]: mockLlm(decideAll('keep_split'), requests),
       },
     );
-    expect(out.act.status).toBe('success');
+    expect(out.act?.status).toBe('success');
     expect(requests).toHaveLength(1); // 走了 LLM（验收 bug 的回归锚）
     const data = out.signals[0]!.data as { adjudication: Record<string, number> };
     expect(data.adjudication.keptSplit).toBe(1);
@@ -390,7 +390,7 @@ describe('consolidate merge_llm_adjudication', () => {
         ),
       },
     );
-    expect(out.act.status).toBe('success');
+    expect(out.act?.status).toBe('success');
     const data = out.signals[0]!.data as { adjudication: Record<string, number> };
     expect(data.adjudication.keptSplit).toBe(1);
   });

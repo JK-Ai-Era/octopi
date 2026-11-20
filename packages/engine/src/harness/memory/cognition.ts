@@ -288,8 +288,11 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
   /** 无向量能力（InMemory 不注 embedding）：语义种子恒空，调用方据 supportsSemanticSeeds 降级纯词面 */
   readonly supportsSemanticSeeds = false;
 
-  /** @returns 恒空数组——InMemory 无向量，语义种子不可用（能力缺失，非数据为空） */
-  async semanticSeeds(): Promise<string[]> {
+  /**
+   * 与 ConceptGraphStore 契约同签名：query/k 收下但不使用（无向量能力，调用方据 supportsSemanticSeeds 降级）。
+   * @returns 恒空数组——InMemory 无向量，语义种子不可用（能力缺失，非数据为空）
+   */
+  async semanticSeeds(_query: string, _k?: number): Promise<string[]> {
     return [];
   }
 
