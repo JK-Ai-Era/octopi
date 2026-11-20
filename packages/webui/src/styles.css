@@ -44,8 +44,11 @@
   --syntax-title: #fbbf24;
   --syntax-attr: #f87171;
   --syntax-builtin: #38bdf8;
+  /* 左栏宽度：真正生效值由 ChatWorkspace 注入内联 --sidebar-w（初始/最小 280/240）；此处仅为注入前兜底。
+     不再有窄屏媒体查询覆盖：宽度由用户拖拽控制并持久化，硬编码覆盖会与用户选择冲突。 */
   --sidebar-w: 280px;
-  --right-panel-w: 300px;
+  /* 右栏宽度：真正生效值由 ChatWorkspace 注入内联 --right-panel-w（初始 280 / 最小 220）；此处仅为注入前兜底 */
+  --right-panel-w: 280px;
 }
 
 /* 暗色主题（DESIGN.md 3a 仪器底 --n-950；data-theme 由 ThemeToggle 同步，system 跟随 matchMedia） */
@@ -235,12 +238,29 @@ pre { font-family: var(--font-mono); font-size: 13px; }
 .app-header-actions { display: flex; align-items: center; gap: 8px; }
 .btn-focus-active { background: var(--color-accent); border-color: var(--color-accent-border); }
 
-.app-main { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--sidebar-w) 1fr var(--right-panel-w); /* 行高锁死，侧栏 overflow-y:auto 才能滚动，不被内容撑破裁切 */
+.app-main { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--right-panel-w); /* 行高锁死，侧栏 overflow-y:auto 才能滚动，不被内容撑破裁切 */
+  /* 中栏用 minmax(0,1fr)：纯 1fr 的下界是内容 min-content，长代码块/长 URL 会把中栏撑破；
+     0 下界允许它被两侧拖拽压缩，保底宽度由 ChatWorkspace 的 clamp（CENTER_MIN_W）负责 */
   grid-template-rows: minmax(0, 1fr); overflow: hidden; position: relative; }
-.app-main-no-right { grid-template-columns: var(--sidebar-w) 1fr; }
+.app-main-no-right { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); }
 .app-main-no-right .right-panel { display: none; }
 
 /* ── Left Sidebar ── */
+/* 左栏手柄：放在 .app-main 内（不在 aside 里）——aside 有 overflow-x:hidden，会把它裁掉。
+   left 跟随 --sidebar-w，因此不需要 JS 额外定位。 */
+.left-splitter {
+  position: absolute;
+  left: calc(var(--sidebar-w) - 3px);
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  transition: background 0.12s;
+  z-index: 25;
+}
+.left-splitter:hover, .left-splitter:active { background: var(--color-accent-border); }
 .left-sidebar { padding: 12px; overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--color-border); display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
 .sidebar-section { padding: 12px; min-width: 0; overflow: hidden; flex-shrink: 0; }
 .sidebar-title { font-weight: 600; margin-bottom: 8px; }
@@ -1649,12 +1669,10 @@ button.ctx-band {
 }
 
 /* ── Responsive ── */
-@media (max-width: 1024px) {
-  :root { --sidebar-w: 240px; --right-panel-w: 260px; }
-}
-
 @media (max-width: 768px) {
   .app-main { grid-template-columns: 1fr; }
+  /* 移动端左栏是整屏抽屉，手柄无意义 */
+  .left-splitter { display: none; }
   .left-sidebar, .right-panel { display: none; }
 
   .mobile-nav { display: flex; border-bottom: 1px solid var(--color-border); background: var(--color-surface); flex-shrink: 0; }
@@ -1894,9 +1912,11 @@ button.ctx-band {
 .composer {
   display: flex;
   flex-direction: column;
-  height: var(--composer-h, 240px);
+  /* 初始/兜底 200px（= JS 侧 COMPOSER_H_DEFAULT/MIN）；实际高度由内联 --composer-h 决定 */
+  height: var(--composer-h, 200px);
   min-height: 0;
-  max-height: 70vh;
+  /* 上限与 JS clamp 同源（视口 60%）：CSS 兜住未触发 JS 的容器缩窄，两处不可再分叉 */
+  max-height: 60vh;
   overflow: visible;
   box-sizing: border-box;
   /* 固定高度（手柄直接调它）：rows=1 让 flex 全权决定 textarea 高度；

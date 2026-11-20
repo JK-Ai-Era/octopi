@@ -131,6 +131,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.7 (2026-11-20)
+
+### feat(webui): 左栏可拖拽调宽，三栏尺寸约束统一收口
+
+- 左栏新增拖拽手柄（240px–视口 40%，双击复位 280px，`localStorage['octopi.leftSidebar.width']` 持久）；手柄挂在 `.app-main` 而非 `aside` 内——`aside` 的 `overflow-x:hidden` 会将其裁掉，`left` 跟随 `--sidebar-w` 无需 JS 定位。
+- 右栏初始宽度 360→**280px**，最小 280→**220px**；输入区初始高度 240→**200px**（= 最小值）。三项默认值同时下调，把首屏空间让给对话区。
+- **尺寸常量与 clamp 收敛为单一真源**：`COMPOSER_H_MIN/DEFAULT`、`RIGHT_W_MIN/DEFAULT`、`LEFT_W_MIN/DEFAULT`、`CENTER_MIN_W` 与 `clampRange`/`clampComposerH`/`clampRightW`/`clampLeftW` 全部提到模块级。初始值、`localStorage` 值、双击复位值三条入口统一过 clamp——此前初始值直接返回常量，极小视口下首屏越界，需等一次 `resize` 才纠正。
+- `clampRange` 明确 min/max 冲突语义：**min 为硬下限**，视口派生上限与之冲突时以 min 兜底。旧写法 `Math.min(Math.max(v,min),max)` 在 `max<min` 时会让结果掉到下限以下。
+- **中栏改为 `minmax(0, 1fr)`**（含 `app-main-no-right`）：纯 `1fr` 的下界是内容 `min-content`，长代码块/长 URL 会把中栏撑破。经评估未采用 `minmax(420px, 1fr)`——那是硬下界，窗口窄于「两侧下限+420」时 grid 总宽溢出，会被 `.app-main { overflow:hidden }` 裁掉右栏；改由 JS clamp 在拖拽/resize 时保底 `CENTER_MIN_W=420`，窄屏降级为中栏变窄而非静默裁切。
+- `clampRightW` 增加 `leftW` 入参、`clampLeftW` 增加 `rightW` 入参，上限取「视口比例」与「留出中栏保底」中更严者；resize 时先收左栏再用其结果收右栏，一次收敛避免两栏互相挤爆中栏。
+- 删除两条死规则：`@media (max-width:1024px)` 下的 `--sidebar-w: 240px` / `--right-panel-w: 260px`——两者均被 `<main>` 内联变量覆盖，永不生效，留着只会误导后续维护。
+- 修正 CSS 与 JS 上限分叉：`.composer` 兜底高度 `240px→200px`，`max-height` 由 `70vh` 对齐为 **`60vh`**（与 `clampComposerH` 同源）。`≤768px` 隐藏左栏手柄（移动端左栏为整屏抽屉）。
+- 会话标题省略无需任何 JS：`.session-card-title` 已是 `text-overflow: ellipsis`，浏览器在布局阶段按实际盒宽重算，全仓无字符级截断逻辑。
+- 新增 i18n `chatWorkspace.leftSplitterAria`（中/英）。
+
+**注意**：`localStorage` 中已存旧值（240/360）的用户看不到新默认值，需双击手柄复位或清除对应 key。
+
 ## v0.121.6 (2026-11-20)
 
 ### chore(changelog): 到期 minor 段 v0.120.x 归档至 changelog/v0.120.md

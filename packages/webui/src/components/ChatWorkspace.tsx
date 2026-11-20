@@ -45,6 +45,69 @@ function webuiClientInstanceId(): string {
   return id;
 }
 
+/**
+ * 输入区高度 / 右栏宽度的可调范围（模块级单一真源）。
+ * 初始值、下限、视口上界都从这里派生；CSS 里的同名变量只是 JS 注入前的兜底。
+ */
+const COMPOSER_H_MIN = 200;
+/** 初始高度 = 最小高度：首屏把空间让给对话区 */
+const COMPOSER_H_DEFAULT = COMPOSER_H_MIN;
+const RIGHT_W_MIN = 220;
+const RIGHT_W_DEFAULT = 280;
+const LEFT_W_MIN = 240;
+const LEFT_W_DEFAULT = 280;
+/**
+ * 中栏（对话区）保底宽度：左右两侧拖拽合计不得把中栏压到这以下。
+ * 窗口本身窄于「两侧下限 + 该值」时无法同时满足（CSS 按比例让步），
+ * 这里只保证拖拽不会进一步侵占中栏。
+ */
+const CENTER_MIN_W = 420;
+
+/**
+ * 把 value 收进 [min, max]。max 由视口推导，极小窗口下可能小于 min——
+ * 此时以 min 兜底（宁可略超可用空间，也不让输入区/侧栏缩到不可用）。
+ * @param value 目标值
+ * @param min 下限（硬约束）
+ * @param max 上限（视口派生）
+ * @returns 收束后的值
+ */
+function clampRange(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+/**
+ * 输入区高度收束：下限 COMPOSER_H_MIN，上限视口 60%（与 CSS max-height 同源）。
+ * @param h 目标高度 px
+ * @returns 收束后的高度 px
+ */
+const clampComposerH = (h: number): number => clampRange(h, COMPOSER_H_MIN, Math.round(window.innerHeight * 0.6));
+
+/**
+ * 右栏宽度收束：下限 RIGHT_W_MIN；上限取「视口 50%」与「留出中栏保底」中更严的一个。
+ * @param w 目标宽度 px
+ * @param leftW 左栏当前宽度 px（拖拽时不变，resize 时用重算后的值）
+ * @returns 收束后的宽度 px
+ */
+const clampRightW = (w: number, leftW: number): number =>
+  clampRange(
+    w,
+    RIGHT_W_MIN,
+    Math.min(Math.round(window.innerWidth * 0.5), window.innerWidth - leftW - CENTER_MIN_W),
+  );
+
+/**
+ * 左栏宽度收束：下限 LEFT_W_MIN；上限取「视口 40%」与「留出中栏保底」中更严的一个。
+ * @param w 目标宽度 px
+ * @param rightW 右栏当前宽度 px
+ * @returns 收束后的宽度 px
+ */
+const clampLeftW = (w: number, rightW: number): number =>
+  clampRange(
+    w,
+    LEFT_W_MIN,
+    Math.min(Math.round(window.innerWidth * 0.4), window.innerWidth - rightW - CENTER_MIN_W),
+  );
+
 /** 从已持久化的 html_ui call 恢复预览 */
 function webViewsFromCalls(calls: ClientToolCallDto[]): RenderedWebView[] {
   const out: RenderedWebView[] = [];
@@ -792,21 +855,38 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const baseUrl = resolveDefaultBase();
   const apiKey = getConsoleKey();
   const t = useT();
-  // §5b splitter：右栏宽度（280px–约视口 50%，双击复位；localStorage 持久）
-  const RIGHT_W_DEFAULT = 360;
-  const clampRightW = (w: number): number => Math.min(Math.max(w, 280), Math.round(window.innerWidth * 0.5));
+  // §5b splitter：右栏宽度（RIGHT_W_MIN–视口 50%/中栏保底，双击复位；localStorage 持久）
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     // MINOR-5：存储被禁（Safari 隐私模式）不白屏
     try {
       const saved = Number(localStorage.getItem('octopi.rightPanel.width'));
-      return Number.isFinite(saved) && saved > 0 ? clampRightW(saved) : RIGHT_W_DEFAULT;
+      // 初始值同样过 clamp：极小视口下默认值可能越上限，首屏不该等 resize 才纠正
+      return Number.isFinite(saved) && saved > 0
+        ? clampRightW(saved, LEFT_W_DEFAULT)
+        : clampRightW(RIGHT_W_DEFAULT, LEFT_W_DEFAULT);
     } catch {
-      return RIGHT_W_DEFAULT;
+      return clampRightW(RIGHT_W_DEFAULT, LEFT_W_DEFAULT);
+    }
+  });
+  // 左栏宽度（与右栏同构：拖拽 / 双击复位 / localStorage 持久）
+  const [leftPanelWidth, setLeftPanelWidth] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem('octopi.leftSidebar.width'));
+      return Number.isFinite(saved) && saved > 0
+        ? clampLeftW(saved, RIGHT_W_DEFAULT)
+        : clampLeftW(LEFT_W_DEFAULT, RIGHT_W_DEFAULT);
+    } catch {
+      return clampLeftW(LEFT_W_DEFAULT, RIGHT_W_DEFAULT);
     }
   });
   const rightDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const rightWRef = useRef(rightPanelWidth);
   rightWRef.current = rightPanelWidth;
+  const leftDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const leftWRef = useRef(leftPanelWidth);
+  leftWRef.current = leftPanelWidth;
+  /** 右栏未显示时 grid 只有两列，不必为它预留宽度（否则左栏拉不宽） */
+  const reserveRightW = rightPanelVisible ? rightWRef.current : 0;
   const onSplitterPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     e.currentTarget.setPointerCapture(e.pointerId); // Pointer Capture：拖出元素不丢事件
     rightDragRef.current = { startX: e.clientX, startW: rightWRef.current };
@@ -814,7 +894,30 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const onSplitterPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
     const drag = rightDragRef.current;
     if (!drag) return;
-    setRightPanelWidth(clampRightW(drag.startW + (drag.startX - e.clientX)));
+    setRightPanelWidth(clampRightW(drag.startW + (drag.startX - e.clientX), leftWRef.current));
+  };
+  // 左栏手柄：向右拖 = 变宽（方向与右栏相反，仅此一处差异）
+  const onLeftSplitterPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    leftDragRef.current = { startX: e.clientX, startW: leftWRef.current };
+  };
+  const onLeftSplitterPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const drag = leftDragRef.current;
+    if (!drag) return;
+    setLeftPanelWidth(clampLeftW(drag.startW + (e.clientX - drag.startX), reserveRightW));
+  };
+  const onLeftSplitterPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!leftDragRef.current) return;
+    leftDragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    localStorage.setItem('octopi.leftSidebar.width', String(leftWRef.current));
+  };
+  const onLeftSplitterDoubleClick = (): void => {
+    const next = clampLeftW(LEFT_W_DEFAULT, reserveRightW);
+    setLeftPanelWidth(next);
+    localStorage.setItem('octopi.leftSidebar.width', String(next));
   };
   // pointerup/pointercancel 共用收尾（与输入区分割条同构）
   const onSplitterPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
@@ -826,18 +929,18 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     localStorage.setItem('octopi.rightPanel.width', String(rightWRef.current));
   };
   const onSplitterDoubleClick = (): void => {
-    setRightPanelWidth(RIGHT_W_DEFAULT);
-    localStorage.setItem('octopi.rightPanel.width', String(RIGHT_W_DEFAULT));
+    const next = clampRightW(RIGHT_W_DEFAULT, leftWRef.current);
+    setRightPanelWidth(next);
+    localStorage.setItem('octopi.rightPanel.width', String(next));
   };
-  // 输入区高度拖拽：对话历史 ↔ 输入区横向分割条（140–60vh，双击复位，localStorage 持久）
-  const COMPOSER_H_DEFAULT = 240;
-  const clampComposerH = (h: number): number => Math.min(Math.max(h, 200), Math.round(window.innerHeight * 0.6));
+  // 输入区高度拖拽：对话历史 ↔ 输入区横向分割条（COMPOSER_H_MIN–视口 60%，双击复位，localStorage 持久）
   const [composerHeight, setComposerHeight] = useState(() => {
     try {
       const saved = Number(localStorage.getItem('octopi.composer.height'));
-      return Number.isFinite(saved) && saved > 0 ? clampComposerH(saved) : COMPOSER_H_DEFAULT;
+      // 初始值同样过 clamp（与右栏同构）：极小视口下默认值可能越上限
+      return Number.isFinite(saved) && saved > 0 ? clampComposerH(saved) : clampComposerH(COMPOSER_H_DEFAULT);
     } catch {
-      return COMPOSER_H_DEFAULT;
+      return clampComposerH(COMPOSER_H_DEFAULT);
     }
   });
   const composerDragRef = useRef<{ startY: number; startH: number } | null>(null);
@@ -862,18 +965,24 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     localStorage.setItem('octopi.composer.height', String(composerHRef.current));
   };
   const onComposerSplitterDoubleClick = (): void => {
-    setComposerHeight(COMPOSER_H_DEFAULT);
-    localStorage.setItem('octopi.composer.height', String(COMPOSER_H_DEFAULT));
+    const next = clampComposerH(COMPOSER_H_DEFAULT);
+    setComposerHeight(next);
+    localStorage.setItem('octopi.composer.height', String(next));
   };
   // 窗口尺寸变化重 clamp（横屏/软键盘导致 innerHeight 缩小时，持久化值可能越界；打磨批 m3）
   useEffect(() => {
     const onResize = (): void => {
       setComposerHeight((h) => clampComposerH(h));
-      setRightPanelWidth((w) => clampRightW(w));
+      // 先算左栏、再用其结果算右栏：一次收敛，避免两栏各自越界后互相挤爆中栏
+      // 这里不用 reserveRightW（渲染期派生值），直接从 ref + 可见性读取，避免闭包捕获过期值
+      const nextLeft = clampLeftW(leftWRef.current, rightPanelVisible ? rightWRef.current : 0);
+      const nextRight = clampRightW(rightWRef.current, nextLeft);
+      setLeftPanelWidth(nextLeft);
+      setRightPanelWidth(nextRight);
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, []);
+  }, [rightPanelVisible]);
   const [connection, setConnection] = useState('idle');
   const [agents, setAgents] = useState<Array<{
     id: string;
@@ -2268,8 +2377,20 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
 
       <main
         className={`app-main ${rightPanelVisible ? '' : 'app-main-no-right'} ${mobileTab === 'left' ? 'mobile-show-left' : ''} ${mobileTab === 'right' ? 'mobile-show-right' : ''}`}
-        style={{ '--right-panel-w': `${rightPanelWidth}px` } as React.CSSProperties}
+        style={{ '--right-panel-w': `${rightPanelWidth}px`, '--sidebar-w': `${leftPanelWidth}px` } as React.CSSProperties}
       >
+        {/* 左栏手柄放在 .app-main 内、.left-sidebar 外：aside 有 overflow-x:hidden，会把手柄裁掉 */}
+        <div
+          className="left-splitter"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('chatWorkspace.leftSplitterAria')}
+          onPointerDown={onLeftSplitterPointerDown}
+          onPointerMove={onLeftSplitterPointerMove}
+          onPointerUp={onLeftSplitterPointerUp}
+          onPointerCancel={onLeftSplitterPointerUp}
+          onDoubleClick={onLeftSplitterDoubleClick}
+        />
         {/* ── 左栏：连接、Agent、会话 ── */}
         <aside className="left-sidebar">
           <section className="connection-strip">

@@ -170,6 +170,7 @@ export const zh = {
   'chatWorkspace.send': '发送',
   // 右栏概览
   'chatWorkspace.rightSplitterAria': '拖动调整右栏宽度；双击复位',
+  'chatWorkspace.leftSplitterAria': '拖动调整左栏宽度；双击复位',
   'chatWorkspace.groupProgress': '工作进度',
   'chatWorkspace.groupMaterials': '会话物料',
   'chatWorkspace.groupEnvironment': '环境',
@@ -358,6 +359,7 @@ export const en: Record<keyof typeof zh, string> = {
   'chatWorkspace.windowUnknown': ' · window unknown',
   'chatWorkspace.send': 'Send',
   'chatWorkspace.rightSplitterAria': 'Drag to resize the right panel; double-click to reset',
+  'chatWorkspace.leftSplitterAria': 'Drag to resize the left sidebar; double-click to reset',
   'chatWorkspace.groupProgress': 'Progress',
   'chatWorkspace.groupMaterials': 'Session materials',
   'chatWorkspace.groupEnvironment': 'Environment',
