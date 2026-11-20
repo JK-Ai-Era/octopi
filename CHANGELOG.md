@@ -130,6 +130,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.120.7 (2026-11-20)
+
+### fix(engine): createRunId 加随机段（run 身份弱唯一修复）
+
+- **根因**（独立评审 del-5ca70159 P3-11，大哥拍板采纳）：runId 形如 `run_<at>_<进程内seq>_<sessionId>_<agentId>`，seq 重启归零——同毫秒 + 同会话 + 重启的极端序列可碰撞。runId 自 v0.120.5 起是 historyAging run 起点边界的语义载体，id 碰撞会把两个 run 并成同一个保护域（老化边界错位）。
+- **改动**：插入 crypto 随机段 `run_<at>_<seq>_<rand>_<sessionId>_<agentId>`；全仓核查无消费方按格式解析 runId，尾部 sessionId/agentId 可读形态保留。
+- **验证**：新增 `tests/harness/run-id-uniqueness.test.ts` 2 例（同刻同会话唯一 + 形态含随机段——旧格式必失败）；全量套件 5514 通过；lint 三段全绿。
+
 ## v0.120.6 (2026-11-20)
 
 ### refactor(engine,gateway): isTurnInput 收敛 layer-types 单一真源（消除两份手抄副本）

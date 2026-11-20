@@ -10,6 +10,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomBytes } from 'node:crypto';
 import type { Message } from '@octopi-agent/core/types.js';
 import type { ToolFileEffects } from '@octopi-agent/core/types/tools.js';
 import type { ToolPolicy } from '@octopi-agent/core/types/agent-definition.js';
@@ -165,7 +166,11 @@ let runIdSeq = 0;
  */
 export function createRunId(sessionId: string, agentId: string, at: number = Date.now()): string {
   runIdSeq += 1;
-  return `run_${at.toString(36)}_${runIdSeq.toString(36)}_${sessionId}_${agentId}`;
+  // 随机后缀：seq 是进程内计数（重启归零），同毫秒 + 同会话 + 重启的极端序列
+  // 曾可碰撞并 run——runId 自 v0.120.5 起是老化 run 边界的语义载体，碰撞会把
+  // 两个 run 并成一个保护域；随机后缀消掉这条理论路径（评审 del-5ca70159 P3-11）
+  const rand = randomBytes(4).readUInt32BE(0).toString(36);
+  return `run_${at.toString(36)}_${runIdSeq.toString(36)}_${rand}_${sessionId}_${agentId}`;
 }
 
 const runScopeStorage = new AsyncLocalStorage<RunScope>();
