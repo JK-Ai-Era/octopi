@@ -175,17 +175,8 @@ async function runInteractive(opts: RunOnboardingOptions): Promise<OnboardingRes
   let launchChat = false;
   let saved = false;
   const commit = async (): Promise<void> => {
-    const applied = await applyOnboarding(choices, applyDeps(opts));
+    await applyOnboarding(choices, applyDeps(opts));
     saved = true;
-    // M3：降级显式——demo 播种失败的警告必须透出到 CLI（此前静默丢弃）
-    if (applied.demoWarning) {
-      console.warn(`\n⚠️  ${choices.lang === 'en' ? 'Demo kit not seeded:' : '示例任务包未播种：'}${applied.demoWarning}`);
-      console.warn(
-        choices.lang === 'en'
-          ? '   Main config is saved and unaffected; the "Try this example" card will be unavailable.'
-          : '   主配置已保存不受影响；「试试这个示例」暂不可用。',
-      );
-    }
   };
 
   while (state.current !== null) {
@@ -468,11 +459,7 @@ async function runNonInteractive(opts: RunOnboardingOptions): Promise<Onboarding
     if (err) throw new Error(`onboarding_${step}: ${err}`);
   }
 
-  const applied = await applyOnboarding(choices, applyDeps(opts));
-  if (applied.demoWarning) {
-    // M3：--yes 路径同权透出（降级显式不因非交互而消失）
-    console.warn(`\n⚠️  ${choices.lang === 'en' ? 'Demo kit not seeded:' : '示例任务包未播种：'}${applied.demoWarning}`);
-  }
+  await applyOnboarding(choices, applyDeps(opts));
   // 高权限 --yes 无从交互确认——只告警不代写声明（privilegedAck 必须是人的显式表态）
   const { isProcessElevated } = await import(
     '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js'

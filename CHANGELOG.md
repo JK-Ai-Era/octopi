@@ -129,6 +129,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.120.1 (2026-11-20)
+
+### feat(onboarding)!: 移除演示 agent 与演示任务流程（demo kit 整链下线）
+
+- **移除范围**（大哥拍板：体验不好，整体取消）：init 向导播种「示例助手」demo agent + 样例资料 + 三步演示剧本（engine `config-admin/demo-kit.ts` 删除）、`GET /api/v1/demo/kit` 下发面（gateway `web/api/demo-kit.ts` 删除）、webui 空态「试试这个示例」卡与一键跑、demoWarning 透传链（向导完成页警告 / CLI 警告）、`tests/demo-kit.test.ts`。README 英中同步改为「直接开会话开聊」（公共文档双语同改）。`arch/product-onboarding.md` / `arch/i18n-extraction-spec.md` 相应条目标注废弃。
+- **Breaking note（API 形状回退）**：`applyOnboarding()` 返回 `Promise<void>`（原 `{ demoWarning? }`）；`seedDeploymentRegistry()` 返回 `Promise<void>`（原 `{ tenantId, ownerUserId }`，该返回值仅为 demo 归属引入）。gateway onboarding service 与 CLI 向导两个消费方已同步更新。
+- **存量数据不自动清理**：已跑过向导的部署中已播种的「示例助手」agent 与其 workspace 样例文件保留（不动用户数据），可在 Web 控制台手动删除。
+- **迁移**：原 `tests/demo-kit.test.ts` 内与 demo 无关的 `writeEnvLine` 同步 process.env 回归锚（评审 del-1d95563a B3）迁至 `tests/onboarding-env-sync.test.ts`，覆盖不丢失。
+- **验证**：全量套件 541 文件 / 5490 通过（9 跳过常态）；`npm run build` 五包全绿；`arch/check-sync.sh` 通过；独立评审（del-95badb87）确认无残留引用、onboarding/router/wizard 语义完好、README 英中对齐。
+- **已知无关问题**：`npm run lint` 的 tests 类型检查在 `tests/memory/*`（cognition 提交带入）有 14 个存量 type error，非本次引入。
+
 ## v0.120.0 (2026-11-20)
 
 ### feat(webui): 浏览器引擎管理面进设置页（install WebUI 化）

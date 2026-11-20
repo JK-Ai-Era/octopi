@@ -24,9 +24,9 @@ import { ClientToolCallCard, WebViewPreview, type RenderedWebView } from './Clie
 import { FileCard, FilePreviewPanel, fileRefFromCall, fileRefFromToolResult, type FileRef } from './FileDelivery';
 import { looksLikeCodeOrMarkup } from '@octopi-agent/engine/harness/session/title';
 import { resolveDefaultBase } from '../gateway-base';
-import { getConsoleKey, getRegistryToken } from '../console-key';
+import { getConsoleKey } from '../console-key';
 import { t as tc, type MessageKey } from '../i18n/core';
-import { useLang, useT } from '../i18n/react';
+import { useT } from '../i18n/react';
 import { runStatusLabelKey } from './run-status-label';
 import { reduceScrollEvent } from './conversation-follow';
 import { createViewportAuthority, shouldApplyCompensation } from './viewport-authority';
@@ -792,7 +792,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const baseUrl = resolveDefaultBase();
   const apiKey = getConsoleKey();
   const t = useT();
-  const [lang] = useLang();
   // §5b splitter：右栏宽度（280px–约视口 50%，双击复位；localStorage 持久）
   const RIGHT_W_DEFAULT = 360;
   const clampRightW = (w: number): number => Math.min(Math.max(w, 280), Math.round(window.innerWidth * 0.5));
@@ -883,9 +882,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     effectModeSource?: 'agent' | 'global' | 'default';
   }>>([]);
   const [agentId, setAgentId] = useState('');
-  /** 演示任务包（批 3-1）：demo agent 发现 + 剧本 prompt（单源下发，见 /api/v1/demo/kit） */
-  const [demoKit, setDemoKit] = useState<{ available: boolean; agentId?: string; prompt?: string } | null>(null);
-  const [demoRunning, setDemoRunning] = useState(false);
   // §5d：错误卡进对话流（按时间交错）；self-heal 级走 toast/静默，不进卡
   const [flowErrors, setFlowErrors] = useState<Array<FlowErrorItem & { sessionId: string }>>([]);
   const pushFlowError = useCallback((e: Omit<FlowErrorItem, 'id' | 'at'>): void => {
@@ -1805,8 +1801,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   };
 
   /**
-   * 新建会话后的 UI 全量激活（评审 M5：createSession / demo 一键跑共用——
-   * activeSessionIdRef/状态重置/文件卡清空/模型刷新缺一即状态分叉）。
+   * 新建会话后的 UI 全量激活（评审 M5：activeSessionIdRef/状态重置/文件卡清空/模型刷新
+   * 缺一即状态分叉）。
    */
   const activateCreatedSession = async (created: { id: string }) => {
     enableStickToBottom();
@@ -1864,61 +1860,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [rightTab]);
-
-  /** 演示任务包（批 3-1）：连接后拉 demo kit（网关未起/无 demo agent = 不显示示例卡，非关键路径） */
-  useEffect(() => {
-    if (connection !== 'connected') return;
-    // M2：带鉴权头（apiKey Bearer + registry token）与语言（m9）——裸 fetch 会被 checkAuth 401 静默吞
-    const headers: Record<string, string> = {};
-    const consoleKey = getConsoleKey();
-    if (consoleKey) headers['Authorization'] = `Bearer ${consoleKey}`;
-    const registryToken = getRegistryToken();
-    if (registryToken) headers['X-Registry-Token'] = registryToken;
-    fetch(`${resolveDefaultBase()}/api/v1/demo/kit?lang=${lang}`, { headers })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j: unknown) => {
-        const kit = j as { ok?: boolean; available?: boolean; agentId?: string; prompt?: string } | null;
-        if (kit?.ok && kit.available && kit.agentId && kit.prompt) {
-          setDemoKit({ available: true, agentId: kit.agentId, prompt: kit.prompt });
-        }
-      })
-      .catch(() => setDemoKit(null));
-  }, [connection, lang]);
-
-  /**
-   * 一键跑演示剧本（真 agent 真工具）：选 demo agent → 新会话 → 发剧本 prompt，
-   * 后续读资料/写周报都走普通 run + 真实文件工具（同数据路径，无假动画）。
-   */
-  const runDemoScript = async () => {
-    const store = storeRef.current;
-    if (!store || !demoKit?.agentId || !demoKit.prompt || demoRunning) return;
-    setDemoRunning(true);
-    setActionError(null);
-    try {
-      // M5：不依赖 selectAgent 前置（switchingAgent 短路会分叉状态）——直接对齐 agent 后激活新会话
-      setAgentId(demoKit.agentId);
-      const created = await store.createSession(demoKit.agentId, undefined);
-      await activateCreatedSession(created);
-      await sendMessage(demoKit.prompt);
-    } catch (error) {
-      pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
-      setActionError(t('chatWorkspace.demoFailed'));
-    } finally {
-      setDemoRunning(false);
-    }
-  };
-
-  /** 「试试这个示例」卡：demo agent 可用才渲染（批 3-1 演示剧本一键跑） */
-  const demoCard = demoKit?.available && demoKit.agentId && demoKit.prompt ? (
-    <div className="demo-kit-card">
-      <div className="small muted" style={{ marginBottom: 8 }}>
-        {t('chatWorkspace.demoIntroPrefix')}<b>{t('chatWorkspace.demoIntroBold')}</b>{t('chatWorkspace.demoIntroSuffix')}
-      </div>
-      <button className="btn-primary" onClick={() => void runDemoScript()} disabled={demoRunning}>
-        {demoRunning ? t('chatWorkspace.demoStarting') : t('chatWorkspace.demoTry')}
-      </button>
-    </div>
-  ) : null;
 
   /**
    * 切换 agent：会话列表 + 中部窗口 + 右栏 + store 活动会话全量联动。
@@ -2569,7 +2510,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 <div className="small muted">
                   {t('chatWorkspace.welcomeHintPrefix')}<b>{t('chatWorkspace.welcomeHintBold')}</b>{t('chatWorkspace.welcomeHintSuffix')}
                 </div>
-                {demoCard}
               </div>
             )}
             {activeSessionId && conversationItems.length === 0 && (
@@ -2595,7 +2535,6 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                     );
                   })}
                 </div>
-                {demoCard}
               </div>
             )}
 

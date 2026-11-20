@@ -114,7 +114,7 @@ export interface StartWebUiOptions {
   consoleApiKey?: string;
   /** 部署模式（②③模式 webui 需登录；personal 免登录） */
   deploymentMode?: string;
-  /** 配置语言（demo 剧本等语言对齐——评审 m9） */
+  /** 配置语言（UI 文案语言对齐——评审 m9） */
   language?: string;
 }
 
@@ -197,7 +197,7 @@ export function gatewayConfigScript(
  *
  * @param web - UI 旋钮对象；undefined 时仅下发 version（无 version 则下发 null）
  * @param version - 产品版本（package.json 构建信息——非配置项，随脚本下发给「关于」页）
- * @param language - 配置语言（demo 剧本语言对齐）
+ * @param language - 配置语言（UI 文案语言对齐）
  * @returns JavaScript 赋值语句
  */
 export function webConfigScript(

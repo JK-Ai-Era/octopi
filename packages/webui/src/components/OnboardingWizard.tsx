@@ -28,8 +28,6 @@ interface WizardRender {
   };
   notice?: 'back-at-first';
   probeError?: { kind: ProbeErrorKind; message: string };
-  /** 演示任务包播种失败的非致命警告（主配置已保存） */
-  demoWarning?: string;
   /** M-6 热应用结果（true=已即时生效；false=失败见 hotApplyError；undefined=未热应用需重启） */
   hotApplied?: boolean;
   hotApplyError?: string;
@@ -349,14 +347,6 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
           <div className="error-card-detail">
             {t('onboardingWizard.restartRequiredPrefix')}<code>octopi serve restart</code>
             {t('onboardingWizard.restartRequiredSuffix')}
-          </div>
-        </div>
-      )}
-      {render.completed && render.demoWarning && (
-        <div className="error-card error-card-user-action" role="status">
-          <div className="error-card-title">{t('onboardingWizard.demoWarningTitle')}</div>
-          <div className="error-card-detail">
-            {t('onboardingWizard.demoWarningDetail', { warning: render.demoWarning })}
           </div>
         </div>
       )}

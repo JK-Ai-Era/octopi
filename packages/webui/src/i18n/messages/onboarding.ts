@@ -148,9 +148,6 @@ export const zh = {
   'onboardingWizard.savedTitle': '配置已保存',
   'onboardingWizard.restartRequiredPrefix': '重启服务后生效：',
   'onboardingWizard.restartRequiredSuffix': '。在此之前，对话所用的仍是旧配置。',
-  'onboardingWizard.demoWarningTitle': '示例任务包未播种',
-  'onboardingWizard.demoWarningDetail':
-    '{warning} —— 主配置已保存，不受影响；示例助手与样例资料未就绪，「试试这个示例」暂不可用。',
   'onboardingWizard.footerTitle': '首启配置向导',
   'onboardingWizard.stepProgress': ' · 第 {index}/{count} 步',
   'onboardingWizard.backAtFirst': '已经是第一步了。',
@@ -312,9 +309,6 @@ export const en: Record<keyof typeof zh, string> = {
   'onboardingWizard.savedTitle': 'Config saved',
   'onboardingWizard.restartRequiredPrefix': 'Takes effect after restarting the service: ',
   'onboardingWizard.restartRequiredSuffix': '. Until then, conversations still use the old config.',
-  'onboardingWizard.demoWarningTitle': 'Example task pack was not seeded',
-  'onboardingWizard.demoWarningDetail':
-    '{warning} — the main config is saved and unaffected; the example assistant and sample materials are not ready, so "Try this example" is unavailable for now.',
   'onboardingWizard.footerTitle': 'First-run setup wizard',
   'onboardingWizard.stepProgress': ' · step {index} of {count}',
   'onboardingWizard.backAtFirst': 'Already at the first step.',

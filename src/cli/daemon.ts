@@ -1185,7 +1185,6 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     const { HttpChannelAdapter } = await import('@octopi-agent/gateway/protocols/http.js');
     const { WebApiRouter } = await import('@octopi-agent/gateway/web/api/router.js');
     const { OnboardingService } = await import('@octopi-agent/gateway/web/api/onboarding.js');
-    const { DemoKitService } = await import('@octopi-agent/gateway/web/api/demo-kit.js');
     const { OctopiConfigSchema } = await import('../config-schema/index.js');
     const { resolveListenHost, isLoopbackListenHost } = await import('@octopi-agent/engine/config.js');
     // 配置管理面（arch/config-hot-reload.md）：FileConfigService（IO）+ provider 工厂（带 wireDump）
@@ -1234,7 +1233,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         void OctopiConfigSchema.parse(raw); // fail-loud：合并后配置必须过 schema（未过则 zod 抛）
       },
       // M-6：向导产物接 ApplyEngine 热应用（L0-L2；新会话即用新配置，免重启）
-      // 评审 B2：播种的 registry agent（如 demo agent）同步 attach 进运行时——
+      // 评审 B2：向导播种的 registry agent 同步 attach 进运行时——
       // 向导在 gateway 启动后经 HTTP 运行，绕过启动装载路径。
       onConfigApplied: async () => {
         await configApply?.applyFromDisk();
@@ -1272,10 +1271,6 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       configApply,
       approverIdentity: httpConfig?.apiKey ? 'owner' : undefined,
       onboarding: onboardingSvc,
-      demoKit: new DemoKitService({
-        octopiHome: getOctopiHome(),
-        deploymentMode: (config as { deploymentMode?: unknown }).deploymentMode as string | undefined,
-      }),
     });
     const listenHost = resolveListenHost(listenHostConfig);
     // SEC-7 边界显式化：无 apiKey 时 console/config API 不设防（checkAuth 放行），

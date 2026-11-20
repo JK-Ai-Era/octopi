@@ -18,7 +18,7 @@ declare global {
       deploymentMode?: string;
       /** 产品版本（package.json 构建信息；AboutPanel 展示） */
       version?: string;
-      /** 配置语言（demo 剧本/文案语言对齐用） */
+      /** 配置语言（UI 文案语言对齐用） */
       language?: string;
     } | null;
   }
@@ -40,7 +40,7 @@ export function getProductVersion(): string | undefined {
 }
 
 /**
- * 配置语言（demo 剧本等语言对齐——评审 m9）。
+ * 配置语言（UI 文案语言对齐——评审 m9）。
  *
  * @returns 'zh' | 'en'；缺失时 'zh'
  */

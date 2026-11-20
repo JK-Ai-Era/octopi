@@ -51,8 +51,6 @@ export interface OnboardingRender {
     hasAdminPassword?: boolean;
   };
   notice?: 'back-at-first';
-  /** 演示任务包播种失败的非致命警告（主配置已落盘；webui 完成页提示） */
-  demoWarning?: string;
   /** M-6 热应用结果：true=已即时生效（新会话即用新配置）；false=失败（见 hotApplyError，仍需重启）；undefined=未热应用 */
   hotApplied?: boolean;
   hotApplyError?: string;
@@ -116,7 +114,6 @@ export class OnboardingService {
     choices: OnboardingChoices;
     probeError?: OnboardingRender['probeError'];
     notice?: 'back-at-first';
-    demoWarning?: string;
     /** M-6：热应用结果（true=已即时生效；undefined=未注入钩子/未走到） */
     hotApplied?: boolean;
     hotApplyError?: string;
@@ -257,14 +254,12 @@ export class OnboardingService {
 
     // commit 时机（状态机语义）：测通后 / 保存退出 / 走完——半截状态不组装
     if (t.commit !== 'none') {
-      const applied = await applyOnboarding(s.choices, {
+      await applyOnboarding(s.choices, {
         configPath: this.deps.configPath,
         octopiHome: this.deps.octopiHome,
         adminName: this.deps.adminName,
         validateConfig: this.deps.validateConfig,
       });
-      // m1：无条件赋值（undefined 即清除）——after-probe 残留的旧警告不得带到完成页
-      s.demoWarning = applied.demoWarning;
       // M-6：落盘后热应用（同一 ApplyEngine 通路）。抛错不回滚落盘（配置已是真相），
       // 以 hotApplyError 透出——完成页降级提示重启（fail-loud 的显式降级）。
       if (this.deps.onConfigApplied) {
@@ -324,7 +319,6 @@ export class OnboardingService {
       },
       notice: s.notice,
       probeError: s.probeError,
-      demoWarning: s.demoWarning,
       hotApplied: s.hotApplied,
       hotApplyError: s.hotApplyError?.split(this.deps.octopiHome).join('~'), // NIT：本地路径打码再出浏览器
       options,

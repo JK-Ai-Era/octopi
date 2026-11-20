@@ -14,7 +14,6 @@ import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-pre
 import type { AgentId, BindingId, SessionPolicy, User } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import { OnboardingService, OnboardingStepInvalidError } from './onboarding.js';
-import { DemoKitService } from './demo-kit.js';
 
 export interface WebApiRouterOptions {
   gateway: Gateway;
@@ -30,8 +29,6 @@ export interface WebApiRouterOptions {
   approverIdentity?: string;
   /** Web 向导服务端（§7 setup token）；未注入时 /onboarding/* 返回 503 */
   onboarding?: OnboardingService;
-  /** 演示任务包下发面（批 3-1）；未注入时 /demo/kit 返回 available:false */
-  demoKit?: DemoKitService;
   /** 浏览器引擎安装任务面（arch/browser-capability.md §3.9）；缺省自建进程内注册表 */
   browserInstalls?: BrowserInstallJobs;
 }
@@ -50,7 +47,6 @@ export class WebApiRouter {
   private configApply?: ConfigApplyService;
   private approverIdentity?: string;
   private onboarding?: OnboardingService;
-  private demoKit?: DemoKitService;
   private browserInstalls: BrowserInstallJobs;
 
   constructor(options: WebApiRouterOptions) {
@@ -60,7 +56,6 @@ export class WebApiRouter {
     this.configApply = options.configApply;
     this.approverIdentity = options.approverIdentity;
     this.onboarding = options.onboarding;
-    this.demoKit = options.demoKit;
     this.browserInstalls = options.browserInstalls ?? new BrowserInstallJobs();
   }
 
@@ -97,11 +92,6 @@ export class WebApiRouter {
             privileged: await this.gateway.getPrivilegedStatus(),
           },
         });
-      }
-
-      // ── 演示任务包（批 3-1）：demo agent 发现 + 剧本 prompt 下发（单源在 engine）──
-      if (relativePath.startsWith('/demo')) {
-        return await this.handleDemoKit(req, res, relativePath, method, url);
       }
 
       // ── Web 向导面（arch/product-onboarding.md §1/§7）：状态机单源在 engine，此面只做 HTTP ──
@@ -2076,31 +2066,7 @@ export class WebApiRouter {
     return false;
   }
 
-  /**
-   * registry 路由（arch/multi-tenancy.md §5/§9）。
-   *
-   * 鉴权两层：/api/v1 整体随上游 apiKey 闸（宿主面）；/registry/* 再叠租户身份层
-   * （Bearer token 会话，register/login 签发）。MVP 鉴权=token 会话+名称直登
-   * （演练级；口令/SSO 属 P3 替换）。跨租户边界由 RegistryService fail-loud。
-   */
   /** Web 向导路由（loopback 免闸；远程须 setup token——§7） */
-  /** 演示任务包（批 3-1）：demo agent 发现 + 剧本 prompt 下发；未装配给 available:false（webui 隐藏示例卡） */
-  private async handleDemoKit(
-    req: IncomingMessage,
-    res: ServerResponse,
-    relativePath: string,
-    method: string,
-    url: URL,
-  ): Promise<boolean> {
-    if (relativePath !== '/demo/kit' || method !== 'GET') return false;
-    const lang = url.searchParams.get('lang') === 'en' ? 'en' : 'zh';
-    const token = req.headers['x-registry-token'];
-    const kit = this.demoKit
-      ? await this.demoKit.getKit(lang, typeof token === 'string' && token ? token : undefined)
-      : { available: false };
-    return this.json(res, 200, { ok: true, ...kit });
-  }
-
   private async handleOnboarding(
     req: IncomingMessage,
     res: ServerResponse,
@@ -2162,6 +2128,13 @@ export class WebApiRouter {
     return this.json(res, 404, { ok: false, error: 'not_found' });
   }
 
+  /**
+   * registry 路由（arch/multi-tenancy.md §5/§9）。
+   *
+   * 鉴权两层：/api/v1 整体随上游 apiKey 闸（宿主面）；/registry/* 再叠租户身份层
+   * （Bearer token 会话，register/login 签发）。MVP 鉴权=token 会话+名称直登
+   * （演练级；口令/SSO 属 P3 替换）。跨租户边界由 RegistryService fail-loud。
+   */
   private async handleRegistry(
     req: IncomingMessage,
     res: ServerResponse,

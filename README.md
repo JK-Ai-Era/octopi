@@ -303,10 +303,8 @@ link in the terminal:
 
 Open it and walk the nine-step wizard (language → model provider → API key →
 pick a model → …). When you finish, the config takes effect immediately —
-open the web console at `http://localhost:8180`, and on the empty state hit
-**Try this example**: the demo agent really reads sample files, writes a
-weekly report and saves it to disk (real agent, real tools — no fake
-animation). Or open a session and just start chatting.
+open the web console at `http://localhost:8180`, open a session and just
+start chatting.
 
 Prefer the terminal?
 

@@ -124,14 +124,13 @@ export function mergeConfigFragment(
  * @param octopiHome - OCTOPI_HOME（registry.db 所在）
  * @param choices - 向导选择
  * @param opts - 播种选项（adminName 覆盖，默认 admin / OCTOPI_ADMIN_NAME）
- * @returns 播种归属（tenantId + ownerUserId——demo 任务包等下游复用，单源不另猜）
  * @throws 模式②③无密码、或 admin 名被其他组织占用
  */
 export async function seedDeploymentRegistry(
   octopiHome: string,
   choices: OnboardingChoices,
   opts?: { adminName?: string },
-): Promise<{ tenantId: string; ownerUserId: string }> {
+): Promise<void> {
   const { RegistryService } = await import('../harness/governance/registry/service.js');
   const registry = await RegistryService.create({ dbPath: join(octopiHome, 'registry.db') });
   try {
@@ -140,10 +139,10 @@ export async function seedDeploymentRegistry(
       // M11：显式 'default' 租户/用户（与 core DEFAULT_TENANT_ID 同一 ID 空间）
       const tenant = registry.ensureTenant('default', 'default');
       const existing = registry.getUserInTenant(tenant.tenantId, 'default');
-      const user = existing ?? (await registry.createUserInTenant({ tenantId: tenant.tenantId, name: 'default', isPlatformAdmin: true }));
+      if (!existing) await registry.createUserInTenant({ tenantId: tenant.tenantId, name: 'default', isPlatformAdmin: true });
       // M12：personal 远程绑定强制设密码（收进来的 adminPassword 即 default 用户密码）
       if (choices.adminPassword) await registry.setUserPassword((registry.getUserInTenant(tenant.tenantId, 'default'))!.userId, choices.adminPassword);
-      return { tenantId: tenant.tenantId, ownerUserId: user.userId };
+      return;
     }
     const tenantName = choices.deploymentMode === 'multi-organization' ? (choices.orgName ?? 'default') : 'default';
     const tenant = registry.ensureTenant(tenantName, tenantName === 'default' ? 'default' : undefined);
@@ -151,7 +150,7 @@ export async function seedDeploymentRegistry(
     const existing = registry.getUserInTenant(tenant.tenantId, adminName);
     if (existing) {
       await registry.setUserPassword(existing.userId, choices.adminPassword);
-      return { tenantId: tenant.tenantId, ownerUserId: existing.userId };
+      return;
     }
     const elsewhere = registry.getUserByName(adminName);
     if (elsewhere && elsewhere.tenantId !== tenant.tenantId) {
@@ -160,13 +159,12 @@ export async function seedDeploymentRegistry(
         `registry_admin_name_taken: 用户名 ${adminName} 已被其他组织占用——重跑并指定 OCTOPI_ADMIN_NAME=<其他名字>`,
       );
     }
-    const created = await registry.createUserInTenant({
+    await registry.createUserInTenant({
       tenantId: tenant.tenantId,
       name: adminName,
       password: choices.adminPassword,
       isPlatformAdmin: true,
     });
-    return { tenantId: tenant.tenantId, ownerUserId: created.userId };
   } finally {
     registry.close();
   }
@@ -236,13 +234,9 @@ export interface ApplyOnboardingDeps {
  *
  * @param choices - 完整选择（须先过 validateStep 全链）
  * @param deps - 动作依赖
- * @returns 播种附带的非致命警告（demo 任务包播种失败时给出；主配置与部署播种已落盘）
  * @throws 组装失败 / 校验失败 / 播种撞名（fail-loud，不产半截配置）
  */
-export async function applyOnboarding(
-  choices: OnboardingChoices,
-  deps: ApplyOnboardingDeps,
-): Promise<{ demoWarning?: string }> {
+export async function applyOnboarding(choices: OnboardingChoices, deps: ApplyOnboardingDeps): Promise<void> {
   // M-4：个人模式 + 远程绑定 = 裸奔，强制设密码（M12 服务端 enforce——CLI/Web 同受，此前只在 CLI 渲染层）
   if (
     choices.deploymentMode === 'personal' &&
@@ -254,20 +248,6 @@ export async function applyOnboarding(
   const output = assembleOnboarding(choices);
   for (const line of output.envLines) writeEnvLine(deps.octopiHome, line);
   mergeConfigFragment(deps.configPath, output, deps.validateConfig);
-  // registry 播种是主成果（fail-loud）；owner 归属复用其返回值（单源——不另猜）
-  const owner = await seedDeploymentRegistry(deps.octopiHome, choices, deps);
-  // 演示任务包（批 3-1）：demo agent + 样例资料。降级显式——失败不回滚主成果，
-  // 但警告必须透出到完成页（fail-loud 的软形态：不静默吞）。
-  try {
-    const { seedDemoKit } = await import('./demo-kit.js');
-    await seedDemoKit({
-      octopiHome: deps.octopiHome,
-      tenantId: owner.tenantId,
-      ownerUserId: owner.ownerUserId,
-      lang: choices.lang === 'en' ? 'en' : 'zh',
-    });
-    return {};
-  } catch (err) {
-    return { demoWarning: `demo_seed_failed: ${err instanceof Error ? err.message : String(err)}` };
-  }
+  // registry 播种是主成果（fail-loud）
+  await seedDeploymentRegistry(deps.octopiHome, choices, deps);
 }
