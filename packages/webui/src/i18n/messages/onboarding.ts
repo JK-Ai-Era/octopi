@@ -23,6 +23,14 @@ export const zh = {
   'loginPage.busy': '登录中…',
   'loginPage.submit': '登录',
 
+  'accessKeyGate.title': '访问密钥已失效',
+  'accessKeyGate.subtitle': '浏览器保存的访问密钥已被网关拒绝（部署可能重新初始化过）。填写新的访问密钥继续。',
+  'accessKeyGate.label': '访问密钥',
+  'accessKeyGate.placeholder': '粘贴访问密钥',
+  'accessKeyGate.hint': '在初始化输出或配置文件（channels[type=http].apiKey）里可以找到它。',
+  'accessKeyGate.rejected': '上次填写的访问密钥被网关拒绝，请确认后重新输入。',
+  'accessKeyGate.submit': '保存并重连',
+
   'privilegedBadge.title': '特权部署运行中（授权无笼 / 全量提权 / 高权限进程）：{reasons}',
   'privilegedBadge.reasonSeparator': '；',
 
@@ -172,6 +180,15 @@ export const en: Record<keyof typeof zh, string> = {
     'Deployment access key distributed by your administrator (self-hosted: octopi.json → channels[].apiKey). Local access is configured automatically; remote/LAN access needs it entered here.',
   'loginPage.busy': 'Signing in…',
   'loginPage.submit': 'Sign in',
+
+  'accessKeyGate.title': 'Access key rejected',
+  'accessKeyGate.subtitle':
+    'The access key saved in this browser was rejected by the gateway (the deployment may have been re-initialized). Enter a valid access key to continue.',
+  'accessKeyGate.label': 'Access key',
+  'accessKeyGate.placeholder': 'Paste the access key',
+  'accessKeyGate.hint': 'Find it in the init output or the config file (channels[type=http].apiKey).',
+  'accessKeyGate.rejected': 'The access key you entered was rejected by the gateway — check it and try again.',
+  'accessKeyGate.submit': 'Save & reconnect',
 
   'privilegedBadge.title':
     'Privileged deployment in effect (unconfined authorization / full escalation / high-privilege process): {reasons}',

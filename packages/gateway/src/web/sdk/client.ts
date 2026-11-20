@@ -732,10 +732,59 @@ export interface WsEnvelope {
   sessionId?: string;
   messageId?: string;
   message?: string;
+  /** 鉴权失败（error envelope）时的失效凭据类别（机器可读；缺省按 message 分类） */
+  credential?: 'apiKey' | 'registryToken';
   agents?: AgentSummary[];
   event?: AgentEventEnvelope;
   state?: string;
   delivery?: 'continued' | 'followup' | 'run';
+}
+
+/** 鉴权失败的失效凭据类别 */
+export type AuthFailureReason = 'apiKey' | 'registryToken' | 'unknown';
+
+/** 鉴权失败事件负载（上层据此清陈旧凭据、回登录/填钥页，而非无限重连） */
+export interface AuthFailureInfo {
+  reason: AuthFailureReason;
+  source: 'ws' | 'http';
+  /** 失败连接的目标网关地址（上层比对当前 base，防误清「试验新地址」场景的在用钥） */
+  baseUrl: string;
+  /** 失败连接携带的 apiKey（调用方与当前存储比对，防误清正在试验的新钥） */
+  failedApiKey?: string;
+  /** 失败连接携带的 registryToken */
+  failedRegistryToken?: string;
+  /** 服务端错误文案 */
+  message: string;
+}
+
+/**
+ * 分类鉴权失败的失效凭据。
+ *
+ * @param message - 服务端错误文案（HTTP body error 或 WS error envelope message）
+ * @param credentialHint - 服务端机器可读 credential 字段（WS 新契约；缺省按文案分类）
+ * @returns 失效凭据类别
+ */
+export function classifyAuthFailure(message: string, credentialHint?: string): AuthFailureReason {
+  if (credentialHint === 'apiKey' || credentialHint === 'registryToken') return credentialHint;
+  if (/X-Registry-Token|registry[\s_-]?token/i.test(message)) return 'registryToken';
+  if (/api[\s_-]?key/i.test(message) || /invalid token/i.test(message)) return 'apiKey';
+  return 'unknown';
+}
+
+/** 全局鉴权失败出口（页面内多 client 实例共享；宿主注册一次统一处置） */
+let globalAuthFailureHandler: ((info: AuthFailureInfo) => void) | null = null;
+
+/**
+ * 注册全局鉴权失败处理器（WS 4001 / HTTP 401 都会走到这里；每页面一个）。
+ *
+ * @param handler - 处理函数；null = 注销
+ * @returns 注销函数
+ */
+export function setAuthFailureHandler(handler: ((info: AuthFailureInfo) => void) | null): () => void {
+  globalAuthFailureHandler = handler;
+  return () => {
+    if (globalAuthFailureHandler === handler) globalAuthFailureHandler = null;
+  };
 }
 
 export interface OctopiClientEvents {
@@ -745,6 +794,8 @@ export interface OctopiClientEvents {
   onEvent?: (sessionId: string | undefined, event: AgentEventEnvelope) => void;
   onState?: (sessionId: string | undefined, state: string) => void;
   onError?: (error: Error) => void;
+  /** 鉴权被网关明确拒绝（WS close 4001 / HTTP 401）：停重连、上报失效凭据 */
+  onAuthFailure?: (info: AuthFailureInfo) => void;
 }
 
 // ──────────────────────────────────────
@@ -910,6 +961,8 @@ export class OctopiClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionalClose = false;
   private lastWelcomeAgents: AgentSummary[] = [];
+  /** WS 鉴权拒绝前的最后一条 error envelope（close 4001 归因用） */
+  private lastWsAuthMessage: { message: string; credential?: 'apiKey' | 'registryToken' } | null = null;
 
   private readonly listeners: OctopiClientEvents = {};
 
@@ -1551,7 +1604,24 @@ export class OctopiClient {
     const url = `${this.restBase}/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(fileId)}`;
     const headers: Record<string, string> = {};
     if (this.options.apiKey) headers.Authorization = `Bearer ${this.options.apiKey}`;
-    return fetch(url, { headers });
+    const response = await fetch(url, { headers });
+    // 字节流响应不过 parseJsonAuthAware——401 在此旁读 clone() 归因上报
+    // （不消费原 Response body，原样交调用方；不吞状态）
+    if (response.status === 401) {
+      const bodyText = await response
+        .clone()
+        .text()
+        .catch(() => '');
+      this.emitAuthFailure({
+        reason: classifyAuthFailure(bodyText),
+        source: 'http',
+        baseUrl: this.baseUrl,
+        failedApiKey: this.options.apiKey,
+        failedRegistryToken: this.options.registryToken,
+        message: bodyText || 'HTTP 401',
+      });
+    }
+    return response;
   }
 
   // ── Client Streams（§15.1 Host 通道）──
@@ -2202,6 +2272,8 @@ export class OctopiClient {
   }
 
   private openSocket(): void {
+    // 鉴权拒绝暂存按连接清零：上一条连接的归因不得串给下一条
+    this.lastWsAuthMessage = null;
     const wsUrl = this.baseUrl.replace(/^http/, 'ws') + this.options.wsPath;
     const socket = new WebSocket(wsUrl);
     this.ws = socket;
@@ -2224,10 +2296,29 @@ export class OctopiClient {
       }
     });
 
-    socket.addEventListener('close', () => {
+    socket.addEventListener('close', (event) => {
       this.ws = null;
       if (this.intentionalClose) {
         this.setConnectionState('disconnected');
+        return;
+      }
+
+      // 4001 = 网关鉴权拒绝（close(4001, 'Unauthorized')）：重连只会再撞同样的拒绝，
+      // 变成永动的「正在重连」。停在这里并上报鉴权失效，由上层清陈旧凭据/回登录
+      const code = typeof (event as { code?: unknown }).code === 'number' ? (event as { code: number }).code : 0;
+      if (code === 4001) {
+        const last = this.lastWsAuthMessage;
+        this.lastWsAuthMessage = null;
+        this.clearReconnect();
+        this.setConnectionState('failed');
+        this.emitAuthFailure({
+          reason: classifyAuthFailure(last?.message ?? '', last?.credential),
+          source: 'ws',
+          baseUrl: this.baseUrl,
+          failedApiKey: this.options.apiKey,
+          failedRegistryToken: this.options.registryToken,
+          message: last?.message ?? 'Unauthorized',
+        });
         return;
       }
 
@@ -2293,9 +2384,15 @@ export class OctopiClient {
       case 'state':
         this.listeners.onState?.(envelope.sessionId, envelope.state ?? 'unknown');
         break;
-      case 'error':
+      case 'error': {
+        // 鉴权拒绝（随后 close 4001）：暂存归因信息，close 处理据此分类失效凭据。
+        // 触发条件双轨：machine-readable credential 在场（新网关）或文案自述 Unauthorized（旧网关）
+        if (envelope.credential || /^Unauthorized/i.test(envelope.message ?? '')) {
+          this.lastWsAuthMessage = { message: envelope.message ?? 'Unauthorized', credential: envelope.credential };
+        }
         this.listeners.onError?.(new Error(envelope.message ?? 'Gateway WS error'));
         break;
+      }
       default:
         break;
     }
@@ -2309,11 +2406,36 @@ export class OctopiClient {
     this.ws.send(JSON.stringify(payload));
   }
 
+  /** 上报鉴权失败（WS 4001 / HTTP 401 共用出口；全局处理器 + 实例监听器都通知） */
+  private emitAuthFailure(info: AuthFailureInfo): void {
+    globalAuthFailureHandler?.(info);
+    this.listeners.onAuthFailure?.(info);
+  }
+
+  /** parseJsonResponse + 401 归因：HTTP 鉴权拒绝同样上报（供上层清陈旧凭据/回登录） */
+  private async parseJsonAuthAware<T = any>(response: Response): Promise<T> {
+    try {
+      return await parseJsonResponse<T>(response);
+    } catch (err) {
+      if (err instanceof Error && /^HTTP 401\b/.test(err.message)) {
+        this.emitAuthFailure({
+          reason: classifyAuthFailure(err.message),
+          source: 'http',
+          baseUrl: this.baseUrl,
+          failedApiKey: this.options.apiKey,
+          failedRegistryToken: this.options.registryToken,
+          message: err.message,
+        });
+      }
+      throw err;
+    }
+  }
+
   private async getJson<T = any>(path: string): Promise<T> {
     const response = await fetch(`${this.restBase}${path}`, {
       headers: this.buildHeaders(),
     });
-    return parseJsonResponse(response);
+    return this.parseJsonAuthAware(response);
   }
 
   /** Debug 面请求：挂在服务器根路径，不经过 restBase=/api/v1 */
@@ -2321,7 +2443,7 @@ export class OctopiClient {
     const response = await fetch(`${this.baseUrl}${path}`, {
       headers: this.buildHeaders(),
     });
-    return parseJsonResponse(response);
+    return this.parseJsonAuthAware(response);
   }
 
   private async postJson<T = any>(path: string, body: unknown): Promise<T> {
@@ -2333,7 +2455,7 @@ export class OctopiClient {
       },
       body: JSON.stringify(body ?? {}),
     });
-    return parseJsonResponse(response);
+    return this.parseJsonAuthAware(response);
   }
 
   private async putJson<T = any>(path: string, body: unknown): Promise<T> {
@@ -2345,7 +2467,7 @@ export class OctopiClient {
       },
       body: JSON.stringify(body ?? {}),
     });
-    return parseJsonResponse(response);
+    return this.parseJsonAuthAware(response);
   }
 
   private async patchJson<T = any>(path: string, body: unknown): Promise<T> {
@@ -2357,7 +2479,7 @@ export class OctopiClient {
       },
       body: JSON.stringify(body ?? {}),
     });
-    return parseJsonResponse(response);
+    return this.parseJsonAuthAware(response);
   }
 
   private async deleteJson<T = any>(path: string): Promise<T> {
@@ -2365,7 +2487,7 @@ export class OctopiClient {
       method: 'DELETE',
       headers: this.buildHeaders(),
     });
-    return parseJsonResponse(response);
+    return this.parseJsonAuthAware(response);
   }
 
   // ──────────────────────────────────

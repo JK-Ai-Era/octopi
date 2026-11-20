@@ -35,6 +35,8 @@ import { applyOnboarding, isRemoteBind, probeProvider } from '@octopi-agent/engi
 import type { ApplyOnboardingDeps } from '@octopi-agent/engine/config-admin/onboarding-apply.js';
 import type { ProductLang } from '@octopi-agent/engine/config-admin/i18n.js';
 import { OctopiConfigSchema } from '../../config-schema/index.js';
+import { expandEnvPlaceholders } from '../../config.js';
+import { probeWebUiIdentity, resolveWebUiPort } from '../webui.js';
 import { askText, choose, closePrompts, confirm, stdinExhausted } from './prompt.js';
 
 /** 向导结果（不含任何 secret —— m10） */
@@ -91,6 +93,84 @@ function spawnCli(args: string[]): Promise<number> {
     child.on('exit', (code) => resolve(code ?? 1));
     child.on('error', () => resolve(1));
   });
+}
+
+/**
+ * 初始化收尾：把随机生成的控制台访问密钥（channels[type=http].apiKey）亮出来。
+ * 新用户未必知道配置文件在哪——密钥直接展示 + 指路 WebUI 登录页「访问密钥」栏。
+ *
+ * 幂等：同一配置路径只打印一次（first-chat 与向导早退出口都可能走到）。
+ * 生效值与 daemon 同源展开 `${VAR}` 占位符（loadConfig 口径）；取不到钥时
+ * 明说「无鉴权/环境变量未解析」，不指路一个不存在的密钥。
+ *
+ * @param configPath - 配置文件路径
+ * @param zh - 是否中文文案
+ */
+const accessInfoPrinted = new Set<string>();
+
+export function printConsoleAccessInfo(configPath: string, zh: boolean): void {
+  if (accessInfoPrinted.has(configPath)) return;
+  accessInfoPrinted.add(configPath);
+  let raw: { channels?: Array<{ type?: unknown; apiKey?: unknown }> } | undefined;
+  try {
+    raw = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      channels?: Array<{ type?: unknown; apiKey?: unknown }>;
+    };
+  } catch {
+    // 配置缺失/损坏不阻塞收尾；按「读不到」处置
+    raw = undefined;
+  }
+  const http = raw?.channels?.find((c) => c?.type === 'http');
+  const rawKey = typeof http?.apiKey === 'string' && http.apiKey ? http.apiKey : undefined;
+  // 与 daemon 加载同口径展开 ${VAR}（直接粘字面占位符进登录页必失败）
+  const key = rawKey ? expandEnvPlaceholders(rawKey) : undefined;
+  if (key && !key.includes('${')) {
+    console.log('');
+    console.log(zh ? '🔑 访问密钥（请复制保存）：' : '🔑 Access key (copy it now):');
+    console.log(`   ${key}`);
+    if (key !== rawKey) {
+      console.log(
+        zh
+          ? `   （已从环境变量解析：${rawKey}）`
+          : `   (resolved from environment: ${rawKey})`,
+      );
+    }
+    console.log(
+      zh
+        ? '   打开 WebUI 登录页后，把它填进「访问密钥」栏（远程 / 局域网访问时必填）。'
+        : '   Paste it into the "Access key" field on the WebUI login page (required for remote/LAN access).',
+    );
+    console.log(
+      zh
+        ? `   密钥在配置文件里：${configPath}（channels[type=http].apiKey）`
+        : `   The key lives in the config file: ${configPath} (channels[type=http].apiKey)`,
+    );
+    return;
+  }
+  if (rawKey) {
+    // env 引用但当前环境解析不出值：指名来源，不打印假钥
+    console.log('');
+    console.log(
+      zh
+        ? `   ℹ️ 访问密钥由环境变量提供（${rawKey}），当前环境未解析出值——登录页请填该变量的实际值。`
+        : `   ℹ️ The access key comes from an environment variable (${rawKey}), unresolved in this environment — enter its actual value on the login page.`,
+    );
+    return;
+  }
+  if (raw) {
+    console.log('');
+    console.log(
+      zh
+        ? '   ℹ️ 配置未设访问密钥（channels[type=http].apiKey）——无鉴权模式，登录页无需填写；如需准入控制请配置 apiKey 后重启服务。'
+        : '   ℹ️ No access key configured (channels[type=http].apiKey) — unauthenticated mode, nothing to enter on the login page; configure an apiKey and restart for access control.',
+    );
+    return;
+  }
+  console.log(
+    zh
+      ? `   密钥在配置文件里：${configPath}（channels[type=http].apiKey）`
+      : `   The key lives in the config file: ${configPath} (channels[type=http].apiKey)`,
+  );
 }
 
 type ProbeLabels = Record<ProbeErrorKind, string>;
@@ -192,6 +272,10 @@ async function runInteractive(opts: RunOnboardingOptions): Promise<OnboardingRes
     if (transition.notice === 'back-at-first') console.log('已经是第一步了。'); // m13：空栈回退给提示，不静默绕圈
     if (transition.commit !== 'none') await commit(); // B2/m5/防御落盘——时机由状态机决定
   }
+  // 早退出口（probe 失败「保存并退出」/EOF/回退耗尽）同样亮钥——向导之前的脚手架
+  // 已生成随机 apiKey，锁在配置文件里不亮出来正是本次要消灭的锁定场景。
+  // first-chat 步已打印过时幂等跳过。
+  printConsoleAccessInfo(opts.configPath, choices.lang === 'zh');
   return { configPath: opts.configPath, launchChat, completed: state.completed, saved };
 }
 
@@ -393,7 +477,8 @@ async function runStep(
       }
       const go = await confirm(zh ? '现在启动服务？（gateway + webui）' : 'Start services now? (gateway + webui)', { defaultYes: true });
       if (!go) {
-        console.log(zh ? '稍后手动启动：octopi serve start && octopi webui start' : 'Start later with: octopi serve start && octopi webui start');
+        // serve start 会一并联动启动 Web UI——不再教用户重复起 webui
+        console.log(zh ? '稍后手动启动：octopi serve start（会一并启动 Web UI）' : 'Start later with: octopi serve start (starts the Web UI as well)');
         if (needsAck) {
           console.log(
             zh
@@ -413,15 +498,41 @@ async function runStep(
         );
       }
       const cfg = opts.configPath ? ['--config', opts.configPath] : []; // B2 附：配置透传
-      const rc1 = await spawnCli(['serve', 'start', ...cfg]);
-      const rc2 = await spawnCli(['webui', 'start', ...cfg]);
-      if (rc1 !== 0 || rc2 !== 0) {
+      // serve start 收尾已 soft 联动启动 Web UI（daemon.serveStartCommand）——再 spawn 一次
+      // webui start 只会打出误导性的「Web UI is already running」，故单入口启动。
+      const rc = await spawnCli(['serve', 'start', ...cfg]);
+      if (rc !== 0) {
         console.log(zh ? '⚠️ 服务启动有异常，可稍后用 octopi serve status 检查。' : '⚠️ Services reported an error — check with: octopi serve status');
+      } else {
+        // serve start 对 Web UI 失败是 soft（dist 缺失/端口被占只告警，退出码仍 0）——
+        // 这里补一次实测，失败明说下一步，不把「Web UI 没起来」吞成「全部就绪」
+        const webOk = await probeWebUiIdentity(resolveWebUiPort(opts.configPath));
+        if (!webOk) {
+          console.log(
+            zh
+              ? '⚠️ Web UI 未启动成功（serve start 对 Web UI 失败是容错的）。稍后可运行：octopi webui start'
+              : '⚠️ Web UI did not start (serve start tolerates Web UI failures). Start it later with: octopi webui start',
+          );
+        }
       }
       return { event: { kind: 'next' } };
     }
     case 'first-chat': {
-      console.log(zh ? '\n🎉 全部就绪！打开 http://localhost:8180 或运行 octopi chat 开聊。' : '\n🎉 All set! Open http://localhost:8180 or run: octopi chat');
+      // 收尾宣称前先核实 Web UI 活着（serve start 对 Web UI 是 soft 容错）——
+      // 没起来就如实给启动指引，不宣称一个死端口「全部就绪」
+      const webPort = resolveWebUiPort(opts.configPath);
+      const webOk = await probeWebUiIdentity(webPort);
+      console.log(
+        webOk
+          ? zh
+            ? `\n🎉 全部就绪！打开 http://localhost:${webPort} 或运行 octopi chat 开聊。`
+            : `\n🎉 All set! Open http://localhost:${webPort} or run: octopi chat`
+          : zh
+            ? '\n🎉 配置就绪！Web UI 尚未在跑——运行 octopi webui start 后打开它，或直接运行 octopi chat 开聊。'
+            : '\n🎉 Configuration is ready! The Web UI is not running yet — run octopi webui start to open it, or run octopi chat.',
+      );
+      // 收尾亮钥：新用户未必找得到配置文件——直接展示 + 指路登录页
+      printConsoleAccessInfo(opts.configPath, zh);
       const launch = await confirm(zh ? '现在就在终端里聊几句？' : 'Chat in the terminal now?', { defaultYes: true });
       return { event: { kind: 'next' }, launchChat: launch };
     }
@@ -471,6 +582,8 @@ async function runNonInteractive(opts: RunOnboardingOptions): Promise<Onboarding
         : '\n⚠️  高权限（root/admin）init：serve 启动会被拒，直到在顶层 effectPolicy.privilegedAck 显式声明——或改用普通权限终端启动。',
     );
   }
+  // --yes 也亮钥：非交互流程同样以「用户拿到访问密钥」收尾
+  printConsoleAccessInfo(opts.configPath, choices.lang !== 'en');
   return { configPath: opts.configPath, launchChat: false, completed: true, saved: true };
 }
 

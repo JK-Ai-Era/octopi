@@ -468,7 +468,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
       if (typeof msg.registryToken === 'string' && msg.registryToken.trim()) {
         const identity = await this.resolveWsIdentity?.(msg.registryToken.trim()) ?? null;
         if (!identity) {
-          session.ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid registryToken' }));
+          // credential = 机器可读的失效凭据类别（客户端据此清缓存回登录，不靠文案嗅探）
+          session.ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid registryToken', credential: 'registryToken' }));
           session.ws.close(4001, 'Unauthorized');
           return;
         }
@@ -478,7 +479,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
         session.authenticated = true;
         session.ws.send(JSON.stringify({ type: 'auth_ok', ...(session.identity ? { tenantScoped: true } : {}) }));
       } else if (this.apiKey) {
-        session.ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid token' }));
+        session.ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized: invalid token', credential: 'apiKey' }));
         session.ws.close(4001, 'Unauthorized');
       }
       return;

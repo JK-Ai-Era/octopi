@@ -131,6 +131,35 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.8 (2026-11-21)
+
+### fix(webui/gateway-sdk): 凭据被拒不再死循环——清陈旧凭据并回登录/填钥页
+
+新机部署反馈 #2/#4（同一根因）：删除 `OCTOPI_HOME` 重新初始化会换掉随机 apiKey / registry.db，而浏览器 localStorage 缓存的旧凭据仍在生效（localStorage 优先于 serve-webui 本机自动下发），表现为 WS 死循环「连接已断开，正在重连…」或设置页裸 401（`unauthorized: invalid X-Registry-Token`）。
+
+- **根因**：web sdk `OctopiClient` 的 WS close 处理不看关闭码——网关鉴权拒绝 `close(4001, 'Unauthorized')` 后仍无限重连；HTTP 401 直接透传异常，失效凭据永不清除、UI 无重新录入入口。
+- **SDK 鉴权失败契约**（`AuthFailureInfo` / `setAuthFailureHandler` / `OctopiClientEvents.onAuthFailure`）：WS close 4001 停止自动重连（状态 `failed`）并归因上报；REST 401（含 `fetchSessionFile` 字节流面，`clone()` 旁读不消费原 body）同样归因上报。失效凭据类别机器可读优先（WS error envelope 新增 `credential` 字段，纯增量不破坏既有消费者），文案分类兜底（`classifyAuthFailure`，含旧网关 `invalid registryToken` 变体）；归因暂存按连接清零。
+- **webui `auth-guard` 统一处置**：只认「当前在用凭据被拒」——按 reason 只比对被拒的那一种凭据（WS 连接只带 apiKey 不带 registryToken，全量 AND 比对会把真实失效漏成不动作）；失败实例目标地址 ≠ 当前网关（试验新地址）不动全局态；无法归因的 HTTP 401（反代/其它鉴权面）一律不清凭据。处置：清陈旧凭据后——本机有更新的自动下发钥 → 整页重建无感恢复；否则 ②③模式回登录页（login 闸）、个人模式回填钥页（key 闸）。循环有界（恢复至多 1 次 reload，闸内错误钥只在用户每次提交后重试）。
+- **个人模式新增「访问密钥」录入页**（`AccessKeyGate`，登录页同形）：凭据被拒且无可恢复钥时出现；提交后整页重建（顺带清掉各面板 client 实例里的旧凭据快照）；「刚提交的钥被拒」有一次性错误提示（与提交记录对账，陈旧钥场景不误报）。
+- 判断上的取舍：WS auth 帧仍只带 apiKey（`registryToken` 不上 WS）——②③模式 WS 租户身份收口是**既有缺口**（REST 面早已收口），与本次死循环/401 修复无因果，不在此扩 scope，另行处理。
+
+### feat(cli): init 收尾亮出随机访问密钥
+
+新机部署反馈 #1：init 生成随机 `channels[type=http].apiKey` 但不展示，用户（尤其远程/局域网）不知道去哪找。
+
+- 向导收尾（first-chat 步与任何早退出口，含 probe 失败「保存并退出」/EOF；`--yes` 同）打印访问密钥 + 登录页「访问密钥」栏指路 + 配置文件位置；同一配置路径只打印一次。
+- `${VAR}` 引用按 loadConfig 同源展开后打印**生效值**并注明解析来源；env 解析不出/配置无 apiKey 时明说「环境变量未解析 / 无鉴权模式」，不指路不存在的密钥。
+- **注意**：`octopi init --yes` 的 stdout 含访问密钥，CI 日志采集方请知悉。
+
+### fix(cli): 向导启动服务去重 + Web UI 失败可见
+
+新机部署反馈 #3：init 启动服务时 webui 启动两次（第二次报「Web UI is already running」）。
+
+- 根因：`octopi serve start` 收尾已 soft 联动启动 Web UI，向导再 spawn `webui start` 属重复调用——改为单入口 `octopi serve start`（「稍后手动启动」指引同步修正，不再教 `serve start && webui start`）。
+- 失败可见性不降级：serve start 对 Web UI 是 soft 容错（dist 缺失/端口被占只告警、退出码仍 0），向导收尾补一次 `probeWebUiIdentity` 实测——Web UI 未起则明说并给 `octopi webui start` 出路；first-chat 的「全部就绪」按实测宣称（端口取配置 `web.port`，不再硬编码 8180）。
+
+**验证**：全量测试 5590 passed（新增 33 个回归锚：sdk 4001 停重连/401 归因/分类、auth-guard 处置链与不动作面、填钥页渲染、亮钥边界与幂等）；`npm run lint`（eslint + 测试类型 + webui tsc）与 `npm run build` 全绿；`bash arch/check-sync.sh` 通过。经独立评审（MAJOR×4/MINOR×6/NIT×5）逐条核对后落地。
+
 ## v0.121.7 (2026-11-20)
 
 ### feat(webui): 左栏可拖拽调宽，三栏尺寸约束统一收口

@@ -10,8 +10,17 @@ import { LanguageToggle } from './components/LanguageToggle';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { resolveDefaultBase } from './gateway-base';
 import { LoginPage } from './components/LoginPage';
+import { AccessKeyGate } from './components/AccessKeyGate';
 import { requiresLogin } from './runtime-config';
 import { getRegistryToken } from './console-key';
+import {
+  type CredentialGate,
+  getCredentialGate,
+  installAuthFailureHandler,
+  onCredentialGateChange,
+  resetCredentialGate,
+  submitConsoleKey,
+} from './auth-guard';
 
 initTheme(); // 恢复持久化主题偏好（§5d：prefers-color-scheme 跟随 + 手动切换）
 
@@ -47,6 +56,17 @@ export default function App() {
   // §1/§7：Web 向导入口——URL 带 setup 参数（token 见 §7）或首启（providers 未配置）检测
   // m4：②③模式需 registry 登录（personal 免登录）
   const [loggedIn, setLoggedIn] = useState(() => !requiresLogin() || Boolean(getRegistryToken()));
+  // 凭据闸：网关明确拒掉陈旧 apiKey/registryToken 后，auth-guard 切闸
+  // —— ②③回登录页（login）、个人模式回填钥页（key），不再死循环「正在重连」
+  const [credentialGate, setCredentialGate] = useState<CredentialGate>(getCredentialGate);
+  useEffect(() => {
+    const uninstall = installAuthFailureHandler();
+    const offGate = onCredentialGateChange(setCredentialGate);
+    return () => {
+      offGate();
+      uninstall();
+    };
+  }, []);
   const hasSetupParam = new URLSearchParams(window.location.search).has('setup');
   const [wizardDue, setWizardDue] = useState(hasSetupParam);
   useEffect(() => {
@@ -56,10 +76,22 @@ export default function App() {
       .then((b) => { if (b.data?.available) setWizardDue(true); })
       .catch(() => { /* gateway 未起/未装配向导面：走正常控制台 */ });
   }, [hasSetupParam]);
-  if (!hasSetupParam && !loggedIn) {
+  if (!hasSetupParam && (!loggedIn || credentialGate === 'login')) {
     return (
       <div className="app-shell">
-        <LoginPage onLoggedIn={() => setLoggedIn(true)} />
+        <LoginPage
+          onLoggedIn={() => {
+            resetCredentialGate();
+            setLoggedIn(true);
+          }}
+        />
+      </div>
+    );
+  }
+  if (!hasSetupParam && credentialGate === 'key') {
+    return (
+      <div className="app-shell">
+        <AccessKeyGate onSubmit={submitConsoleKey} />
       </div>
     );
   }
