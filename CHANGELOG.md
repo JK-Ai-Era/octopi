@@ -131,6 +131,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.9 (2026-11-21)
+
+### docs(constitution): add section F — workspace file management
+
+新增执行宪法 F 节（`default-agents.md`）：workspace 是工作面不是仓库。核心规则——权威文档归项目仓库、根目录保持近空且长期文件须有一句话理由；过程产物进 `scratch/<task>/` 任务目录、编号变体不落共享位置；清理挂在 `task_complete`（产物与任务同生共死）、日志先删后跑、**项目文档禁止反向引用 workspace 文件**（发现引用即迁入仓库，不把 workspace 文件升级成契约）、不可逆删除先问；写设计文档前先查仓库、同名以仓库版为准、绝不合并双副本。
+
+动机：一次 workspace 清理（230 个根文件 / 58MB，五批才清完）暴露无规则必复发。无行为变更——仅新增注入 system prompt 的宪法文本；与 C/D 节边界不变（本节只管文件放哪、留多久，不放松 D 的删除确认，不改 C 的收尾时机）。
+
 ## v0.121.8 (2026-11-21)
 
 ### fix(webui/gateway-sdk): 凭据被拒不再死循环——清陈旧凭据并回登录/填钥页
