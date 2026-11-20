@@ -129,7 +129,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.120.2 (2026-11-20)
+## v0.120.3 (2026-11-20)
+
+### fix(engine): package_edit / package_install 的 cwd 也改为必填；package_edit 的相对 path 贴 cwd 解析
+
+- **同一根因收口**（接 v0.120.2）：`package_edit` 原本没有 `cwd` 入参、`package_install` 的 `cwd` 可选，缺省都落到会话 workspace。后果是**静默错靶**——`package_edit` 改掉 workspace 自己的 package.json，`package_install` 往错目录装依赖。现在三个 package 工具统一走 `requireCwd`：wire schema `required` + handler 侧 `<tool>_cwd_required`。
+- **结构性防复发**：`resolveCwd` 去掉了 `?? context.cwd ?? process.cwd()` 的回落，签名改为必传 `raw`——「缺省落到 workspace」这条路径不再存在于代码里，而不只是靠三个调用点各自记得校验。
+- **顺带修同类缺陷**：`package_edit` 的 `path` 走 `assertPathSafe`，此前也是用 `context.cwd`（workspace）解析相对路径，显式 `cwd: /repo` 时同样会改错文件；现改为贴 `cwd` 解析。另：`packageManager` 改由**被编辑文件所在目录**判定（`dirname(pkgPath)`），避免 `path` 指向别处时报错仓库的 lockfile。
+- **验证**：新增/改写 4 例——三个工具 `cwd` 的 schema required + 缺失/空白拒绝（表驱动，覆盖 project_run / package_edit / package_install），以及「workspace 与项目目录不同时，`package_edit` 仍编辑项目内的 package.json」（断言含 realpath，兼容 macOS `/var`→`/private/var`）。全量套件 542 文件 / 5497 通过（9 跳过常态）；engine `tsc` 全绿；改动文件 eslint 通过。
+- **兼容性（breaking）**：`package_edit` 新增必填 `cwd`；`package_install` 的 `cwd` 由可选变必填。缺省会得到 `*_cwd_required` 报错，而不是静默作用于 workspace。
+
 
 ### fix(engine): git_* 的 paths 按仓库 cwd 解析；project_run 的 cwd 必填
 

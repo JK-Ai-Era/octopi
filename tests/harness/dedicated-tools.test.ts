@@ -122,7 +122,7 @@ describe('package_install network gate', () => {
     const install = tools.find((t) => t.definition.name === 'package_install')!;
     await expect(
       install.handler(
-        { action: 'install' },
+        { action: 'install', cwd: process.cwd() },
         {
           sessionId: 's',
           agentId: 'a',
@@ -174,10 +174,10 @@ describe('P0 hardening', () => {
       },
     } as never;
     await expect(
-      edit.handler({ set: { '__proto__.polluted': true } }, base),
+      edit.handler({ cwd: process.cwd(), set: { '__proto__.polluted': true } }, base),
     ).rejects.toThrow(/package_edit_forbidden_key|prototype/);
     await expect(
-      edit.handler({ set: { 'constructor.prototype.x': 1 } }, base),
+      edit.handler({ cwd: process.cwd(), set: { 'constructor.prototype.x': 1 } }, base),
     ).rejects.toThrow(/package_edit_forbidden_key|prototype/);
   });
 
@@ -306,7 +306,7 @@ describe('P2 follow-ups (EOL / pathspec / filters)', () => {
       const tools = createPackageTools();
       const edit = tools.find((t) => t.definition.name === 'package_edit')!;
       const { ctx, writes } = mockCtx(dir);
-      await edit.handler({ set: { 'scripts.lint': 'eslint .' } }, ctx as never);
+      await edit.handler({ cwd: dir, set: { 'scripts.lint': 'eslint .' } }, ctx as never);
       expect(writes.length).toBe(1);
       const after = writes[0]!.data;
       expect(after.includes('\r\n')).toBe(true);
@@ -329,7 +329,7 @@ describe('P2 follow-ups (EOL / pathspec / filters)', () => {
       const tools = createPackageTools();
       const edit = tools.find((t) => t.definition.name === 'package_edit')!;
       const { ctx, writes } = mockCtx(dir);
-      await edit.handler({ set: { 'scripts.test': 'vitest' } }, ctx as never);
+      await edit.handler({ cwd: dir, set: { 'scripts.test': 'vitest' } }, ctx as never);
       const after = writes[0]!.data;
       expect(after.includes('\r\n')).toBe(false);
       expect(after.endsWith('\n')).toBe(true);
@@ -357,7 +357,7 @@ describe('P2 follow-ups (EOL / pathspec / filters)', () => {
   });
 });
 
-describe('project_run cwd 必填', () => {
+describe('package 工具 cwd 必填（project_run / package_edit / package_install）', () => {
   const ctx = (cwd: string) => ({
     sessionId: 's',
     agentId: 'a',
@@ -365,25 +365,41 @@ describe('project_run cwd 必填', () => {
     cwd,
     pathRoots: [cwd],
     pathContainment: 'strict' as const,
+    networkPolicy: 'open' as const,
   });
-  const projectRun = () => createPackageTools().find((t) => t.definition.name === 'project_run')!;
+  const tool = (name: string) => createPackageTools().find((t) => t.definition.name === name)!;
+
+  // 三个工具的最小合法入参（除 cwd 外的必填项），用于验证「只缺 cwd」这一种情况
+  const minimalArgs: Record<string, Record<string, unknown>> = {
+    project_run: { script: 'test' },
+    package_edit: { set: { 'scripts.lint': 'eslint .' } },
+    package_install: { action: 'install' },
+  };
 
   it('wire schema 把 cwd 标为 required', () => {
-    const schema = buildToolLlmParameters(projectRun().definition.parameters) as { required?: string[] };
-    expect(schema.required).toContain('cwd');
-    expect(schema.required).toContain('script');
+    for (const name of Object.keys(minimalArgs)) {
+      const schema = buildToolLlmParameters(tool(name).definition.parameters) as { required?: string[] };
+      expect(schema.required, `${name} 必须要求 cwd`).toContain('cwd');
+    }
   });
 
-  // 缺省会落到会话 workspace：那通常不是目标项目（没有 package.json 或跑错仓库）
+  // 缺省会落到会话 workspace：改错 package.json / 往错仓库装依赖 / 跑错仓库的脚本
   it('缺 cwd 时直接报错，不静默落到 workspace cwd', async () => {
-    await expect(
-      projectRun().handler({ script: 'test' }, ctx('/tmp/ws') as never),
-    ).rejects.toThrow(/project_run_cwd_required/);
+    for (const [name, args] of Object.entries(minimalArgs)) {
+      await expect(
+        tool(name).handler({ ...args }, ctx('/tmp/ws') as never),
+        `${name} 缺 cwd 必须报错`,
+      ).rejects.toThrow(new RegExp(`${name}_cwd_required`));
+    }
   });
 
   it('空白 cwd 同样拒绝', async () => {
-    await expect(
-      projectRun().handler({ script: 'test', cwd: '   ' }, ctx('/tmp/ws') as never),
-    ).rejects.toThrow(/project_run_cwd_required/);
+    for (const [name, args] of Object.entries(minimalArgs)) {
+      await expect(
+        tool(name).handler({ ...args, cwd: '   ' }, ctx('/tmp/ws') as never),
+        `${name} 空白 cwd 必须报错`,
+      ).rejects.toThrow(new RegExp(`${name}_cwd_required`));
+    }
   });
 });
+

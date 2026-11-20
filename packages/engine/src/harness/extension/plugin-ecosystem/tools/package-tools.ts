@@ -9,7 +9,7 @@
  *   when networkPolicy is not open (prompt the user to install manually).
  */
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { RegisteredTool, ToolExecutionContext } from '@octopi-agent/core/types.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
 import {
@@ -24,9 +24,18 @@ import { resolveNodeToolCommand } from './platform.js';
 
 type Pm = 'npm' | 'pnpm' | 'yarn';
 
-function resolveCwd(context: ToolExecutionContext | undefined, raw?: string): string {
-  const cwd = raw ?? context?.cwd ?? process.cwd();
-  const abs = resolveToolPath(cwd, context?.cwd, containmentOptions(context));
+/**
+ * 解析并校验项目目录（containment / attachment / undo 保护）。
+ *
+ * `raw` 必传、无缺省：三个 package 工具的 cwd 都是必填入参，这里不再提供
+ * 「回落到会话 workspace」的路径——否则静默错靶会从这里重新长出来。
+ *
+ * @param context - 工具执行上下文（提供 containment 根）
+ * @param raw - 已由 `requireCwd` 校验非空的项目目录
+ * @returns 已解析并做过 containment 校验的项目目录
+ */
+function resolveCwd(context: ToolExecutionContext | undefined, raw: string): string {
+  const abs = resolveToolPath(raw, context?.cwd, containmentOptions(context));
   if (isUnderAttachmentRoot(abs, context?.attachmentRoots)) {
     throw new Error('session attachments are read-only; cannot run package tools under attachments root');
   }
@@ -36,12 +45,48 @@ function resolveCwd(context: ToolExecutionContext | undefined, raw?: string): st
   return abs;
 }
 
+/**
+ * 三个 package 工具共用的 cwd 契约：必填，缺省绝不回落到会话 workspace。
+ *
+ * 依据：workspace 通常不是目标项目——`project_run` 会对着另一个仓库的同名脚本执行，
+ * `package_edit` 会改 workspace 自己的 package.json，`package_install` 会往错误目录装依赖。
+ * 静默错靶（改错文件/装错仓库）比显式报错代价高得多，所以这里 fail loud。
+ *
+ * @param context - 工具执行上下文（提供 containment 根）
+ * @param raw - 工具入参 cwd
+ * @param tool - 工具名，用于错误前缀（`<tool>_cwd_required`）
+ * @returns 已解析并做过 containment 校验的项目目录
+ */
+function requireCwd(
+  context: ToolExecutionContext | undefined,
+  raw: unknown,
+  tool: string,
+): string {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (!value) {
+    throw new Error(
+      `${tool}_cwd_required: pass the project directory containing package.json; it is never inferred from the workspace cwd`,
+    );
+  }
+  return resolveCwd(context, value);
+}
+
+/**
+ * 把工具入参路径解析到**本次操作的项目目录**，而不是会话 workspace。
+ *
+ * @param raw - 工具入参中的相对/绝对路径
+ * @param context - 工具执行上下文
+ * @param label - 动作标签，用于错误信息
+ * @param baseCwd - 相对路径的基准目录（项目目录）
+ * @returns 已解析并做过 containment / denylist 校验的绝对路径
+ */
 function assertPathSafe(
   raw: string,
   context: ToolExecutionContext | undefined,
   label: string,
+  baseCwd: string,
 ): string {
-  const abs = resolveToolPath(raw, context?.cwd, containmentOptions(context));
+  const abs = resolveToolPath(raw, baseCwd, containmentOptions(context));
   if (isUnderAttachmentRoot(abs, context?.attachmentRoots)) {
     throw new Error(`session attachments are read-only; cannot ${label} under attachments root`);
   }
@@ -162,9 +207,15 @@ export function createPackageEditTool(): RegisteredTool {
       description:
         'Structurally edit package.json (scripts, dependencies, metadata) via dotted paths. Undoable. Prefer this over rewriting the whole file.',
       parameters: {
+        cwd: {
+          type: 'string',
+          description:
+            'Project directory containing the package.json to edit (required; relative paths resolve against it, never against the workspace cwd)',
+          required: true,
+        },
         path: {
           type: 'string',
-          description: 'Path to package.json (default: <cwd>/package.json)',
+          description: 'Path to package.json, relative to `cwd` (default: package.json in `cwd`)',
         },
         set: {
           type: 'object',
@@ -181,9 +232,9 @@ export function createPackageEditTool(): RegisteredTool {
     // 整文件读改写无合并语义：所在 tool_call 批次整体串行，防同路径并发读改写互相覆盖
     executionMode: 'sequential',
     handler: async (args, context) => {
-      const cwd = resolveCwd(context);
+      const cwd = requireCwd(context, args.cwd, 'package_edit');
       const rawPath = (args.path as string | undefined) ?? 'package.json';
-      const pkgPath = assertPathSafe(rawPath, context, 'edit');
+      const pkgPath = assertPathSafe(rawPath, context, 'edit', cwd);
       const { pkg, raw: originalText } = await readPackageJson(pkgPath);
 
       const set = (args.set as Record<string, unknown> | undefined) ?? {};
@@ -217,7 +268,9 @@ export function createPackageEditTool(): RegisteredTool {
       }
       const after = stringifyPreservingEol(pkg, originalText);
       await effects.writeFile(pkgPath, after);
-      return { path: pkgPath, changed, packageManager: await detectPm(cwd) };
+      // 包管理器由**被编辑文件所在目录**判定（cwd 只是相对 path 的基准）；
+      // 否则 path 指向别处时会报错仓库的 lockfile。
+      return { path: pkgPath, changed, packageManager: await detectPm(dirname(pkgPath)) };
     },
   };
 }
@@ -319,15 +372,7 @@ export function createProjectRunTool(): RegisteredTool {
     // 历史视图收敛为「成败 + 尾部结论」（stdout 结论在末尾；成功时 stderr 是日志噪音）
     ageResult: ({ result }) => ageProjectRunResult(result),
     handler: async (args, context) => {
-      // cwd 必填：缺省会落到会话 workspace，那通常不是目标项目——要么 package.json
-      // 不存在，要么跑的是另一个仓库的同名脚本。
-      const rawCwd = typeof args.cwd === 'string' ? args.cwd.trim() : '';
-      if (!rawCwd) {
-        throw new Error(
-          'project_run_cwd_required: pass the project directory containing package.json; it is never inferred from the workspace cwd',
-        );
-      }
-      const cwd = resolveCwd(context, rawCwd);
+      const cwd = requireCwd(context, args.cwd, 'project_run');
       const script = String(args.script ?? '').trim();
       if (!script || !/^[A-Za-z0-9][A-Za-z0-9:._-]*$/.test(script)) {
         throw new Error(`project_run: invalid script name "${script}"`);
@@ -400,7 +445,12 @@ export function createPackageInstallTool(): RegisteredTool {
           items: { type: 'string', description: 'Package spec' },
         },
         dev: { type: 'boolean', description: 'add as devDependency' },
-        cwd: { type: 'string', description: 'Project directory' },
+        cwd: {
+          type: 'string',
+          description:
+            'Project directory to install into (required; its lockfile selects the package manager, never inferred from the workspace cwd)',
+          required: true,
+        },
         packageManager: {
           type: 'string',
           description: 'Force package manager (default: detect from lockfile)',
@@ -419,7 +469,7 @@ export function createPackageInstallTool(): RegisteredTool {
       if (!['install', 'add', 'remove', 'ci'].includes(action)) {
         throw new Error(`package_install: unsupported action "${action}"`);
       }
-      const cwd = resolveCwd(context, args.cwd as string | undefined);
+      const cwd = requireCwd(context, args.cwd, 'package_install');
       const packages = Array.isArray(args.packages) ? (args.packages as string[]).map(String) : [];
 
       if ((action === 'add' || action === 'remove') && packages.length === 0) {

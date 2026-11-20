@@ -112,6 +112,7 @@ describe.skipIf(!gitAvailable)('package_edit (functional)', () => {
       const { ctx, writes } = mockContext(dir);
       await edit.handler(
         {
+          cwd: dir,
           set: { 'scripts.lint': 'eslint .', 'dependencies.lodash': '^4.0.0' },
           remove: ['scripts.test'],
         },
@@ -211,6 +212,33 @@ describe.skipIf(!gitAvailable)('git_* pathspec 相对仓库 cwd 解析（不是�
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('pending.txt');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('package_edit：path 相对 cwd 解析（不是会话 workspace）', () => {
+  it('cwd=<repo> + 默认 package.json 落在仓库内，而非 workspace', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'octopi-pkg-path-'));
+    const workspace = await mkdtemp(join(tmpdir(), 'octopi-pkg-ws-'));
+    try {
+      await writeFile(join(repo, 'package.json'), JSON.stringify({ name: 'sub' }) + '\n');
+      await writeFile(join(workspace, 'package.json'), JSON.stringify({ name: 'ws' }) + '\n');
+
+      const edit = createPackageTools().find((t) => t.definition.name === 'package_edit')!;
+      // 会话 cwd 与项目目录是两个不同目录：编辑目标必须贴 cwd 解析
+      const { ctx, writes } = mockContext(workspace, { pathRoots: [workspace, repo] });
+      await edit.handler({ cwd: repo, set: { 'scripts.test': 'vitest run' } }, ctx as never);
+
+      expect(writes.length).toBe(1);
+      // containment 会把路径解析到真实路径（macOS /var → /private/var），断言同样取 realpath
+      const { realpathSync } = await import('node:fs');
+      expect(writes[0]!.path).toBe(realpathSync(join(repo, 'package.json')));
+      const parsed = JSON.parse(writes[0]!.data) as { name: string; scripts: Record<string, string> };
+      expect(parsed.name).toBe('sub');
+      expect(parsed.scripts.test).toBe('vitest run');
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(workspace, { recursive: true, force: true });
