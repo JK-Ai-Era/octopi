@@ -2109,6 +2109,12 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     setCmdSuggestIndex(0);
   };
 
+  // 命令列表键盘导航：选中项移出弹层可视区时自动滚动跟进（ArrowDown/Up 焦点可见）
+  const activeCmdItemRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    activeCmdItemRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [cmdSuggestIndex, showCmdSuggest]);
+
   const handleComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const nativeEvent = e.nativeEvent as unknown as { isComposing?: boolean };
 
@@ -2836,6 +2842,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 {cmdMatches.map((c, idx) => (
                   <div
                     key={c.name}
+                    ref={idx === cmdSuggestIndex ? activeCmdItemRef : undefined}
                     className={`cmd-suggest-item ${idx === cmdSuggestIndex ? 'cmd-suggest-active' : ''}`}
                     onMouseDown={(e) => {
                       e.preventDefault();

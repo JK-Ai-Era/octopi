@@ -130,6 +130,13 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.1 (2026-11-20)
+
+### fix(webui): 命令弹层方向键导航自动滚动跟进选中项
+
+- **现象**（大哥实报）：/ 命令弹层用方向键移动焦点到显示区域以外时，列表不跟随滚动——焦点走出可视区。
+- **修复**：选中项挂 ref + `scrollIntoView({ block: 'nearest' })` 跟进（弹层为 240px `overflow:auto` 容器，`nearest` 只滚弹层、不误滚会话区）。
+
 ## v0.121.0 (2026-11-20)
 
 ### feat(engine,gateway): mid-run 手动压缩 =「主动压缩立即触发」（方案 A）——run 进行中于下一消息缝执行同一条 compact 路径
