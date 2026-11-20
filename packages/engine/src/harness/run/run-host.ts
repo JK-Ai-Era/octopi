@@ -42,6 +42,7 @@ import type {
 } from '../activation/run-protocol.js';
 import type { RunApprovalRequestInput } from '../activation/run-protocol.js';
 import type { HitlAskResult } from '../governance/human-in-the-loop/decision-cache.js';
+import { InRunCompactUnavailable, type CompactSessionOptions } from './runner.js';
 import type { SessionAwareRunner, RunConfig } from './runner.js';
 import type { Agent } from './agent/index.js';
 import type { ContextEngine } from '../context/types.js';
@@ -58,9 +59,6 @@ import type {
 } from '../context/capabilities/compact/types.js';
 import type { ContextCompactSnapshot, ContextEmitFn } from '../context/types.js';
 import { registeredToolToAgentTool } from '../agent/registered-tool-adapter.js';
-
-/** Runner compactSession 的选项形状（搬移解析的目标类型，禁手抄） */
-type CompactSessionOptions = Parameters<SessionAwareRunner['compactSession']>[2];
 
 /** compact 进度事件形状（ContextEmitFn 同式；双缝出口见 onCompactEvent）——
  *  从事件联合**派生**而非手抄字段表（评审 F-6：手抄形状会随新字段静默丢失） */
@@ -95,6 +93,8 @@ type StructuralEngine = {
     toolArgAgers?: ReadonlySet<string>;
     /** F22：cache-miss 旁路事件出口（ContextEmitFn 形状，经 observerHub 直采进 timeline） */
     emit?: (event: CompactEmitEvent) => void;
+    /** run 中止信号（F1）：透传至摘要/压缩调用，run abort 即取消 */
+    signal?: AbortSignal;
   }) => Promise<CompactOutcome>;
 };
 
@@ -482,6 +482,22 @@ export class RunHost implements RunBackend {
           return { ok: true };
         }
         case 'compact': {
+          // 手动压缩双通路（方案 A，2026-11-20 拍板）：run 进行中 =「主动压缩立即
+          // 触发」——请求进活跃 run、下一个消息缝执行同一条 compact 路径（同保护/
+          // 同摘要/同 transform 记录），不排 session 锁（持锁排队 = run 结束才执行，
+          // 恰是要修的意图落空）。run 空闲 → 照旧锁路径（FIFO 立即执行）。
+          const m = this.mounted.get(op.agentId);
+          if (m && this.activeRuns.has(op.sessionId)) {
+            try {
+              const result = await this.resolveAndCompact(op.sessionId, op.agentId, m, (options) =>
+                m.runner.requestInRunCompact(op.sessionId, op.agentId, options),
+              );
+              return { ok: true, result };
+            } catch (err) {
+              if (!(err instanceof InRunCompactUnavailable)) throw err;
+              // 竞态：判活跃后 run 恰已收尾 → 落回锁路径（此时锁空闲，立即执行）
+            }
+          }
           const result = await this.compactSession(op.sessionId, op.agentId);
           return { ok: true, result };
         }
@@ -855,7 +871,13 @@ export class RunHost implements RunBackend {
    * @param agentId - compact 视图归属 agent（E4 键，调用方已消歧）
    * @returns 压缩结果
    */
-  private async resolveAndCompact(sessionId: string, agentId: string, m: Mounted): Promise<CompactTransportOutcome> {
+  private async resolveAndCompact(
+    sessionId: string,
+    agentId: string,
+    m: Mounted,
+    exec: (options: CompactSessionOptions) => Promise<CompactTransportOutcome> = (options) =>
+      m.runner.compactSession(sessionId, agentId, options),
+  ): Promise<CompactTransportOutcome> {
     const structural = m.handle.contextEngine as StructuralEngine | undefined;
     if (!structural?.compactStructural) {
       return {
@@ -909,8 +931,10 @@ export class RunHost implements RunBackend {
     const surface = await m.runner.resolveSessionToolSurface(sessionId, agentId);
     const manualTools: LLMToolDefinition[] = surface.tools;
 
-    // D1：与 handle 共用 Runner session 锁（E4 键）；持久化走 Runner
-    return m.runner.compactSession(sessionId, agentId, {
+    // D1：与 handle 共用 Runner session 锁（E4 键）；持久化走 Runner。
+    // 执行器可替换：锁路径（默认）与 in-run 消息缝路径（handleControl('compact')）
+    // 共用本解析段——两路的 systemPrompt/tools/摘要绑定/老化策略零漂移。
+    return exec({
       systemPrompt: m.handle.agent.context.systemPrompt,
       tools: manualTools,
       compactStructural: (input) =>
@@ -934,6 +958,8 @@ export class RunHost implements RunBackend {
           emit: (e) => {
             this.opts.onCompactEvent?.({ ...e, sessionId: e.sessionId ?? sessionId });
           },
+          // run 中止信号（F1）：in-run 路随 run abort 取消摘要；锁路径无 run 时 undefined
+          signal: input.signal,
         }),
       summarize,
       compactTargetTokens: this.opts.compactTargetTokens,

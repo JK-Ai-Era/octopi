@@ -2865,9 +2865,18 @@ export class Gateway {
           case 'set_model':
             await this.setSessionModel(sessionId, op.model, agentId);
             break;
-          case 'compact':
-            await this.compactSession(sessionId, agentId);
+          case 'compact': {
+            const outcome = await this.compactSession(sessionId, agentId);
+            // 结果播报（评审 del-d0830117 F8）：回执说结果而非「requested」——
+            // 本 op 完成后才广播，说「将在下一缝执行」会与时序不符
+            result.display = {
+              type: 'text',
+              text: outcome.compacted
+                ? `🗜️ Compact done: ${outcome.tokensBefore} → ${outcome.tokensAfter} tokens.`
+                : `🗜️ Compact not applied: ${outcome.reason ?? 'unknown reason'}`,
+            };
             break;
+          }
           case 'set_preferred_agent':
             // reserved；V1 不落地
             break;

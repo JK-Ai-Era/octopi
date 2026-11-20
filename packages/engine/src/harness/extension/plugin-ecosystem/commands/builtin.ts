@@ -185,7 +185,35 @@ export function createBuiltinCommands(host: BuiltinHost): CommandDefinition[] {
     },
   };
 
-  return [help, stop, newSession, model, status, issues];
+  const compact: CommandDefinition = {
+    name: 'compact',
+    description: 'Compress conversation context (during an active run: executes at the next message seam)',
+    usage: '/compact',
+    kind: 'control',
+    source: 'builtin',
+    risk: 'low',
+    // preempt =「run 在途可立即执行」（router 语义，默认仅 /stop）：/compact 的主场景
+    // 恰是 run 进行中（方案 A），但它不中断 run——只提交压缩请求，由活跃 run 在下一个
+    // 消息缝执行。与 /stop 同为 run 在途控制命令。
+    preempt: true,
+    async execute(_ctx: CommandContext): Promise<CommandResult> {
+      return {
+        status: 'ok',
+        display: {
+          type: 'text',
+          // 结果播报由 op 执行后回填（gateway applySessionOps case 'compact'）——
+          // 本条只在执行面缺席时兜底；不承诺时序（评审 del-d0830117 F8）
+          text: '🗜️ Compact requested.',
+        },
+        // 与压缩按钮同通道（SessionOp case 'compact'）：run 进行中走 in-run 缝执行，
+        // 空闲走锁路径（方案 A，2026-11-20）
+        sessionOps: [{ op: 'compact' }],
+        effects: [{ kind: 'compact', summary: 'requested' }],
+      };
+    },
+  };
+
+  return [help, stop, newSession, model, status, issues, compact];
 }
 
 /** UI 本地命令目录项（执行仍在 Client，文案与 catalog 同源） */

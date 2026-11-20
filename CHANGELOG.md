@@ -130,6 +130,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.0 (2026-11-20)
+
+### feat(engine,gateway): mid-run 手动压缩 =「主动压缩立即触发」（方案 A）——run 进行中于下一消息缝执行同一条 compact 路径
+
+- **拍板与动机**（大哥 2026-11-20）：`/compact` 与压缩按钮在 run 进行中原本排 session 锁 FIFO、run 结束才执行——长任务中「立刻压缩」意图落空。方案 A：手动压缩即主动压缩的「立即触发」——请求交**活跃 run** 在下一个消息缝执行**同一条 compact 路径**（同保护/同摘要/同 transform 记录），不抢锁（run 持锁中自抢即死锁）；无活跃 run / run 已收尾 / E4 键不匹配 → `InRunCompactUnavailable` → 落回锁路径（FIFO 立即执行，承诺必兑现）。
+- **机制**：runner 提取无锁核心 `runCompactCore`（锁路径与缝路径共用）+ `requestInRunCompact` 请求槽（同键 coalesce、in-flight join）+ 消息缝 drain；`RunHost.handleControl('compact')` 双通路（activeRuns 判活跃 → in-run，竞态落回锁路径）；`resolveAndCompact` 解析段（systemPrompt/tools/摘要绑定/老化策略）两路共用零漂移。
+- **评审修复**（独立评审 del-d0830117 10 findings 逐条核实）：F1 run abort 透传至摘要调用（signal 接线——修复前 in-run 压缩可挂满 summarizeTimeoutMs 300s 且 /stop 失效）；F2 contextSize 同步活对象（收尾整包 save 浅合并 incoming 胜，会用旧值盖回压缩后读数）；F4 承接面按 (sessionId, agentId) 校验（防以错误 agent 账本在他人 run 缝里执行）；F5 in-flight coalesce 跨缝（执行期间的点击 join 当前执行，不烧第二次 LLM）；F7/F8 回执说结果而非「requested」、测试断言判别力修正；F9 CompactSessionOptions 单源（消 run-host 派生副本）。
+- **`/compact` 命令在册**（用户实报：/ 弹层无此项）：builtin 命令目录注册，`preempt: true`（router 语义 = run 在途可执行——主场景恰是 run 进行中）；与压缩按钮同 `sessionOps` 通道（`{op:'compact'}`）。
+- **验证**：`tests/harness/in-run-compact.test.ts` 7 例（缝执行时序对照锁路径/coalesce/无 run reject/残留 reject/真实压缩路径 transform 记录 + contextSize 盖回钉/跨缝请求/in-flight join）；`commands-router.test.ts` 24 例（在册 + run 在途放行 + 非 preempt 对照）；全量 547 文件 / 5523 通过；lint 三段全绿。
+- **留档**：① control 面「受理/完成」两态契约（评审 F3：回执在压缩完成后才广播，run 卡长工具/HITL 时反馈延迟——按钮有「压缩中」spinner 非零反馈；拆两态涉及 gateway op 语义与 UI 回执契约，独立改动）；② RunHost in-run 分支 fallback 无独立测试（mount 夹具成本高，runner 层 unavailable 语义已钉）；③ `runCompactCore` 方法体缩进为提取残留（纯观感）。
+
 ## v0.120.7 (2026-11-20)
 
 ### fix(engine): createRunId 加随机段（run 身份弱唯一修复）

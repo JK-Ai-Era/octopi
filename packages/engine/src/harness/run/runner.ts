@@ -47,6 +47,47 @@ import { loadRootInstructionsInjection } from '../context/root-instructions.js';
 import type { SessionTaskService } from '../session/tasks/service.js';
 import { extractTaskQueryHints, renderSessionTasksInjection } from '../session/tasks/render.js';
 import { createRunId, type RunScope } from './run-scope.js';
+
+/** Runner 压缩执行选项（compactSession / requestInRunCompact 共用形状；禁手抄） */
+export type CompactSessionOptions = {
+  compactStructural: (input: {
+    sessionId: string;
+    agentId: string;
+    messages: Message[];
+    summarize?: import('../context/types.js').SummarizeFunction;
+    compactTargetTokens?: number;
+    /** task 快照：交接式摘要指令尾部注入 */
+    taskSnapshot?: string;
+    /** 请求口径计量原料（2026-11-08 B1）：与会话下一请求同源的 system/tools */
+    systemPrompt?: string;
+    tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
+    /** 旧压缩快照读口（迁移输入） */
+    loadCompactState?: (sessionId: string) => Promise<import('../context/types.js').ContextCompactSnapshot | undefined> | import('../context/types.js').ContextCompactSnapshot | undefined;
+    toolAgers?: ReturnType<typeof collectToolAgers>;
+    toolArgAgers?: ReturnType<typeof collectToolArgAgers>;
+    /** run 中止信号（in-run 路）：摘要/压缩调用随 run abort 取消 */
+    signal?: AbortSignal;
+  }) => Promise<import('../context/capabilities/compact/types.js').CompactOutcome>;
+  summarize?: import('../context/types.js').SummarizeFunction;
+  compactTargetTokens?: number;
+  /** 请求口径计量原料（2026-11-08 B1）：透传给 compactStructural */
+  systemPrompt?: string;
+  tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
+  /** 老化策略：摘要前缀必须与会话请求同形（缺它 → 默认指针 → 前缀分叉） */
+  toolAgers?: ReturnType<typeof collectToolAgers>;
+  toolArgAgers?: ReturnType<typeof collectToolArgAgers>;
+};
+
+/**
+ * in-run 压缩不可承接（无活跃 run / run 已收尾）——调用方（RunHost）应落回
+ * compactSession 锁路径执行。抛此类 = 语义化的 fallback 信号，不是故障。
+ */
+export class InRunCompactUnavailable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InRunCompactUnavailable';
+  }
+}
 import type { SessionInboxEntry, SessionInboxBinding, SessionInboxRun } from '../activation/inbox.js';
 import {
   DEFAULT_TOOL_ISOLATION,
@@ -590,6 +631,27 @@ export class SessionAwareRunner {
   private config: SessionAwareRunnerConfig;
   /** Session 状态机缓存 */
   private stateMachines = new Map<string, StateMachine<SessionStatus>>();
+
+  /** 活跃 handle 会话（in-run 压缩承接判定；sessionId → run 归属 agentId，E4 键校验用） */
+  private readonly activeHandleSessions = new Map<string, string>();
+
+  /** in-flight 压缩执行（key = sessionId\\0agentId）：执行期间的请求 join 当前执行（coalesce 跨缝，评审 del-d0830117 F5） */
+  private readonly inFlightCompacts = new Map<
+    string,
+    Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome>
+  >();
+
+  /** in-run 压缩请求槽（sessionId → 队列；消息缝 drain，见 requestInRunCompact） */
+  private readonly inRunCompactRequests = new Map<
+    string,
+    Array<{
+      agentId: string;
+      options: CompactSessionOptions;
+      resolve: (r: import('../context/capabilities/compact/types.js').CompactTransportOutcome) => void;
+      reject: (e: Error) => void;
+      promise: Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome>;
+    }>
+  >();
   /** 自主子系统运行时 */
   private _subsystemRuntime?: import('../collaboration/autonomous-subsystem/runtime.js').SubsystemRuntime;
   private _backfillTrigger?: import('../memory/backfill-trigger.js').BackfillTrigger;
@@ -1138,6 +1200,8 @@ export class SessionAwareRunner {
     let llmCallIndexInUserTurn = 0;
 
     try {
+      // in-run 压缩承接面：handle 持锁期间登记（requestInRunCompact 判定锚；带 run 归属 agentId 供 E4 键校验）
+      this.activeHandleSessions.set(sessionId, _agentId);
       // 3. 加载或创建 session
       let session = await this.store.load(sessionId);
       if (!session) {
@@ -2200,6 +2264,10 @@ export class SessionAwareRunner {
               if (entry.onEvent) entryObservers.add(entry.onEvent);
             }
           }
+          // in-run 手动压缩（方案 A）：下一个消息缝执行已挂起的压缩请求
+          // （run 持锁中，走无锁核心；压缩产物 append-only，下一步装配自然生效；
+          // run abort 透传至摘要调用——F1：压缩不挂满 summarizeTimeoutMs）
+          await this.drainInRunCompacts(sessionId, session, signal);
           if (injected.length) {
             this.emitObserved({
               type: 'session.inbox.appended',
@@ -2766,6 +2834,21 @@ export class SessionAwareRunner {
       }
       throw err;
     } finally {
+      // in-run 压缩槽清理：残留请求 reject（InRunCompactUnavailable）→ 调用方
+      // fallback 锁路径执行。不在 finally 执行压缩——那会拖慢 abort 收尾；
+      // 锁路径在本 handle 释放锁后立即可执行，语义无缝（方案 A）。
+      this.activeHandleSessions.delete(sessionId);
+      const pendingCompacts = this.inRunCompactRequests.get(sessionId);
+      if (pendingCompacts) {
+        this.inRunCompactRequests.delete(sessionId);
+        for (const req of pendingCompacts) {
+          req.reject(
+            new InRunCompactUnavailable(
+              `in_run_compact: run for session "${sessionId}" ended before the next seam`,
+            ),
+          );
+        }
+      }
       // run 收口：reason = 观测口径，stopReason = 停止闸门。
       // 计时进 trace（run.timing）；console 保留一条完整生命周期日志——前次事故
       // 「run 结束原因零日志、只能靠反推落盘消息定位」，该留痕不随探针删除。
@@ -2970,32 +3053,7 @@ export class SessionAwareRunner {
   async compactSession(
     sessionId: string,
     agentId: string,
-    options: {
-      compactStructural: (input: {
-        sessionId: string;
-        agentId: string;
-        messages: Message[];
-        summarize?: import('../context/types.js').SummarizeFunction;
-        compactTargetTokens?: number;
-        /** task 快照：交接式摘要指令尾部注入 */
-        taskSnapshot?: string;
-        /** 请求口径计量原料（2026-11-08 B1）：与会话下一请求同源的 system/tools */
-        systemPrompt?: string;
-        tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
-        /** 旧压缩快照读口（迁移输入） */
-        loadCompactState?: (sessionId: string) => Promise<import('../context/types.js').ContextCompactSnapshot | undefined> | import('../context/types.js').ContextCompactSnapshot | undefined;
-        toolAgers?: ReturnType<typeof collectToolAgers>;
-        toolArgAgers?: ReturnType<typeof collectToolArgAgers>;
-      }) => Promise<import('../context/capabilities/compact/types.js').CompactOutcome>;
-      summarize?: import('../context/types.js').SummarizeFunction;
-      compactTargetTokens?: number;
-      /** 请求口径计量原料（2026-11-08 B1）：透传给 compactStructural */
-      systemPrompt?: string;
-      tools?: import('@octopi-agent/core/interfaces/model-provider.js').LLMToolDefinition[];
-      /** 老化策略：摘要前缀必须与会话请求同形（缺它 → 默认指针 → 前缀分叉） */
-      toolAgers?: ReturnType<typeof collectToolAgers>;
-      toolArgAgers?: ReturnType<typeof collectToolArgAgers>;
-    },
+    options: CompactSessionOptions,
   ): Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome> {
     const release = await this.acquireLock(sessionId);
     try {
@@ -3009,7 +3067,31 @@ export class SessionAwareRunner {
           summarizeAttempted: false,
         };
       }
+      return await this.runCompactCore(sessionId, agentId, session, options);
+    } finally {
+      release();
+    }
+  }
 
+  /**
+   * 压缩执行核心（**无锁**）：两个入口共用——compactSession（锁路径，store 快照）与
+   * in-run 消息缝（run 持锁中，传 handle 内活 session，见 requestInRunCompact）。
+   * 锁语义（E1/E4 单写者）由入口负责，本方法不得再抢锁（自抢即死锁）。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - compact 视图归属 agent（E4 键）
+   * @param session - 会话数据（消息/任务/compact 快照读口的来源）
+   * @param options - 压缩执行选项（compactStructural 等，已解析）
+   * @param signal - run 中止信号（in-run 路透传至摘要/压缩调用；锁路径不传）
+   * @returns 压缩结果
+   */
+  private async runCompactCore(
+    sessionId: string,
+    agentId: string,
+    session: SessionData,
+    options: CompactSessionOptions,
+    signal?: AbortSignal,
+  ): Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome> {
       // Compaction Hooks fire exactly once inside the compact engine
       // (HookedCompactEngine) with the real session identity. Orchestrating a
       // second vote/observe here double-fired every manual compaction and
@@ -3027,6 +3109,9 @@ export class SessionAwareRunner {
         // 老化策略：缺它摘要视图退回默认指针，与会话前缀分叉（2026-11-13 实测 76% 结果形态不同）
         toolAgers: options.toolAgers,
         toolArgAgers: options.toolArgAgers,
+        // run 中止信号（F1，评审 del-d0830117）：摘要 LLM 调用随 run abort 取消，
+        // 不再挂满 summarizeTimeoutMs（缺省 300s）
+        signal,
         // 交接式摘要素材：task 快照（裸状态块，不含对话引导语）随指令尾部注入
         taskSnapshot: renderSessionTasksInjection(session.tasks ?? [], { includeGuidance: false }),
         // 旧压缩快照读口（迁移输入）：manual 路也要先迁移再产记录，防旧快照在
@@ -3041,6 +3126,10 @@ export class SessionAwareRunner {
       // 整包 save 会用陈旧 session 回写并发更新的 metadata 键（浅合并调用方优先）。
       if (result.compacted && result.contextSize) {
         const size = result.contextSize;
+        // 活对象同步（评审 del-d0830117 F2）：收尾整包 save 的 metadata 浅合并是
+        // incoming 胜——若不同步活对象，run 收尾会用 run 起点的旧 contextSize
+        // 盖回本次写入（title 三键有 titleUpdatedAt 仲裁，contextSize 没有）
+        session.metadata = { ...session.metadata, contextSize: size };
         if (this.store.updateMetadata) {
           await this.store.updateMetadata(sessionId, (meta) => {
             meta.contextSize = size;
@@ -3057,8 +3146,108 @@ export class SessionAwareRunner {
       // 传输投影：view 不过锁面（大对象，UI 无需）——唯一投影实现在能力层
       //（禁止手抄字段表：新可选字段会静默丢失，评审 P3 major）
       return toCompactTransport(result);
-    } finally {
-      release();
+  }
+
+  /**
+   * mid-run 手动压缩（方案 A，2026-11-20 拍板）：请求交**活跃 run** 在下一个消息缝
+   * 执行同一条 compact 路径（同保护/同摘要/同 transform 记录），不抢 session 锁
+   * （run 持锁中，自抢即死锁）。同 (sessionId, agentId) 的并发请求 coalesce 到
+   * 同一次缝执行。无活跃 run / run 已收尾 → 抛 InRunCompactUnavailable，
+   * 调用方落回 compactSession 锁路径（FIFO 立即执行）。
+   *
+   * @param sessionId - 会话 id
+   * @param agentId - compact 视图归属 agent（E4 键）
+   * @param options - 与 compactSession 同形的解析结果（compactStructural 等）
+   * @returns 压缩结果（下一个消息缝执行完成后 resolve）
+   * @throws {InRunCompactUnavailable} 无活跃 run 可承接（调用方 fallback 锁路径）
+   */
+  requestInRunCompact(
+    sessionId: string,
+    agentId: string,
+    options: CompactSessionOptions,
+  ): Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome> {
+    const runAgentId = this.activeHandleSessions.get(sessionId);
+    if (runAgentId === undefined) {
+      return Promise.reject(
+        new InRunCompactUnavailable(`in_run_compact: no active run for session "${sessionId}"`),
+      );
+    }
+    if (runAgentId !== agentId) {
+      // E4 键（评审 del-d0830117 F4）：压缩归属 agent ≠ run 归属 agent 时不得在
+      // 别人 run 的缝里静默执行（用错账本 + 别人的活消息）——落回锁路径自行消歧
+      return Promise.reject(
+        new InRunCompactUnavailable(
+          `in_run_compact: run agent "${runAgentId}" does not match compact agent "${agentId}"`,
+        ),
+      );
+    }
+    const coalesceKey = `${sessionId}\u0000${agentId}`;
+    const inflight = this.inFlightCompacts.get(coalesceKey);
+    // F5：执行期间（已 drain、未完成）的点击 join 当前执行——不重复烧 LLM
+    if (inflight) return inflight;
+    let queue = this.inRunCompactRequests.get(sessionId);
+    if (!queue) {
+      queue = [];
+      this.inRunCompactRequests.set(sessionId, queue);
+    }
+    // coalesce：同键已有未执行请求 → 复用其承诺（压缩语义幂等，重复执行只烧 LLM）
+    const existing = queue.find((r) => r.agentId === agentId);
+    if (existing) return existing.promise;
+    let resolve!: (r: import('../context/capabilities/compact/types.js').CompactTransportOutcome) => void;
+    let reject!: (e: Error) => void;
+    const promise = new Promise<import('../context/capabilities/compact/types.js').CompactTransportOutcome>(
+      (res, rej) => {
+        resolve = res;
+        reject = rej;
+      },
+    );
+    queue.push({ agentId, options, resolve, reject, promise });
+    return promise;
+  }
+
+  /**
+   * 消息缝执行 in-run 压缩队列（consumeMessages 缝上调用；run 持锁，单写者）。
+   * 逐条执行、逐条结算；单条失败只 reject 该条，不拖垮队列。
+   *
+   * @param sessionId - 会话 id
+   * @param session - handle 内活 session（消息/任务最新视图）
+   */
+  private async drainInRunCompacts(
+    sessionId: string,
+    session: SessionData,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const queue = this.inRunCompactRequests.get(sessionId);
+    if (!queue?.length) return;
+    this.inRunCompactRequests.delete(sessionId);
+    for (const req of queue) {
+      if (signal?.aborted) {
+        // run 已中止：不在收尾路上执行压缩（不拖 abort），交调用方 fallback 锁路径
+        //（承诺仍兑现；锁路径在本 handle 释放锁后立即执行）
+        req.reject(
+          new InRunCompactUnavailable(`in_run_compact: run for session "${sessionId}" aborted`),
+        );
+        continue;
+      }
+      const coalesceKey = `${sessionId}\u0000${req.agentId}`;
+      const exec = this.runCompactCore(sessionId, req.agentId, session, req.options, signal)
+        .then((r) => {
+          req.resolve(r);
+          return r;
+        })
+        .catch((err: unknown) => {
+          req.reject(err instanceof Error ? err : new Error(String(err)));
+          throw err;
+        })
+        .finally(() => {
+          this.inFlightCompacts.delete(coalesceKey);
+        });
+      // in-flight 登记在 await 之前（跨缝 coalesce 窗口自 finally 开）；顺序承重：
+      // 本方法内 delete map / settle 之间不得插入 await 之外的新结算点（防双结算）
+      this.inFlightCompacts.set(coalesceKey, exec);
+      await exec.catch(() => {
+        // 单条失败不拖垮队列（该条已 settle）；吞掉避免 unhandled rejection
+      });
     }
   }
 

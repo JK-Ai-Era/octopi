@@ -199,6 +199,52 @@ describe('CommandRouter execute', () => {
     }
   });
 
+  test('/compact：目录在册、run 在途放行（preempt）、下发 sessionOps（与压缩按钮同通道）', async () => {
+    const router = new CommandRouter();
+    const host = {
+      hasActiveRun: () => true,
+      currentModel: () => 'm',
+      listModels: () => [{ id: 'p/m' }],
+      listIssues: () => [],
+      listCatalogNames: () => [],
+    };
+    for (const def of createBuiltinCommands(host)) {
+      router.register(def, 'builtin');
+    }
+    // 目录包含 compact（/ 弹层数据源 = listCatalog）
+    expect(router.listCatalog().map((c) => c.name)).toContain('compact');
+    // run 在途执行（方案 A 主场景）：preempt 放行 + op 通道
+    const out = await router.execute({
+      content: '/compact',
+      sessionId: 's',
+      agentId: 'a',
+      view: view({ hasActiveRun: true }),
+    });
+    expect(out.kind).toBe('command');
+    if (out.kind === 'command') {
+      expect(out.definition?.preempt).toBe(true);
+      // 真正的判别：run 在途未被 command_busy 拦（router.ts 放行语义）
+      expect(out.result.status).toBe('ok');
+      expect(out.result.sessionOps?.[0]).toEqual({ op: 'compact' });
+    }
+  });
+
+  test('run 在途对照：非 preempt 命令仍被拦（/compact 的放行是显式特例）', async () => {
+    const router = new CommandRouter();
+    router.register(cmd({ name: 'nope', source: 'builtin', kind: 'control' }));
+    const out = await router.execute({
+      content: '/nope',
+      sessionId: 's',
+      agentId: 'a',
+      view: view({ hasActiveRun: true }),
+    });
+    expect(out.kind).toBe('command');
+    if (out.kind === 'command') {
+      expect(out.result.status).not.toBe('ok'); // 被 run-in-flight 闸门拦下
+      expect(out.result.sessionOps).toBeUndefined();
+    }
+  });
+
   test('prompt expand 进 Loop', async () => {
     const router = new CommandRouter();
     router.register(

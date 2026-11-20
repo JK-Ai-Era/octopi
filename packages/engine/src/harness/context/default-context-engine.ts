@@ -2055,6 +2055,8 @@ export class DefaultContextEngine implements ContextEngine {
      */
     toolAgers?: ReadonlyMap<string, ToolResultAger>;
     toolArgAgers?: ReadonlySet<string>;
+    /** run 中止信号（F1）：透传至摘要/压缩调用，run abort 即取消（不写记录） */
+    signal?: AbortSignal;
   }): Promise<CompactOutcome> {
     const stateKey = compactStateKey(input.sessionId, input.agentId);
     // R1（评审 #5）：manual 压缩同样是决策路径（目标裁剪 / tokensBefore|After 读数），
