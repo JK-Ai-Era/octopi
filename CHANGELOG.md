@@ -130,6 +130,35 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.3 (2026-11-20)
+
+### fix(engine,gateway): 连通性探测在端点无 `/models` 路由时回退到最小对话请求（mistral / gemini 形态）
+
+- **现象**：新增的 `mistral` 预设（官方 OpenAI 端点 `https://api.mistral.ai/openai/v1`）在向导「测通」与 Web「测试连接」里恒失败，正确 key 也一样；`gemini` 预设（`/v1beta/openai`）历史性地同样坏。
+- **根因**：两条探测都假设「OpenAI 兼容 ⇒ 有 `GET /models`」。实测 `GET /openai/v1/models` → 404 `no Route matched`，而同一前缀 `POST /openai/v1/chat/completions` → 401（路由存在）；Gemini 的 `/v1beta/openai/models` 亦 404。404 被当成「baseUrl/key 无效」，把「路由缺失」误报成「鉴权失败」。
+- **修复**：探测在 **404** 时回退一次最小对话请求（`max_tokens: 1`）——`discoverProviderModels`（Web 路径）与 `OpenAIProvider.isAvailable()`（向导路径）同源修复。只有 404 才回退：401/403 是真鉴权失败，不被探针掩盖。`/models` 缺失时返回 `degraded: true` + 说明，如实告知「连通已确认，清单拉不到，参数请手填」，不当完整清单用。
+- **调用方**：`config-apply.testProvider` 传首个已配模型 id 作探针模型；无模型可探时保持原 404 失败（不猜测模型）。
+- **测试**：新增 `tests/provider-probe-fallback.test.ts`（7 用例，真实本地 HTTP 服务，非 mock 内部实现）：404+对话200 → 可用且 degraded、404+对话401 → 仍失败且 reason 指向鉴权、404 且无探针 → 原样 404 且不发对话请求、200 → 不触发探针。
+- **验证**：`npm test tests/provider-probe-fallback.test.ts` 全绿；`npm run lint` 见本次提交。
+
+### feat(engine): provider 预设表按官方文档重核并扩表（新增 13 家国内外厂商）
+
+- **背景**：`BUILTIN_MODEL_PRESETS` 自 v0.91 落地后未随厂商迭代更新——`kimi-latest` 已被官方下线、`qwen-turbo` 已从模型列表消失、`glm-4.6` / `gemini-3-pro` / `gpt-5.5` 均非当前主力，上下文与输出上限普遍偏小一个数量级。向导与 Web 设置页预设卡片会把这些过期值预填进新配置。
+- **新增 13 家**（全部 `openai-completions`，baseUrl 均取自官方文档原文）：国际 `xai` / `mistral` / `groq` / `openrouter` / `cerebras`；国内 `doubao`（火山方舟）/ `mimo`（小米）/ `minimax` / `qianfan`（千帆 ERNIE）/ `hunyuan` / `spark`（讯飞星火）/ `stepfun`（阶跃）/ `siliconflow`（硅基流动）。
+- **现有 8 家重核**：OpenAI → GPT-6.2 Astra/Sol、GPT-6.1 Terra、GPT-6 Luna（1,050,000 / 128,000）；Anthropic → Opus/Sonnet/Haiku 5.5（1M / 128K）；Gemini → Gemini 4 Carbon/Neon/Hydrogen（1,048,576 / 65,536 同步默认）；DeepSeek 补 `reasoning` 与 flash 的图片输入、数值校正为 1,048,576 / 393,216；Qwen → `qwen4-max` / `qwen3.7-plus` / `qwen3.8-flash`；Kimi → `kimi-k3.1-pro` / `-highspeed` / `kimi-k3`；GLM → `glm-5.3` / `glm-5.3-flash`；Ollama → qwen3.5 / gemma4:31b / gpt-oss:20b。
+- **取值口径**（写进模块头注释）：只写官方文档明写的数字；官方未公布逐模型输出上限的（xAI / Mistral / 硅基流动 / Ollama，以及 MiniMax-M3、StepFun flash 两代）`maxTokens` **留空，不填估算值**——假上限会悄悄收紧截断预算。
+- **预算不变量**：`maxTokens` 必须小于 `contextWindow`——分配器按「input+output ≤ contextWindow」硬预留输出，输出上限等于整窗时会让输入预算归零（`infeasible` 后逐轮退化为 1k 预算，且每轮告警）。因此 `doubao-seed-2-1-turbo-260628`（最大回答 256K = 整窗）与 `ernie-5.5-flash-preview`（最大输出 1M = 整窗）的 `maxTokens` 留空；`spark-x` 的官方「输入 64K / 输出 128K」折算为窗口 196,608，保留 131,072 输出预留后正好余 64K 输入。新增测试守住该不变量。
+- **拍板记录**（大哥 2026-11-20）：Mistral 用官方 OpenAI 格式端点 `https://api.mistral.ai/openai/v1`（public preview，native `/v1` 仅注释备选）；GLM 的 `apiKeyEnvHint` 照官方改 `ZAI_API_KEY`；混元指向新平台 `https://tokenhub.tencentmaas.com/v1`。
+- **星火单模型**：`/x2` 只服务 `spark-x`，老域模型（4.0Ultra / pro-128k / lite）需换成 `/v1` baseUrl；一个预设只有一条 baseUrl，故只列 `spark-x`，换域说明写进 `keyHints`。
+- **新增测试**：预设表结构不变量（id 唯一、非 custom 至少一条模型——对应 `ModelProviderConfigSchema.models.min(1)`、条目 id 唯一、参数为正、模态枚举合法）、「未公布上限的厂商不填估算 maxTokens」与「`maxTokens < contextWindow`」两条回归断言；原 `gpt-5.5` 断言改为 `gpt-6.2-astra`。
+- **文案校准**（按评审意见）：MiniMax 提示补「海外账号需改 `api.minimax.io` 端点」；GLM 提示补「旧称 `ZHIPU_API_KEY`」；硅基流动提示明确「上下文/输出参数需按模型广场手填」；Ollama 模型名去掉中文「（本地）」后缀（`name` 无本地化字段，会漏到英文界面）；OpenRouter `gemini-4-neon` 的 943,718 输出预留加注释说明取舍；模块头补「输入+输出两条独立上限可折算总窗口，须注明依据」。
+- **遗留（未改，待定）**：
+  - `src/init.ts` 脚手架默认模型仍是 `openai/gpt-5.5`，`packages/engine/src/builtin-model-info.ts` 兜底表也仍是旧代际——两者与预设表同属「模型参数」逻辑状态，是否一并刷新待大哥定。
+  - Web 设置页预设卡片仍渲染 `preset.label`（未用 `labels`/`pickLocalized`），英文界面会看到 13 条中文名；`/config/presets/models` 的 DTO 也未声明 `labels`。属 gateway + webui 两包改动，本次未动。
+  - Web 向导不预填 `modelId` 且 provider 选项不带模型清单（CLI 有默认 `preset.models[0]`），长模型 id 需手打——跨包行为分叉，本次未动。
+  - `custom` 的 `apiKeyEnvHint: 'API_KEY'` 让向导强制要求 key，无鉴权自建端点（本地 vLLM / LM Studio）过不去；修法需区分「必须有 key / 可选 key」，属向导校验语义变更，本次未动（条目注释已记录）。
+- **验证**：`npm test tests/config-admin.test.ts`（19 用例）、`tests/onboarding-core.test.ts`（19 用例）、`tests/provider-probe-fallback.test.ts`（7 用例）通过；全量 `npm test` 548 文件 / 5536 用例通过；`npm run lint`、`arch/check-sync.sh` 全绿。
+
 ## v0.121.2 (2026-11-20)
 
 ### feat(webui): 未选中会话时也可直接发送——首条消息自动新建会话

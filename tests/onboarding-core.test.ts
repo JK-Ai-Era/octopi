@@ -18,6 +18,7 @@ import {
   validateStep,
 } from '../packages/engine/src/config-admin/onboarding.js';
 import { initialOnboardingState, nextStep, mergeOnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
+import { getProviderPreset } from '../packages/engine/src/config-admin/model-presets.js';
 import type { OnboardingChoices } from '../packages/engine/src/config-admin/onboarding.js';
 import { classifyProbeError, mergeConfigFragment, writeEnvLine } from '../packages/engine/src/config-admin/onboarding-apply.js';
 import { expectRestrictedToOwner } from './helpers/file-mode.js';
@@ -83,7 +84,8 @@ describe('onboarding 核心状态机', () => {
     const out = assembleOnboarding(baseChoices({ modelId: 'deepseek-v4-pro' }));
     const provider = out.configFragment.providers.deepseek as { models: Array<{ id: string; contextWindow?: number }> };
     expect(provider.models.map((m) => m.id)).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
-    expect(provider.models[1].contextWindow).toBe(1000000); // 参考参数随目录行落盘
+    // 参考参数随目录行落盘（断言与目录同源，避免厂商刷新数值时再改测试）
+    expect(provider.models[1].contextWindow).toBe(getProviderPreset('deepseek')!.models[1]!.contextWindow);
     expect(out.configFragment.agentModel).toBe('deepseek/deepseek-v4-pro');
     expect(out.configFragment.levels).toEqual({
       mini: { primary: 'deepseek/deepseek-v4-pro' },

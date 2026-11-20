@@ -552,10 +552,19 @@ export class ConfigApplyService {
       };
     }
     const rawKey = typeof merged.apiKey === 'string' ? merged.apiKey : '';
+    // 探针模型：/models 404 时用首个已配模型发一次最小对话（仅 openai-completions 生效）
+    const firstModel = Array.isArray(merged.models) ? (merged.models[0] as { id?: unknown } | undefined) : undefined;
+    const probeModel =
+      typeof firstModel?.id === 'string' && firstModel.id.length > 0
+        ? firstModel.id
+        : typeof merged.defaultModel === 'string'
+          ? merged.defaultModel
+          : undefined;
     return discoverProviderModels({
       baseUrl: expandEnvPlaceholders(String(merged.baseUrl ?? '')),
       apiKey: expandEnvPlaceholders(rawKey),
       api: merged.api === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions',
+      ...(probeModel ? { probeModel } : {}),
     });
   }
 

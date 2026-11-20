@@ -36,7 +36,54 @@ describe('model presets', () => {
     expect(cfg.api).toBe('openai-completions');
     expect(cfg.apiKey).toBe('${OPENAI_API_KEY}');
     expect(cfg.models.length).toBeGreaterThan(0);
-    expect(cfg.models[0]!.id).toBe('gpt-5.5');
+    expect(cfg.models[0]!.id).toBe('gpt-6.2-astra');
+  });
+
+  it('预设表结构不变量：id 唯一、非 custom 至少一条模型、条目 id 唯一且参数为正', () => {
+    const ids = BUILTIN_MODEL_PRESETS.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    for (const preset of BUILTIN_MODEL_PRESETS) {
+      if (preset.custom) {
+        expect(preset.models).toEqual([]);
+        continue;
+      }
+      // config-schema 要求 provider.models 至少 1 条（ModelProviderConfigSchema.models.min(1)）
+      expect(preset.models.length).toBeGreaterThan(0);
+      expect(preset.baseUrl.length).toBeGreaterThan(0);
+
+      const modelIds = preset.models.map((m) => m.id);
+      expect(new Set(modelIds).size).toBe(modelIds.length);
+
+      for (const m of preset.models) {
+        expect(m.id.length).toBeGreaterThan(0);
+        expect(m.name.length).toBeGreaterThan(0);
+        if (m.contextWindow !== undefined) expect(m.contextWindow).toBeGreaterThan(0);
+        if (m.maxTokens !== undefined) expect(m.maxTokens).toBeGreaterThan(0);
+        for (const modality of m.input ?? []) {
+          expect(['text', 'image', 'audio', 'video']).toContain(modality);
+        }
+      }
+    }
+  });
+
+  it('未公布逐模型输出上限的厂商不填估算 maxTokens', () => {
+    for (const id of ['xai', 'mistral', 'ollama', 'siliconflow']) {
+      const preset = getProviderPreset(id);
+      expect(preset).toBeDefined();
+      for (const m of preset!.models) {
+        expect(m.maxTokens).toBeUndefined();
+      }
+    }
+  });
+
+  it('maxTokens 必须小于 contextWindow（否则输出预留吃光窗口，分配器判 infeasible）', () => {
+    for (const preset of BUILTIN_MODEL_PRESETS) {
+      for (const m of preset.models) {
+        if (m.maxTokens === undefined || m.contextWindow === undefined) continue;
+        expect(m.maxTokens, `${preset.id}/${m.id}`).toBeLessThan(m.contextWindow);
+      }
+    }
   });
 
   it('expandProviderPreset overrides 逐字段覆盖预设默认值', () => {
