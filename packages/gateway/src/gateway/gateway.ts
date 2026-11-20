@@ -54,7 +54,7 @@ import { existsSync } from 'node:fs';
 import { appendFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { CircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/circuit-breaker.js';
 import { isTurnStartContent } from '@octopi-agent/engine/harness/context/turn-envelope.js';
-import { isTurnAnchor } from '@octopi-agent/engine/harness/context/layer-types.js';
+import { isTurnInput } from '@octopi-agent/engine/harness/context/layer-types.js';
 import { wrapProviderWithCircuitBreaker } from '@octopi-agent/engine/harness/run/reliability/provider-wrapper.js';
 import { resolveModel, resolveModelRef, resolveCatalogEntry, parseModelRef } from '@octopi-agent/engine/harness/run/model/index.js';
 import { PluginManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/plugins/manager.js';
@@ -3595,15 +3595,6 @@ export class Gateway {
     return this.store.load(sessionId);
   }
 
-  /** 中止标记锚点 = 某 turn 的用户输入：开轮信封（含 wake 等机器输入），或定形前的裸用户输入 */
-  private isTurnInput(msg: Message | undefined): boolean {
-    return (
-      !!msg &&
-      msg.role === 'user' &&
-      (isTurnStartContent(msg.content) || isTurnAnchor(msg))
-    );
-  }
-
   async getSessionView(sessionId: string, _agentId?: string): Promise<{
     meta: SessionMeta;
     messageCount: number;
@@ -3644,7 +3635,7 @@ export class Gateway {
       }
       // 被标记的下标本身必须是该 turn 的用户输入（开轮信封，或 abort 抢在定形前的裸输入）：
       // legacy/损坏标记（指向载体或 notify）暴露出去会让截断点切错位置，重发叠出重复用户轮
-      if (this.isTurnInput(msg) && !hasNewerTurn) {
+      if (isTurnInput(msg) && !hasNewerTurn) {
         abortedTurn = raw;
       }
     }

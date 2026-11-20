@@ -48,8 +48,7 @@ import type { ContextEngine } from '../context/types.js';
 import type { ContextLayerHealth } from '../context/layer-health.js';
 import type { SessionData } from '../session/types.js';
 import type { DiscardFileEffectsResult } from '../extension/execution-environment/undo-log.js';
-import { isTurnAnchor } from '../context/layer-types.js';
-import { isTurnStartContent } from '../context/turn-envelope.js';
+import { isTurnInput } from '../context/layer-types.js';
 import { InProcessSessionLock } from './concurrency/session-lease.js';
 import type { SessionLease } from './concurrency/session-lease.js';
 import type {
@@ -164,18 +163,6 @@ function readSessionModelId(metadata: Record<string, unknown> | undefined): stri
     }
   }
   return null;
-}
-
-/**
- * 中止标记锚点 = 某 turn 的用户输入：开轮信封（含 wake 等机器输入），或定形前的裸用户输入
- * （自 gateway.isTurnInput 迁入；view 与写路径同口径，单一来源）。
- */
-export function isTurnInput(msg: Message | undefined): boolean {
-  return (
-    !!msg &&
-    msg.role === 'user' &&
-    (isTurnStartContent(msg.content) || isTurnAnchor(msg))
-  );
 }
 
 /**

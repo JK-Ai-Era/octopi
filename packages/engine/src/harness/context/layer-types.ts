@@ -15,7 +15,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
-import { extractUserMessageText } from './turn-envelope.js';
+import { extractUserMessageText, isTurnStartContent } from './turn-envelope.js';
 
 // ── 层标识 ──
 
@@ -398,6 +398,28 @@ export function currentRunStartAnchorIndex(
     first = i;
   }
   return first;
+}
+
+/**
+ * 中止标记锚点 = 某 turn 的用户输入：开轮信封（含 wake 等机器输入），或定形前的
+ * 裸用户输入。abort / edit-resend 的截断锚点判定（view 与写路径同口径）。
+ *
+ * 历史：本谓词曾在 run-host 与 gateway 各存一份手抄（run-host 迁移时声称单一来源，
+ * gateway 副本未删）——2026-11-20 合并到本文件，turn 边界类谓词一处收口。
+ *
+ * @param msg - 待判定消息（abort 标记指向的历史条目）
+ * @returns true = 可作为中止 turn 的截断锚点
+ */
+export function isTurnInput(
+  msg:
+    | { role?: string; content?: Message['content']; metadata?: Record<string, unknown> }
+    | undefined,
+): boolean {
+  return (
+    !!msg &&
+    msg.role === 'user' &&
+    (isTurnStartContent(msg.content) || isTurnAnchor(msg))
+  );
 }
 
 /**

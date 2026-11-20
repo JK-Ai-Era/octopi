@@ -10,6 +10,7 @@ import {
   isTurnAnchor,
   isHumanSpeech,
   isTurnBoundaryAnchor,
+  isTurnInput,
 } from '@octopi-agent/engine/harness/context/layer-types.js';
 
 const user = (metadata?: Record<string, unknown>) => ({ role: 'user', metadata });
@@ -61,5 +62,19 @@ describe('isTurnBoundaryAnchor（边界类共用锚点：isTurnAnchor 基础上�
     expect(isTurnBoundaryAnchor(user({ source: 'engineHint' }))).toBe(false);
     expect(isTurnBoundaryAnchor(user({ source: 'runtime', delivery: 'notify' }))).toBe(false);
     expect(isTurnBoundaryAnchor({ role: 'assistant' })).toBe(false);
+  });
+});
+
+describe('isTurnInput（中止截断锚点：layer-types 单一真源，2026-11-20 合并两份手抄）', () => {
+  it('开轮信封与定形前裸用户输入：可作截断锚点', () => {
+    expect(isTurnInput({ role: 'user', content: 'hi' })).toBe(true);
+    expect(isTurnInput({ role: 'user', content: '<turn_start id="t1">hi</turn_start>' })).toBe(true);
+    expect(isTurnInput({ role: 'user', content: 'wake', metadata: { source: 'runtime' } })).toBe(true);
+  });
+
+  it('引擎载体 / assistant / 空值：不是截断锚点', () => {
+    expect(isTurnInput({ role: 'user', content: 'x', metadata: { source: 'turnEnd' } })).toBe(false);
+    expect(isTurnInput({ role: 'assistant', content: 'x' })).toBe(false);
+    expect(isTurnInput(undefined)).toBe(false);
   });
 });

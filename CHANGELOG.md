@@ -130,6 +130,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.120.6 (2026-11-20)
+
+### refactor(engine,gateway): isTurnInput 收敛 layer-types 单一真源（消除两份手抄副本）
+
+- **根因**（独立评审 del-5ca70159 P3-10）：`isTurnInput`（abort / edit-resend 的截断锚点判定）曾从 gateway 迁入 run-host 并声称「单一来源」，但 gateway 私有副本未删——同一语义两份手抄，改一份忘另一份即口径分裂（view 与写路径的截断点可能判出不同锚点）。
+- **改动**：谓词移入 `harness/context/layer-types.ts`（turn 边界类谓词归属地），run-host 与 gateway 改为 import；谓词体逐字一致、两个调用点语义零变化。形参按本文件谓词风格结构化（`Message` 可直接赋值）。
+- **验证**：`message-speech-predicates.test.ts` 补 `isTurnInput` 行为钉 2 例；全量套件 546 文件 / 5514 通过；lint 三段全绿。
+
 ## v0.120.5 (2026-11-20)
 
 ### fix(context): historyAging 老化边界改钉「当前 run 起点」——插话/命令话语不再触发工具老化
