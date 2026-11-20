@@ -5,7 +5,7 @@
  * - commit 时机：走完才落盘（半截状态不组装）；render 脱敏（apiKey/adminPassword 不回显）
  */
 
-import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -208,5 +208,46 @@ describe('M-6 热应用（向导产物接 ApplyEngine）', () => {
     const svc = makeService();
     const last = await walk(svc);
     expect(last.hotApplied).toBeUndefined();
+  });
+});
+
+describe('控制台准入密钥的暴露窗口', () => {
+  it('只在收尾步骤下发；中途步骤一律不带（缩小浏览器暴露面）', async () => {
+    probeMock.mockResolvedValueOnce({ ok: true });
+    const svc = makeService();
+    svc.start();
+    const steps = ['welcome', 'init-mode', 'deployment-mode', 'provider', 'api-key', 'model', 'probe', 'services', 'first-chat'] as const;
+    const exposedAt: string[] = [];
+    for (const step of steps) {
+      const r = await svc.submit({ kind: 'next' }, ['provider', 'api-key', 'model'].includes(step) ? baseChoices : undefined);
+      // 提交后的 render 描述的是**新**步骤：检查它是否带密钥
+      if (r.consoleAccessKey !== undefined) exposedAt.push(r.step ?? '(done)');
+    }
+    expect(exposedAt).toEqual(['first-chat', '(done)']);
+  });
+
+  it('first-chat 步给出可直接粘贴的密钥（与 LLM provider key 严格不同源）', async () => {
+    probeMock.mockResolvedValueOnce({ ok: true });
+    const svc = makeService();
+    // 模拟 initOctopi 脚手架：先落一份带随机 apiKey 的配置（真实首启的形状）
+    writeFileSync(
+      svc.__config,
+      JSON.stringify({ channels: [{ type: 'http', port: 18180, apiKey: 'scaffold-console-key' }] }),
+      'utf8',
+    );
+    svc.start();
+    const steps = ['welcome', 'init-mode', 'deployment-mode', 'provider', 'api-key', 'model', 'probe', 'services'] as const;
+    for (const step of steps) {
+      await svc.submit({ kind: 'next' }, ['provider', 'api-key', 'model'].includes(step) ? baseChoices : undefined);
+    }
+    const r = svc.render();
+    expect(r.step).toBe('first-chat');
+    expect(r.consoleAccessKey).toEqual({
+      kind: 'key',
+      value: 'scaffold-console-key',
+      source: 'scaffold-console-key',
+    });
+    // baseChoices.apiKey 是 LLM 密钥 'sk-real-secret'——绝不能出现在控制台密钥字段里
+    expect(JSON.stringify(r.consoleAccessKey)).not.toContain('sk-real-secret');
   });
 });

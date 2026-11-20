@@ -29,6 +29,10 @@ import {
 import { pickLocalized } from '@octopi-agent/engine/config-admin/i18n.js';
 import { getProviderPreset } from '@octopi-agent/engine/config-admin/model-presets.js';
 import { requiresAdminPassword } from '@octopi-agent/engine/config-admin/onboarding-apply.js';
+import {
+  readConsoleAccessKey,
+  type ConsoleAccessKey,
+} from '@octopi-agent/engine/config-admin/console-access-key.js';
 import type { ProbeErrorKind } from '@octopi-agent/engine/config-admin/error-copy.js';
 import {
   applyOnboarding,
@@ -61,6 +65,14 @@ export interface OnboardingRender {
   /** M-6 热应用结果：true=已即时生效（新会话即用新配置）；false=失败（见 hotApplyError，仍需重启）；undefined=未热应用 */
   hotApplied?: boolean;
   hotApplyError?: string;
+  /**
+   * 控制台准入密钥（`channels[type=http].apiKey`）——**仅最后一步/完成时给出**。
+   *
+   * 与 `choices.apiKey` 是两件东西：那是 LLM provider 密钥，永不回显；这是
+   * initOctopi 随机生成的控制台准入密钥，用户不复制就只能翻配置文件找。
+   * 只在最后一步下发，缩小密钥在浏览器里的暴露窗口（其余步骤不返回）。
+   */
+  consoleAccessKey?: ConsoleAccessKey;
   /** probe 失败：分类码 + 原始信息（人话映射在渲染层单源——webui/CLI 的 probeErrorCopy） */
   probeError?: { kind: ProbeErrorKind; message: string };
   /** 步骤校验失败（HTTP 400 语义的回显） */
@@ -354,6 +366,12 @@ export class OnboardingService {
       probeError: s.probeError,
       hotApplied: s.hotApplied,
       hotApplyError: s.hotApplyError?.split(this.deps.octopiHome).join('~'), // NIT：本地路径打码再出浏览器
+      // 控制台准入密钥只在「收尾」三个时机下发：最后一步（first-chat）、正常走完、
+      // 保存并退出。此时配置已/即将落盘（probe 步 commit=after-probe），密钥是最终值；
+      // 其余步骤不返回，缩小密钥在浏览器里的暴露窗口。
+      ...((s.state.current === 'first-chat' || s.state.completed || s.state.exitSave)
+        ? { consoleAccessKey: readConsoleAccessKey(this.deps.configPath) }
+        : {}),
       options,
       stepIndex,
       stepCount,

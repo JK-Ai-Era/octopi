@@ -32,6 +32,12 @@ interface WizardRender {
   /** M-6 热应用结果（true=已即时生效；false=失败见 hotApplyError；undefined=未热应用需重启） */
   hotApplied?: boolean;
   hotApplyError?: string;
+  /** 控制台准入密钥（`channels[type=http].apiKey`；仅收尾步骤下发——与 LLM provider key 无关） */
+  consoleAccessKey?:
+    | { kind: 'key'; value: string; source: string }
+    | { kind: 'env-ref'; ref: string }
+    | { kind: 'none' }
+    | { kind: 'unreadable' };
   options: {
     languages: Array<{ id: string; label: string }>;
     deploymentModes: Array<{ id: string; label: string; description: string }>;
@@ -60,6 +66,81 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 function probeCopy(kind: ProbeErrorKind): { title: string; detail: string } {
   // 文案单源在 engine error-copy（批 3-2 四份单源化）；此函数保留语义别名
   return probeErrorCopy(kind, 'zh');
+}
+
+/**
+ * 控制台准入密钥卡（向导收尾）。
+ *
+ * 存在的理由：`initOctopi` 会随机生成 `channels[type=http].apiKey`，它只存在配置文件里；
+ * 用户不知道去哪找，登录页却要填。收尾时必须亮出来让用户复制保存。
+ *
+ * 注意：这是**控制台准入密钥**，不是 LLM provider 的密钥——后者永不回显。
+ *
+ * @param accessKey - 服务端判定的密钥四态（缺省 = 服务端未下发，不渲染）
+ */
+function AccessKeyCard({ accessKey }: { accessKey?: WizardRender['consoleAccessKey'] }): JSX.Element | null {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  if (!accessKey) return null;
+
+  if (accessKey.kind === 'none') {
+    return (
+      <div className="status-card" role="status">
+        <div className="status-card-title">{t('onboardingWizard.accessKeyNoneTitle')}</div>
+        <div className="status-card-detail">{t('onboardingWizard.accessKeyNoneDetail')}</div>
+      </div>
+    );
+  }
+  if (accessKey.kind === 'env-ref') {
+    return (
+      <div className="status-card" role="status">
+        <div className="status-card-title">{t('onboardingWizard.accessKeyEnvTitle')}</div>
+        <div className="status-card-detail">
+          <code>{accessKey.ref}</code>
+          {t('onboardingWizard.accessKeyEnvDetail')}
+        </div>
+      </div>
+    );
+  }
+  if (accessKey.kind === 'unreadable') {
+    return (
+      <div className="status-card" role="status">
+        <div className="status-card-title">{t('onboardingWizard.accessKeyUnreadableTitle')}</div>
+        <div className="status-card-detail">{t('onboardingWizard.accessKeyUnreadableDetail')}</div>
+      </div>
+    );
+  }
+
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(accessKey.value);
+      setCopied(true);
+    } catch {
+      // 剪贴板不可用（非安全上下文/无权限）：文本已可见，用户可手动选中复制——不回退到 execCommand
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="status-card" role="status">
+      <div className="status-card-title">{t('onboardingWizard.accessKeyTitle')}</div>
+      <div className="status-card-detail">
+        {/* 密钥单行可选中：`user-select: all` 让双击即全选，剪贴板不可用时也能复制 */}
+        <code className="access-key-value" style={{ userSelect: 'all', wordBreak: 'break-all' }}>
+          {accessKey.value}
+        </code>
+      </div>
+      {accessKey.value !== accessKey.source && (
+        <div className="status-card-detail small muted">
+          {t('onboardingWizard.accessKeyResolvedFrom', { ref: accessKey.source })}
+        </div>
+      )}
+      <div className="status-card-detail">{t('onboardingWizard.accessKeyDetail')}</div>
+      <button className="btn-secondary" style={{ marginTop: 8 }} onClick={() => void copy()} disabled={copied}>
+        {copied ? t('onboardingWizard.accessKeyCopied') : t('onboardingWizard.accessKeyCopy')}
+      </button>
+    </div>
+  );
 }
 
 export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Element {
@@ -401,6 +482,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
           <div className="wizard-step">
             <h2>{t('onboardingWizard.doneTitle')}</h2>
             <p className="small muted">{t('onboardingWizard.doneHint')}</p>
+            <AccessKeyCard accessKey={render.consoleAccessKey} />
             <button className="btn-primary" onClick={() => void submit({ kind: 'next' })} disabled={busy}>
               {t('onboardingWizard.startChat')}
             </button>

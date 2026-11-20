@@ -152,6 +152,21 @@ export const zh = {
   'onboardingWizard.finishedTitle': '向导已结束',
   'onboardingWizard.finishedCompleted': '配置完成。',
   'onboardingWizard.finishedAborted': '向导中止，配置未改。',
+  'onboardingWizard.accessKeyTitle': '🔑 访问密钥（请复制保存）',
+  'onboardingWizard.accessKeyDetail':
+    '打开控制台登录页时，把它填进「访问密钥」栏（远程 / 局域网访问必填）。关掉本页后仍可在配置文件的 channels[type=http].apiKey 中找到。',
+  'onboardingWizard.accessKeyCopy': '复制密钥',
+  'onboardingWizard.accessKeyCopied': '已复制 ✓',
+  'onboardingWizard.accessKeyResolvedFrom': '（已从环境变量解析：{ref}）',
+  'onboardingWizard.accessKeyNoneTitle': '未设访问密钥（无鉴权模式）',
+  'onboardingWizard.accessKeyNoneDetail':
+    '配置里没有 channels[type=http].apiKey，登录页无需填写。如需准入控制，请配置 apiKey 后重启服务。',
+  'onboardingWizard.accessKeyEnvTitle': '访问密钥由环境变量提供',
+  'onboardingWizard.accessKeyEnvDetail':
+    ' 当前环境未解析出值——登录页请填该变量的实际值。',
+  'onboardingWizard.accessKeyUnreadableTitle': '读不到访问密钥',
+  'onboardingWizard.accessKeyUnreadableDetail':
+    '配置文件缺失或不可读，请检查 channels[type=http].apiKey。',
   'onboardingWizard.enterChat': '进入对话',
   'onboardingWizard.hotAppliedTitle': '配置已保存并即时生效',
   'onboardingWizard.hotAppliedDetail': '新会话即用新配置，无需重启。现在就可以点「进入对话」开始使用。',
@@ -324,6 +339,21 @@ export const en: Record<keyof typeof zh, string> = {
   'onboardingWizard.finishedTitle': 'The wizard has ended',
   'onboardingWizard.finishedCompleted': 'Configuration complete.',
   'onboardingWizard.finishedAborted': 'Wizard aborted; config unchanged.',
+  'onboardingWizard.accessKeyTitle': '🔑 Access key (copy it now)',
+  'onboardingWizard.accessKeyDetail':
+    'Paste it into the "Access key" field on the console login page (required for remote/LAN access). You can also find it later at channels[type=http].apiKey in the config file.',
+  'onboardingWizard.accessKeyCopy': 'Copy key',
+  'onboardingWizard.accessKeyCopied': 'Copied ✓',
+  'onboardingWizard.accessKeyResolvedFrom': '(resolved from environment: {ref})',
+  'onboardingWizard.accessKeyNoneTitle': 'No access key configured (unauthenticated mode)',
+  'onboardingWizard.accessKeyNoneDetail':
+    'There is no channels[type=http].apiKey, so nothing to enter on the login page. To require a key, configure one and restart the service.',
+  'onboardingWizard.accessKeyEnvTitle': 'The access key comes from an environment variable',
+  'onboardingWizard.accessKeyEnvDetail':
+    " — unresolved in this environment; enter that variable's actual value on the login page.",
+  'onboardingWizard.accessKeyUnreadableTitle': 'Cannot read the access key',
+  'onboardingWizard.accessKeyUnreadableDetail':
+    'The config file is missing or unreadable — check channels[type=http].apiKey.',
   'onboardingWizard.enterChat': 'Go to conversation',
   'onboardingWizard.hotAppliedTitle': 'Config saved and applied immediately',
   'onboardingWizard.hotAppliedDetail':

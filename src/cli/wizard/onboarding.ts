@@ -35,7 +35,7 @@ import { applyOnboarding, isRemoteBind, probeProvider } from '@octopi-agent/engi
 import type { ApplyOnboardingDeps } from '@octopi-agent/engine/config-admin/onboarding-apply.js';
 import type { ProductLang } from '@octopi-agent/engine/config-admin/i18n.js';
 import { OctopiConfigSchema } from '../../config-schema/index.js';
-import { expandEnvPlaceholders } from '../../config.js';
+import { readConsoleAccessKey } from '@octopi-agent/engine/config-admin/console-access-key.js';
 import { probeWebUiIdentity, resolveWebUiPort, resolveWebUiProbeHost } from '../webui.js';
 import { askText, choose, closePrompts, confirm, stdinExhausted } from './prompt.js';
 
@@ -111,66 +111,60 @@ const accessInfoPrinted = new Set<string>();
 export function printConsoleAccessInfo(configPath: string, zh: boolean): void {
   if (accessInfoPrinted.has(configPath)) return;
   accessInfoPrinted.add(configPath);
-  let raw: { channels?: Array<{ type?: unknown; apiKey?: unknown }> } | undefined;
-  try {
-    raw = JSON.parse(readFileSync(configPath, 'utf8')) as {
-      channels?: Array<{ type?: unknown; apiKey?: unknown }>;
-    };
-  } catch {
-    // 配置缺失/损坏不阻塞收尾；按「读不到」处置
-    raw = undefined;
-  }
-  const http = raw?.channels?.find((c) => c?.type === 'http');
-  const rawKey = typeof http?.apiKey === 'string' && http.apiKey ? http.apiKey : undefined;
-  // 与 daemon 加载同口径展开 ${VAR}（直接粘字面占位符进登录页必失败）
-  const key = rawKey ? expandEnvPlaceholders(rawKey) : undefined;
-  if (key && !key.includes('${')) {
-    console.log('');
-    console.log(zh ? '🔑 访问密钥（请复制保存）：' : '🔑 Access key (copy it now):');
-    console.log(`   ${key}`);
-    if (key !== rawKey) {
+  // 判定单源在 engine `readConsoleAccessKey`（Web 向导完成页共用同一口径）
+  const accessKey = readConsoleAccessKey(configPath);
+  switch (accessKey.kind) {
+    case 'key': {
+      console.log('');
+      console.log(zh ? '🔑 访问密钥（请复制保存）：' : '🔑 Access key (copy it now):');
+      console.log(`   ${accessKey.value}`);
+      if (accessKey.value !== accessKey.source) {
+        console.log(
+          zh
+            ? `   （已从环境变量解析：${accessKey.source}）`
+            : `   (resolved from environment: ${accessKey.source})`,
+        );
+      }
       console.log(
         zh
-          ? `   （已从环境变量解析：${rawKey}）`
-          : `   (resolved from environment: ${rawKey})`,
+          ? '   打开 WebUI 登录页后，把它填进「访问密钥」栏（远程 / 局域网访问时必填）。'
+          : '   Paste it into the "Access key" field on the WebUI login page (required for remote/LAN access).',
       );
+      console.log(
+        zh
+          ? `   密钥在配置文件里：${configPath}（channels[type=http].apiKey）`
+          : `   The key lives in the config file: ${configPath} (channels[type=http].apiKey)`,
+      );
+      return;
     }
-    console.log(
-      zh
-        ? '   打开 WebUI 登录页后，把它填进「访问密钥」栏（远程 / 局域网访问时必填）。'
-        : '   Paste it into the "Access key" field on the WebUI login page (required for remote/LAN access).',
-    );
-    console.log(
-      zh
-        ? `   密钥在配置文件里：${configPath}（channels[type=http].apiKey）`
-        : `   The key lives in the config file: ${configPath} (channels[type=http].apiKey)`,
-    );
-    return;
+    case 'env-ref': {
+      // env 引用但当前环境解析不出值：指名来源，不打印假钥
+      console.log('');
+      console.log(
+        zh
+          ? `   ℹ️ 访问密钥由环境变量提供（${accessKey.ref}），当前环境未解析出值——登录页请填该变量的实际值。`
+          : `   ℹ️ The access key comes from an environment variable (${accessKey.ref}), unresolved in this environment — enter its actual value on the login page.`,
+      );
+      return;
+    }
+    case 'none': {
+      console.log('');
+      console.log(
+        zh
+          ? '   ℹ️ 配置未设访问密钥（channels[type=http].apiKey）——无鉴权模式，登录页无需填写；如需准入控制请配置 apiKey 后重启服务。'
+          : '   ℹ️ No access key configured (channels[type=http].apiKey) — unauthenticated mode, nothing to enter on the login page; configure an apiKey and restart for access control.',
+      );
+      return;
+    }
+    case 'unreadable': {
+      console.log(
+        zh
+          ? `   密钥在配置文件里：${configPath}（channels[type=http].apiKey）`
+          : `   The key lives in the config file: ${configPath} (channels[type=http].apiKey)`,
+      );
+      return;
+    }
   }
-  if (rawKey) {
-    // env 引用但当前环境解析不出值：指名来源，不打印假钥
-    console.log('');
-    console.log(
-      zh
-        ? `   ℹ️ 访问密钥由环境变量提供（${rawKey}），当前环境未解析出值——登录页请填该变量的实际值。`
-        : `   ℹ️ The access key comes from an environment variable (${rawKey}), unresolved in this environment — enter its actual value on the login page.`,
-    );
-    return;
-  }
-  if (raw) {
-    console.log('');
-    console.log(
-      zh
-        ? '   ℹ️ 配置未设访问密钥（channels[type=http].apiKey）——无鉴权模式，登录页无需填写；如需准入控制请配置 apiKey 后重启服务。'
-        : '   ℹ️ No access key configured (channels[type=http].apiKey) — unauthenticated mode, nothing to enter on the login page; configure an apiKey and restart for access control.',
-    );
-    return;
-  }
-  console.log(
-    zh
-      ? `   密钥在配置文件里：${configPath}（channels[type=http].apiKey）`
-      : `   The key lives in the config file: ${configPath} (channels[type=http].apiKey)`,
-  );
 }
 
 type ProbeLabels = Record<ProbeErrorKind, string>;

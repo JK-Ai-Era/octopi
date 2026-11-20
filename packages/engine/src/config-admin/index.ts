@@ -56,6 +56,9 @@ export type {
 export { discoverProviderModels } from './discover.js';
 export type { DiscoverModelsRequest, DiscoverModelsResult } from './discover.js';
 
+export { readConsoleAccessKey } from './console-access-key.js';
+export type { ConsoleAccessKey } from './console-access-key.js';
+
 export {
   ONBOARDING_STEPS,
   DEPLOYMENT_MODES,

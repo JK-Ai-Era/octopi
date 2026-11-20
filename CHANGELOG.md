@@ -131,6 +131,35 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.14 (2026-11-21)
+
+### feat(onboarding): 向导收尾亮出控制台准入密钥（CLI 与 Web 单源）
+
+`initOctopi` 会随机生成 `channels[type=http].apiKey`（B-1 secure-by-default），但它只锁在配置文件里：
+用户不知道去哪找，登录页却要填。CLI 侧此前已在收尾打印（`printConsoleAccessInfo`），Web 向导
+**没有**——走 Web 路径的用户只能去翻 `octopi.json`。
+
+- **新增 engine 单源原语** `config-admin/console-access-key.ts`（`readConsoleAccessKey`）。CLI 与 Web
+  共用同一判定，返回四态而非「string | undefined」：`key`（可直接粘贴的生效值）/ `env-ref`（`${VAR}`
+  当前解析不出，只给变量名）/ `none`（无鉴权模式）/ `unreadable`（配置缺失或损坏）。四态的用意是
+  让每个分支都能如实说话——解析不出时绝不返回假钥，读不到时明说读不到。CLI 侧原有的内联实现
+  改为消费该原语（行为不变，`tests/onboarding-access-key.test.ts` 原 7 条全绿未改）。
+- **两把 key 不可混淆**（本模块存在的唯一理由）：`channels[type=http].apiKey` 是**控制台准入密钥**，
+  可以回显；`choices.apiKey` / `models.providers[].apiKey` 是 **LLM provider 密钥**，绝不回显。
+  把两者混用会把上游模型密钥泄漏到浏览器。
+- **Web 侧暴露窗口**：`OnboardingRender` 新增 `consoleAccessKey`，但**只在收尾三个时机下发**
+  （`first-chat` 步、正常走完、保存并退出）。中途步骤不返回，缩小密钥在浏览器里的停留窗口。
+  下发时点选在 `first-chat` 而非完成页，因为点「开始第一句话」后组件立即卸载、完成页根本不会出现。
+- **前端**新增 `AccessKeyCard`：展示密钥（`user-select: all` 便于剪贴板不可用时手动选中）、复制按钮
+  （`navigator.clipboard`，失败不假装成功）、`${VAR}` 解析时标明来源、`none`/`unreadable` 如实降级
+  且不给复制按钮。中英文文案同步。
+
+验证：新增 `tests/console-access-key.test.ts`（6 条四态）、Web 侧暴露窗口 2 条、组件 6 条（含复制、
+env-ref、none、unreadable、服务端不下发时不渲染）。**做了变异验证**：无条件每步下发 → 窗口测试红；
+把 LLM key 当控制台密钥 → 脱敏测试与同源断言双双红；移除前端卡片 → 组件测试 5 条红。
+全量 `555 files / 5633 tests` 通过；lint 与 `arch/check-sync.sh` 绿。端到端在全新 `OCTOPI_HOME`
+上确认 `initOctopi` 产出 43 位随机密钥、且 `readConsoleAccessKey` 判定值与配置原文严格一致。
+
 ## v0.121.13 (2026-11-21)
 
 ### fix(onboarding): Web 向导五项缺陷（误报未启动 / 模式选不中 / 不能滚动 / 模型无预设 / 密码校验太晚）

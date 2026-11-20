@@ -194,3 +194,77 @@ describe('模型步', () => {
     expect(screen.queryByLabelText(/模型 id/)).toBeNull();
   });
 });
+
+describe('收尾步的访问密钥', () => {
+  /**
+   * 构造 first-chat 步的 render（可选带密钥四态之一）。
+   *
+   * @param accessKey - 服务端下发的密钥判定结果（缺省 = 不下发）
+   * @returns render 替身
+   */
+  function firstChat(accessKey?: unknown): Render {
+    return makeRender({
+      step: 'first-chat',
+      stepIndex: 9,
+      ...(accessKey === undefined ? {} : { consoleAccessKey: accessKey }),
+    });
+  }
+
+  it('展示密钥原文并提示填进登录页（用户不必去翻配置文件）', async () => {
+    initial = firstChat({ kind: 'key', value: 'random-32-bytes', source: 'random-32-bytes' });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    expect(await screen.findByText('random-32-bytes')).toBeTruthy();
+    expect(screen.getByText('🔑 访问密钥（请复制保存）')).toBeTruthy();
+    expect(screen.getByText(/填进「访问密钥」栏/)).toBeTruthy();
+  });
+
+  it('${VAR} 解析出的值同时标明来源（不让人以为配置里写着明文）', async () => {
+    initial = firstChat({ kind: 'key', value: 'resolved-value', source: '${MY_KEY}' });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    expect(await screen.findByText('resolved-value')).toBeTruthy();
+    expect(screen.getByText(/已从环境变量解析：\$\{MY_KEY\}/)).toBeTruthy();
+  });
+
+  it('解析不出变量时只指变量名，不显示假钥', async () => {
+    initial = firstChat({ kind: 'env-ref', ref: '${MY_MISSING_KEY}' });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    expect(await screen.findByText('${MY_MISSING_KEY}')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /复制密钥/ })).toBeNull();
+  });
+
+  it('未设密钥/读不到时如实说明，不给复制按钮', async () => {
+    initial = firstChat({ kind: 'none' });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    expect(await screen.findByText(/无鉴权模式/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /复制密钥/ })).toBeNull();
+    cleanup();
+
+    initial = firstChat({ kind: 'unreadable' });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    expect(await screen.findByText(/读不到访问密钥/)).toBeTruthy();
+  });
+
+  it('点击复制把密钥写入剪贴板（并给出已复制反馈）', async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    initial = firstChat({ kind: 'key', value: 'copy-me', source: 'copy-me' });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: /复制密钥/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('copy-me'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /已复制/ })).toBeTruthy());
+  });
+
+  it('服务端不下发密钥时不渲染该卡（不猜、不伪造）', async () => {
+    initial = firstChat();
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    expect(await screen.findByRole('button', { name: /开始第一句话/ })).toBeTruthy();
+    expect(screen.queryByText(/访问密钥（请复制保存）/)).toBeNull();
+  });
+});
