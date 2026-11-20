@@ -37,8 +37,9 @@ function assertPathSafe(
   raw: string,
   context: ToolExecutionContext | undefined,
   label: string,
+  baseCwd: string,
 ): string {
-  const abs = resolveToolPath(raw, context?.cwd, containmentOptions(context));
+  const abs = resolveToolPath(raw, baseCwd, containmentOptions(context));
   if (isUnderAttachmentRoot(abs, context?.attachmentRoots)) {
     throw new Error(`session attachments are read-only; cannot ${label} under attachments root`);
   }
@@ -51,19 +52,25 @@ function assertPathSafe(
 /**
  * Pathspec for git porcelain.
  *
- * Simple paths are L2-resolved (absolute + roots-checked). Glob/magic specs
- * (src/*.ts, :(exclude)...) must stay relative - absolute-resolving them
- * turns the pattern into a literal path and silently matches nothing. Those
- * pass through after a .. / absolute / NUL ban; cwd is already L2-contained.
+ * Simple paths are L2-resolved against the repository cwd the git command runs
+ * in — not the session workspace cwd (`context.cwd`). With an explicit
+ * `cwd: /repo` and `paths: ["CHANGELOG.md"]` the old workspace-based resolve
+ * produced `/workspace/CHANGELOG.md`, which git rejected as "outside
+ * repository". Containment still applies (`allowRoots`, denylist).
+ * Glob/magic specs (src/*.ts, :(exclude)...) must stay relative -
+ * absolute-resolving them turns the pattern into a literal path and silently
+ * matches nothing. Those pass through after a .. / absolute / NUL ban; cwd is
+ * already L2-contained.
  */
 function toGitPathspec(
   raw: string,
   context: ToolExecutionContext | undefined,
   label: string,
+  baseCwd: string,
 ): string {
   const isMagic = raw.startsWith(':(') || /[*?\[]/.test(raw);
   if (!isMagic) {
-    return assertPathSafe(raw, context, label);
+    return assertPathSafe(raw, context, label, baseCwd);
   }
   const denylist = context?.pathDenylist ?? [];
   // A glob pathspec is matched by git, not by us, so we cannot prove it excludes
@@ -305,7 +312,7 @@ export function createGitStatusTool(): RegisteredTool {
     handler: async (args, context) => {
       const cwd = resolveCwd(context, args.cwd as string | undefined);
       const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
-      const pathArgs = paths.length > 0 ? ['--', ...paths.map((p) => toGitPathspec(p, context, 'status'))] : [];
+      const pathArgs = paths.length > 0 ? ['--', ...paths.map((p) => toGitPathspec(p, context, 'status', cwd))] : [];
       const result = await runGit(context, cwd, [
         'status',
         '--porcelain=v1',
@@ -363,7 +370,7 @@ export function createGitDiffTool(): RegisteredTool {
       if (args.stat === true) gitArgs.push('--stat');
       const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
       if (paths.length > 0) {
-        gitArgs.push('--', ...paths.map((p) => toGitPathspec(p, context, 'diff')));
+        gitArgs.push('--', ...paths.map((p) => toGitPathspec(p, context, 'diff', cwd)));
       }
       const result = await runGit(context, cwd, gitArgs, { timeoutMs: 120_000 });
       return { ...toText(result, context, 'diff'), cwd, mode };
@@ -406,7 +413,7 @@ export function createGitLogTool(): RegisteredTool {
       gitArgs.push(rev);
       const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
       if (paths.length > 0) {
-        gitArgs.push('--', ...paths.map((p) => toGitPathspec(p, context, 'log')));
+        gitArgs.push('--', ...paths.map((p) => toGitPathspec(p, context, 'log', cwd)));
       }
       const result = await runGit(context, cwd, gitArgs);
       return { ...toText(result), cwd, limit, revision: rev };
@@ -491,7 +498,7 @@ export function createGitCommitTool(): RegisteredTool {
       );
 
       const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
-      const resolvedPaths = paths.map((p) => toGitPathspec(p, context, 'commit'));
+      const resolvedPaths = paths.map((p) => toGitPathspec(p, context, 'commit', cwd));
       const useAll = args.all === true;
 
       if (resolvedPaths.length > 0 || useAll) {
@@ -651,7 +658,7 @@ export function createGitRestoreTool(): RegisteredTool {
       const cwd = resolveCwd(context, args.cwd as string | undefined);
       const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
       if (paths.length === 0) throw new Error('git_restore: paths is required');
-      const resolvedPaths = paths.map((p) => toGitPathspec(p, context, 'restore'));
+      const resolvedPaths = paths.map((p) => toGitPathspec(p, context, 'restore', cwd));
 
       await gateEffect(
         {

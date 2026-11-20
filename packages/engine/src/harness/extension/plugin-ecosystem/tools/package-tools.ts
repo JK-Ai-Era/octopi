@@ -285,14 +285,19 @@ export function createProjectRunTool(): RegisteredTool {
       name: 'project_run',
       capabilities: ['runner'],
       description:
-        'Run a named script from package.json#scripts (e.g. test, lint, build). Pass the script name only — never an arbitrary command string. Executes workspace code; blocked when the tool surface is reduced.',
+        'Run a named script from package.json#scripts (e.g. test, lint, build). Pass the script name only — never an arbitrary command string. `cwd` is required: it is the project directory holding package.json and is never inferred from the session workspace. Executes workspace code; blocked when the tool surface is reduced.',
       parameters: {
         script: {
           type: 'string',
           description: 'Script name defined in package.json#scripts',
           required: true,
         },
-        cwd: { type: 'string', description: 'Project directory (default: workspace cwd)' },
+        cwd: {
+          type: 'string',
+          description:
+            'Project directory containing package.json (required; relative paths resolve against it, never against the workspace cwd)',
+          required: true,
+        },
         args: {
           type: 'array',
           description: 'Extra args passed after the script (npm run <script> -- <args>)',
@@ -314,7 +319,15 @@ export function createProjectRunTool(): RegisteredTool {
     // 历史视图收敛为「成败 + 尾部结论」（stdout 结论在末尾；成功时 stderr 是日志噪音）
     ageResult: ({ result }) => ageProjectRunResult(result),
     handler: async (args, context) => {
-      const cwd = resolveCwd(context, args.cwd as string | undefined);
+      // cwd 必填：缺省会落到会话 workspace，那通常不是目标项目——要么 package.json
+      // 不存在，要么跑的是另一个仓库的同名脚本。
+      const rawCwd = typeof args.cwd === 'string' ? args.cwd.trim() : '';
+      if (!rawCwd) {
+        throw new Error(
+          'project_run_cwd_required: pass the project directory containing package.json; it is never inferred from the workspace cwd',
+        );
+      }
+      const cwd = resolveCwd(context, rawCwd);
       const script = String(args.script ?? '').trim();
       if (!script || !/^[A-Za-z0-9][A-Za-z0-9:._-]*$/.test(script)) {
         throw new Error(`project_run: invalid script name "${script}"`);

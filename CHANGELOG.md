@@ -129,7 +129,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.120.1 (2026-11-20)
+## v0.120.2 (2026-11-20)
+
+### fix(engine): git_* 的 paths 按仓库 cwd 解析；project_run 的 cwd 必填
+
+- **根因（git_*）**：`toGitPathspec` → `assertPathSafe` 用 `context.cwd`（会话 workspace）解析相对 paths，而不是工具入参 `cwd`（仓库）。显式 `cwd: /repo` + `paths: ["CHANGELOG.md"]` 因此拼成 `<workspace>/CHANGELOG.md`，git 报 `fatal: ... is outside repository at '/repo'`。修复：`status`/`diff`/`log`/`commit`/`restore` 全部把已解析的仓库 cwd 传给 pathspec 解析（L2 包含与 denylist 仍照常生效）。glob/magic pathspec 仍保持相对解析（绝对化会静默失配）。
+- **根因（project_run）**：`cwd` 可选且缺省落到 `context.cwd`，而会话 workspace 通常不是目标项目——要么 package.json 不存在，要么对着另一个仓库的同名脚本执行（静默跑错）。改为 `cwd` 必填（wire schema `required` + handler 侧 `project_run_cwd_required` 显式报错），描述里明确「不推断自 workspace」。
+- **验证**：新增 `tests/harness/dedicated-tools-functional.test.ts` 两例（workspace 与仓库为两个不同目录时，`git_commit` / `git_status` 的相 paths 仍落在仓库内）——先按旧语义跑过并复现 `outside repository`，再确认修复后通过；`tests/harness/dedicated-tools.test.ts` 三例覆盖 `cwd` 的 schema required 与缺失/空白拒绝。全量套件 542 文件 / 5496 通过（9 跳过常态）；engine `tsc` 全绿；改动文件 eslint 通过。
+- **兼容性**：仅收紧入参契约（`project_run` 缺 `cwd` 由「静默用 workspace」变为报错）。同一套判定尚未施加到 `package_edit` / `package_install`（二者 `cwd` 仍可选，缺省编辑 workspace 的 package.json），留待单独决策。
+
 
 ### feat(onboarding)!: 移除演示 agent 与演示任务流程（demo kit 整链下线）
 

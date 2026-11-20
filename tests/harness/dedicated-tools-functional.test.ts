@@ -165,3 +165,55 @@ describe.skipIf(!gitAvailable)('git filter.* neutralization (functional)', () =>
     }
   });
 });
+
+describe.skipIf(!gitAvailable)('git_* pathspec 相对仓库 cwd 解析（不是会话 workspace）', () => {
+  it('cwd=<repo> + 相对 path 落在仓库内，而不是 workspace 里', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'octopi-git-pathspec-'));
+    const workspace = await mkdtemp(join(tmpdir(), 'octopi-git-ws-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: repo });
+      execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: repo });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repo });
+      await writeFile(join(repo, 'CHANGELOG.md'), '# log\n');
+
+      const tools = createGitTools();
+      const commit = tools.find((t) => t.definition.name === 'git_commit')!;
+      // 会话 cwd 与仓库是两个不同目录：path spec 必须贴仓库解析
+      const { ctx } = mockContext(workspace, { pathRoots: [workspace, repo] });
+      const result = (await commit.handler(
+        { cwd: repo, message: 'init', paths: ['CHANGELOG.md'] },
+        ctx as never,
+      )) as { exitCode: number; stderr: string };
+
+      expect(result.stderr).not.toMatch(/outside repository/);
+      expect(result.exitCode).toBe(0);
+      const log = execFileSync('git', ['log', '--oneline'], { cwd: repo, encoding: 'utf8' });
+      expect(log).toContain('init');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('git_status paths 同样相对仓库 cwd 解析', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'octopi-git-status-'));
+    const workspace = await mkdtemp(join(tmpdir(), 'octopi-git-status-ws-'));
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: repo });
+      await writeFile(join(repo, 'pending.txt'), 'x\n');
+
+      const status = createGitTools().find((t) => t.definition.name === 'git_status')!;
+      const { ctx } = mockContext(workspace, { pathRoots: [workspace, repo] });
+      const result = (await status.handler(
+        { cwd: repo, paths: ['pending.txt'] },
+        ctx as never,
+      )) as { exitCode: number; stdout: string };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('pending.txt');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+});

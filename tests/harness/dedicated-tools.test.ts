@@ -18,6 +18,7 @@ import {
 } from '@octopi-agent/engine/harness/extension/execution-environment/tool-capabilities.js';
 import { createGitTools } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-tools.js';
 import { createPackageTools } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/package-tools.js';
+import { buildToolLlmParameters } from '@octopi-agent/engine/harness/agent/tool-purpose.js';
 
 describe('dedicated tool capabilities', () => {
   it('vcs is allowed on reduced; runner and egress are stripped', () => {
@@ -353,5 +354,36 @@ describe('P2 follow-ups (EOL / pathspec / filters)', () => {
     await status.handler({ paths: ['package.json'] }, ctx as never).catch((e: Error) => {
       expect(e.message).not.toMatch(/pathspec_/);
     });
+  });
+});
+
+describe('project_run cwd 必填', () => {
+  const ctx = (cwd: string) => ({
+    sessionId: 's',
+    agentId: 'a',
+    messages: [],
+    cwd,
+    pathRoots: [cwd],
+    pathContainment: 'strict' as const,
+  });
+  const projectRun = () => createPackageTools().find((t) => t.definition.name === 'project_run')!;
+
+  it('wire schema 把 cwd 标为 required', () => {
+    const schema = buildToolLlmParameters(projectRun().definition.parameters) as { required?: string[] };
+    expect(schema.required).toContain('cwd');
+    expect(schema.required).toContain('script');
+  });
+
+  // 缺省会落到会话 workspace：那通常不是目标项目（没有 package.json 或跑错仓库）
+  it('缺 cwd 时直接报错，不静默落到 workspace cwd', async () => {
+    await expect(
+      projectRun().handler({ script: 'test' }, ctx('/tmp/ws') as never),
+    ).rejects.toThrow(/project_run_cwd_required/);
+  });
+
+  it('空白 cwd 同样拒绝', async () => {
+    await expect(
+      projectRun().handler({ script: 'test', cwd: '   ' }, ctx('/tmp/ws') as never),
+    ).rejects.toThrow(/project_run_cwd_required/);
   });
 });
