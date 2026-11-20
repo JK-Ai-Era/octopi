@@ -160,14 +160,18 @@ export class OnboardingService {
   }
 
   /**
-   * §7 闸：loopback 免 token（本机已有 shell）；远程必须携带有效未过期 token。
+   * §7 闸：任何来源都必须携带有效未过期 setup token。
+   *
+   * 为什么 loopback 不再免闸：豁免面接入 adapter 后，本机 127.0.0.1 成为**可达**面——
+   * 同一台机器上任意网页都能 POST 到这里驱动向导改写 octopi.json / .env。
+   * 「本机已有 shell 所以免闸」在写配置的面上不成立：浏览器不是 shell，它没有用户的
+   * 意图。浏览器侧本来就带着 URL 里的 `?setup=`（OnboardingWizard 单源），因此去掉免闸
+   * 不影响正常旅程，只挡掉跨站写入。
    *
    * @param setupToken - 请求携带的 token（query 或 X-Setup-Token）
-   * @param isLoopback - 请求来源是否本机回环
    * @returns 是否放行
    */
-  authorize(setupToken: string | undefined, isLoopback: boolean): boolean {
-    if (isLoopback) return true;
+  authorize(setupToken: string | undefined): boolean {
     const t = this.setupToken;
     if (!t) return false;
     if (this.now() > t.expiresAt) {

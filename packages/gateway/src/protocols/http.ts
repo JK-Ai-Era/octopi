@@ -52,6 +52,15 @@ export interface HttpAdapterOptions {
    */
   apiKey?: string;
   /**
+   * 自鉴权面：这些路径（前缀匹配）跳过本适配器的 Bearer 闸门，由 `onRequest` 侧
+   * 自己的凭证闸把关（Web 向导 §7：setup token + Origin 校验）。
+   *
+   * 只应登记「自身已有独立凭证校验」的面——登记错了就是把该面交给下游裸奔；
+   * 内置路由（/messages、/metrics）不在豁免范围内。匹配按路径段（`isSameOrSubPath`），
+   * 不做裸字符串前缀匹配。
+   */
+  apiKeyExemptPaths?: string[];
+  /**
    * 租户身份解析（§9.1-3，T4b）：auth 消息可附带 `registryToken`（registry token
    * 会话）转为租户身份连接——此后订阅受租户收口。无 registryToken = 宿主面
    * （全量可见是其正确语义）；坏凭证回 null，fail-loud 拒连。
@@ -102,6 +111,40 @@ interface WsSession {
 }
 
 /**
+ * 判断请求路径是否命中「自鉴权前缀」。
+ *
+ * **必须用与消费者完全相同的解析器取值**：router 用 `new URL(req.url, base).pathname`
+ * 决定路由落点，此处也必须用同一化后的 `pathname` 判定。曾经用「拆 `?` + decodeURIComponent」
+ * 自己解析，于是 `..\agents`（反斜杠）在 WHATWG URL 下归一化成 `/api/v1/agents`，
+ * 但本函数按 '/' 拆段看不到 `..`，判定为「在豁免面内」——豁免穿到任意 /api/v1 面。
+ *
+ * 归一化后再按**路径段**比较：命中 `/api/v1/onboarding` 及其子路径，不命中
+ * `/api/v1/onboardingX`（否则新增同前缀路径会静默继承豁免）。
+ *
+ * @param reqUrl - 原始 request url（含 query）
+ * @param prefix - 自鉴权前缀（不含 query）
+ * @returns 是否由该前缀的自鉴权面负责
+ */
+export function isSameOrSubPath(reqUrl: string, prefix: string): boolean {
+  if (/\\|%5c/i.test(reqUrl)) return false; // 反斜杠在 WHATWG 下等同 '/'：不认豁免（fail-closed）
+  let pathname: string;
+  try {
+    // 与 router 同一解析器；base 只用于补全，绝对路径原样保留
+    pathname = new URL(reqUrl, 'http://localhost').pathname;
+  } catch {
+    return false; // 非法 URL：不认作豁免，走正常鉴权（fail-closed）
+  }
+  // 余下的 `%..` 仍需能解码：URL 不校验百分号编码，坏编码会原样留在 pathname 上。
+  // 放行它会让 router 的 decodeURIComponent 抛在 try 之外（未捕获异常）——在此 fail-closed。
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    return false;
+  }
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+/**
  * Gateway 向 adapter 推送事件的接口
  */
 export interface StreamingChannelAdapter extends ChannelAdapter {
@@ -146,6 +189,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private readonly resolveWsIdentity?: HttpAdapterOptions['resolveWsIdentity'];
   /** 订阅授权（租户身份连接的 session/agent 订阅校验） */
   private readonly canSubscribe?: HttpAdapterOptions['canSubscribe'];
+  /** 自鉴权面（前缀）：跳过本适配器 Bearer 闸，由 onRequest 侧凭证闸把关（§7 向导面） */
+  private readonly apiKeyExemptPaths: string[];
 
   constructor(options: HttpAdapterOptions) {
     this.port = options.port;
@@ -156,6 +201,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     this.apiKey = options.apiKey;
     this.resolveWsIdentity = options.resolveWsIdentity;
     this.canSubscribe = options.canSubscribe;
+    this.apiKeyExemptPaths = options.apiKeyExemptPaths ?? [];
     this.corsOrigins = options.corsOrigins?.join(', ') ?? '*';
     this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
     this.onRequest = options.onRequest;
@@ -197,7 +243,12 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
 
       // 单一鉴权闸门：覆盖 onRequest 扩展（/api/v1、/debug/run…）与内置路由。
       // 禁止在下游再各自 checkAuth——那会随新路由再次漏检。
-      if (!this.checkAuth(req, res)) return;
+      // 例外：登记为自鉴权面的路径（apiKeyExemptPaths，如 Web 向导 §7 的 setup token 闸），
+      // 由 onRequest 侧把凭证关——适配器不重复判，也不代它放行其他面。
+      // 匹配按「路径段」而非裸前缀：/api/v1/onboarding 只放行它本身与其子路径，
+      // 不放行 /api/v1/onboardingX 这类同前缀异路径（否则豁免会随命名扩散）。
+      const selfAuth = this.apiKeyExemptPaths.some((p) => isSameOrSubPath(req.url ?? '', p));
+      if (!selfAuth && !this.checkAuth(req, res)) return;
 
       if (this.onRequest) {
         const handled = await this.onRequest(req, res);

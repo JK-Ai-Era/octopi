@@ -58,24 +58,24 @@ describe('setup token 闸（§7）', () => {
     expect(svc.issueSetupToken()).toEqual({ token: 'tok-fixed', path: '/?setup=tok-fixed' });
   });
 
-  it('30 分钟过期：过期后远程拒、再签发换新 token', () => {
+  it('30 分钟过期：过期后拒、再签发换新 token', () => {
     let now = T0;
     const svc = makeService({ now: () => now, randomToken: () => `tok-${now}` });
     const first = svc.issueSetupToken();
     now = T0 + 30 * 60_000 + 1; // 过期
-    expect(svc.authorize(first.token, false)).toBe(false);
+    expect(svc.authorize(first.token)).toBe(false);
     const second = svc.issueSetupToken();
     expect(second.token).toContain(`tok-${now}`); // 新 token
-    expect(svc.authorize(second.token, false)).toBe(true);
+    expect(svc.authorize(second.token)).toBe(true);
   });
 
-  it('远程无 token / 错 token 拒；loopback 免闸', () => {
+  it('无 token / 错 token 一律拒（loopback 不再免闸）', () => {
     const svc = makeService();
     svc.issueSetupToken();
-    expect(svc.authorize(undefined, false)).toBe(false);
-    expect(svc.authorize('wrong', false)).toBe(false);
-    expect(svc.authorize(undefined, true)).toBe(true);
-    expect(svc.authorize('tok-fixed', false)).toBe(true);
+    expect(svc.authorize(undefined)).toBe(false);
+    expect(svc.authorize('wrong')).toBe(false);
+    // 回归锚：曾经 loopback 免闸——豁免面可达后，本机任意网页可借此写配置（跨站写通道）
+    expect(svc.authorize('tok-fixed')).toBe(true);
   });
 
   it('完成向导后 token 一次性失效', async () => {
@@ -88,7 +88,7 @@ describe('setup token 闸（§7）', () => {
       // 推进断言（替代此前的恒真摆设）：每步应走到 steps 里的下一步，走完为 null
       expect(r.step).toBe(i === steps.length - 1 ? null : steps[i + 1]);
     }
-    expect(svc.authorize('tok-fixed', false)).toBe(false); // 完成即失效
+    expect(svc.authorize('tok-fixed')).toBe(false); // 完成即失效
   });
 });
 

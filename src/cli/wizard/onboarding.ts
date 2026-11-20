@@ -590,55 +590,90 @@ async function runNonInteractive(opts: RunOnboardingOptions): Promise<Onboarding
 /**
  * 打开浏览器（darwin/linux/win32 平台分派）
  *
+ * 无 `xdg-open`（精简容器 / headless Linux / 无桌面 WSL）时 spawn 会发 `error` 事件；
+ * 不挂监听就是未捕获异常，会把整个 CLI 打崩（用户还看不到 URL）。故监听并降级为打印。
+ *
  * @param url - 目标地址
  */
 function openBrowser(url: string): void {
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
   const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
-  spawn(cmd, args, { stdio: 'ignore', detached: true }).unref();
+  const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+  child.on('error', () => {
+    // 没有可用的浏览器启动器：不是错误（URL 已打印在终端），只是不能自动打开
+    console.log(`   （无法自动打开浏览器，请手动访问上面的链接）`);
+  });
+  child.unref();
 }
 
 /**
  * --web 路径（§3 步骤 2）：把用户带进 Web 向导。
- * 服务在跑 → 读 setup-token.json 拼 URL 开浏览器（token 不进命令行参数）；
- * 服务没跑 → 指引起服务（daemon 首启会打印带 setup 的向导链接）。
+ *
+ * 首次启动即用户求助的场景：服务没跑就先 `serve start`（它自带 web 向导与 setup token），
+ * 起来后读 `setup-token.json` 拼 URL 开浏览器（token 不进命令行参数）。
+ * 拿不到 token 时明说原因（已配置/已过期/非首启），不静默开一个没有向导的控制台首页。
  *
  * @param opts - 运行选项
  */
 async function runWebHandoff(opts: RunOnboardingOptions): Promise<OnboardingResult> {
-  const { readFileSync } = await import('node:fs');
-  const { join } = await import('node:path');
-  const webUrl = `http://localhost:${process.env.OCTOPI_WEBUI_PORT ?? 8180}`;
-  let reachable = false;
+  // 语言：与交互向导同源（已有配置的 language 预选；缺省中文）
+  let zh = true;
   try {
-    const res = await fetch(`http://localhost:${process.env.OCTOPI_GATEWAY_PORT ?? 18180}/health`, {
-      signal: AbortSignal.timeout(1500),
-    });
-    reachable = res.ok;
+    const raw = JSON.parse(readFileSync(opts.configPath, 'utf8')) as { language?: ProductLang };
+    if (raw.language === 'en') zh = false;
   } catch {
-    reachable = false;
+    // 配置缺失/损坏：用缺省语言，向导面自己会再问
   }
-  if (!reachable) {
-    console.log('🌐 Web 向导需要服务在跑。请先执行：');
-    console.log('     octopi serve start');
-    console.log('   首启时终端会打印「🧙 首启配置向导」链接（含一次性 setup token）；');
-    console.log('   或在这里继续命令行向导：octopi init --cli');
+  const webPort = resolveWebUiPort(opts.configPath);
+  const webUrl = `http://localhost:${webPort}`;
+
+  // 确保本 OCTOPI_HOME 的服务在跑：`serve start` 自身幂等（已在跑只打状态、不重复启动），
+  // 且首启时它正是签发 setup token 的那一环。用探活判断「服务是否在跑」不成立——
+  // /health 200 可能来自另一个 OCTOPI_HOME 的 gateway（端口相同、配置不同），
+  // 会导致跳过启动、随后读不到本 home 的 token。
+  const cfg = opts.configPath ? ['--config', opts.configPath] : [];
+  const rc = await spawnCli(['serve', 'start', ...cfg]);
+  if (rc !== 0) {
+    console.log(
+      zh
+        ? '⚠️ 服务启动失败，未能进入 Web 向导。可在终端继续：octopi init --cli'
+        : '⚠️ Service failed to start; cannot enter the Web wizard. Continue in the terminal with: octopi init --cli',
+    );
     return { configPath: opts.configPath, launchChat: false, completed: false, saved: false };
   }
-  let target = webUrl;
-  try {
-    const t = JSON.parse(readFileSync(join(opts.octopiHome, 'setup-token.json'), 'utf8')) as {
-      token?: unknown;
-      expiresAt?: unknown;
-    };
-    if (typeof t.token === 'string' && typeof t.expiresAt === 'number' && t.expiresAt > Date.now()) {
-      target = `${webUrl}/?setup=${t.token}`;
-    }
-  } catch {
-    // 无 token 文件：已配置或已过期——直接开控制台（非首启不需要向导）
+
+  const { readSetupToken, setupWizardUrl } = await import('../helpers.js');
+  const { probeWebUiIdentity } = await import('../webui.js');
+  const setupTok = readSetupToken(opts.octopiHome);
+  if (!setupTok) {
+    // 无 token = 向导已完成/已过期/非首启：诚实说明，不静默开控制台首页（那里没有向导）
+    console.log(
+      zh
+        ? `ℹ️  未发现有效的 setup token（向导可能已完成，或链接已过期超过 30 分钟）。` +
+          `\n   控制台：${webUrl}（如需重新配置，用控制台的设置页；或先 octopi serve restart 再重跑 octopi init --web）`
+        : `ℹ️  No valid setup token found (the wizard already completed, or the link expired after 30 minutes).` +
+          `\n   Console: ${webUrl} (to reconfigure use the console's settings, or run octopi serve restart then re-run octopi init --web)`,
+    );
+    return { configPath: opts.configPath, launchChat: false, completed: false, saved: false };
   }
-  console.log(`🌐 打开 Web 向导：${target}`);
+
+  // serve start 对 Web UI 是 soft 失败（dist 缺失/端口占用只告警、退出码仍 0）——
+  // 这里补一次实测，否则会打开一个打不开的页面还宣称成功。
+  const webOk = await probeWebUiIdentity(webPort);
+  if (!webOk) {
+    console.log(
+      zh
+        ? `⚠️  Web UI 未启动成功（serve start 对 Web UI 失败是容错的）。\n   稍后可运行：octopi webui start，然后用这条链接进入向导：`
+        : `⚠️ Web UI did not start (serve start tolerates Web UI failures).\n   Start it later with: octopi webui start, then open the wizard link:`,
+    );
+    console.log(`   ${setupWizardUrl(setupTok.token, webPort, 'localhost')}`);
+    return { configPath: opts.configPath, launchChat: false, completed: true, saved: false };
+  }
+
+  const target = setupWizardUrl(setupTok.token, webPort, 'localhost');
+  console.log(zh ? `🌐 打开 Web 向导：${target}` : `🌐 Opening the Web wizard: ${target}`);
   openBrowser(target);
+  // 用户要的是 Web 向导，不是终端对话——不接力 chatCommand
   return { configPath: opts.configPath, launchChat: false, completed: true, saved: false };
 }
 

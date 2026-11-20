@@ -329,18 +329,23 @@ octopi doctor        # diagnose deployment/config, no LLM needed
 Bare `octopi` follows the same rule: uninitialized → the init wizard,
 initialized → TUI chat.
 
-**Prefer the browser?** `octopi init --web` hands off to the Web wizard (it needs
-the gateway running; otherwise it tells you to run `octopi serve start` first).
-On a fresh deployment `octopi serve start` issues a setup link, printed in that
-terminal (valid for 30 minutes, revoked once the wizard completes):
+**Prefer the browser?** `octopi init --web` starts the service for you if it is
+not running (`serve start`, itself idempotent), then opens the Web wizard at the
+printed setup link. On a fresh deployment that link is what `octopi serve start`
+prints:
 
 ```text
 🧙 First-run setup wizard (Web): http://localhost:8180/?setup=<token>
 ```
 
 (Port `8180` is the default; with `web.port` set, trust the printed link.) The
-CLI and Web wizards share one state machine and write the same config — pick
-either.
+link is valid for 30 minutes and revoked once the wizard completes. The setup
+endpoint requires that token from any source — loopback included — so nothing
+else on the machine can drive the wizard and rewrite the config; requests a
+browser sends from a non-local origin are refused. If no valid token exists
+(already configured, or expired), `--web` says so and points at the console
+instead of opening a page without a wizard. The CLI and Web wizards share one
+state machine and write the same config — pick either.
 
 **Non-interactive** (CI, dotfiles, scripted installs) — `--yes` skips the wizard
 and reads everything from flags plus env, so nothing is probed:

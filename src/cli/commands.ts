@@ -69,7 +69,7 @@ Options:
                         doctor: with --fix layout, rename obsolete memory/wisdom/extract dirs
   --session <id>        llm-diff: target session (default: most recently updated)
   --agent <id>          chat: agent to chat with (default: first agent in config)
-  --web | --cli         init: wizard form (web wizard ships in a later release)
+  --web | --cli         init: wizard form (--web opens the browser wizard; --cli forces terminal)
   --provider <id>       init --yes: provider preset id (default: ollama)
   --model <id>          init --yes: model id (default: preset's first model)
   --resume <id>         chat: resume an existing session (loads recent history)
@@ -101,6 +101,17 @@ export async function initCommand(args: CliArgs): Promise<string | undefined> {
   // init = 首启体验器（product-onboarding.md §0）：脚手架后直接走向导。
   // M6：.env/registry.db 恒落 OCTOPI_HOME（与 loadConfig/gateway 读取同源；-c 只挪配置文件）。
   // n10：交互模式不打「Next steps: 手动编辑配置」报告（向导本身就是 next step）。
+  // --web 与 --yes 互斥：--yes 是「无交互、全部取自 flag/env」，--web 是「把决定交给浏览器」，
+  // 组合起来两套语义都落空（旧行为是静默走 Web 且不打印任何结果）。显式拒绝，不猜用户意图。
+  if (args.web === true && args.yes === true) {
+    throw new Error(
+      'init: --web 与 --yes 不能同时使用（--web 交互式交给浏览器，--yes 无交互取自 flag/env）。请二选一。',
+    );
+  }
+  if (args.web === true && args.port !== undefined) {
+    // 端口由配置决定（web.port / gateway.port）；静默忽略会让人以为服务起在了别的端口
+    console.log('ℹ️  init --web 忽略 --port：端口取自配置（web.port / gateway.port）。');
+  }
   const { runOnboardingWizard } = await import('./wizard/onboarding.js');
   const interactive = !args.yes;
   if (!interactive) console.log(formatInitReport(result));
@@ -115,15 +126,16 @@ export async function initCommand(args: CliArgs): Promise<string | undefined> {
     adminName: process.env.OCTOPI_ADMIN_NAME,
   });
   if (interactive) {
-    // 文案=行为（m5）：中途退出但已保存时不得谎报「配置未改」；未落盘的 Web 交接不得谎报「完成」
+    // 文案=行为（m5）：`initOctopi` 已先写了脚手架配置（含随机访问密钥），所以任何分支都
+    // 不能说「配置未改」或「将在向导完成后写入」——那是改写/合并，不是首次写入。
     console.log(
       onboarding.completed && onboarding.saved
         ? `\n✅ 初始化完成：${result.configPath}`
         : onboarding.completed
-          ? `\n✅ 已打开 Web 向导——配置将在向导完成后写入：${result.configPath}`
+          ? `\n✅ 已打开 Web 向导——初始配置已写入 ${result.configPath}，向导完成后会按你的选择更新。`
           : onboarding.saved
             ? `\n⚠️ 向导未走完——此前步骤已保存：${result.configPath}（重跑 octopi init 可继续）`
-            : '\n⚠️ 向导中止——配置未改，重跑 octopi init 继续。',
+            : `\n⚠️ 向导中止——已写入初始配置（${result.configPath}），尚未按你的选择更新；重跑 octopi init 继续。`,
     );
   }
   if (onboarding.launchChat) {

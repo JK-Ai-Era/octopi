@@ -1294,6 +1294,9 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
       path: httpConfig?.path ?? '/messages',
       apiKey: httpConfig?.apiKey,
       corsOrigins: httpConfig?.corsOrigins,
+      // Web 向导面自鉴权（§7 setup token）：路径单源在 router，闸门让路给它自己的凭证关。
+      // 不豁免整个 /api/v1，只豁免 router 声明的那一面。
+      apiKeyExemptPaths: webApiRouter.selfAuthPathPrefixes(),
       onRequest: (req, res) => webApiRouter.handle(req, res),
       healthExtras: () => ({
         knowledge: gateway.getKnowledgeState(),

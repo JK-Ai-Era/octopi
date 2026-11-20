@@ -12,7 +12,7 @@ import { resolveDefaultBase } from './gateway-base';
 import { LoginPage } from './components/LoginPage';
 import { AccessKeyGate } from './components/AccessKeyGate';
 import { requiresLogin } from './runtime-config';
-import { getRegistryToken } from './console-key';
+import { getConsoleKey, getRegistryToken } from './console-key';
 import {
   type CredentialGate,
   getCredentialGate,
@@ -71,10 +71,16 @@ export default function App() {
   const [wizardDue, setWizardDue] = useState(hasSetupParam);
   useEffect(() => {
     if (hasSetupParam) return;
-    fetch(`${resolveDefaultBase()}/api/v1/onboarding/availability`)
+    // 向导面已取消 loopback 免闸（本机任意网页不得借 127.0.0.1 写配置），
+    // 因此这条探测必须带令牌：控制台钥匙（本机由 serve-webui 自动下发）。
+    // 无钥匙时探测 401，被 catch 吞掉 → 走正常控制台，不会误弹向导。
+    const key = getConsoleKey();
+    fetch(`${resolveDefaultBase()}/api/v1/onboarding/availability`, {
+      headers: key ? { Authorization: `Bearer ${key}` } : {},
+    })
       .then((r) => r.json() as Promise<{ ok: boolean; data?: { available: boolean } }>)
       .then((b) => { if (b.data?.available) setWizardDue(true); })
-      .catch(() => { /* gateway 未起/未装配向导面：走正常控制台 */ });
+      .catch(() => { /* gateway 未起/未装配向导面/无钥匙：走正常控制台 */ });
   }, [hasSetupParam]);
   if (!hasSetupParam && (!loggedIn || credentialGate === 'login')) {
     return (

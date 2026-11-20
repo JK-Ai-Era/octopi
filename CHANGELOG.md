@@ -131,6 +131,69 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.12 (2026-11-21)
+
+### fix(gateway): Web 向导面在全新部署上被 Bearer 闸 401 拦住（setup 链接无法使用）
+
+实测现象：`octopi serve start` 首启打印的 `http://localhost:8180/?setup=<token>` 打开后报
+`Unauthorized: invalid or missing API key`。
+
+根因链：`initOctopi` 脚手架默认生成随机 `channels[type=http].apiKey`（B-1 secure-by-default）→
+`HttpChannelAdapter` 的单一鉴权闸门要求除 `OPTIONS`/`GET /health` 外一律带 `Authorization: Bearer`
+→ 向导前端只带 `X-Setup-Token`（它自己没有、也不该有 Bearer）→ 401 发生在 router 的 setup-token 闸
+**之前**，§7 那套「loopback 免闸 / 远程验 token / 完成即吊销」在该面唯一该生效的场景里不可达。
+
+修法（不复制鉴权逻辑，单源让路）：adapter 新增 `apiKeyExemptPaths`，命中该前缀的请求跳过 Bearer 闸、
+交给 `onRequest` 侧自鉴权；前缀由 `WebApiRouter.selfAuthPathPrefixes()` 声明（`SELF_AUTH_PATHS` +
+`basePath` 派生），daemon 直接消费，不在 CLI 里硬编码路径。
+
+**同时收紧了两个随之暴露的边界**（评审 del-1c68f2e6 发现，均实测复现）：
+
+- **路径穿越可借豁免穿到任意 `/api/v1` 面（P0）**。豁免判定最初用「拆 `?` + `decodeURIComponent`
+  + 按 `/` 分段」，而 router 用 `new URL().pathname` —— 两套解析器对 `\` 的语义不同：WHATWG 把
+  `..\agents` 归一化成 `/api/v1/agents`，分段判定却看不到 `..` 段，于是未带任何凭证即可进入
+  agents/config 等面。修法：`isSameOrSubPath` 改用**与消费者完全相同的解析器**取 `pathname`，
+  并对 `\` / `%5c`、不可解码的百分号编码 fail-closed。回归锚用 `node:net` 裸发 request-line
+  （`fetch`/`curl` 会在客户端归一化 `..\`，测试里测不出来）。
+- **loopback 免闸从死代码变成活面（跨站写配置通道）**。豁免生效后 `127.0.0.1` 真正可达，本机任意
+  网页都能 POST 驱动向导改写 `octopi.json` / `.env`。修法：`OnboardingService.authorize()` 去掉
+  `isLoopback` 参数——任何来源都要 setup token（浏览器 URL 里本来就有）；另加 `Origin` 校验，
+  非本机来源的浏览器请求一律 403（`Origin` 只有浏览器带，CLI 工具不受影响）。
+  **Breaking note**：`authorize(token, isLoopback)` → `authorize(token)`；`HttpAdapterOptions`
+  新增可选字段（纯增量）。
+
+附带的单源修正：router 的 `/onboarding` 分派谓词改为与豁免谓词同一口径（路径段，不再命中
+`/onboardingX`）；前端 `availability` 探测改为带控制台钥匙（取消免闸后不带会 401）。
+
+### fix(cli): `octopi init --web` 把用户推进死循环
+
+旧逻辑探 `/health` 不通就打印「请先 octopi serve start」——而 `serve start` 自己就会签发 setup token、
+打印向导链接并拉起 WebUI，于是 `init --web` 在该状态下什么都没做。
+
+修法：`--web` 直接幂等调用 `serve start`（它已在跑时只打状态），再读 `setup-token.json` 开浏览器。
+用探活判断「服务是否在跑」不成立——`/health` 200 可能来自另一个 `OCTOPI_HOME` 的 gateway
+（端口相同、配置不同），会跳过启动、随后读不到本 home 的 token。
+
+一并按评审核实的偏差修正：
+
+- **成功判定补实测**：`serve start` 对 WebUI 是 soft 失败（dist 缺失/端口占用只告警、退出码仍 0），
+  故拉起后用 `probeWebUiIdentity` 复核；失败时打印 URL 并明说 Web UI 未起，不再宣称成功。
+- **过期 token 的恢复指引曾走不通**：旧文案教「删 deploymentMode 重跑 init」，但 token 只在 daemon
+  **启动时**签发，而 `serve start` 对已在跑的 gateway 直接 `exit 0`，于是回到同一句提示。改为指引
+  `octopi serve restart`。
+- **`--web --yes` 静默走 Web 且不打印任何结果**：现在显式拒绝这对矛盾 flag（`--yes` 是「取自
+  flag/env」，`--web` 是「交给浏览器」，两者语义互相抵消）。
+- **`init --web --port` 被静默吞**：端口固定的来自配置，现在打印一行说明而不是装作生效。
+- **`openBrowser` 无 `error` 监听**：无 `xdg-open`（精简容器/headless Linux）时会以未捕获异常打崩
+  CLI，且用户还没看到 URL。现在降级为「无法自动打开，请手动访问」。
+- **结果文案与事实不符**：`initOctopi` 已先写脚手架配置（含随机访问密钥），旧文案却说「配置将在向导
+  完成后写入」「配置未改」。改为「初始配置已写入 …，向导完成后会按你的选择更新」。
+- CLI `--help` 里 `--web` 的「web wizard ships in a later release」已过期，更正。
+
+验证：`tsc` / `npm run lint` 绿；全量 **553 files / 5600 tests 通过**；端到端实跑（隔离
+`OCTOPI_HOME` + 独立端口）确认四条路径——带令牌+本机 Origin 200、外部 Origin 403、无令牌 401、
+裸 socket `..\agents` 401；`octopi init --web` 在真实首启部署上正确给出向导链接。
+
 ## v0.121.11 (2026-11-21)
 
 ### docs(readme,contributing): Quick Start 对齐 init 首启旅程，修正跑不通的入口与代码示例

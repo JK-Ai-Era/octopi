@@ -36,11 +36,57 @@ export interface WebApiRouterOptions {
 import { BrowserInstallJobs } from './browser-install.js';
 
 /**
+ * 自鉴权面的分派谓词（路径段匹配）：`/onboarding` 命中自身与子路径，
+ * 不命中 `/onboardingX`。与 adapter 侧 `isSameOrSubPath` 同一语义。
+ *
+ * @param relativePath - basePath 之后的路径
+ * @returns 是否属于 Web 向导面
+ */
+function matchesSelfAuthPath(relativePath: string): boolean {
+  return WebApiRouter.SELF_AUTH_PATHS.some((p) => relativePath === p || relativePath.startsWith(`${p}/`));
+}
+
+/**
+ * 向导面的 Origin 校验：带 Origin 的请求必须是**本机来源**。
+ *
+ * 目的：堵「本机任意网页借 127.0.0.1 驱动向导写配置」。setup token 已是主闸，
+ * 这是第二道：只认 `localhost` / 回环地址上的页面，外部站点一律拒。
+ *
+ * 注意不能用「socket 来自回环」作为放行理由——公网页面发到 127.0.0.1 时 socket
+ * 同样是回环，那正是要挡的场景。
+ *
+ * 无 Origin（命令行/脚本工具）不受此闸约束（主闸 token 已验）。
+ *
+ * @param origin - `Origin` 头值（已确认非空）
+ * @returns 是否允许
+ */
+function isLocalOrigin(origin: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false; // 非法 Origin：拒（fail-closed）
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost');
+}
+
+/**
  * 配置名合法化（provider 名 / agent id 通用）：实现见 engine config-admin/name-guard.ts
  * （单一实现点：拒路径穿越 `.`/`..`、原型污染键）
  */
 
 export class WebApiRouter {
+  /**
+   * 自鉴权面（相对 basePath）：Web 向导 §7 的 setup-token 闸自己把凭证关，
+   * 上游 adapter 的 Bearer 闸必须让路——否则 401 发生在闸之前，向导面在
+   * 默认全新部署（init 生成随机 apiKey）上永远不可达。
+   *
+   * 单源：daemon 用它填 `HttpAdapterOptions.apiKeyExemptPaths`，避免硬编码路径漂移。
+   */
+  static readonly SELF_AUTH_PATHS = ['/onboarding'] as const;
+
   private gateway: Gateway;
   private basePath: string;
   private maxBodyBytes: number;
@@ -57,6 +103,16 @@ export class WebApiRouter {
     this.approverIdentity = options.approverIdentity;
     this.onboarding = options.onboarding;
     this.browserInstalls = options.browserInstalls ?? new BrowserInstallJobs();
+  }
+
+  /**
+   * 自鉴权面的绝对路径前缀（basePath 拼上 SELF_AUTH_PATHS），供 adapter 的
+   * `apiKeyExemptPaths` 使用——路径单源在 router，adapter 不复制。
+   *
+   * @returns 绝对前缀数组（如 `/api/v1/onboarding`）
+   */
+  selfAuthPathPrefixes(): string[] {
+    return WebApiRouter.SELF_AUTH_PATHS.map((p) => `${this.basePath}${p}`);
   }
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -95,7 +151,9 @@ export class WebApiRouter {
       }
 
       // ── Web 向导面（arch/product-onboarding.md §1/§7）：状态机单源在 engine，此面只做 HTTP ──
-      if (relativePath.startsWith('/onboarding')) {
+      // 分派谓词与 adapter 的豁免谓词同一口径（路径段，不是裸前缀）：单源语义,
+      // 避免「/onboardingX 被 adapter 豁免、却被 router 当向导子路径」这类两侧认知分裂。
+      if (matchesSelfAuthPath(relativePath)) {
         return await this.handleOnboarding(req, res, relativePath, method, url);
       }
 
@@ -2077,13 +2135,17 @@ export class WebApiRouter {
     const svc = this.onboarding;
     if (!svc) return this.json(res, 503, { ok: false, error: 'onboarding_unavailable: Web 向导未装配' });
 
-    const remote = req.socket.remoteAddress ?? '';
-    // B-3：同机反代时 remote 恒为 loopback——转发头在场一律视为远程（防代理后免闸写配置）
-    const forwarded = req.headers['x-forwarded-for'] ?? req.headers['forwarded'] ?? req.headers['x-forwarded-proto'];
-    const isLoopback = !forwarded && (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1');
     const token = req.headers['x-setup-token'] ?? url.searchParams.get('setup') ?? undefined;
-    if (!svc.authorize(typeof token === 'string' ? token : undefined, isLoopback)) {
+    // §7：来源一律要 token（含 loopback）——本机任意网页不得借 127.0.0.1 改写配置。
+    // 浏览器侧始终在 URL 里带 setup 令牌，正常旅程不受影响。
+    if (!svc.authorize(typeof token === 'string' ? token : undefined)) {
       return this.json(res, 401, { ok: false, error: 'setup_token_invalid: 需要终端打印的 setup 链接（30 分钟内有效）' });
+    }
+    // 跨站写入的第二道闸：带 Origin 的请求必须是本机来源（浏览器跨站 CORS 简单请求不带 Origin，
+    // 但 POST/JSON 必然带；无 Origin 的本机工具不受此限）。
+    const origin = req.headers.origin;
+    if (typeof origin === 'string' && origin !== '' && !isLocalOrigin(origin)) {
+      return this.json(res, 403, { ok: false, error: 'onboarding_cross_origin: 向导面不接受跨站请求' });
     }
 
     if (relativePath === '/onboarding/availability' && method === 'GET') {
