@@ -130,6 +130,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.5 (2026-11-20)
+
+### fix(engine): 工具入参 `~` 路径展开到用户目录，不再静默拼接到会话 workspace
+
+- **现象**（大哥实报）：`file_list` 传 `path: "~/.octopi/sessions"` 报 ENOENT，路径被拼成 `<workspace>/~/.octopi/sessions`。
+- **根因**：所有文件类工具的共享路径原语 `resolveToolPath` / `resolveReadableToolPath`（`packages/engine/src/harness/extension/plugin-ecosystem/tools/platform.ts`）只判 `isAbsolute`，`~/…` 被当相对路径贴到工具 cwd（会话 workspace）解析。file_read/list/write/delete/edit、file ops、file_search、document、git/package/browser 的 cwd 与 paths、shell 的 cwd 全部走这两个原语，一类通犯。
+- **修复**：原语内先做 `~` 展开（复用共享实现 `expandHomePath`（`packages/engine/src/paths.ts`），不造第二真相源）再走原有解析；containment / denylist / 符号链接复核全部在展开后的路径上执行——`~` 只可能增加拒绝，不可能绕过 L2。`homedir()` 不可用的裸异常包成 `path_invalid`。
+- **行为边界（重要）**：
+  - `~` 语义受 effect policy 约束：默认 `workspace` 模式（`pathContainment: 'strict'`）下 home 不在 effect roots 内时是**明确拒绝**（`path_forbidden: escapes effect roots`）而非放行——由静默错靶升级为显式拒绝；`host` 模式（containment `none`）或 home 在配置 roots / `transactionRoots` 内时真正可达。
+  - `~user/…` 无跨平台展开语义，不再静默贴到 cwd 解析，改报 `path_invalid`（字面 `~user` 名用 `./~user`）。
+  - `~` 前后带空白（如 `" ~/x"`）同样报 `path_invalid`（过去会静默拼到 cwd）。
+  - 与 config 层 `expandHomePath` 同语义：`~\…` 在 POSIX 也按 home 形态展开（字面量用 `./~\…`）；附件根中以 `~` 开头的显示名不再按文件名探测（home 形态优先）。
+- **测试**：`tests/harness/platform-tools.test.ts`（`~`/`~/`/`~\` 展开、`~user` 与空白包裹 fail loud 且错误回显入参、`./~x` 逃生口、展开后 denylist / strict containment 仍生效、附件根诱饵证明确实跳过探测）；`tests/harness/builtin-tools.test.ts`（file_list 端到端回归 `~/sessions` 解析到用户目录而非 workspace、strict roots 下 `~` 越界报 `path_forbidden`）。全量 `npm test` 548 文件 / 5557 用例通过；`npm run lint` 通过；`arch/check-sync.sh` 通过。
+- **发现面**：file_read / file_write / file_delete / file_list 的 `path` 描述标注 `~/…` 语义，防回归重演。
+
 ## v0.121.4 (2026-11-20)
 
 ### fix(engine,gateway,webui): 设置页「测试连通」不再把「端点没有模型清单」误报成连接失败

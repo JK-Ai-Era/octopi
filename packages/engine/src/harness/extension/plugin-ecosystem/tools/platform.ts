@@ -13,6 +13,7 @@ import {
   lexicalUnderRoots,
   realpathAllowMissing,
 } from '../../../shared/paths/index.js';
+import { expandHomePath } from '../../../../paths.js';
 import { matchesDenyPattern } from '../../../shared/paths/glob.js';
 
 export { isPathUnderRoots };
@@ -190,7 +191,48 @@ function denyPath(
 }
 
 /**
- * 解析工具入参路径：绝对路径原样返回，相对路径相对 cwd
+ * Expand a tool-input `~` prefix to the user home directory.
+ *
+ * `~`, `~/rest`, `~\rest` expand via the shared {@link expandHomePath}. The
+ * `~user/rest` form has no portable expansion; leaving it unexpanded would
+ * silently resolve it against the tool cwd — the exact mis-target this surface
+ * forbids — so it fails loud instead (use an absolute path, or `./~user/…` for
+ * a literal name).
+ *
+ * @param rawPath - caller-supplied path
+ * @returns expanded path (unchanged when there is no `~` prefix)
+ */
+function expandToolTilde(rawPath: string): string {
+  // Surrounding whitespace around a `~` spelling is an ambiguity, not a name:
+  // `" ~/x"` would silently resolve against the cwd — the exact mis-target this
+  // surface forbids. Fail loud instead of picking a side (tool input is not a
+  // shell line; strip the whitespace yourself or use "./…" for a literal name).
+  const trimmed = rawPath.trim();
+  if (trimmed !== rawPath && trimmed.startsWith('~')) {
+    throw new Error(
+      `path_invalid: "${rawPath}" has surrounding whitespace and would not expand to the user home; strip the whitespace, or pass "./${trimmed}" for a literal name`,
+    );
+  }
+  let expanded: string;
+  try {
+    expanded = expandHomePath(rawPath);
+  } catch (error) {
+    // homedir() fails when HOME/USERPROFILE are unset and the passwd lookup
+    // fails; surface it as an actionable path_invalid, not a raw os error.
+    throw new Error(
+      `path_invalid: cannot expand "${rawPath}": user home directory unavailable (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (expanded === rawPath && rawPath.startsWith('~')) {
+    throw new Error(
+      `path_invalid: cannot expand "${rawPath}": ~user home lookup has no portable meaning; pass an absolute path, or "./${rawPath}" for a literal name`,
+    );
+  }
+  return expanded;
+}
+
+/**
+ * 解析工具入参路径：`~` 展开到用户目录，绝对路径原样返回，相对路径相对 cwd
  *
  * 使用 path.isAbsolute，同时覆盖 POSIX /foo、Windows 盘符与 UNC。
  *
@@ -204,7 +246,8 @@ export function resolveToolPath(
   cwd?: string,
   options?: ResolveToolPathOptions,
 ): string {
-  const abs = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd ?? process.cwd(), rawPath);
+  const expanded = expandToolTilde(rawPath);
+  const abs = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd ?? process.cwd(), expanded);
   return containPath(abs, rawPath, options);
 }
 
@@ -223,9 +266,11 @@ export function resolveReadableToolPath(
   options?: ResolveToolPathOptions,
 ): string {
   const roots = attachmentRoots ?? [];
-  // 绝对路径原样；相对路径先试 attachments 根（文件名直呼）
-  if (!isAbsolute(rawPath) && roots.length > 0) {
-    const cleaned = rawPath.replace(/^[/\\]+/, '');
+  // `~` 先展开到用户目录（home 形态不是附件文件名）；绝对路径原样，
+  // 相对路径先试 attachments 根（文件名直呼）
+  const expanded = expandToolTilde(rawPath);
+  if (!isAbsolute(expanded) && roots.length > 0) {
+    const cleaned = expanded.replace(/^[/\\]+/, '');
     for (const root of roots) {
       const rootResolved = resolve(root);
       const candidate = resolve(rootResolved, cleaned);

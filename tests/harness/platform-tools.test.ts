@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFile, appendFile, mkdir, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 import {
   resolveToolPath,
+  resolveReadableToolPath,
   resolvePlatformShell,
   resetPlatformShellCache,
   findExecutable,
@@ -82,6 +83,82 @@ describe('resolveToolPath', () => {
   it('should keep absolute paths that use the current platform separator', () => {
     const abs = join(tmpDir, 'abs.txt');
     expect(resolveToolPath(abs, '/other')).toBe(abs);
+  });
+
+  it('should expand ~/ to the user home instead of resolving it against cwd', () => {
+    // Regression: `~/.octopi/sessions` was joined onto the tool cwd (workspace).
+    expect(resolveToolPath('~/.octopi/sessions', tmpDir)).toBe(
+      join(homedir(), '.octopi', 'sessions'),
+    );
+  });
+
+  it('should expand a bare ~ to the user home directory', () => {
+    expect(resolveToolPath('~', tmpDir)).toBe(resolve(homedir()));
+  });
+
+  it('should expand ~\\ paths to the user home directory', () => {
+    expect(resolveToolPath('~\\notes\\a.txt', tmpDir)).toBe(
+      resolve(join(homedir(), 'notes', 'a.txt')),
+    );
+  });
+
+  it('should fail loud on ~user forms instead of resolving them against cwd', () => {
+    // One error identity for every unexpandable `~…` spelling; the offending
+    // input must be echoed so the model can self-correct.
+    expect(() => resolveToolPath('~root/x', tmpDir)).toThrow(/path_invalid: cannot expand "~root\/x"/);
+    expect(() => resolveToolPath('~draft', tmpDir)).toThrow(/path_invalid: cannot expand "~draft"/);
+  });
+
+  it('should fail loud on whitespace-wrapped ~ paths instead of resolving them against cwd', () => {
+    // `" ~/x"` expands to nothing and would silently become <cwd>/ ~/x.
+    expect(() => resolveToolPath(' ~/x', tmpDir)).toThrow(/path_invalid/);
+    expect(() => resolveToolPath('~ ', tmpDir)).toThrow(/path_invalid/);
+  });
+
+  it('should reach literal ~-prefixed names via the ./ escape hatch', () => {
+    expect(resolveToolPath('./~draft', tmpDir)).toBe(join(tmpDir, '~draft'));
+  });
+
+  it('should still apply the denylist to ~ paths', () => {
+    expect(() =>
+      resolveToolPath('~/.ssh/id_rsa', tmpDir, { containment: 'none', denyPatterns: ['id_rsa'] }),
+    ).toThrow(/matches pathDenylist/);
+  });
+
+  it('should still apply containment to ~ paths', () => {
+    expect(() =>
+      resolveToolPath('~/.ssh/id_rsa', tmpDir, { allowRoots: [tmpDir], containment: 'strict' }),
+    ).toThrow(/path_forbidden/);
+  });
+});
+
+describe('resolveReadableToolPath', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = join(tmpdir(), `octopi-path-${randomUUID()}`);
+    await mkdir(join(tmpDir, 'attachments'), { recursive: true });
+    await writeFile(join(tmpDir, 'attachments', 'report.md'), '# r');
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should expand ~ to the user home instead of probing attachment roots', async () => {
+    // Decoy: without the fix, `~/.octopi/sessions` is probed as a literal name
+    // under the attachment root and would hit this tree.
+    await mkdir(join(tmpDir, 'attachments', '~', '.octopi', 'sessions'), { recursive: true });
+    expect(resolveReadableToolPath('~/.octopi/sessions', tmpDir, [join(tmpDir, 'attachments')])).toBe(
+      join(homedir(), '.octopi', 'sessions'),
+    );
+  });
+
+  it('should still map plain relative names to attachment roots', async () => {
+    const { realpath } = await import('node:fs/promises');
+    const resolved = resolveReadableToolPath('report.md', tmpDir, [join(tmpDir, 'attachments')]);
+    // Attachment hits return the symlink-resolved real path.
+    expect(resolved).toBe(await realpath(join(tmpDir, 'attachments', 'report.md')));
   });
 });
 

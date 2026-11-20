@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { writeFile, appendFile, readFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -827,5 +827,46 @@ describe('file_list entry caps and skip dirs', () => {
 
     expect(result.base).toBe(tmpDir);
     expect(result.entries.some((e) => e.name === 'README.md')).toBe(true);
+  });
+
+  it('resolves ~ paths against the user home, not the workspace cwd', async () => {
+    const { createFileListTool } = await import(
+      '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/builtin.js'
+    );
+    // Regression: `path: "~/.octopi/sessions"` was joined onto the workspace cwd.
+    const fakeHome = join(tmpDir, 'fake-home');
+    await mkdir(join(fakeHome, 'sessions'), { recursive: true });
+    await writeFile(join(fakeHome, 'sessions', 'meta.json'), '{}');
+    // os.homedir() reads HOME (POSIX) / USERPROFILE (win32) on every call.
+    vi.stubEnv('HOME', fakeHome);
+    vi.stubEnv('USERPROFILE', fakeHome);
+    try {
+      const tool = createFileListTool();
+      const result = (await tool.handler(
+        { path: '~/sessions' },
+        makeContext({ cwd: tmpDir }),
+      )) as { base: string; entries: Array<{ name: string }> };
+
+      expect(result.base).toBe(join(fakeHome, 'sessions'));
+      expect(result.entries.some((e) => e.name === 'meta.json')).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('denies ~ paths escaping strict effect roots instead of listing them', async () => {
+    const { createFileListTool } = await import(
+      '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/builtin.js'
+    );
+    // Under pathContainment 'strict' (default run mode 'workspace'), a home
+    // path outside the effect roots must be an explicit path_forbidden denial —
+    // `~` expansion never weakens the containment verdict.
+    const tool = createFileListTool();
+    await expect(
+      tool.handler(
+        { path: '~/.octopi/sessions' },
+        makeContext({ cwd: tmpDir, pathRoots: [tmpDir], pathContainment: 'strict' }),
+      ),
+    ).rejects.toThrow(/path_forbidden/);
   });
 });

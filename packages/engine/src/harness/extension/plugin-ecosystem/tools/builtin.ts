@@ -428,7 +428,7 @@ export function createFileReadTool(options?: {
       parameters: {
         path: {
           type: 'string',
-          description: 'Path to the file to read',
+          description: 'Path to the file to read (~/… expands to the user home, subject to path containment)',
           required: true,
         },
         offset: {
@@ -539,7 +539,7 @@ export function createFileWriteTool(): RegisteredTool {
       parameters: {
         path: {
           type: 'string',
-          description: 'Path to the file to write',
+          description: 'Path to the file to write (~/… expands to the user home, subject to path containment)',
           required: true,
         },
         content: {
@@ -637,7 +637,7 @@ export function createFileDeleteTool(): RegisteredTool {
       parameters: {
         path: {
           type: 'string',
-          description: 'Path to the file to delete',
+          description: 'Path to the file to delete (~/… expands to the user home, subject to path containment)',
           required: true,
         },
       },
@@ -792,7 +792,8 @@ export function createFileListTool(options?: {
       parameters: {
         path: {
           type: 'string',
-          description: 'Directory path to list (optional; default "." = workspace cwd)',
+          description:
+            'Directory path to list (optional; default "." = workspace cwd; ~/… expands to the user home, subject to path containment)',
         },
         recursive: {
           type: 'boolean',
