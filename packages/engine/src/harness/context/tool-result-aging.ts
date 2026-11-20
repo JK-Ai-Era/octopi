@@ -2,8 +2,9 @@
  * 历史工具结果批量冻结老化（F1-B2）— 视图级、零 LLM、write-once
  *
  * 语义（arch/long-session-latency.md §5 B2 + arch/b0-cache-stable-context.md §4）：
- * - **当前 run 永不老化**：最近一条真实 user 消息（排除引擎载体插槽）以来的工具结果全原文；
- * - **近 `rawWindow` 条跨轮工具结果**保留原文；
+ * - **当前 run 永不老化**：当前 run 起点（`currentRunStartAnchorIndex`——同 run 的
+ *   插话 / 接续 turn 不推进边界）以来的工具结果全原文；
+ * - **近 `rawWindow` 条跨 run 工具结果**保留原文；
  * - 更旧的候选按 **`freezeBatch` 批量**降级为结构化指针（工具名 + 参数要点 + 结果轮廓 + re-run 提示）；
  * - **批量冻结（禁渐进老化）**：老化边界只以 `freezeBatch` 为步长成批推进，段间轮次视图
  *   逐字节稳定——每轮在 recency 边界改写 1 条 = 把边界→尾部整段烧前缀缓存（B0 稿 §4）；
@@ -25,14 +26,14 @@
 
 import type { Message, ToolResultAger } from '@octopi-agent/core/types.js';
 import { AGED_POINTER_PREFIX, TRUNCATED_MARK, elidedValueMarker, isElisionToken } from '@octopi-agent/core/elision.js';
-import { isTurnAnchor } from './layer-types.js';
+import { currentRunStartAnchorIndex } from './layer-types.js';
 import { toolResultBody } from './tool-result-body.js';
 
 /** 老化配置（配置面输入；缺省见 {@link resolveToolResultAgingOptions}） */
 export interface ToolResultAgingConfig {
   /** 总开关（默认 true） */
   enabled?: boolean;
-  /** 跨轮原文保留条数（默认 20） */
+  /** 跨 run 原文保留条数（默认 20） */
   rawWindow?: number;
   /**
    * 批量冻结步长：老化边界只成批推进（默认 60；最小 1）。
@@ -193,8 +194,8 @@ interface CandidateEntry {
 /**
  * 计算老化计划：批量冻结边界 + 工具调用参数索引
  *
- * 边界语义：跨轮工具结果（位于最近一条真实 user 消息之前）中，最旧的
- * `crossTurn - rawWindow` 条为候选；候选前 `freezeBatch` 整批部分「过冻结线」。
+ * 边界语义：跨 run 工具结果（位于当前 run 起点之前）中，最旧的
+ * `crossRun - rawWindow` 条为候选；候选前 `freezeBatch` 整批部分「过冻结线」。
  * 过线条目再过三道守卫才降级：error 永不降级；正文 ≤ 指针目标不降级；
  * 实际指针不比原文短不降级（不膨胀）。历史只增不减时边界单调推进、
  * 已降级条目永不回原文——满足 write-once（须以完整历史为输入，见模块头注）。
@@ -202,7 +203,7 @@ interface CandidateEntry {
  * @param messages - **完整**历史消息（按时间序；勿传裁剪后的装配视图）
  * @param opts - 老化配置（已解析）
  * @param override - overflow 收敛阶梯第 0 轮（2026-11-08）：ignoreTurnBoundary=true 时
- *   豁免 turn 首限定（不限 crossTurn、rawWindow 归 0）——守门兜底语境下「发得出去」
+ *   豁免 run 起点限定（不限 crossRun、rawWindow 归 0）——守门兜底语境下「发得出去」
  *   优先于「保护 turn 内工作数据/缓存前缀」；阈值（maxPointerChars/freezeBatch）不动
  * @returns 老化计划（enabled=false 或无候选时 agedIds 为空）
  */
@@ -220,12 +221,8 @@ export function computeToolResultAgingPlan(
   const argsById = new Map<string, unknown>();
   const ordered: CandidateEntry[] = [];
 
-  let lastGenuineUserIdx = -1;
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    if (isTurnAnchor(msg)) {
-      lastGenuineUserIdx = i;
-    }
     for (const tc of msg.toolCalls ?? []) {
       argsById.set(tc.id, tc.arguments);
     }
@@ -244,17 +241,21 @@ export function computeToolResultAgingPlan(
   const agedIds = new Set<string>();
   if (!opts.enabled) return { agedIds, argsById, agersByCallId: agesByCallId, argAgedIds: new Set<string>() };
 
-  // 边界 = 完整历史最后一个真实 user（两遍判定：旧轮结果在遇到后续 user 前不可下结论）。
+  // 边界 = 当前 run 起点（currentRunStartAnchorIndex，完整历史口径）：同 run 的
+  // 插话/接续 turn 不推进边界（2026-11-20 拍板）——任务中途的工作数据不因插话
+  // 被降级。旧实现取「最近一条真实 user」，插话一落库就把同 run 先前的工具结果
+  // 整体划入跨轮候选（插话即触发老化）。
   // overflow 第 0 轮豁免（ignoreTurnBoundary）：全历史候选、rawWindow 归 0——
-  // turn 内工作数据的保护让位于「装得下去」（arch/overflow-redesign.md §3 第 0 轮细则）
+  // run 内工作数据的保护让位于「装得下去」（arch/overflow-redesign.md §3 第 0 轮细则）
   const ignoreTurnBoundary = override?.ignoreTurnBoundary === true;
-  const crossTurn = ignoreTurnBoundary
+  const runStartIdx = currentRunStartAnchorIndex(messages);
+  const crossRun = ignoreTurnBoundary
     ? ordered
-    : ordered.filter((e) => e.msgIndex < lastGenuineUserIdx);
+    : ordered.filter((e) => e.msgIndex < runStartIdx);
   const rawWindow = ignoreTurnBoundary ? 0 : opts.rawWindow;
-  // freezeBatch（冻结批次防抖）同属 turn 内保护——守门语境豁免：发不出去了不等批次
+  // freezeBatch（冻结批次防抖）同属 run 内保护——守门语境豁免：发不出去了不等批次
   const freezeBatch = ignoreTurnBoundary ? 1 : opts.freezeBatch;
-  const candidates = crossTurn.slice(0, Math.max(0, crossTurn.length - rawWindow));
+  const candidates = crossRun.slice(0, Math.max(0, crossRun.length - rawWindow));
   const covered = candidates.length - (candidates.length % freezeBatch);
   const toolAgers = override?.toolAgers;
   for (let i = 0; i < covered; i++) {

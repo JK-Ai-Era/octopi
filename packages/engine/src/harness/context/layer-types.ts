@@ -337,6 +337,70 @@ export function isTurnAnchor(msg: {
 }
 
 /**
+ * turn 边界锚点判定（边界类消费方共用：isMidTurn / compact / tool-result-aging）。
+ *
+ * isTurnAnchor 基础上剔除 **agentId 归因** 的 user 消息（appendCommandDiscourse：
+ * slash 命令话语、多 agent 共线记录）——它们不是主对话发言，不得推进任何 turn
+ * 边界。此前 tool-result-aging 用裸 isTurnAnchor 各自判边界，命令话语会误推进
+ * 老化边界（与 isMidTurn/compact 不一致，2026-11-20 收敛到本谓词）。
+ *
+ * 注意各消费方**边界语义有意不同**，只是共享锚点定义：aging 取 run 起点
+ * （{@link currentRunStartAnchorIndex}，插话不推进）；compact/isMidTurn 仍取
+ * 最近锚点（turn 语义——压缩门控本就是 turn 域）。勿把「谓词统一」误读为
+ * 「边界统一」（评审 del-5ca70159 P2-3）。
+ *
+ * @param msg - 消息（结构化入参，接受 Message 及其裁剪形态）
+ * @returns true = 可作为 turn 边界锚点
+ */
+export function isTurnBoundaryAnchor(msg: {
+  role?: string;
+  agentId?: string;
+  metadata?: Record<string, unknown>;
+}): boolean {
+  return !msg.agentId && isTurnAnchor(msg);
+}
+
+/**
+ * 当前 run 起点锚点下标（tool-result-aging 的保护边界）。
+ *
+ * 「当前 run 永不老化」按 **run 起点** 计（2026-11-20 拍板）：同一 run 的
+ * 插话 / 接续注入（v0.95 起同 run 多 turn）不推进老化边界，任务中途的工具
+ * 工作数据不被降级。锚点携带 `metadata.runId`（runner 在 bakeTurnStart 打标）：
+ * - 最后锚点无 runId（升级前历史）→ 回落 turn 语义（= 最后锚点，旧行为）；
+ * - 回溯遇**无 runId 或不同 runId** 的锚点即停（无归因锚点作 run 分界）。
+ *   「即停」而非「跳过」是 write-once 的前提：跳过会让未打标锚点夹在同 run
+ *   打标锚点之间时把边界**拉回**（已降级条目回原文、批量段翻转，F1 事故形态；
+ *   评审 del-5ca70159 P1-1 反例）。即停保证边界随历史增长单调前进，
+ *   最坏只是多保护一段旧数据，永不回退。
+ *
+ * @param messages - 完整历史消息（按时间序）
+ * @returns 当前 run 起点锚点下标；无锚点时 -1
+ */
+export function currentRunStartAnchorIndex(
+  messages: ReadonlyArray<{
+    role?: string;
+    agentId?: string;
+    metadata?: Record<string, unknown>;
+  }>,
+): number {
+  let last = -1;
+  for (let i = 0; i < messages.length; i++) {
+    if (isTurnBoundaryAnchor(messages[i])) last = i;
+  }
+  if (last < 0) return -1;
+  const runId = messages[last].metadata?.runId;
+  if (typeof runId !== 'string' || runId === '') return last;
+  let first = last;
+  for (let i = last - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!isTurnBoundaryAnchor(m)) continue;
+    if (m.metadata?.runId !== runId) break; // 无归因或异 run：作 run 分界（单调性前提）
+    first = i;
+  }
+  return first;
+}
+
+/**
  * 人话判定（人类文本类消费方：title / grounding.latestUserText / backfill userTurns）。
  *
  * 只有真实用户创作的文本才是「人话」：引擎载体插槽、schedule notify 便签、

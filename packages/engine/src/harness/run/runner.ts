@@ -2059,7 +2059,7 @@ export class SessionAwareRunner {
           turnId: currentTurnId,
           slotsXml,
         });
-        this.bakeTurnStart(input, currentTurnId, turnContextXml);
+        this.bakeTurnStart(input, currentTurnId, turnContextXml, runId);
 
         // 视图 = detach 切片（含已定形 user）；全回放，无条件成为 LLM 窗口
         runContext.messages = baseMsgs;
@@ -2192,7 +2192,7 @@ export class SessionAwareRunner {
               this.bakeTurnStart(entry.message, currentTurnId, formatTurnContextXml({
                 turnId: currentTurnId,
                 slotsXml: joinSlotXml([{ tag: 'runtime_snapshot', body: runtimeSnapshotText ?? '' }]),
-              }));
+              }), runId);
               injected.push(entry.message);
               // ack 延到转录同步成功后统一 flush；同步失败/崩溃由 close 的
               // unacked 重投兜底（at-least-once，见 SessionInbox）
@@ -3159,9 +3159,10 @@ export class SessionAwareRunner {
    * @param userMessage - 本 turn 用户消息对象（session.messages 中的同一引用）
    * @param turnId - 会话内单调 turn id
    * @param turnContextXml - `<turn_context>…</turn_context>` 整段
+   * @param runId - 本 run 归因（`metadata.runId`，tool-result-aging 的 run 起点边界用）
    * @throws 若已定形（禁止二次改写）
    */
-  private bakeTurnStart(userMessage: Message, turnId: string, turnContextXml: string): void {
+  private bakeTurnStart(userMessage: Message, turnId: string, turnContextXml: string, runId: string): void {
     const content = userMessage.content;
     const text = typeof content === 'string' ? content : getTextContent(content);
     if (isTurnStartContent(text)) {
@@ -3181,7 +3182,9 @@ export class SessionAwareRunner {
         ...content.filter((b) => b.type !== 'text'),
       ] as Message['content'];
     }
-    userMessage.metadata = { ...userMessage.metadata, turnId };
+    // runId：老化的 run 起点归因（tool-result-aging）——同 run 的插话/续 turn
+    // 携带同一 runId，老化边界不随插话推进
+    userMessage.metadata = { ...userMessage.metadata, turnId, runId };
   }
 
   /** 构造 turn 闭标消息（write-once 由调用处重复检查保证） */

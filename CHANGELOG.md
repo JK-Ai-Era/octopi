@@ -130,6 +130,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.120.5 (2026-11-20)
+
+### fix(context): historyAging 老化边界改钉「当前 run 起点」——插话/命令话语不再触发工具老化
+
+- **根因**：老化保护边界取「最近一条真实 user 消息」（turn 语义），而 v0.95 起用户插话是**同 run 续 turn**（`accepted` 注入活跃 Run、不开新 Run）——插话一落库即把同 run 先前的工具结果整体划入跨轮候选，任务中途的工作数据被降级为指针（默认 rawWindow=20 + freezeBatch=60：插话前 ≥80 条结果一次性翻转）。同形态的第二触发面：`appendCommandDiscourse` 命令话语（agentId 归因 user）被裸 `isTurnAnchor` 当 turn 边界，任务中跑一条 slash 命令即触发老化；而 compact/isMidTurn 的边界一直剔除这类消息——两套边界谓词不一致。
+- **语义变更（方案 A，大哥拍板）**：老化边界钉在**当前 run 起点**——锚点带 `metadata.runId`（runner `bakeTurnStart` 打标，run 首锚点与插话/接续注入同值）；同 run 的插话/续 turn 不推进边界，跨 run 才进候选、再过 `rawWindow`/`freezeBatch`。无 runId 的历史（升级前）回落 turn 语义，旧行为不变；`rawWindow` 语义改为跨 run 口径。
+- **边界谓词单一真源**：新增 `isTurnBoundaryAnchor`（= `isTurnAnchor` 剔 agentId 归因）与 `currentRunStartAnchorIndex`（layer-types.ts），`lastGenuineUserIndex` 与老化计划共用锚点定义（此前 aging 用裸 isTurnAnchor 各自判边界）。compact/isMidTurn 仍按 turn 边界——**有意分域**（压缩门控是 turn 域），谓词统一≠边界统一。
+- **write-once 前提显式化**（独立评审 del-5ca70159 P1-1）：run 起点回溯遇**无归因或异 runId** 锚点即停（不可归因作 run 分界）——「跳过」会让未打标锚点夹在同 run 打标锚点之间时把边界拉回（已降级条目回原文、批量段整段翻转的 F1 事故形态）；「即停」保证边界随历史增长单调前进，最坏多保一段旧数据、永不回退。
+- **验证**：新增 `tests/harness/aging-run-boundary.test.ts` 9 例（插话不推进边界/跨 run 照常老化/legacy 回落/命令话语不推进/混合历史/单调性反例钉 + 装配视图 2 例）；`tests/harness/aging-runid-stamping.test.ts` 走真实 SessionAwareRunner×SessionInbox 插话路径钉 runId 打标与落盘重载往返（评审 P1-2：手工构造 metadata 证明不了接线）；`message-speech-predicates.test.ts` 补 `isTurnBoundaryAnchor` 单测。全量 545 文件 / 5510 通过；lint 三段全绿；`arch/check-sync.sh` 通过；独立评审 11 findings 已核实处置。
+- **留档讨论（评审带出、超出本次范围）**：① compact 仍 turn 域——插话后 run 起点锚点（原始任务指令）可落入压缩 middle 被摘要吞掉，run 级 compact 保护待单独定夺（P2-3）；② `run-host`×`gateway` 两份手抄 `isTurnInput` 是漂移源（P3-10）；③ `runId` 现为语义载体但仍用进程内序号弱唯一（理论碰撞并 run，建议加随机后缀，P3-11）。
+- **已知边界**：升级瞬间跨 run 的旧锚点无 runId 归因，按 run 分界保守处理（只多保、不误降）。
+
 ## v0.120.4 (2026-11-20)
 
 ### fix(cognition): 清掉 tests 类型门禁的 14 个新增红灯错误
