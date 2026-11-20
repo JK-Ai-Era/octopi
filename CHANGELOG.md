@@ -130,6 +130,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.2 (2026-11-20)
+
+### feat(webui): 未选中会话时也可直接发送——首条消息自动新建会话
+
+- **背景**：首启 / 新建 agent 且无历史会话时，没有选中会话就发不出消息（发送键禁用、Enter 被忽略），必须先点「新建会话」。
+- **改动**：`sendMessage()` 在无活动会话时先自动建会话再发送；`createSession()` 改为返回新建会话或 `null`（前置条件不满足 / 创建在途 / 创建失败），并用 `creatingRef` 同步镜像拦重入——`creating` state 在同一 tick 内仍是旧闭包值，连按 Enter 或连点按钮会并发建出两个会话。发送键与 Enter 不再要求已有会话，发送键在创建在途中禁用。
+- **失败即失败**：创建失败时中止本次发送，原因已由 `createSession` 写入 `actionError`，输入保留可直接重试；`/stop` 不触发建会话（无会话可停）。
+- **附件**：`attachmentIds` 在函数开头捕获——自动建会话的 `await` 会跨越 `activeSessionId` 变更，`[activeSessionId]` effect 随之清空 `pendingAttachments`，事后才读会静默丢掉用户已挂上的文件。
+- **文案**：空态欢迎语与输入框 `title`（zh/en）改为「直接输入消息，首次发送会自动新建会话」；`uploadNeedsSession` 同步改为「先发出第一条消息（会自动新建会话），再添加附件」，不再与新流程互相打架。
+- **评审补齐**：① 空态 `/stop` 静默忽略——此前会落进 `store.sendMessage` 抛「No active session」再转成错误卡，而该路径在本改动前不可达；② 建会话失败的原因同时在输入区露出——`actionError` 只渲染在左栏，而左栏在移动端 chat 页签下是 CSS 隐藏的，首条消息失败本会变成完全静默；③ 发送键只在「本次发送正在等自动建会话」时禁用，此前 `creating` 会让已有会话时点「新会话」也连坐禁用发送，与 Enter 路径口径不一致。
+- **边界（未改）**：附件上传仍要求已有会话，本次只放开文本发送。
+- **测试**：新增 `ChatWorkspace.auto-session.test.tsx`（3 用例：空态输入后发送键可用且先建后发、建会话失败时不发送/错误外显/输入保留、`/stop` 静默忽略），只替换 gateway 的 store/client 两个出口，其余走真实实现。
+- **验证**：`npm run lint`（含 `tsc -p packages/webui --noEmit`）、`npm test`（webui 11 文件 68 用例）、`vitest tests/architecture`、`arch/check-sync.sh`、`vite build` 全绿；真机浏览器确认空态下输入后发送键变为可用、建会话失败时错误外显且输入保留，自动建会话的成功路径由新增组件测试覆盖。
+
 ## v0.121.1 (2026-11-20)
 
 ### fix(webui): 命令弹层方向键导航自动滚动跟进选中项

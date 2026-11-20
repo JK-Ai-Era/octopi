@@ -960,6 +960,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const [connectError, setConnectError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  /** 创建在途的同步镜像：state 是旧闭包值，连按 Enter / 连点按钮的同步重入只能靠 ref 拦 */
+  const creatingRef = useRef(false);
   /** 切换 agent 联动中（防双击并发切换） */
   const [switchingAgent, setSwitchingAgent] = useState(false);
   const [mobileTab, setMobileTab] = useState<'chat' | 'left' | 'right'>('chat');
@@ -1828,24 +1830,36 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     if (sm) setSelectedModelId(sm.modelId ?? sm.defaultModelId);
   };
 
-  const createSession = async () => {
-    if (connection !== 'connected') { setActionError(t('chatWorkspace.createNeedsConnection')); return; }
-    if (!agentId) { setActionError(t('chatWorkspace.createNeedsAgent')); return; }
+  /**
+   * 新建会话并切为活动会话。
+   * @returns 创建出的会话；null = 未创建，分两种：
+   *   - 前置条件不满足 / 创建抛错 → 原因已写入 actionError，调用方可据此中止后续动作；
+   *   - 创建在途（creatingRef）或 store 未就绪 → 静默返回、不报错（前者是被吸收的重复触发，不是失败）。
+   */
+  const createSession = async (): Promise<{ id: string } | null> => {
+    if (connection !== 'connected') { setActionError(t('chatWorkspace.createNeedsConnection')); return null; }
+    if (!agentId) { setActionError(t('chatWorkspace.createNeedsAgent')); return null; }
     const store = storeRef.current;
-    if (!store) return;
+    if (!store) return null;
+    // 创建在途（连点「新会话」/连按 Enter）：不再并发建出第二个会话
+    if (creatingRef.current) return null;
     setActionError(null);
     setCreating(true);
+    creatingRef.current = true;
     try {
       const modelToApply = selectedModelId && selectedModelId !== agentDefaultModelId
         ? selectedModelId
         : undefined;
       const created = await store.createSession(agentId, modelToApply ? { model: modelToApply } : undefined);
       await activateCreatedSession(created);
+      return created;
     } catch (error) {
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError(t('chatWorkspace.actionFailed'));
+      return null;
     } finally {
       setCreating(false);
+      creatingRef.current = false;
     }
   };
 
@@ -2003,7 +2017,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
 
   const sendMessage = async (textOverride?: string) => {
     const store = storeRef.current;
-    const hasAttach = pendingAttachments.length > 0;
+    // 提前捕获待发附件：下面 await 自动建会话会跨越 activeSessionId 变更，[activeSessionId] effect
+    // 会清空 pendingAttachments。当前上传本就要求已有会话（此刻必为空），这是防御性就地读取——
+    // 将来若放开无会话上传，就不会被那个 effect 静默清掉、丢掉用户已挂上的文件
+    const attachmentIds = pendingAttachments.map((a) => a.id);
+    const hasAttach = attachmentIds.length > 0;
     const rawInput = textOverride ?? input;
     if (!store || (!rawInput.trim() && !hasAttach)) return;
     const text = rawInput.trim();
@@ -2020,13 +2038,22 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const interjecting =
       !isStop && (runStatus === 'streaming' || runStatus === 'waiting' || runStatus === 'tools');
 
+    // 无活动会话（首启 / 新建 agent 的空历史）：发送即自动建会话，再把这条消息发进新会话。
+    if (!activeSessionId) {
+      // /stop 无会话可停：静默忽略——既不为其建会话，也不让 store 抛「No active session」错误卡
+      if (isStop) return;
+      const created = await createSession();
+      // null = 创建在途被吸收（静默，输入保留）或前置条件失败（原因已写入 actionError）
+      if (!created) return;
+    }
+
     setActionError(null);
     // 用户主动发起新一轮：恢复粘底跟随
     enableStickToBottom();
     if (!interjecting) setRunStatus('waiting');
     try {
       await store.sendMessage(text, {
-        attachmentIds: pendingAttachments.map((a) => a.id),
+        attachmentIds,
       });
       setInput('');
       setPendingAttachments([]);
@@ -2144,7 +2171,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
 
     if (e.key === 'Enter' && !e.shiftKey && !e.repeat && !nativeEvent.isComposing) {
       e.preventDefault();
-      if (!activeSessionId || !input.trim()) return;
+      // 无活动会话同样放行：sendMessage 内自动建会话（创建在途/失败由其自行中止）
+      if (!input.trim()) return;
       sendMessage();
     }
   };
@@ -2899,6 +2927,9 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                   </span>
                 )}
                 {modelError && <span className="small status-error">{modelError}</span>}
+                {/* actionError 只渲染在左栏，而左栏在移动端 chat 页签下是 CSS 隐藏的——
+                    空态首条消息发送失败必须在输入区也露出，否则用户按了回车毫无反馈 */}
+                {actionError && <span className="small status-error">{actionError}</span>}
               </div>
               <div className="composer-footer-right">
                 <select
@@ -2934,7 +2965,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 <button
                   className="btn-primary small"
                   onClick={() => void sendMessage()}
-                  disabled={!activeSessionId || (!input.trim() && pendingAttachments.length === 0)}
+                  disabled={
+                    // 只在「本次发送正在等自动建会话」时禁用：已有会话时点新会话不该连坐发送键
+                    // （Enter 路径本就不看 creating，两边必须同口径）
+                    (!activeSessionId && creating) || (!input.trim() && pendingAttachments.length === 0)
+                  }
                 >
                   {t('chatWorkspace.send')}
                 </button>
