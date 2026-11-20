@@ -2153,7 +2153,11 @@ export class WebApiRouter {
     }
     if (relativePath === '/onboarding/session' && method === 'POST') {
       try {
-        return this.json(res, 200, { ok: true, data: svc.start() });
+        // 起始语言由客户端界面偏好决定（服务端默认 zh 分不清「默认」与「用户选的 zh」）。
+        // 只收白名单值：非 'en' 一律按 'zh'，不把任意字符串塞进 choices.lang。
+        const body = (await this.readBody(req)) as { lang?: unknown } | undefined;
+        const initialLang: 'zh' | 'en' = body?.lang === 'en' ? 'en' : 'zh';
+        return this.json(res, 200, { ok: true, data: svc.start(initialLang) });
       } catch (e) {
         if (e instanceof OnboardingStepInvalidError) {
           return this.json(res, 403, { ok: false, error: `onboarding_step_invalid: ${e.message}` });

@@ -211,6 +211,32 @@ describe('M-6 热应用（向导产物接 ApplyEngine）', () => {
   });
 });
 
+describe('起始语言（客户端偏好驱动首个 render）', () => {
+  it('start("en")：选项 label 与描述按英文下发', () => {
+    const svc = makeService();
+    const r = svc.start('en');
+    expect(r.choices.lang).toBe('en');
+    const personal = r.options.deploymentModes.find((m) => m.id === 'personal')!;
+    expect(personal.label).toBe('Personal');
+    expect(personal.description).toBe('Just you on this machine — no login required.');
+  });
+
+  it('缺省仍是 zh（既有调用点不受影响）', () => {
+    const svc = makeService();
+    const r = svc.start();
+    expect(r.choices.lang).toBe('zh');
+    expect(r.options.deploymentModes.find((m) => m.id === 'personal')!.label).toBe('个人使用');
+  });
+
+  it('幂等：已有会话不被后续 start 的语言覆盖（正在填的不被顶掉）', () => {
+    const svc = makeService();
+    svc.start('en');
+    // StrictMode 双跑 / 并发 POST 可能带不同偏好，但会话已建立 → 以先建的为准
+    const again = svc.start('zh');
+    expect(again.choices.lang).toBe('en');
+  });
+});
+
 describe('控制台准入密钥的暴露窗口', () => {
   it('只在收尾步骤下发；中途步骤一律不带（缩小浏览器暴露面）', async () => {
     probeMock.mockResolvedValueOnce({ ok: true });

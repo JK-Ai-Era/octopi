@@ -131,6 +131,34 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.15 (2026-11-21)
+
+### fix(onboarding): Web 向导选 English 后仍全中文（语言只管了服务端，没管界面）
+
+真机现象：第一步选 English，往后的步骤仍一路中文。
+
+根因是**语言被送去了错的地方**：welcome 步点「English」只把 `lang` 提交给服务端，而界面文案
+走的是前端 i18n store（`t()` 由它驱动）——store 从未被切换，界面自然不动。服务端那边其实早
+就按 `lang` 本地化了（`pickLocalized` 覆盖部署模式 label/description 与 provider keyHint），
+所以修的是「界面这一半」，不是重做文案体系。
+
+- **语言选择落到两处**：`pickLang` 先切界面 store、再提交服务端。顺序有意为之——界面必须在
+  点击瞬间响应，服务端提交是异步的；两处都写才能同时满足「看得见」与「落盘记得住」。
+- **起始语言由客户端偏好驱动**（新增 `start(initialLang)` + `/onboarding/session` 收 `lang`）。
+  这里刻意**没有**反向做「用服务端返回的 lang 覆盖界面 store」：服务端默认 `zh`，它分不清
+  「默认」与「用户主动选了中文」，反向覆盖会把英文界面硬拉回中文。路由侧只认白名单值
+  （非 `'en'` 一律按 `'zh'`），不把任意字符串塞进 `choices.lang`。
+- **探针错误卡片跟随语言**：`probeCopy` 此前把 `probeErrorCopy(kind, 'zh')` 的语言参数硬编码，
+  选了英文仍弹中文错误卡；现传入当前界面语言。
+- `start()` 保持幂等语义：已有会话不被后续请求的偏好覆盖（StrictMode 双跑 / 并发 POST 不顶掉
+  正在填的会话）。
+
+验证：组件新增 5 条（点 English 立即变英文且提交 `en`、双向切回、后续步骤跟随、开会话上送语言、
+探针卡片跟随）；服务端新增 3 条（en 选项全英文、缺省仍 zh、幂等不被覆盖）。**变异验证**：
+去掉 `setUiLang` → 2 条红；探针语言回退硬编码 `zh` → 1 条红。全量 `555 files / 5641 tests`
+通过；lint 绿。端到端（重建 dist 后）确认 `en` 下发 `Personal` / `Just you on this machine —
+no login required.` / `Organization` / 英文 keyHint，`zh` 保持原样。
+
 ## v0.121.14 (2026-11-21)
 
 ### feat(onboarding): 向导收尾亮出控制台准入密钥（CLI 与 Web 单源）

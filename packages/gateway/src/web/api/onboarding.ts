@@ -221,13 +221,27 @@ export class OnboardingService {
     this.clearSetupToken();
   }
 
-  start(): OnboardingRender {
+  /**
+   * 开会话（幂等：已有会话原样返回，StrictMode 双跑/并发 POST 不顶掉正在填的会话）。
+   *
+   * @param initialLang - 首个 render 的本地化基准语言（客户端界面偏好）。缺省 'zh'；
+   *                      只在**新建**会话时生效，已有会话不因后续请求被改写。
+   * @returns 当前渲染
+   * @throws OnboardingStepInvalidError 向导已关闭
+   */
+  start(initialLang: 'zh' | 'en' = 'zh'): OnboardingRender {
     if (this.closed) throw new OnboardingStepInvalidError('wizard_closed: 配置已完成，向导不再开放');
     // M-3：幂等——已有会话直接返回现状（StrictMode 双跑/并发 POST 不顶掉正在填的会话）
     if (this.session) return this.render();
     this.session = {
       state: initialOnboardingState(),
-      choices: { lang: 'zh', initMode: 'cli', deploymentMode: 'personal', providerId: '', modelId: '' } as OnboardingChoices,
+      choices: {
+        lang: initialLang,
+        initMode: 'cli',
+        deploymentMode: 'personal',
+        providerId: '',
+        modelId: '',
+      } as OnboardingChoices,
       notice: undefined,
     };
     return this.render();

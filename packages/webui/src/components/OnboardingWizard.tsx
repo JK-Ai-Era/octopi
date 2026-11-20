@@ -7,7 +7,8 @@
 import { useEffect, useState } from 'react';
 import { resolveDefaultBase } from '../gateway-base';
 import { probeErrorCopy, type ProbeErrorKind } from '@octopi-agent/engine/config-admin/error-copy.js';
-import { useT } from '../i18n/react';
+import { useT, useLang } from '../i18n/react';
+import type { Lang } from '../i18n/core';
 
 interface WizardRender {
   /** 步骤进度（服务端 ONBOARDING_STEPS 派生——前端不自维护步骤序） */
@@ -62,10 +63,16 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body.data;
 }
 
-/** probe 分类码 → 人话文案（与 error-classify 同口径的向导语境文案） */
-function probeCopy(kind: ProbeErrorKind): { title: string; detail: string } {
+/**
+ * probe 分类码 → 人话文案（与 error-classify 同口径的向导语境文案）
+ *
+ * @param kind - 探针失败分类码
+ * @param lang - 当前界面语言（此前硬编码 'zh'，选了 English 仍出中文）
+ * @returns 该语言的标题与详情
+ */
+function probeCopy(kind: ProbeErrorKind, lang: Lang): { title: string; detail: string } {
   // 文案单源在 engine error-copy（批 3-2 四份单源化）；此函数保留语义别名
-  return probeErrorCopy(kind, 'zh');
+  return probeErrorCopy(kind, lang);
 }
 
 /**
@@ -145,6 +152,7 @@ function AccessKeyCard({ accessKey }: { accessKey?: WizardRender['consoleAccessK
 
 export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Element {
   const t = useT();
+  const [uiLang, setUiLang] = useLang();
   const [render, setRender] = useState<WizardRender | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -153,10 +161,31 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
   const [adminPassword2, setAdminPassword2] = useState('');
 
   useEffect(() => {
-    api<WizardRender>('/session', { method: 'POST' })
+    // 起始语言由**客户端偏好**（i18n store）决定，交给服务端做首个 render 的本地化基准。
+    // 反过来「用服务端默认 lang 覆盖界面 store」会强制拉回中文（服务端默认是 zh，
+    // 无法区分「默认」与「用户选的 zh」）。
+    api<WizardRender>('/session', {
+      method: 'POST',
+      body: JSON.stringify({ lang: uiLang }),
+    })
       .then(setRender)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    // 只在挂载时开一次会话；uiLang 故意不进依赖（后续切换由 pickLang 显式提交）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * 选语言：**同时**写界面 store 与服务端。
+   *
+   * @param id - 语言 id（'zh' | 'en'）
+   * @returns 无
+   */
+  const pickLang = async (id: string): Promise<void> => {
+    // 界面文案走 i18n store（t() 由它驱动），服务端只决定落盘语言与选项 label——
+    // 只提交不切 store 就是「选了 English，后面还是中文」的真机现象。
+    if (id === 'zh' || id === 'en') setUiLang(id);
+    await submit({ kind: 'next' }, { lang: id });
+  };
 
   const submit = async (event: { kind: string; save?: boolean }, extra?: Record<string, unknown>): Promise<void> => {
     // M-4：密码二次确认是硬校验（此前收集了但不比对，形同装饰）。
@@ -214,7 +243,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
                 <button
                   key={o.id}
                   className={render.choices.lang === o.id ? 'btn-primary wizard-card' : 'btn-secondary wizard-card'}
-                  onClick={() => void submit({ kind: 'next' }, { lang: o.id })}
+                  onClick={() => void pickLang(o.id)}
                 >
                   {o.label}
                 </button>
@@ -454,7 +483,7 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
             <h2>{t('onboardingWizard.probeTitle')}</h2>
             <p className="small muted">{t('onboardingWizard.probeHint')}</p>
             {render.probeError && (() => {
-              const c = probeCopy(render.probeError!.kind);
+              const c = probeCopy(render.probeError!.kind, uiLang);
               return (
                 <div className="error-card error-card-user-action" style={{ marginBottom: 12 }} title={render.probeError?.message}>
                   <div className="error-card-title">⚠ {c.title}</div>

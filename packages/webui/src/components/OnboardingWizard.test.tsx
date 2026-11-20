@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { OnboardingWizard } from './OnboardingWizard';
+import { setLang, getLang } from '../i18n/core';
 
 type Render = Record<string, unknown>;
 
@@ -52,6 +53,8 @@ let submitted: Array<{ event: { kind: string }; stepData: Record<string, unknown
 let initial: Render = makeRender();
 /** `/session/event` 返回的 render（推进后） */
 let after: Render = makeRender();
+/** `/session` 的请求体（断言开会话时上送的语言偏好） */
+let sessionBody: { lang?: string } | undefined;
 
 /**
  * 桩掉 fetch：`/session` 返回 initial，`/session/event` 记录请求体并返回 after。
@@ -60,12 +63,14 @@ let after: Render = makeRender();
  */
 function stubFetch(): void {
   submitted = [];
+  sessionBody = undefined;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: { body?: string }) => {
       const body = init?.body ? JSON.parse(init.body) : undefined;
       const isEvent = String(url).endsWith('/session/event');
       if (isEvent) submitted.push(body);
+      else sessionBody = body;
       return {
         ok: true,
         json: async () => ({ ok: true, data: isEvent ? after : initial }),
@@ -78,6 +83,7 @@ beforeEach(() => {
   initial = makeRender();
   after = makeRender();
   stubFetch();
+  setLang('zh'); // 语言是模块级单例：用例间必须复位，否则先跑英文用例会污染后续
   window.history.replaceState({}, '', '/?setup=tok-fixed');
 });
 
@@ -192,6 +198,89 @@ describe('模型步', () => {
     render(<OnboardingWizard onDone={() => {}} />);
     expect(await screen.findByRole('button', { name: /DeepSeek-V4\.1-Flash/ })).toBeTruthy();
     expect(screen.queryByLabelText(/模型 id/)).toBeNull();
+  });
+});
+
+describe('界面语言（真机现象：选了 English，后面还是中文）', () => {
+  /** welcome 步的 render（两种语言各一份选项 label，模拟服务端本地化产物） */
+  function welcomeStep(selectedLang: string): Render {
+    return makeRender({
+      step: 'welcome',
+      stepIndex: 1,
+      choices: { lang: selectedLang },
+      options: {
+        ...(makeRender().options as Record<string, unknown>),
+        languages: [
+          { id: 'zh', label: '中文' },
+          { id: 'en', label: 'English' },
+        ],
+      },
+    });
+  }
+
+  it('点 English 后界面文案立即变英文，且把 en 提交给服务端', async () => {
+    initial = welcomeStep('zh');
+    after = makeRender({ step: 'init-mode', stepIndex: 2 });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    // 起点是中文
+    expect(await screen.findByText('三分钟让你的助手跑起来 🐙')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'English' }));
+    // 界面文案必须切到英文（此前只提交服务端、store 没动 → 仍是中文）
+    await waitFor(() => expect(getLang()).toBe('en'));
+    await waitFor(() => expect(submitted.length).toBeGreaterThan(0));
+    expect(submitted[0]!.stepData.lang).toBe('en');
+  });
+
+  it('点中文后切回中文（双向可逆，不是单向开关）', async () => {
+    setLang('en');
+    initial = welcomeStep('en');
+    after = makeRender({ step: 'init-mode', stepIndex: 2 });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    expect(await screen.findByText(/Get your assistant running/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '中文' }));
+    await waitFor(() => expect(getLang()).toBe('zh'));
+    await waitFor(() => expect(submitted.length).toBeGreaterThan(0));
+    expect(submitted[0]!.stepData.lang).toBe('zh');
+  });
+
+  it('后续步骤跟随已选语言（init-mode 文案是英文）', async () => {
+    setLang('en');
+    initial = makeRender({
+      step: 'init-mode',
+      stepIndex: 2,
+      choices: { lang: 'en' },
+    });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    expect(await screen.findByText('Pick an initialization method')).toBeTruthy();
+    // 反向锚：若仍是中文表，这句会命中
+    expect(screen.queryByText('选一种初始化方式')).toBeNull();
+  });
+
+  it('开会话时把当前界面语言交给服务端（否则首个 render 的中文选项与界面语言矛盾）', async () => {
+    setLang('en');
+    initial = welcomeStep('zh');
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    await screen.findByText(/Get your assistant running/);
+    expect(sessionBody?.lang).toBe('en');
+  });
+
+  it('探针错误卡片跟随界面语言（此前硬编码 zh）', async () => {
+    setLang('en');
+    initial = makeRender({
+      step: 'probe',
+      stepIndex: 8,
+      choices: { lang: 'en' },
+      probeError: { kind: 'auth', message: '401 Unauthorized' },
+    });
+    stubFetch();
+    render(<OnboardingWizard onDone={() => {}} />);
+    // 卡片标题来自 engine error-copy 的 en 表
+    expect(await screen.findByText(/API key rejected/)).toBeTruthy();
+    expect(screen.queryByText(/密钥没通过校验/)).toBeNull();
   });
 });
 
