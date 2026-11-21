@@ -81,6 +81,20 @@ interface SkillFrontmatter {
 }
 
 /**
+ * 剥离 YAML 标量的成对引号（双引号含转义还原；单引号按 YAML 惯例还原 ''）。
+ * 只处理标量层的一对引号——多行/嵌套 YAML 仍不在解析范围。
+ */
+function unquoteYamlScalar(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replace(/\\(["\\])/g, '$1');
+  }
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replace(/''/g, "'");
+  }
+  return value;
+}
+
+/**
  * 解析 SKILL.md 的 YAML frontmatter（只读元数据，不读正文）
  */
 function parseFrontmatter(filePath: string): {
@@ -96,12 +110,12 @@ function parseFrontmatter(filePath: string): {
     const fmLines = fmMatch[1].split('\n');
     const content = fmMatch[2].trim();
 
-    // 简单 YAML 解析（只支持 key: value）
+    // 简单 YAML 解析（只支持 key: value 标量）
     const meta: SkillFrontmatter = {};
     for (const line of fmLines) {
       const m = line.match(/^([\w-]+):\s*(.+)$/);
       if (m) {
-        meta[m[1]] = m[2].trim();
+        meta[m[1]] = unquoteYamlScalar(m[2].trim());
       }
     }
 

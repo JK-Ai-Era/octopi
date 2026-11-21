@@ -22,3 +22,7 @@ coverage/
 tests/fixtures/tmp-*/
 # npm pack artifacts
 *.tgz
+
+# Python bytecode（skills/ 内 Python 工具链）
+__pycache__/
+*.pyc

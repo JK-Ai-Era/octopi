@@ -10,9 +10,12 @@ import {
   initOctopi,
   isInitialized,
   ensureAgentDirs,
+  findBuiltinSkillsDir,
+  seedBuiltinSkills,
   getOctopiHome,
   formatInitReport,
 } from '../src/init.js';
+import { DefaultSkillManager } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/manager.js';
 
 describe('init', () => {
   let tempDir: string;
@@ -243,6 +246,81 @@ describe('init', () => {
 
       expect(readFileSync(soulPath, 'utf-8')).toBe(custom);
       expect(result.existed.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('seedBuiltinSkills', () => {
+    it('should locate builtin skills directory in dev checkout', () => {
+      const dir = findBuiltinSkillsDir();
+      expect(dir).not.toBeNull();
+      expect(existsSync(join(dir!, 'document-authoring', 'SKILL.md'))).toBe(true);
+    });
+
+    it('should seed copy-if-missing and never overwrite user edits', () => {
+      const src = join(tempDir, 'builtin');
+      const dest = join(tempDir, 'agent-skills');
+      mkdirSync(join(src, 'demo'), { recursive: true });
+      writeFileSync(join(src, 'demo', 'SKILL.md'), 'v1', 'utf-8');
+      writeFileSync(join(src, 'demo', 'extra.md'), 'e', 'utf-8');
+
+      const first = seedBuiltinSkills(dest, src);
+      expect(first.builtinDir).toBe(src);
+      expect(first.seeded).toHaveLength(2);
+      expect(first.skipped).toHaveLength(0);
+
+      // 用户改动不得被覆盖；既有文件计入 skipped
+      writeFileSync(join(dest, 'demo', 'SKILL.md'), 'user-edited', 'utf-8');
+      const second = seedBuiltinSkills(dest, src);
+      expect(second.seeded).toHaveLength(0);
+      expect(second.skipped).toHaveLength(2);
+      expect(readFileSync(join(dest, 'demo', 'SKILL.md'), 'utf-8')).toBe('user-edited');
+    });
+
+    it('should degrade explicitly when builtin dir is missing', () => {
+      const res = seedBuiltinSkills(join(tempDir, 'x'), join(tempDir, 'nope'));
+      expect(res.builtinDir).toBeNull();
+      expect(res.seeded).toHaveLength(0);
+      expect(res.skipped).toHaveLength(0);
+    });
+
+    it('ensureAgentDirs seeds builtin skills into agent home', async () => {
+      await ensureAgentDirs('default', tempDir);
+      const skillsDir = join(tempDir, 'agents/default/skills');
+      expect(existsSync(join(skillsDir, 'document-authoring', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(skillsDir, 'docx', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(skillsDir, 'pptx', 'SKILL.md'))).toBe(true);
+    });
+    it('later-added files are seeded; modified files stay user-owned (mixed-version)', () => {
+      const src = join(tempDir, 'builtin2');
+      const dest = join(tempDir, 'agent-skills2');
+      mkdirSync(join(src, 'demo'), { recursive: true });
+      writeFileSync(join(src, 'demo', 'SKILL.md'), 'v1', 'utf-8');
+      seedBuiltinSkills(dest, src);
+
+      // 后续版本：改了 SKILL.md、新增一个文件 → 只补种新文件（文档声称的混版本语义）
+      writeFileSync(join(src, 'demo', 'SKILL.md'), 'v2', 'utf-8');
+      writeFileSync(join(src, 'demo', 'added-later.md'), 'new', 'utf-8');
+      const res = seedBuiltinSkills(dest, src);
+
+      expect(res.seeded).toHaveLength(1);
+      expect(res.seeded[0]).toBe(join(dest, 'demo', 'added-later.md'));
+      expect(readFileSync(join(dest, 'demo', 'SKILL.md'), 'utf-8')).toBe('v1');
+      expect(readFileSync(join(dest, 'demo', 'added-later.md'), 'utf-8')).toBe('new');
+    });
+
+    it('seeded builtin tree is discoverable by DefaultSkillManager', async () => {
+      const dest = join(tempDir, 'agent-skills3');
+      const seeded = seedBuiltinSkills(dest);
+      expect(seeded.seeded.length).toBeGreaterThan(0);
+
+      const mgr = new DefaultSkillManager();
+      await mgr.discover(dest);
+      const ids = mgr.list().map((s) => s.id);
+      for (const id of ['document-authoring', 'docx', 'pdf', 'pptx', 'xlsx']) {
+        expect(ids).toContain(id);
+      }
+      // m1 回归：frontmatter 引号转义不得泄漏进技能索引
+      expect(mgr.formatForPrompt()).not.toContain('\\"');
     });
   });
 

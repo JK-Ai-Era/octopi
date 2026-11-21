@@ -212,9 +212,11 @@ Agent home directory convention (scaffolded by `initOctopi` / `ensureAgentDirs`)
 <agentHome>/
   AGENTS.md              # main persona; loaded first
   persona/               # supplemental persona (alphabetical; numeric prefixes control order)
-  skills/                # skills (can be pointed at by skillDirectory)
+  skills/                # skills (can be pointed at by skillDirectory); seeded from packaged skills/ (copy-if-missing)
 # Note: sessions are not in agent home — see OCTOPI_HOME/sessions/
 ```
+
+Builtin skills (e.g. the `document-authoring` family: shared design/QA/OOXML toolkit + `docx`/`pdf`/`pptx`/`xlsx`) ship in the package under `skills/` and are seeded into `agents/<id>/skills/` at scaffold time (`ensureAgentDirs`). Seeding is per-file copy-if-missing: existing files are never overwritten (user data wins), while files **added** by later releases are seeded on the next scaffold — so a skill tree can straddle versions until an explicit reinstall.
 
 Memory / Cognition / Wisdom / Knowledge **are not persisted by directory**; they are carried uniformly by the per-agent SQLite `AgentDatabase` (`agent.db`).
 

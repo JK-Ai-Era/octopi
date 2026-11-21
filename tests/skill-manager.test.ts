@@ -252,24 +252,54 @@ describe('DefaultSkillManager', () => {
   });
 
   // ─────────────────────────────────────────────
+  // frontmatter 引号标量（m1 回归）
+  // ─────────────────────────────────────────────
+  describe('frontmatter 引号标量', () => {
+    test('成对双引号被剥离、转义还原', async () => {
+      const testDir = resolve(FIXTURES, 'quoted-frontmatter');
+      const skillDir = resolve(testDir, 'quoted-skill');
+      mkdirSync(skillDir, { recursive: true });
+
+      try {
+        writeFileSync(
+          resolve(skillDir, 'SKILL.md'),
+          ['---', 'name: "quoted \\"skill\\""', 'description: "A \\"quoted\\" description"', '---', '', 'Body.'].join('\n'),
+          'utf-8',
+        );
+        await manager.discover(testDir);
+        const skill = manager.get('quoted-skill');
+        expect(skill).not.toBeNull();
+        expect(skill!.name).toBe('quoted "skill"');
+        expect(skill!.description).toBe('A "quoted" description');
+      } finally {
+        rmSync(testDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // ─────────────────────────────────────────────
   // 与真实 skills/ 目录集成
   // ─────────────────────────────────────────────
   describe('集成测试（真实 skills 目录）', () => {
-    test('加载项目 skills/ 目录', async () => {
+    test('加载项目 skills/ 的五个内置技能，且引号不泄漏进索引', async () => {
       await manager.discover('./skills');
 
       const skills = manager.list();
-      if (skills.length > 0) {
-        // 如果项目有 skills，验证格式
-        const prompt = manager.formatForPrompt();
-        expect(prompt).toContain('<available_skills>');
+      const ids = skills.map((s) => s.id);
+      for (const id of ['document-authoring', 'docx', 'pdf', 'pptx', 'xlsx']) {
+        expect(ids).toContain(id);
+      }
 
-        for (const skill of skills) {
-          expect(skill.id).toBeTruthy();
-          expect(skill.name).toBeTruthy();
-          expect(skill.description).toBeTruthy();
-          expect(skill.filePath).toContain('SKILL.md');
-        }
+      const prompt = manager.formatForPrompt();
+      expect(prompt).toContain('<available_skills>');
+      // m1 回归：带引号 frontmatter 的转义引号不得出现在技能索引
+      expect(prompt).not.toContain('\\"');
+      for (const skill of skills) {
+        expect(skill.id).toBeTruthy();
+        expect(skill.name).toBeTruthy();
+        expect(skill.name).not.toContain('"');
+        expect(skill.description).toBeTruthy();
+        expect(skill.filePath).toContain('SKILL.md');
       }
     });
   });

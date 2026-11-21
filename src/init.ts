@@ -44,8 +44,17 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  renameSync,
+} from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { renderAgentRole } from '@octopi-agent/engine/config-admin/agent-presets.js';
 import type { ProductLang } from '@octopi-agent/engine/config-admin/i18n.js';
 import {
@@ -214,6 +223,90 @@ function writeIfAbsent(filePath: string, content: string): boolean {
   return true;
 }
 
+// ── 内置技能种子（随包发布的 skills/ → agents/<id>/skills/） ──
+
+/**
+ * 定位包内置 skills 目录（仓库/npm 包根的 `skills/`）。
+ *
+ * 从本模块位置向上查找含 `skills/document-authoring/SKILL.md` 的祖先目录
+ * （dist/init.js 与源码 src/init.ts 均能解析到包根，不依赖固定相对深度）。
+ *
+ * @param fromDir - 起始目录（缺省本模块所在目录）
+ * @returns 内置 skills 目录绝对路径；找不到返回 null（调用方降级 warn，不阻塞初始化）
+ */
+export function findBuiltinSkillsDir(fromDir?: string): string | null {
+  let dir = fromDir ?? dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    const candidate = join(dir, 'skills');
+    if (existsSync(join(candidate, 'document-authoring', 'SKILL.md'))) {
+      return candidate;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/**
+ * 递归复制技能树（copy-if-missing，逐文件；用户数据/既有技能优先）
+ */
+function copyTreeIfAbsent(
+  srcDir: string,
+  destDir: string,
+  seeded: string[],
+  skipped: string[],
+): void {
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    if (entry.name === '.DS_Store' || entry.name === '__pycache__') continue;
+    const from = join(srcDir, entry.name);
+    const to = join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      copyTreeIfAbsent(from, to, seeded, skipped);
+      continue;
+    }
+    if (!entry.isFile()) {
+      // 符号链接/设备等非常规项：跳过并显式告知（复制它们会 EISDIR/ENOENT 炸掉初始化）
+      console.warn(`[octopi] builtin skill seeding: skipped non-regular entry ${from}`);
+      continue;
+    }
+    if (existsSync(to)) {
+      skipped.push(to);
+      continue;
+    }
+    ensureDir(dirname(to));
+    copyFileSync(from, to);
+    seeded.push(to);
+  }
+}
+
+/**
+ * 将内置技能种子进 agent 的 skills 目录。
+ *
+ * 语义与 persona 四件套一致：**已存在的文件不覆盖**（用户数据优先）。
+ * 产品侧技能更新不自动覆盖用户改动——需要更新时显式重装（用户数据优先）。
+ *
+ * @param agentSkillsDir - 目标 skills 目录（`agents/<id>/skills`）
+ * @param builtinDir - 内置 skills 源目录（缺省 findBuiltinSkillsDir()）
+ * @returns seeded 新建文件 / skipped 已存在未动文件 / builtinDir 实际源（null = 未找到）
+ */
+export function seedBuiltinSkills(
+  agentSkillsDir: string,
+  builtinDir?: string,
+): { seeded: string[]; skipped: string[]; builtinDir: string | null } {
+  const src = builtinDir ?? findBuiltinSkillsDir();
+  const seeded: string[] = [];
+  const skipped: string[] = [];
+  if (!src || !existsSync(src)) return { seeded, skipped, builtinDir: null };
+  try {
+    copyTreeIfAbsent(src, agentSkillsDir, seeded, skipped);
+  } catch (e) {
+    // 复制中途失败（I/O 等）：保留已拷部分（copy-if-missing 重试自愈），显式降级不阻塞初始化
+    console.warn(`[octopi] builtin skill seeding incomplete: ${e}`);
+  }
+  return { seeded, skipped, builtinDir: src };
+}
+
 /**
  * 将旧版平铺在 home 根目录的 persona 文件迁移到 persona/ 下
  *
@@ -301,6 +394,15 @@ export async function ensureAgentDirs(
       existed.push(filePath);
     }
   }
+
+  // 内置技能种子：随包发布的 skills/ → agents/<id>/skills/（copy-if-missing，用户数据优先）
+  const skillSeed = seedBuiltinSkills(join(agentHome, 'skills'));
+  if (skillSeed.builtinDir === null) {
+    // 种子缺失（打包遗漏/目录被移走）：显式降级，不阻塞初始化
+    console.warn('[octopi] builtin skills directory not found next to package; skill seeding skipped');
+  }
+  created.push(...skillSeed.seeded);
+  existed.push(...skillSeed.skipped);
 
   return { created, existed, migrated };
 }
@@ -411,6 +513,31 @@ export function isInitialized(homeDir?: string): boolean {
  *   Next steps 里的「运行 serve start」正是用户正在执行的命令，改为指向随后打印的向导链接；评审 m2）
  * @returns 报告文本
  */
+/**
+ * 报告路径列表：skills/ 下的种子文件折叠为一行摘要（否则每次 init 打印近百行噪音）
+ */
+function pushCollapsedPaths(lines: string[], paths: string[], marker: string): void {
+  const others: string[] = [];
+  const skillRoots = new Map<string, number>();
+  for (const p of paths) {
+    const parts = p.split(sep);
+    const idx = parts.lastIndexOf('skills');
+    if (idx > 0 && idx === parts.length - 2) {
+      // skills/<file> 或更深：<skillsRoot> 记目录，计文件数
+      const root = parts.slice(0, idx + 1).join(sep);
+      skillRoots.set(root, (skillRoots.get(root) ?? 0) + 1);
+    } else {
+      others.push(p);
+    }
+  }
+  for (const p of others) {
+    lines.push(`     ${marker} ${p}`);
+  }
+  for (const [root, count] of skillRoots) {
+    lines.push(`     ${marker} ${root} (${count} builtin skill files)`);
+  }
+}
+
 export function formatInitReport(
   result: Awaited<ReturnType<typeof initOctopi>>,
   opts?: { context?: 'init' | 'serve' },
@@ -423,16 +550,12 @@ export function formatInitReport(
 
   if (result.created.length > 0) {
     lines.push(`\n   Created (${result.created.length}):`);
-    for (const path of result.created) {
-      lines.push(`     + ${path}`);
-    }
+    pushCollapsedPaths(lines, result.created, '+');
   }
 
   if (result.existed.length > 0) {
     lines.push(`\n   Already existed (${result.existed.length}):`);
-    for (const path of result.existed) {
-      lines.push(`     = ${path}`);
-    }
+    pushCollapsedPaths(lines, result.existed, '=');
   }
 
   lines.push('\n   Next steps:');
