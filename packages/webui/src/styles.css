@@ -1937,6 +1937,20 @@ button.ctx-band {
   display: flex;
   gap: 8px;
 }
+/* 「新增自定义文件」行：输入框占满余宽，按钮不压缩不折行
+   （裸 flex 下 CJK 按钮可被压到逐字竖排） */
+.set-file-create {
+  display: flex;
+  gap: 8px;
+}
+.set-file-create .set-input {
+  flex: 1;
+  min-width: 0;
+}
+.set-file-create .btn-ghost {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 /* 向导常驻底栏：钉在滚动视口底部，创建按钮/校验错误始终可见 */
 .set-wizard-footer {
   position: sticky;

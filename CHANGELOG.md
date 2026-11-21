@@ -131,6 +131,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.21 (2026-11-22)
+
+### fix(webui): 「新增」按钮不再被压成逐字竖排
+
+「新增自定义文件」行改用专用样式 `.set-file-create`：输入框 `flex:1` 占满余宽，按钮 `flex-shrink:0 + white-space:nowrap`——裸 `.set-actions` flex 下按钮可被压缩到 CJK 逐字换行（两字竖排）。不动共享 `.set-actions`，其余按钮行零影响。
+
+---
+
 ## v0.121.20 (2026-11-22)
 
 ### feat(webui): persona 编辑器支持「新增自定义文件」

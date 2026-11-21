@@ -691,7 +691,7 @@ export function AgentSettingsPanel() {
               </label>
               <div className="set-field">
                 <span>{t('agentSettings.newPersonaFile')}</span>
-                <div className="set-actions">
+                <div className="set-file-create">
                   <input
                     className="set-input mono"
                     value={newFileName}
