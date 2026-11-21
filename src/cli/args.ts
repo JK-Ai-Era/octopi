@@ -11,6 +11,8 @@ export interface CliArgs {
   config?: string;
   port?: number;
   help?: boolean;
+  /** 打印套件版本后退出（`--version` / `-v` / `octopi version`） */
+  version?: boolean;
   verbose?: boolean;
   fix?: boolean;
   dryRun?: boolean;
@@ -60,6 +62,7 @@ function requireFlagValue(argv: string[], index: number, flag: string): string {
 
 export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   let help = false;
+  let version = false;
   let verbose = false;
   let config: string | undefined;
   let port: number | undefined;
@@ -96,8 +99,11 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
       case '-h':
         help = true;
         break;
-      case '--verbose':
+      case '--version':
       case '-v':
+        version = true;
+        break;
+      case '--verbose':
         verbose = true;
         break;
       case '--fix':
@@ -190,6 +196,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     config,
     port,
     help,
+    version,
     verbose,
     fix,
     dryRun,

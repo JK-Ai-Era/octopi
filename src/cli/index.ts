@@ -14,6 +14,7 @@ import { resolve } from 'node:path';
 import { opsCommand } from './ops.js';
 import { llmDiffCommand } from './llm-diff.js';
 import { doctorCommand } from './doctor/index.js';
+import { getSuiteVersion } from './version.js';
 
 async function main(): Promise<void> {
   const args: CliArgs = parseArgs();
@@ -25,6 +26,12 @@ async function main(): Promise<void> {
 
   if (args.command === 'help') {
     showHelp();
+    return;
+  }
+
+  // `--version` / `-v` / `octopi version`：只读构建信息，不加载配置（未初始化机器也能查版本）
+  if (args.version || args.command === 'version') {
+    console.log(getSuiteVersion());
     return;
   }
 

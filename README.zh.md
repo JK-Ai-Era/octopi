@@ -214,6 +214,7 @@ octopi init
 octopi serve start   # gateway + Web 控制台（向导可以直接替你起）
 octopi chat          # 终端 TUI 对话，同一个 agent、同一份配置
 octopi doctor        # 诊断部署/配置，不需要 LLM
+octopi --version     # 已安装版本（也可: octopi version / -v）
 ```
 
 裸跑 `octopi` 同一规则：未初始化 → 进 init 向导；已初始化 → 进终端对话。

@@ -52,12 +52,14 @@ Commands:
   ops status [id]   Show kill-switch state for one or all agents
   llm-diff [session]
                     Compare dumped LLM requests and locate cache-prefix breaks
+  version           Show the installed version
   help              Show this help message
 
 Options:
   --config, -c <path>   Config file path (default: ~/.octopi/octopi.json)
   --port, -p <port>     Port override
-  --verbose, -v         Enable verbose mode (trace all engine events to file)
+  --version, -v         Show the installed version and exit
+  --verbose             Enable verbose mode (trace all engine events to file)
   --fix                 doctor: apply safe migrations (backs up config)
   --dry-run             doctor: show what --fix would do
   --json                doctor: machine-readable report (secrets redacted)

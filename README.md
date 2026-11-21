@@ -324,6 +324,7 @@ that key into the WebUI login page's "Access key" field.
 octopi serve start   # gateway + web console; the wizard can do this for you
 octopi chat          # TUI chat, same agent, same config
 octopi doctor        # diagnose deployment/config, no LLM needed
+octopi --version     # installed version (also: octopi version, or -v)
 ```
 
 Bare `octopi` follows the same rule: uninitialized → the init wizard,

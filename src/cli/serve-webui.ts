@@ -8,7 +8,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join, normalize, extname, resolve, sep } from 'node:path';
 import { gatewayConfigScript, webConfigScript } from './helpers.js';
 import { isValidGitStatusPollSeconds } from '../config-schema/webui.js';
-import enginePackage from '@octopi-agent/engine/package.json' with { type: 'json' };
+import { getSuiteVersion } from './version.js';
 
 const distArg = process.argv[2];
 if (!distArg) {
@@ -99,7 +99,7 @@ const server = createServer(async (req, res) => {
               ...(deploymentMode !== undefined ? { deploymentMode } : {}),
               ...(language !== undefined ? { language } : {}),
             },
-            enginePackage.version,
+            getSuiteVersion(),
           ),
       );
       return;

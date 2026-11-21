@@ -131,6 +131,30 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.16 (2026-11-21)
+
+### feat(cli): 新增 `--version` / `-v` / `octopi version`
+
+此前 CLI 没有任何查版本的方式：`CliArgs` 没有 version 字段，`octopi --version` 直接落到未知命令分支并打印帮助。用户在真机上排障时（确认装的是发布版还是仓库 link、确认升级是否生效）无从下手，只能去读 `%APPDATA%\npm\node_modules\octopi-agent\package.json`。
+
+现在三种写法等价，输出裸版本号（如 `0.121.16`）后退出：
+
+```bash
+octopi --version
+octopi -v
+octopi version
+```
+
+**只读构建信息、不加载配置**——放在 `help` 之后、裸命令分派之前，因此未初始化的机器上也能查版本（不会触发 init 向导，也不会因缺 `octopi.json` 报错）。
+
+**BREAKING**：`-v` 的语义从 `--verbose` 改为 `--version`（行业惯例）。需要详细日志请改用 `--verbose`（长选项保持不变）。仓库内自查确认没有代码依赖 `-v` 传 verbose（`daemon.ts` 向子进程传的是 `--verbose`），受影响面仅限用户手敲的短选项。
+
+**单一真相源**：版本读取收敛为 `src/cli/version.ts` 的 `getSuiteVersion()`，取 engine 包的 `package.json` 版本（五包 lockstep，只有一个值）。WebUI「关于」页此前在 `serve-webui.ts` 里直接读 `enginePackage.version`，现改为同走该原语，避免两处读取路径漂移。
+
+**验证**：新增 `tests/cli-version.test.ts`（9 例）锁住 `-v` 归属与版本源不变性。**变异验证**：把 `-v` 退回 verbose → 2 条断言变红（`-v` 简写、`-v`/`--verbose` 可共存），还原后复绿。端到端跑构建产物确认三种写法输出同一版本号、`--verbose help` 仍正常、`-v` 退出码 0；版本号在运行时从 `package.json` 解析，bump 后无需重建即读到新值。全量 `556 files / 5650 tests` 通过；`typecheck` 与 `build` 绿。
+
+---
+
 ## v0.121.15 (2026-11-21)
 
 ### fix(onboarding): Web 向导选 English 后仍全中文（语言只管了服务端，没管界面）
