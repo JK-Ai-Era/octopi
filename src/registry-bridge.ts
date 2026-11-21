@@ -113,8 +113,14 @@ export function createRegistryAgentBridge(options: RegistryAgentBridgeOptions): 
       }
       const def = resolveAgentDefinition(ac, normalized);
 
-      // 校验通过后才物化家当（MIN-7）
-      await ensureAgentDirs(record.agentId, homeDir, record.tenantId);
+      // 校验通过后才物化家当（MIN-7）；缺省四件套语言 = 配置 language
+      const rawConfig = options.getRawConfig();
+      await ensureAgentDirs(
+        record.agentId,
+        homeDir,
+        record.tenantId,
+        rawConfig.language === 'en' ? 'en' : 'zh',
+      );
       return { ...def, tenantId: record.tenantId };
     },
   };

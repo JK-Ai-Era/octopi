@@ -26,3 +26,26 @@ export function assertSafeConfigName(name: string): void {
     throw new Error(`invalid config name: ${name}`);
   }
 }
+
+/**
+ * 断言 persona 补充件文件名安全（裸 `*.md` 文件名，无路径成分）
+ *
+ * 拒：空名、首尾空白（尾空格名会绕过模板替换又不被 loadPersona 收录，
+ * 导致身份静默丢失）、非 `.md`、路径分隔符、`..` 穿越形态。
+ *
+ * @param file - persona 文件名（如 `10-soul.md`）
+ * @throws 非法文件名抛错（调用方映射业务 400）
+ */
+export function assertSafePersonaFileName(file: string): void {
+  if (
+    !file ||
+    file !== file.trim() ||
+    !file.endsWith('.md') ||
+    file === '.md' ||
+    file.includes('/') ||
+    file.includes('\\') ||
+    file.includes('..')
+  ) {
+    throw new Error(`invalid persona file name: ${file}`);
+  }
+}

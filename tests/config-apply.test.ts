@@ -71,6 +71,7 @@ interface AgentFilesStub {
   pathsOf: ReturnType<typeof vi.fn>;
   scaffold: ReturnType<typeof vi.fn>;
   readPersona: ReturnType<typeof vi.fn>;
+  readPersonaFiles: ReturnType<typeof vi.fn>;
   writePersona: ReturnType<typeof vi.fn>;
 }
 
@@ -87,6 +88,7 @@ function makeAgentFilesStub(): AgentFilesStub {
       if (opts.agentsMd !== undefined && !files.has(id)) files.set(id, opts.agentsMd);
     }),
     readPersona: vi.fn((id: string) => files.get(id) ?? null),
+    readPersonaFiles: vi.fn(() => []),
     writePersona: vi.fn((id: string, content: string) => {
       files.set(id, content);
     }),
@@ -315,6 +317,48 @@ describe('ConfigApplyService — agent CRUD（P2）', () => {
     const raw = service.read().raw;
     const agents = raw.agents as Array<{ id: string }>;
     expect(agents.some((a) => a.id === 'helper')).toBe(true);
+  });
+
+  it('createAgent：类型模板载荷透传 scaffold（personaFiles / skills / lang）', async () => {
+    const before = service.read();
+    await apply.createAgent({
+      agent: { id: 'typed', model: 'standard' },
+      agentsMd: '# typed persona',
+      personaFiles: [{ file: '10-soul.md', content: '# typed soul' }],
+      skills: [{ id: 'sk1', name: 'SK', description: 'd', content: 'c' }],
+      lang: 'en',
+      hash: before.hash,
+    });
+    expect(agentFiles.scaffold).toHaveBeenCalledWith(
+      'typed',
+      expect.objectContaining({
+        agentsMd: '# typed persona',
+        personaFiles: [{ file: '10-soul.md', content: '# typed soul' }],
+        skills: [expect.objectContaining({ id: 'sk1' })],
+        lang: 'en',
+      }),
+    );
+  });
+
+  it('createAgent：非法模板载荷在写盘前整体拒绝（不留幽灵 agent）', async () => {
+    const before = service.read();
+    await expect(
+      apply.createAgent({
+        agent: { id: 'ghost', model: 'standard' },
+        agentsMd: '# ok',
+        personaFiles: [{ file: '../evil.md', content: 'x' }],
+        hash: before.hash,
+      }),
+    ).rejects.toThrow(/invalid persona file name/);
+    await expect(
+      apply.createAgent({ agent: { id: 'ghost2', model: 'standard' }, agentsMd: '   ', hash: before.hash }),
+    ).rejects.toThrow(/non-empty/);
+    // 盘与文件态都没动
+    const raw = service.read().raw;
+    const ids = (raw.agents as Array<{ id: string }>).map((a) => a.id);
+    expect(ids).not.toContain('ghost');
+    expect(ids).not.toContain('ghost2');
+    expect(agentFiles.scaffold).not.toHaveBeenCalledWith('ghost', expect.anything());
   });
 
   it('B1 回归：updateAgent 部分更新 tools 不得抹掉 denyCapabilities（能力黑名单）', async () => {
@@ -742,9 +786,40 @@ describe('ConfigApplyService — P3（护栏/回滚/审计/模板）', () => {
     });
     const preset = apply.saveAgentAsTemplate('helper', { id: 'my-role', label: 'My Role' });
     expect(preset.template).toBe('# my persona');
+    // round-trip：persona 补充件一并入模板（应用时四件套不丢）
+    expect(preset.personaFiles).toEqual([]);
     expect(preset.recommendedEffectMode).toBe('project');
     expect(apply.listRolePresets().some((p) => p.id === 'my-role')).toBe(true);
     expect(auditEntries.some((e) => e.action === 'template.save')).toBe(true);
+  });
+
+  it('另存模板 round-trip：personaFiles 入模板并回填 {{agentName}}', async () => {
+    const before = service.read();
+    await apply.createAgent({
+      agent: { id: 'keeper2', model: 'standard' },
+      agentsMd: '# keeper2 persona',
+      hash: before.hash,
+    });
+    gateway.getAgentDefinition.mockReturnValueOnce({
+      id: 'keeper2',
+      home: undefined,
+      persona: { name: 'keeper2', description: '', systemPrompt: '' },
+      effectPolicy: { mode: 'workspace' },
+    });
+    agentFiles.readPersonaFiles.mockReturnValueOnce([
+      { file: '20-identity.md', content: '- **Name:** keeper2' },
+      { file: '30-user.md', content: '- call: 大哥' },
+    ]);
+    const preset = apply.saveAgentAsTemplate('keeper2', { id: 'rt-role' });
+    // 已渲染的名字回填成插槽，否则新 agent 会继承旧名字
+    expect(preset.template).toBe('# {{agentName}} persona');
+    expect(preset.personaFiles).toHaveLength(2);
+    expect(preset.personaFiles![0]!.content).toBe('- **Name:** {{agentName}}');
+    expect(preset.personaFiles![1]!.content).toBe('- call: 大哥');
+    // 应用渲染：新名字填进去
+    const rendered = apply.renderRole('rt-role', { agentName: 'amparo', addressToUser: '大哥' }, 'zh');
+    expect(rendered.agentsMd).toContain('amparo');
+    expect(rendered.personaFiles[0]!.content).toContain('amparo');
   });
 
   it('渲染：自定义模板优先命中（renderRole）', async () => {

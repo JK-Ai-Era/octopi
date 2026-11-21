@@ -10,11 +10,12 @@ import {
   OctopiClient,
   type AgentRolePresetDto,
   type ConfigAgentsViewDto,
+  type RenderedAgentRoleDto,
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
 import { useT } from '../i18n/react';
-import type { MessageKey } from '../i18n/core';
+import { getLang, type MessageKey } from '../i18n/core';
 
 type EffectMode = 'workspace' | 'project' | 'host' | 'untrusted';
 
@@ -67,6 +68,10 @@ interface WizardState {
   agentName: string;
   addressToUser: string;
   agentsMd: string;
+  /** 类型模板 persona 补充件（创建时物化四件套） */
+  personaFiles: RenderedAgentRoleDto['personaFiles'];
+  /** 类型模板技能套装（创建时物化 SKILL.md + 落 definition.skills） */
+  skills: RenderedAgentRoleDto['skills'];
   effectMode: EffectMode;
   model: string;
   /** 角色模板推荐特质（renderAgentRole 透出，创建时落 traits） */
@@ -78,6 +83,8 @@ const EMPTY_WIZARD: WizardState = {
   agentName: '',
   addressToUser: '',
   agentsMd: '',
+  personaFiles: [],
+  skills: [],
   effectMode: 'workspace',
   model: '',
   traits: [],
@@ -192,13 +199,19 @@ export function AgentSettingsPanel() {
     setBusy(true);
     setError(null);
     try {
-      const rendered = await client.renderAgentRolePreset(wizard.rolePresetId, {
-        agentName: wizard.agentName.trim(),
-        addressToUser: wizard.addressToUser.trim(),
-      });
+      const rendered = await client.renderAgentRolePreset(
+        wizard.rolePresetId,
+        {
+          agentName: wizard.agentName.trim(),
+          addressToUser: wizard.addressToUser.trim(),
+        },
+        getLang(),
+      );
       setWizard((prev) => ({
         ...prev,
         agentsMd: rendered.agentsMd,
+        personaFiles: rendered.personaFiles,
+        skills: rendered.skills,
         effectMode: rendered.recommendedEffectMode,
         model: rendered.recommendedModelLevel ?? '',
         traits: rendered.recommendedTraits ?? [],
@@ -236,9 +249,14 @@ export function AgentSettingsPanel() {
         effectPolicy: { mode: wizard.effectMode },
       };
       if (wizard.traits.length > 0) agent.traits = wizard.traits;
+      if (wizard.skills.length > 0) agent.skills = wizard.skills.map((s) => s.id);
       const result = await client.createConfigAgent({
         agent,
         agentsMd: wizard.agentsMd,
+        personaFiles: wizard.personaFiles,
+        skills: wizard.skills,
+        // 缺省四件套（若模板未提供某成员）与渲染语言保持同一界面语言
+        lang: getLang(),
         hash: view?.hash ?? '',
       });
       setNotice(t('agentSettings.created', { id }));
@@ -378,11 +396,22 @@ export function AgentSettingsPanel() {
                       className={
                         wizard.rolePresetId === preset.id ? 'set-preset-card set-item-active' : 'set-preset-card'
                       }
-                      onClick={() => setWizard((p) => ({ ...p, rolePresetId: preset.id }))}
-                      title={preset.description}
+                      onClick={() =>
+                        // 切换角色 = 上一轮渲染产物全部作废（agentsMd/persona/skills/traits
+                        // 都是派生态，沿用会把旧角色的四件套安到新角色头上）；已输入的名字/称谓保留
+                        setWizard((p) => ({
+                          ...EMPTY_WIZARD,
+                          rolePresetId: preset.id,
+                          agentName: p.agentName,
+                          addressToUser: p.addressToUser,
+                        }))
+                      }
+                      title={preset.descriptions?.[getLang()] ?? preset.description}
                     >
-                      <strong>{preset.label}</strong>
-                      <span className="small muted">{preset.description}</span>
+                      <strong>{preset.labels?.[getLang()] ?? preset.label}</strong>
+                      <span className="small muted">
+                        {preset.descriptions?.[getLang()] ?? preset.description}
+                      </span>
                     </button>
                   ))}
                 </div>

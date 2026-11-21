@@ -131,6 +131,36 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.18 (2026-11-22)
+
+### fix(init): 默认 persona 四件套改由「通用助手」模板生成，修复首聊工具必报错
+
+init 硬编码的旧 AGENTS.md 含「Session Startup：读 persona/10-soul.md…」指令——persona 文件由 `loadPersona` 每 session 自动注入 system prompt，读取本身多余；且默认 `effectPolicy.mode='project'` 的 `pathContainment:'strict'` 围栏根是 workspace，agent home 在围栏外，部署后第一次文件读必被拒。
+
+- `src/init.ts` 删除整份硬编码 `PERSONA_TEMPLATES`：`ensureAgentDirs` 改为 `renderAgentRole('general', …)` 按语言渲染四件套（与向导创建的通用助手同源，单一真相源）。
+- `initOctopi({ lang })`：显式 options > 已有配置 `language` > zh；`generateDefaultConfig` 落顶层 `language` 字段（schema 既有键）。
+
+### feat(engine): 角色模板四件套 + 中英双语渲染
+
+- **四件套**（拍板 2026-11-21）：六个内置角色模板全部展开为 `AGENTS.md`（工作方式）+ `persona/10-soul.md`（声音）+ `20-identity.md`（身份）+ `30-user.md`（用户），身份内容不再全塞 AGENTS.md；coder 的工程思维并入 AGENTS.md。general 为精修首版，其余五个为拆分首版（内容逐个打磨进行中）。
+- **双语**：`template`/`content` 为 zh 基准，新增 `templates`/`contents`（`LocalizedText`）en 覆盖；`renderAgentRole(presetId, slots, lang)` 按语言产出 persona 文件，缺译回落基准（同 label/labels 约定）。
+- **停生成 `persona/40-tools.md`**（不在四件套内）；旧 `TOOLS.md → 40-tools` 迁移保留。
+- 修英文模板所有格/双宾语病句（`you's` 等）；插槽填充一律用 trim 后的值（API 直连不再产出带前后空白的标题）。
+
+### fix(gateway/webui): Web 创建 agent 的类型模板被遮蔽 + 模板载荷全链路透传
+
+- **遮蔽修复**：`createAgent → scaffold → ensureAgentDirs` 先落 init 默认 AGENTS.md，随后「仅在缺失时写」永远跳过——Web 向导选的类型模板整体失效。`AgentFileAdmin.scaffold` 现为创建语义：带 `agentsMd` 即覆写 + `personaFiles` 整体替换四件套 + `skills` 落盘；CLI 向导与 Web 共用新抽出的 `applyRolePresetFiles`（**校验先于一切写盘与删除**，非法载荷整体拒绝、不留半套 persona、不留幽灵 agent）。
+- **载荷透传**：`POST /config/agents` 增 `personaFiles` / `skills` / `lang`；`POST /config/presets/agent-roles/render` 增 `lang`；WebUI 按当前界面语言渲染并回传完整载荷（含 definition `skills` ids）。`save-as-template` 捕获 personaFiles，并把已渲染的 agent 名回填为 `{{agentName}}`（round-trip：新 agent 不再继承旧名字）。
+- WebUI 角色卡片改读双语 `labels/descriptions`；切换角色卡片清空上一轮渲染产物（防旧角色四件套安到新角色头上）。
+
+**breaking note**：① 带 `agentsMd` 的 `createAgent` 从「不覆盖既有 AGENTS.md」改为覆写（创建即显式选模板，与 CLI 向导一致）；② `AgentFilesPort` 增必填 `readPersonaFiles`；③ 应用类型模板只清理四件套成员（10/20/30）——`40-tools.md` 可能是用户 TOOLS.md 迁移数据，不再按名删；④ `renderAgentRole` 缺省语言 en → zh（产品缺省）。
+
+**已知限制**：自定义模板不捕获 skills、`addressToUser` 无法可靠反推（应用后可手改）；persona 四件套（10/20/30）暂无控制台编辑面（控制台只能改 AGENTS.md，其余在 agent home 手改）；存量部署已写坏的 AGENTS.md 不会被 init 重写（`writeIfAbsent`），需删除后重跑 init 补齐。
+
+**验证**：新增 `tests/agent-admin.test.ts`（物化/scaffold/校验先行 11 例）+ init 双语与内容断言 + config-apply 载荷透传/写盘前拒绝/另存 round-trip + config-admin 缺译回落与 trim 填槽；全量 vitest `557 files / 5667 tests` 通过；lint（eslint + typecheck-tests + webui tsc）绿；arch/check-sync 通过。
+
+---
+
 ## v0.121.17 (2026-11-21)
 
 ### docs(constitution): add section C — how to think (resident core stances)

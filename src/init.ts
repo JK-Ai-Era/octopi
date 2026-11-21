@@ -20,7 +20,6 @@
  *           10-soul.md                 ← 人格定义
  *           20-identity.md             ← 身份定义
  *           30-user.md                 ← 用户上下文
- *           40-tools.md                ← 工具说明
  *         skills/                      ← 技能目录
  *
  * 说明：Memory / Cognition / Wisdom / Knowledge 不按文件目录落盘，
@@ -45,8 +44,10 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { renderAgentRole } from '@octopi-agent/engine/config-admin/agent-presets.js';
+import type { ProductLang } from '@octopi-agent/engine/config-admin/i18n.js';
 import {
   DEFAULT_OCTOPI_HOME,
   OCTOPI_HOME_ENV,
@@ -62,89 +63,11 @@ export { DEFAULT_OCTOPI_HOME, OCTOPI_HOME_ENV, getOctopiHome };
 // loadPersona 约定（见 harness/agent/persona.ts）：
 // - 根目录 AGENTS.md 最先加载
 // - persona/*.md 按文件名字母序加载；数字前缀控制顺序
-const PERSONA_TEMPLATES: Record<string, string> = {
-  'persona/10-soul.md': `# Soul - Agent Persona
-
-_这是你的 Agent 人格定义。修改此文件来定制 Agent 的行为风格。_
-
----
-
-## 声音
-
-**专业、友好。** 用清晰简洁的语言回答问题。
-
-**主动思考。** 不只是执行命令，要理解用户意图，提供有价值的建议。
-
-**对结果负责。** 完成任务后主动验证，确保结果正确。
-
-## 核心原则
-
-- 理解用户真实需求，而非字面意思
-- 遇到不确定时，主动确认而非猜测
-- 保持一致性，建立可预测的行为模式
-
----
-
-_Customize this file to shape your agent's personality._
-`,
-
-  'persona/20-identity.md': `# Identity - Who Am I?
-
-- **Name:** Assistant
-- **Creature:** AI Assistant
-- **Vibe:** Professional, helpful, reliable
-- **Emoji:** 🐙
-
----
-
-An AI assistant powered by Octopi framework.
-`,
-
-  'persona/30-user.md': `# User - About Your Human
-
-- **Name:** (your name)
-- **What to call them:** (preferred name)
-- **Timezone:** (your timezone)
-
----
-
-_Fill in your info so the agent knows who it's talking to._
-`,
-
-  'persona/40-tools.md': `# Tools - Tool Reference
-
-_记下常用工具和命令，方便快速查阅。_
-
----
-
-## 常用操作
-
-（在此添加你的常用命令和工具说明）
-
----
-
-_This file is for quick reference. Keep it updated as you discover useful commands._
-`,
-
-  'AGENTS.md': `# AGENTS.md - Operating Instructions
-
-## Session Startup
-
-每次新 session：
-1. 读 persona/10-soul.md — 我是谁
-2. 读 persona/30-user.md — 我在帮谁
-
-## 核心规则
-
-- 不确定时问用户，不要猜
-- 完成任务后主动报告结果
-- 保持回复简洁有用
-
----
-
-_Customize this file to define your agent's operating procedures._
-`,
-};
+//
+// 初始四件套（AGENTS.md + persona/{10-soul,20-identity,30-user}）不在本文件维护正文：
+// 由 renderAgentRole('general', …) 生成——与向导创建的通用助手同源（单一真相源）；
+// 且绝不指示 agent 用工具读 persona 文件（自动注入 system prompt，且 agent home
+// 在 project/workspace 文件围栏外，读了必被拒）。
 
 /**
  * 旧版布局下平铺在 agent home 根目录的 persona 文件，
@@ -159,10 +82,16 @@ const LEGACY_PERSONA_MOVES: Array<{ from: string; to: string }> = [
 
 // ── 默认配置模板 ──
 
-export function generateDefaultConfig(homeDir: string, agentId: string = 'default'): object {
+export function generateDefaultConfig(
+  homeDir: string,
+  agentId: string = 'default',
+  lang: ProductLang = 'zh',
+): object {
   const agentHome = agentHomeDir(homeDir, agentId);
   return {
     $schema: './node_modules/octopi-agent/octopi.schema.json',
+    // 产品语言（persona 四件套产物语言 / 向导与 WebUI 文案语言的缺省）
+    language: lang,
     models: {
       providers: {
         openai: {
@@ -307,15 +236,20 @@ function migrateLegacyPersonaFiles(agentHome: string): string[] {
 /**
  * 初始化单个 Agent 的目录结构
  *
+ * persona 初始四件套（AGENTS.md + 10-soul + 20-identity + 30-user）由
+ * `renderAgentRole('general', …)` 按 `lang` 生成；已存在的文件不覆盖（用户数据优先）。
+ *
  * @param agentId - Agent ID
  * @param homeDir - Octopi 系统根目录
  * @param tenantId - 归属租户（arch/multi-tenancy.md §4）；缺省 DEFAULT_TENANT_ID
+ * @param lang - persona 产物语言（缺省 zh）
  * @returns 创建的目录列表
  */
 export async function ensureAgentDirs(
   agentId: string,
   homeDir: string = getOctopiHome(),
   tenantId?: string,
+  lang: ProductLang = 'zh',
 ): Promise<{ created: string[]; existed: string[]; migrated: string[] }> {
   const created: string[] = [];
   const existed: string[] = [];
@@ -343,8 +277,23 @@ export async function ensureAgentDirs(
   const migrated = migrateLegacyPersonaFiles(agentHome);
   created.push(...migrated);
 
-  // Persona 文件：根目录 AGENTS.md + persona/ 下的补充人格
-  for (const [relativePath, content] of Object.entries(PERSONA_TEMPLATES)) {
+  // Persona 四件套：根目录 AGENTS.md + persona/{10-soul,20-identity,30-user}
+  // （通用助手模板渲染产物；writeIfAbsent——已存在不覆盖）
+  const rendered = renderAgentRole(
+    'general',
+    {
+      agentName: lang === 'zh' ? '助手' : 'Assistant',
+      addressToUser: lang === 'zh' ? '你' : 'you',
+    },
+    lang,
+  );
+  const initialFiles: Array<[string, string]> = [
+    ['AGENTS.md', rendered.agentsMd],
+    ...rendered.personaFiles.map(
+      (f) => [`persona/${f.file}`, f.content] as [string, string],
+    ),
+  ];
+  for (const [relativePath, content] of initialFiles) {
     const filePath = join(agentHome, relativePath);
     if (writeIfAbsent(filePath, content)) {
       created.push(filePath);
@@ -354,6 +303,24 @@ export async function ensureAgentDirs(
   }
 
   return { created, existed, migrated };
+}
+
+/**
+ * 读取已有配置的产品语言（init 重入时保持 persona 产物语言一致）
+ *
+ * @param home - OCTOPI_HOME
+ * @returns 'zh' | 'en'；配置不存在或不可读/值非法时返回 undefined（走缺省）
+ */
+function readConfigLanguage(home: string): ProductLang | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(home, 'octopi.json'), 'utf-8')) as {
+      language?: unknown;
+    };
+    return raw.language === 'zh' || raw.language === 'en' ? raw.language : undefined;
+  } catch {
+    // 配置不存在/不可读/非 JSON：不阻塞初始化，按缺省语言走（随后会生成新配置）
+    return undefined;
+  }
 }
 
 /**
@@ -373,6 +340,8 @@ export async function initOctopi(
     generateConfig?: boolean;
     /** 默认 agent ID（默认 'default'） */
     defaultAgentId?: string;
+    /** persona 产物语言（缺省：已有配置 language，再缺省 zh） */
+    lang?: ProductLang;
   } = {},
 ): Promise<{
   homeDir: string;
@@ -383,6 +352,8 @@ export async function initOctopi(
 }> {
   const home = homeDir ? resolve(homeDir) : getOctopiHome();
   const { generateConfig = true, defaultAgentId = 'default' } = options;
+  // 产物语言：显式 options > 已有配置 language > zh（产品缺省）
+  const lang = options.lang ?? readConfigLanguage(home) ?? 'zh';
 
   const created: string[] = [];
   const existed: string[] = [];
@@ -404,14 +375,14 @@ export async function initOctopi(
   }
 
   // 3. 默认 Agent 目录
-  const agentResult = await ensureAgentDirs(defaultAgentId, home);
+  const agentResult = await ensureAgentDirs(defaultAgentId, home, undefined, lang);
   created.push(...agentResult.created);
   existed.push(...agentResult.existed);
 
   // 4. 配置文件
   const configPath = join(home, 'octopi.json');
   if (generateConfig && !existsSync(configPath)) {
-    const config = generateDefaultConfig(home, defaultAgentId);
+    const config = generateDefaultConfig(home, defaultAgentId, lang);
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
     created.push(configPath);
   } else if (existsSync(configPath)) {

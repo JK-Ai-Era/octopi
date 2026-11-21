@@ -865,7 +865,23 @@ export interface AgentRolePresetDto {
   id: string;
   label: string;
   description: string;
+  /** 展示名双语覆盖（缺译回落 label；同 i18n.LocalizedText） */
+  labels?: Partial<Record<'zh' | 'en', string>>;
+  /** 说明双语覆盖（缺译回落 description） */
+  descriptions?: Partial<Record<'zh' | 'en', string>>;
   template: string;
+  /** persona/ 补充件（四件套成员；创建时物化） */
+  personaFiles?: Array<{ file: string; content: string }>;
+  recommendedEffectMode: 'workspace' | 'project' | 'host' | 'untrusted';
+  recommendedModelLevel?: string;
+  recommendedTraits?: string[];
+}
+
+/** 角色模板渲染结果（服务端 renderRole 输出） */
+export interface RenderedAgentRoleDto {
+  agentsMd: string;
+  personaFiles: Array<{ file: string; content: string }>;
+  skills: Array<{ id: string; name: string; description: string; content: string; tools?: string[] }>;
   recommendedEffectMode: 'workspace' | 'project' | 'host' | 'untrusted';
   recommendedModelLevel?: string;
   recommendedTraits?: string[];
@@ -2582,10 +2598,13 @@ export class OctopiClient {
     return res.data;
   }
 
-  /** 新增 agent（agents[] 条目 + 可选渲染后 AGENTS.md） */
+  /** 新增 agent（agents[] 条目 + 可选类型模板渲染载荷：AGENTS.md / persona 四件套 / skills / 产物语言） */
   async createConfigAgent(req: {
     agent: Record<string, unknown>;
     agentsMd?: string;
+    personaFiles?: Array<{ file: string; content: string }>;
+    skills?: Array<{ id: string; name: string; description: string; content: string; tools?: string[] }>;
+    lang?: 'zh' | 'en';
     hash: string;
   }): Promise<ConfigApplyResultDto> {
     const res = await this.postJson<{ ok: boolean; data: ConfigApplyResultDto }>('/config/agents', req);
@@ -2685,25 +2704,16 @@ export class OctopiClient {
     return res.data;
   }
 
-  /** 角色模板渲染（服务端单一渲染实现） */
+  /** 角色模板渲染（服务端单一渲染实现；lang 决定 persona 产物语言，缺省服务端 zh） */
   async renderAgentRolePreset(
     presetId: string,
     slots: { agentName: string; addressToUser: string },
-  ): Promise<{
-    agentsMd: string;
-    recommendedEffectMode: AgentRolePresetDto['recommendedEffectMode'];
-    recommendedModelLevel?: string;
-    recommendedTraits?: string[];
-  }> {
-    const res = await this.postJson<{
-      ok: boolean;
-      data: {
-        agentsMd: string;
-        recommendedEffectMode: AgentRolePresetDto['recommendedEffectMode'];
-        recommendedModelLevel?: string;
-        recommendedTraits?: string[];
-      };
-    }>('/config/presets/agent-roles/render', { presetId, ...slots });
+    lang?: 'zh' | 'en',
+  ): Promise<RenderedAgentRoleDto> {
+    const res = await this.postJson<{ ok: boolean; data: RenderedAgentRoleDto }>(
+      '/config/presets/agent-roles/render',
+      { presetId, ...slots, lang },
+    );
     return res.data;
   }
 

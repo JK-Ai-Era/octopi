@@ -77,6 +77,60 @@ function isLocalOrigin(origin: string): boolean {
  * （单一实现点：拒路径穿越 `.`/`..`、原型污染键）
  */
 
+/**
+ * 解析 create agent 请求的类型模板 persona 补充件
+ *
+ * @param value - 请求体 `personaFiles`
+ * @returns 补充件数组；未提供返回 undefined（不触碰脚手架四件套）
+ * @throws 形态非法时抛错（fail-loud，不静默丢弃）
+ */
+function parseRolePersonaFiles(
+  value: unknown,
+): Array<{ file: string; content: string }> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new Error('personaFiles must be an array');
+  return value.map((item) => {
+    const o = item as Record<string, unknown>;
+    if (typeof o?.file !== 'string' || typeof o?.content !== 'string') {
+      throw new Error('invalid personaFiles entry: {file, content} string fields required');
+    }
+    return { file: o.file, content: o.content };
+  });
+}
+
+/**
+ * 解析 create agent 请求的类型模板技能套装
+ *
+ * @param value - 请求体 `skills`
+ * @returns 技能数组；未提供返回 undefined
+ * @throws 形态非法时抛错（fail-loud，不静默丢弃）
+ */
+function parseRoleSkills(
+  value: unknown,
+): Array<{ id: string; name: string; description: string; content: string; tools?: string[] }> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new Error('skills must be an array');
+  return value.map((item) => {
+    const o = item as Record<string, unknown>;
+    if (
+      typeof o?.id !== 'string' ||
+      typeof o?.name !== 'string' ||
+      typeof o?.description !== 'string' ||
+      typeof o?.content !== 'string'
+    ) {
+      throw new Error('invalid skills entry: {id, name, description, content} string fields required');
+    }
+    let tools: string[] | undefined;
+    if (Array.isArray(o.tools)) {
+      if ((o.tools as unknown[]).some((t) => typeof t !== 'string')) {
+        throw new Error('invalid skills entry: tools must be an array of strings');
+      }
+      tools = o.tools as string[];
+    }
+    return { id: o.id, name: o.name, description: o.description, content: o.content, tools };
+  });
+}
+
 export class WebApiRouter {
   /**
    * 自鉴权面（相对 basePath）：Web 向导 §7 的 setup-token 闸自己把凭证关，
@@ -1921,10 +1975,14 @@ export class WebApiRouter {
 
       if (relativePath === '/config/presets/agent-roles/render' && method === 'POST') {
         const body = await this.readBody(req);
-        const rendered = apply.renderRole(String(body?.presetId ?? ''), {
-          agentName: String(body?.agentName ?? ''),
-          addressToUser: String(body?.addressToUser ?? ''),
-        });
+        const rendered = apply.renderRole(
+          String(body?.presetId ?? ''),
+          {
+            agentName: String(body?.agentName ?? ''),
+            addressToUser: String(body?.addressToUser ?? ''),
+          },
+          body?.lang === 'en' || body?.lang === 'zh' ? body.lang : undefined,
+        );
         return this.json(res, 200, { ok: true, data: rendered });
       }
 
@@ -1986,6 +2044,9 @@ export class WebApiRouter {
         const result = await apply.createAgent({
           agent: body.agent as Record<string, unknown>,
           agentsMd: typeof body.agentsMd === 'string' ? body.agentsMd : undefined,
+          personaFiles: parseRolePersonaFiles(body?.personaFiles),
+          skills: parseRoleSkills(body?.skills),
+          lang: body?.lang === 'en' || body?.lang === 'zh' ? body.lang : undefined,
           hash: typeof body.hash === 'string' ? body.hash : '',
         });
         return this.json(res, 200, { ok: true, data: result });

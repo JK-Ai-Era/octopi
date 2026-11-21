@@ -51,17 +51,26 @@ describe('init', () => {
       // Agent workspace 目录（§4 规范布局：workspace/<tenantId>/<agentId>/）
       expect(existsSync(join(tempDir, 'workspace/default/default'))).toBe(true);
 
-      // Persona：根目录 AGENTS.md + persona/ 下的补充人格
+      // Persona 四件套：根目录 AGENTS.md + persona/{10-soul,20-identity,30-user}
       expect(existsSync(join(home, 'AGENTS.md'))).toBe(true);
       expect(existsSync(join(home, 'persona/10-soul.md'))).toBe(true);
       expect(existsSync(join(home, 'persona/20-identity.md'))).toBe(true);
       expect(existsSync(join(home, 'persona/30-user.md'))).toBe(true);
-      expect(existsSync(join(home, 'persona/40-tools.md'))).toBe(true);
+      // 40-tools 不在四件套内，不再生成（旧文件迁移仍保留）
+      expect(existsSync(join(home, 'persona/40-tools.md'))).toBe(false);
       // 旧版平铺文件不再生成
       expect(existsSync(join(home, 'SOUL.md'))).toBe(false);
       expect(existsSync(join(home, 'IDENTITY.md'))).toBe(false);
       expect(existsSync(join(home, 'USER.md'))).toBe(false);
       expect(existsSync(join(home, 'TOOLS.md'))).toBe(false);
+
+      // 内容 = 通用助手模板（复用 renderAgentRole('general')）：
+      // 无「Session Startup 读文件」指令（persona 自动加载；agent home 在围栏外）
+      const agentsMd = readFileSync(join(home, 'AGENTS.md'), 'utf-8');
+      expect(agentsMd).toContain('工作方式');
+      expect(agentsMd).not.toContain('Session Startup');
+      expect(agentsMd).not.toContain('读 persona');
+      expect(readFileSync(join(home, 'persona/20-identity.md'), 'utf-8')).toContain('助手');
 
       // 配置文件
       expect(existsSync(join(tempDir, 'octopi.json'))).toBe(true);
@@ -139,6 +148,32 @@ describe('init', () => {
       expect(config.models.providers).toBeDefined();
       expect(config.session.dmScope).toBe('per-peer');
       expect(config.subsystems.auditDir).toContain(`${sep}audit`);
+      // 产品语言随 persona 产物语言落盘（向导/WebUI 文案同源）
+      expect(config.language).toBe('zh');
+    });
+
+    it('lang=en：persona 四件套与配置 language 产出英文', async () => {
+      await initOctopi(tempDir, { lang: 'en' });
+
+      const home = join(tempDir, 'agents/default');
+      const agentsMd = readFileSync(join(home, 'AGENTS.md'), 'utf-8');
+      expect(agentsMd).toContain('Operating Instructions');
+      expect(agentsMd).not.toContain('工作方式');
+      expect(readFileSync(join(home, 'persona/30-user.md'), 'utf-8')).toContain('you');
+
+      const config = JSON.parse(readFileSync(join(tempDir, 'octopi.json'), 'utf-8'));
+      expect(config.language).toBe('en');
+    });
+
+    it('init 重入：已有配置 language=en 时缺省四件套仍按 en 补齐', async () => {
+      await initOctopi(tempDir, { lang: 'en' });
+      // 模拟用户删掉 persona 后重跑 init（不带显式 lang）
+      rmSync(join(tempDir, 'agents/default/persona/10-soul.md'));
+      await initOctopi(tempDir);
+
+      const soul = readFileSync(join(tempDir, 'agents/default/persona/10-soul.md'), 'utf-8');
+      expect(soul).toContain('Agent Persona');
+      expect(soul).not.toContain('人格定义');
     });
 
     it('should support custom agent ID', async () => {

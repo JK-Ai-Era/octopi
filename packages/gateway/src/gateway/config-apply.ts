@@ -23,6 +23,7 @@ import {
   type AgentRolePreset,
   type RenderedAgentRole,
 } from '@octopi-agent/engine/config-admin/agent-presets.js';
+import type { ProductLang } from '@octopi-agent/engine/config-admin/i18n.js';
 import {
   computeConfigHash,
   deleteJsonPath,
@@ -31,7 +32,7 @@ import {
   setJsonPath,
 } from '@octopi-agent/engine/config-admin/patch.js';
 import { expandEnvPlaceholders, expandEnvValues } from '@octopi-agent/engine/config-admin/env.js';
-import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
+import { assertSafeConfigName, assertSafePersonaFileName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { expandHomePath } from '@octopi-agent/engine/paths.js';
 import { redactProvider, resolveEchoPlaceholders } from '@octopi-agent/engine/config-admin/redact.js';
 import {
@@ -53,14 +54,45 @@ export interface ConfigApplyResult {
   warnings?: string[];
 }
 
+/** 类型模板 persona 补充件（文件名 + 正文） */
+export interface RolePersonaFileDto {
+  file: string;
+  content: string;
+}
+
+/** 类型模板技能套装条目（物化为 skills/<id>/SKILL.md） */
+export interface RoleSkillDto {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  tools?: string[];
+}
+
 /** agent 文件态端口（daemon 注入 AgentFileAdmin；gateway 不做文件路径语义） */
 export interface AgentFilesPort {
   /** agent 文件态标准路径（与 octopi init 同源：home / workspace / skills） */
   pathsOf(agentId: string): { home: string; workspace: string; skillDirectory: string };
-  /** 建文件态（幂等）；agentsMd 仅在 AGENTS.md 不存在时写（不覆盖既有 persona） */
-  scaffold(agentId: string, opts: { agentsMd?: string; workspace?: string }): Promise<void>;
+  /**
+   * 建文件态：缺省四件套幂等补齐（已存在不覆盖）；**提供 agentsMd 即创建语义**——
+   * AGENTS.md 覆写 + personaFiles 整体替换四件套（undefined 不触碰）+ skills 落盘
+   * （与 CLI 新建向导同一实现）。载荷非法在写盘前整体拒绝，不留半套 persona。
+   * lang = 缺省四件套（general 渲染）产物语言（缺省取配置 language）。
+   */
+  scaffold(
+    agentId: string,
+    opts: {
+      agentsMd?: string;
+      personaFiles?: RolePersonaFileDto[];
+      skills?: RoleSkillDto[];
+      workspace?: string;
+      lang?: ProductLang;
+    },
+  ): Promise<void>;
   /** 读 AGENTS.md（home 指定时按 agent 配置的 home 解析）；不存在返回 null */
   readPersona(agentId: string, home?: string): string | null;
+  /** 读 persona/ 目录补充件（另存为模板 round-trip）；目录不存在返回空数组 */
+  readPersonaFiles(agentId: string, home?: string): RolePersonaFileDto[];
   /** 写 AGENTS.md（home 指定时按 agent 配置的 home 解析） */
   writePersona(agentId: string, content: string, home?: string): void;
 }
@@ -127,6 +159,12 @@ export interface CreateAgentRequest {
   agent: Record<string, unknown>;
   /** 初始 AGENTS.md 全文（角色模板渲染结果；缺省用脚手架默认模板） */
   agentsMd?: string;
+  /** 类型模板 persona 补充件（提供则整体替换四件套） */
+  personaFiles?: RolePersonaFileDto[];
+  /** 类型模板技能套装（提供则物化 SKILL.md） */
+  skills?: RoleSkillDto[];
+  /** 缺省四件套产物语言（缺省取配置 language；只影响未随载荷提供的文件） */
+  lang?: ProductLang;
   /** 乐观锁 hash */
   hash: string;
 }
@@ -640,6 +678,14 @@ export class ConfigApplyService {
     // §4.3.1：安全字段不进热应用（预构造阶段拒绝，盘与文件态都不动）
     this.assertHotApplyAllowed(entry);
 
+    // 类型模板载荷预校验（纯校验；失败即中止，盘与文件态都不动——
+    // 否则写盘后再 scaffold 失败会留下「配置里存在、home 无 persona」的幽灵 agent）
+    if (req.agentsMd !== undefined && !req.agentsMd.trim()) {
+      throw new Error('agentsMd must be a non-empty string');
+    }
+    for (const f of req.personaFiles ?? []) assertSafePersonaFileName(f.file);
+    for (const s of req.skills ?? []) assertSafeConfigName(s.id);
+
     // 预构造（失败即中止，盘与文件态都不动）
     const previewRaw = { ...snapshot.raw, agents: [...rawAgents, entry] };
     const def = this.deps.agentDefFactory(entry, previewRaw);
@@ -654,10 +700,15 @@ export class ConfigApplyService {
     // S1：署名紧跟写盘（attestation 描述盘上文件，非内存注册表；热应用失败不撤销署名）
     const warnings = this.reattestAfterSecurityWrite(written, ['agents'], agentId);
 
-    // 文件态（写盘成功后；agentsMd 仅在 AGENTS.md 缺失时写，不覆盖既有 persona）
+    // 文件态（写盘成功后）。带模板创建 = 创建语义：AGENTS.md 覆写 + 四件套整体
+    // 替换 + skills 落盘（与 CLI 向导同实现）；缺省四件套语言取配置 language
     await this.deps.agentFiles.scaffold(agentId, {
       agentsMd: req.agentsMd,
+      personaFiles: req.personaFiles,
+      skills: req.skills,
       workspace: typeof entry.workspace === 'string' ? expandHomePath(entry.workspace) : undefined,
+      // 产物语言：请求显式 lang > 配置 language > zh（单请求内自洽，防混语 agent）
+      lang: req.lang ?? (snapshot.raw.language === 'en' ? 'en' : 'zh'),
     });
 
     // 热应用：注册 + 立即重建（触发路径零窗口）
@@ -1022,11 +1073,23 @@ export class ConfigApplyService {
       throw new Error(`AGENTS.md 不存在：${agentId}，无内容可存为模板`);
     }
     const def = this.deps.gateway.getAgentDefinition(agentId);
+    // 回填插槽：盘上 persona 是**已渲染**产物，直接入库会让新 agent 继承旧名字。
+    // agentName 用注册表显示名反向替换；addressToUser 无法可靠反推（称谓散落在
+    // 30-user 正文）——已知限制：自定义模板保留源称谓，应用后可手改。
+    const sourceName = (def?.persona as { name?: string } | undefined)?.name ?? '';
+    const deSlot = (text: string): string =>
+      sourceName ? text.replaceAll(sourceName, '{{agentName}}') : text;
     const preset: AgentRolePreset = {
       id: opts.id,
       label: opts.label?.trim() || opts.id,
       description: opts.description?.trim() || `从 agent「${agentId}」另存的角色模板`,
-      template: content,
+      template: deSlot(content),
+      // round-trip：persona 补充件一并入模板（否则应用自定义模板会丢四件套身份）
+      personaFiles: this.deps.agentFiles
+        .readPersonaFiles(agentId, home)
+        .map((f) => ({ ...f, content: deSlot(f.content) })),
+      // 已知限制：skills 不入自定义模板（需反解 SKILL.md frontmatter；源 agent 的
+      // skills 随其 definition 走，应用模板的新 agent 按自身 definition 取 skills）
       recommendedEffectMode: (def?.effectPolicy?.mode as AgentRolePreset['recommendedEffectMode']) ?? 'workspace',
     };
     if (!this.deps.roleTemplates) {
@@ -1048,10 +1111,11 @@ export class ConfigApplyService {
   renderRole(
     presetId: string,
     slots: { agentName: string; addressToUser: string },
+    lang?: ProductLang,
   ): RenderedAgentRole {
     const custom = this.deps.roleTemplates?.list().find((p) => p.id === presetId);
-    if (custom) return renderRolePreset(custom, slots);
-    return renderAgentRole(presetId, slots);
+    if (custom) return renderRolePreset(custom, slots, lang);
+    return renderAgentRole(presetId, slots, lang);
   }
 
   /**

@@ -8,6 +8,7 @@ import {
   getProviderPreset,
   getAgentRolePreset,
   renderAgentRole,
+  renderRolePreset,
   expandProviderPreset,
   redactSecret,
   redactProvider,
@@ -200,14 +201,26 @@ describe('findProviderReferences', () => {
 });
 
 describe('agent role presets', () => {
-  it('内置角色清单完整（6 角色，模板含插槽与安全组推荐）', () => {
+  it('内置角色清单完整（6 角色，四件套 + 插槽 + 双语 + 安全组推荐）', () => {
     const ids = BUILTIN_AGENT_ROLE_PRESETS.map((p) => p.id);
     for (const required of ['general', 'researcher', 'coder', 'reviewer', 'writer', 'analyst']) {
       expect(ids).toContain(required);
     }
     for (const preset of BUILTIN_AGENT_ROLE_PRESETS) {
+      // 四件套：AGENTS.md + 10-soul + 20-identity + 30-user（拍板 2026-11-21）
       expect(preset.template).toContain('{{agentName}}');
-      expect(preset.template).toContain('{{addressToUser}}');
+      const files = (preset.personaFiles ?? []).map((f) => f.file);
+      expect(files).toEqual(expect.arrayContaining(['10-soul.md', '20-identity.md', '30-user.md']));
+      // 插槽散布在四件套里（AGENTS.md 不再包揽身份内容）
+      const whole = preset.template + JSON.stringify(preset.personaFiles ?? []);
+      expect(whole).toContain('{{agentName}}');
+      expect(whole).toContain('{{addressToUser}}');
+      // 双语：zh 基准 + en 覆盖
+      expect(preset.templates?.en).toBeTruthy();
+      for (const f of preset.personaFiles ?? []) {
+        expect(f.content).toBeTruthy();
+        expect(f.contents?.en).toBeTruthy();
+      }
       expect(['workspace', 'project', 'host', 'untrusted']).toContain(preset.recommendedEffectMode);
     }
     // 安全组推荐按角色风险分层（coder 动代码 → project；其余只读/文字 → workspace）
@@ -223,6 +236,41 @@ describe('agent role presets', () => {
     expect(rendered.recommendedEffectMode).toBe('project');
     expect(rendered.recommendedModelLevel).toBe('pro');
     expect(rendered.recommendedTraits).toContain('engineering');
+    // persona 补充件同样填槽
+    for (const f of rendered.personaFiles) {
+      expect(f.content).not.toContain('{{');
+    }
+  });
+
+  it('renderAgentRole 双语：缺省 zh 基准，lang=en 产出英文四件套', () => {
+    const zh = renderAgentRole('general', { agentName: '助手', addressToUser: '你' });
+    expect(zh.agentsMd).toContain('工作方式');
+    expect(zh.personaFiles.find((f) => f.file === '10-soul.md')!.content).toContain('人格定义');
+
+    const en = renderAgentRole('general', { agentName: 'Assistant', addressToUser: 'you' }, 'en');
+    expect(en.agentsMd).toContain('Operating Instructions');
+    expect(en.agentsMd).not.toContain('工作方式');
+    const soul = en.personaFiles.find((f) => f.file === '10-soul.md')!;
+    expect(soul.content).toContain('Agent Persona');
+    const user = en.personaFiles.find((f) => f.file === '30-user.md')!;
+    expect(user.content).toContain('you');
+    for (const f of en.personaFiles) expect(f.content).not.toContain('{{');
+  });
+
+  it('自定义模板缺 en 覆盖时回落 zh 基准；插槽一律填 trim 后的值', () => {
+    const custom = {
+      id: 'custom',
+      label: '自定义',
+      description: '',
+      template: '# AGENTS.md — {{agentName}}\n\n中文基准 {{addressToUser}}',
+      recommendedEffectMode: 'workspace' as const,
+    };
+    const en = renderRolePreset(custom, { agentName: '  bot  ', addressToUser: ' 大哥 ' }, 'en');
+    // 缺译回落：无 templates.en → 用 zh 基准（不因 lang=en 抛错或产出空文）
+    expect(en.agentsMd).toContain('中文基准');
+    // trim 后填槽：标题无前后空白
+    expect(en.agentsMd).toContain('# AGENTS.md — bot');
+    expect(en.agentsMd).not.toContain('  bot  ');
   });
 
   it('未知角色 / 空插槽 fail-loud', () => {

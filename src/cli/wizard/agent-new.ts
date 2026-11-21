@@ -9,8 +9,8 @@
  * @module
  */
 
-import { mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   BUILTIN_AGENT_ROLE_PRESETS,
   getAgentRolePreset,
@@ -19,6 +19,7 @@ import {
 import type { ProductLang } from '@octopi-agent/engine/config-admin/i18n.js';
 import type { AgentRecord } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { agentHomeDir } from '@octopi-agent/engine/paths.js';
+import { applyRolePresetFiles } from '../../agent-admin.js';
 import { askText, choose, closePrompts, confirm, stdinExhausted } from './prompt.js';
 
 /** 向导结果 */
@@ -35,13 +36,6 @@ export interface CreateAgentOptions {
   octopiHome: string;
   configPath: string;
   lang?: ProductLang;
-}
-
-function renderSkillMarkdown(skill: { name: string; description: string; content: string; tools?: string[] }): string {
-  // n4：frontmatter 值用双引号包裹（description 常含 `: `，裸 YAML 非法）
-  const esc = (s: string): string => s.replace(/"/g, '\\"');
-  const toolsLine = skill.tools?.length ? `tools: ${skill.tools.join(', ')}\n` : '';
-  return `---\nname: "${esc(skill.name)}"\ndescription: "${esc(skill.description)}"\n${toolsLine}---\n${skill.content}`;
 }
 
 /**
@@ -96,7 +90,7 @@ export async function runCreateAgentWizard(opts: CreateAgentOptions): Promise<Cr
 
     const preset = getAgentRolePreset(presetId);
     if (!preset) throw new Error(`unknown agent role preset: ${presetId}`);
-    const rendered = renderAgentRole(presetId, { agentName, addressToUser });
+    const rendered = renderAgentRole(presetId, { agentName, addressToUser }, lang);
 
     // ── 创建（registry 权威面 + 白名单 definition）──
     let record: AgentRecord;
@@ -127,26 +121,13 @@ export async function runCreateAgentWizard(opts: CreateAgentOptions): Promise<Cr
       await bridge.materialize(record);
 
       const home = agentHomeDir(opts.octopiHome, record.agentId);
-      // M9：清掉通用 persona 脚手架四件（10-soul/20-identity/30-user/40-tools）——
-      // 类型包是该 agent 的 persona 全量，通用模板（Name: Assistant）会与用户取名打架
-      for (const tpl of ['10-soul.md', '20-identity.md', '30-user.md', '40-tools.md']) {
-        try {
-          unlinkSync(join(home, 'persona', tpl));
-        } catch {
-          /* 不存在即目标态 */
-        }
-      }
-      writeFileSync(join(home, 'AGENTS.md'), rendered.agentsMd, 'utf8');
-      for (const pf of rendered.personaFiles) {
-        const p = join(home, 'persona', pf.file);
-        mkdirSync(dirname(p), { recursive: true });
-        writeFileSync(p, pf.content, 'utf8');
-      }
-      for (const skill of rendered.skills) {
-        const p = join(home, 'skills', skill.id, 'SKILL.md');
-        mkdirSync(dirname(p), { recursive: true });
-        writeFileSync(p, renderSkillMarkdown(skill), 'utf8');
-      }
+      // 类型模板物化（与 Web scaffold 同一实现，单一真相源）：
+      // AGENTS.md 覆写 + persona 四件套整体替换（清掉通用脚手架遗留）+ skills 落盘
+      applyRolePresetFiles(home, {
+        agentsMd: rendered.agentsMd,
+        personaFiles: rendered.personaFiles,
+        skills: rendered.skills,
+      });
     } catch (err) {
       // 补偿：注册记录 + 家当目录一并回收（尽力而为），错误原样上抛
       try {
