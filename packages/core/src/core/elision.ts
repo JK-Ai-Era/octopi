@@ -129,7 +129,7 @@ export const AGED_POINTER_PREFIX = '[aged tool result · pointer]';
  * 降级标记的系统提示全局说明（工具注记区；与词汇表同源，文案改动随词汇走）
  *
  * 位置契约：拼在 tool-call 工具说明的固定块（TOOL_PURPOSE_SYSTEM_NOTE 之后）——
- * 模型生成 tool call 时注意力最贴身的位置。宪法层（default-agents.md §E）有
+ * 模型生成 tool call 时注意力最贴身的位置。宪法层（default-agents.md §F）有
  * 同主题的权威禁令；此处是就近提醒，两者内容须同向。
  */
 export const ELISION_MARKER_SYSTEM_NOTE = `### Degradation markers are metadata, never arguments

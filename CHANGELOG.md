@@ -131,6 +131,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.17 (2026-11-21)
+
+### docs(constitution): add section C — how to think (resident core stances)
+
+- **新增常驻章「C. How to think」**：5 条基础思维范式（Think to the root / Done means the final recipient is right / Evidence, not feeling / Surface what you find / Fail loud, degrade explicitly），自工程思维手册的通用内核裁剪定稿（因果链/第一性原理/结构根合并为一条，触发条件均落在可命中的实践时刻）；**全量常驻 system preamble，不走 Wisdom 层按需召回**——与 Wisdom（按需召回的场景范式）的机制分工在 C 章开篇点明。
+- **章节顺延**：原 C(Tasks)/D(Cross-cutting)/E(Tools)/F(Web)/G(Workspace) → D/E/F/G/H，3 处文内交叉引用同步；`elision.ts` 注释与 `constitution-tool-names.test.ts` 标签的旧 §E 指针一并修正（§E 现为 Cross-cutting，降级标记禁令在 §F）。
+- **代价记录**：宪法常驻体积 21.6KB→26.1KB（+4.5KB，约 +21%），每轮 system prompt 固定成本相应增加——「常驻思维手册」的既定代价。
+- **验证**：constitution-tool-names 6/6；全量 vitest（5650 tests）通过；arch/check-sync 全绿；独立评审无阻断项，属实项（2 处措辞对齐源稿、2 条伪工程增量改写）已修入。
+
+---
+
 ## v0.121.16 (2026-11-21)
 
 ### feat(cli): 新增 `--version` / `-v` / `octopi version`

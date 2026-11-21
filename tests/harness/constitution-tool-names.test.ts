@@ -1,7 +1,7 @@
 /**
  * 宪法工具名一致性（default-agents.md）
  *
- * 背景：模型会按宪法里的写法照抄工具名。历史上 §E 用了 `the ask tool`、
+ * 背景：模型会按宪法里的写法照抄工具名。历史上（当时工具章为 §E）用了 `the ask tool`、
  * `http`、`file_*` 等非工具名写法，而 `file_edit` 一次都没被点名，模型于是
  * 调出并不存在的 `edit`（实测 33 次）。这里钉住「宪法只出现真实工具名」。
  */
@@ -19,7 +19,7 @@ const CONSTITUTION = join(
 
 const text = readFileSync(CONSTITUTION, 'utf-8');
 
-describe('宪法 §E 工具命名', () => {
+describe('宪法 §F 工具命名', () => {
   it('点名 file_edit，且明确内置集没有 edit 工具', () => {
     expect(text).toContain('`file_edit`');
     expect(text).toContain('the built-in set has no `edit`, `read`, or `write` tool');
