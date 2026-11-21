@@ -131,6 +131,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.20 (2026-11-22)
+
+### feat(webui): persona 编辑器支持「新增自定义文件」
+
+persona 文件选择器下新增输入行：输入文件名（**可不带后缀**，统一补 `.md`；已带后缀不重复补，含大写 `.MD` 归一）→ 经既有 `PUT /config/agents/:id/persona/files/:file` 首建到该 agent 的 `persona/` 目录 → 自动刷新清单并切进新文件待编辑。重名不报错、直接切过去；回车可提交。
+
+- 归一化与校验走 `normalizePersonaFileName`（`webui/components/persona-file.ts`），合法性直接复用引擎 `assertSafePersonaFileName`（与服务端同一守卫，单一真相源）；空输入/路径成分/`..` 穿越形态拒绝并给输入错误提示。
+- i18n zh/en 新增 `newPersonaFile` / `newPersonaFilePlaceholder` / `createPersonaFile` / `newPersonaFileInvalid` / `personaFileCreated` 五键。
+
+**验证**：新增 `persona-file.test.ts`（补后缀/去重复后缀/非法输入 3 例）；全量 vitest `558 files / 5672 tests` 通过；lint（eslint + typecheck-tests + webui tsc）绿。
+
+---
+
 ## v0.121.19 (2026-11-22)
 
 ### feat(webui): persona 四件套控制台编辑面（persona/ 补充件可在线读写）

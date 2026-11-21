@@ -16,6 +16,7 @@ import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
 import { useT } from '../i18n/react';
 import { getLang, type MessageKey } from '../i18n/core';
+import { normalizePersonaFileName } from './persona-file';
 
 type EffectMode = 'workspace' | 'project' | 'host' | 'untrusted';
 
@@ -129,6 +130,8 @@ export function AgentSettingsPanel() {
   const [personaFiles, setPersonaFiles] = useState<Array<{ file: string; content: string; hash: string }>>(
     [],
   );
+  /** 新增自定义文件的输入（不含后缀；提交时统一补 .md） */
+  const [newFileName, setNewFileName] = useState('');
   /** 载入快照（#6/#7 dirty 跟踪：未改动的字段不发，防全局固化/对象降级） */
   const [initial, setInitial] = useState<{ effectMode: string; model: string }>({ effectMode: '', model: '' });
   const [busy, setBusy] = useState(false);
@@ -328,6 +331,41 @@ export function AgentSettingsPanel() {
       setPersonaHash(data.hash);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /**
+   * 新增自定义 persona 文件：输入名统一补 `.md` 后经既有单文件 PUT 首建
+   * （落该 agent 的 persona/ 目录），随后刷新清单并切进新文件。
+   */
+  const createPersonaFile = async () => {
+    if (!selected || selected === '__new__') return;
+    const file = normalizePersonaFileName(newFileName);
+    if (!file) {
+      setError(t('agentSettings.newPersonaFileInvalid'));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      if (personaFiles.some((f) => f.file === file)) {
+        // 重名：不报错，直接切过去编辑
+        setNewFileName('');
+        await switchPersonaFile(file);
+        return;
+      }
+      // 首建：不存在 → content=null、hash=空内容 hash；空正文进编辑器待输入
+      const current = await client.getAgentPersonaFile(selected, file);
+      await client.updateAgentPersonaFile(selected, file, '', current.hash);
+      setPersonaFiles(await client.getAgentPersonaFiles(selected));
+      setNewFileName('');
+      await switchPersonaFile(file);
+      setNotice(t('agentSettings.personaFileCreated', { file }));
+    } catch (err) {
+      await handleWriteError(err);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -651,6 +689,28 @@ export function AgentSettingsPanel() {
                   ))}
                 </select>
               </label>
+              <div className="set-field">
+                <span>{t('agentSettings.newPersonaFile')}</span>
+                <div className="set-actions">
+                  <input
+                    className="set-input mono"
+                    value={newFileName}
+                    onChange={(e) => setNewFileName(e.target.value)}
+                    placeholder={t('agentSettings.newPersonaFilePlaceholder')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void createPersonaFile();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => void createPersonaFile()}
+                    disabled={busy}
+                  >
+                    {t('agentSettings.createPersonaFile')}
+                  </button>
+                </div>
+              </div>
               <label className="set-field">
                 <span>{t('agentSettings.personaLabel')}</span>
                 <textarea
