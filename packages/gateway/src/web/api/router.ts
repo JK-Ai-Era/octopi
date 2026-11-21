@@ -2097,6 +2097,41 @@ export class WebApiRouter {
         }
       }
 
+      // persona/ 补充件（四件套等）：清单 + 单文件读写（控制台多文件编辑）
+      const personaFilesMatch = relativePath.match(/^\/config\/agents\/([^/]+)\/persona\/files$/);
+      if (personaFilesMatch) {
+        const agentId = personaFilesMatch[1]!;
+        assertSafeConfigName(agentId);
+        if (method === 'GET') {
+          return this.json(res, 200, { ok: true, data: apply.listPersonaFiles(agentId) });
+        }
+      }
+
+      const personaFileMatch = relativePath.match(
+        /^\/config\/agents\/([^/]+)\/persona\/files\/([^/]+)$/,
+      );
+      if (personaFileMatch) {
+        const agentId = personaFileMatch[1]!;
+        const file = personaFileMatch[2]!;
+        assertSafeConfigName(agentId);
+        if (method === 'GET') {
+          return this.json(res, 200, { ok: true, data: apply.getPersonaFile(agentId, file) });
+        }
+        if (method === 'PUT') {
+          const body = await this.readBody(req);
+          if (typeof body?.content !== 'string') {
+            return this.json(res, 400, { ok: false, error: 'content (string) is required' });
+          }
+          const result = await apply.updatePersonaFile(
+            agentId,
+            file,
+            body.content,
+            typeof body.hash === 'string' ? body.hash : '',
+          );
+          return this.json(res, 200, { ok: true, data: result });
+        }
+      }
+
       return this.json(res, 404, { ok: false, error: `unknown config endpoint: ${relativePath}` });
     } catch (err) {
       if (err instanceof ConfigConflictError) {

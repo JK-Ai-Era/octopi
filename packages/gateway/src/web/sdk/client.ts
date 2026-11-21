@@ -2649,6 +2649,42 @@ export class OctopiClient {
     return res.data;
   }
 
+  /** 列出 persona/ 补充件（file + content + 内容 hash） */
+  async getAgentPersonaFiles(
+    agentId: string,
+  ): Promise<Array<{ file: string; content: string; hash: string }>> {
+    const res = await this.getJson<{
+      ok: boolean;
+      data: Array<{ file: string; content: string; hash: string }>;
+    }>(`/config/agents/${encodeURIComponent(agentId)}/persona/files`);
+    return res.data;
+  }
+
+  /** 读单个 persona/ 补充件（不存在 content=null，hash=空内容 hash） */
+  async getAgentPersonaFile(
+    agentId: string,
+    file: string,
+  ): Promise<{ content: string | null; hash: string }> {
+    const res = await this.getJson<{ ok: boolean; data: { content: string | null; hash: string } }>(
+      `/config/agents/${encodeURIComponent(agentId)}/persona/files/${encodeURIComponent(file)}`,
+    );
+    return res.data;
+  }
+
+  /** 写单个 persona/ 补充件（不存在则创建；保存即热生效） */
+  async updateAgentPersonaFile(
+    agentId: string,
+    file: string,
+    content: string,
+    hash: string,
+  ): Promise<{ hash: string }> {
+    const res = await this.putJson<{ ok: boolean; data: { hash: string } }>(
+      `/config/agents/${encodeURIComponent(agentId)}/persona/files/${encodeURIComponent(file)}`,
+      { content, hash },
+    );
+    return res.data;
+  }
+
   /** agent 角色模板清单（生成器） */
   async getAgentRolePresets(): Promise<AgentRolePresetDto[]> {
     const res = await this.getJson<{ ok: boolean; data: AgentRolePresetDto[] }>(

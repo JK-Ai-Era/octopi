@@ -124,6 +124,11 @@ export function AgentSettingsPanel() {
   const [wizard, setWizard] = useState<WizardState>(EMPTY_WIZARD);
   const [personaText, setPersonaText] = useState('');
   const [personaHash, setPersonaHash] = useState('');
+  /** 当前编辑的 persona 文件（AGENTS.md = 主 persona；其余为 persona/ 补充件四件套） */
+  const [personaFile, setPersonaFile] = useState('AGENTS.md');
+  const [personaFiles, setPersonaFiles] = useState<Array<{ file: string; content: string; hash: string }>>(
+    [],
+  );
   /** 载入快照（#6/#7 dirty 跟踪：未改动的字段不发，防全局固化/对象降级） */
   const [initial, setInitial] = useState<{ effectMode: string; model: string }>({ effectMode: '', model: '' });
   const [busy, setBusy] = useState(false);
@@ -182,9 +187,14 @@ export function AgentSettingsPanel() {
       traits: agent.traits.join(', '),
     });
     try {
-      const persona = await client.getAgentPersona(id);
+      const [persona, files] = await Promise.all([
+        client.getAgentPersona(id),
+        client.getAgentPersonaFiles(id),
+      ]);
+      setPersonaFile('AGENTS.md');
       setPersonaText(persona.content ?? '');
       setPersonaHash(persona.hash);
+      setPersonaFiles(files);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -304,20 +314,46 @@ export function AgentSettingsPanel() {
     }
   };
 
+  /** 切换正在编辑的 persona 文件（放弃未保存编辑——与切换 agent 的既有行为一致） */
+  const switchPersonaFile = async (file: string) => {
+    if (!selected || selected === '__new__') return;
+    setError(null);
+    try {
+      const data =
+        file === 'AGENTS.md'
+          ? await client.getAgentPersona(selected)
+          : await client.getAgentPersonaFile(selected, file);
+      setPersonaFile(file);
+      setPersonaText(data.content ?? '');
+      setPersonaHash(data.hash);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const savePersona = async () => {
     if (!selected || selected === '__new__') return;
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      const result = await client.updateAgentPersona(selected, personaText, personaHash);
+      const result =
+        personaFile === 'AGENTS.md'
+          ? await client.updateAgentPersona(selected, personaText, personaHash)
+          : await client.updateAgentPersonaFile(selected, personaFile, personaText, personaHash);
       setPersonaHash(result.hash);
       setNotice(t('agentSettings.personaSaved'));
+      if (personaFile !== 'AGENTS.md' && !personaFiles.some((f) => f.file === personaFile)) {
+        setPersonaFiles(await client.getAgentPersonaFiles(selected));
+      }
     } catch (err) {
       if (isConflictError(err)) {
         // #13 冲突可恢复：换新锁但保留用户编辑内容——再点保存 = 明确覆盖外部修改
         try {
-          const latest = await client.getAgentPersona(selected);
+          const latest =
+            personaFile === 'AGENTS.md'
+              ? await client.getAgentPersona(selected)
+              : await client.getAgentPersonaFile(selected, personaFile);
           setPersonaHash(latest.hash);
           setError(t('agentSettings.personaConflict'));
         } catch {
@@ -600,6 +636,21 @@ export function AgentSettingsPanel() {
                 </button>
               </div>
 
+              <label className="set-field">
+                <span>{t('agentSettings.personaFileLabel')}</span>
+                <select
+                  className="set-input"
+                  value={personaFile}
+                  onChange={(e) => void switchPersonaFile(e.target.value)}
+                >
+                  <option value="AGENTS.md">AGENTS.md</option>
+                  {personaFiles.map((f) => (
+                    <option key={f.file} value={f.file}>
+                      {f.file}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="set-field">
                 <span>{t('agentSettings.personaLabel')}</span>
                 <textarea

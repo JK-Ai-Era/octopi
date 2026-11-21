@@ -225,6 +225,22 @@ export class AgentFileAdmin {
   }
 
   /**
+   * 写单个 persona/ 补充件（不存在则创建；控制台多文件编辑用）
+   *
+   * @param agentId - agent id
+   * @param file - 裸文件名（如 `10-soul.md`；路径成分拒绝）
+   * @param content - 文件全文
+   * @param home - agent 配置的 home（缺省用标准布局路径）
+   * @throws 文件名非法（服务层已守卫，此处纵深防御再守一次）
+   */
+  writePersonaFile(agentId: string, file: string, content: string, home?: string): void {
+    assertSafePersonaFileName(file);
+    const p = join(home ?? this.homeOf(agentId), 'persona', file);
+    mkdirSync(resolve(p, '..'), { recursive: true });
+    writeFileSync(p, content, 'utf-8');
+  }
+
+  /**
    * 写 AGENTS.md（persona 编辑；builder 指纹缓存自动重读）
    *
    * @param agentId - agent id

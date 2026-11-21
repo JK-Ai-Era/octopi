@@ -131,6 +131,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.121.19 (2026-11-22)
+
+### feat(webui): persona 四件套控制台编辑面（persona/ 补充件可在线读写）
+
+四件套落地后 3/4 的身份内容（声音/身份/用户）此前只能 SSH 改文件——本轮补齐与 AGENTS.md 同级的在线编辑能力（拍板事项 1，评审 M3 的修复）。
+
+- **服务端**：`AgentFilesPort` 增 `writePersonaFile`；`ConfigApplyService` 增 `listPersonaFiles` / `getPersonaFile` / `updatePersonaFile`——文件名走 `assertSafePersonaFileName` 单一守卫（写实现侧纵深再守一次）、内容乐观锁（409 换锁语义与 AGENTS.md 一致）、写后 `invalidateAgentBuild` 热生效、`persona.update` 审计带 `file` 字段（`ConfigAuditEntry` 增可选 `file`）；不存在的文件 GET 返回 `content=null`（hash=空内容 hash），PUT 即首建。
+- **API/SDK**：`GET /config/agents/:id/persona/files`（清单）、`GET|PUT /config/agents/:id/persona/files/:file`（单文件读写）；sdk client 对应三方法。
+- **WebUI**：persona 编辑区新增文件选择器（AGENTS.md + `persona/` 补充件清单），按文件加载/保存，409 冲突换锁并保留编辑内容；切换文件丢弃未保存编辑（与切换 agent 的既有行为一致）；新文件保存后自动进清单。i18n zh/en 新增 `agentSettings.personaFileLabel`，`personaLabel` 文案改为「所选文件」。
+
+**验证**：新增 config-apply 单文件用例（清单/首建/更新/乐观锁冲突/非法名拒绝不动盘/热生效/审计带文件名）；全量 vitest `557 files / 5669 tests` 通过；lint（eslint + typecheck-tests + webui tsc）绿。
+
+---
+
 ## v0.121.18 (2026-11-22)
 
 ### fix(init): 默认 persona 四件套改由「通用助手」模板生成，修复首聊工具必报错

@@ -68,17 +68,22 @@ function makeGatewayStub(): GatewayStub {
 
 interface AgentFilesStub {
   files: Map<string, string>;
+  /** persona/ 补充件（file → content；readPersonaFiles / writePersonaFile 数据源） */
+  personaFiles: Map<string, string>;
   pathsOf: ReturnType<typeof vi.fn>;
   scaffold: ReturnType<typeof vi.fn>;
   readPersona: ReturnType<typeof vi.fn>;
   readPersonaFiles: ReturnType<typeof vi.fn>;
+  writePersonaFile: ReturnType<typeof vi.fn>;
   writePersona: ReturnType<typeof vi.fn>;
 }
 
 function makeAgentFilesStub(): AgentFilesStub {
   const files = new Map<string, string>();
+  const personaFiles = new Map<string, string>();
   return {
     files,
+    personaFiles,
     pathsOf: vi.fn((id: string) => ({
       home: `/octopi/agents/${id}`,
       workspace: `/octopi/workspace/${id}`,
@@ -88,7 +93,12 @@ function makeAgentFilesStub(): AgentFilesStub {
       if (opts.agentsMd !== undefined && !files.has(id)) files.set(id, opts.agentsMd);
     }),
     readPersona: vi.fn((id: string) => files.get(id) ?? null),
-    readPersonaFiles: vi.fn(() => []),
+    readPersonaFiles: vi.fn(() =>
+      [...personaFiles.entries()].map(([file, content]) => ({ file, content })),
+    ),
+    writePersonaFile: vi.fn((_id: string, file: string, content: string) => {
+      personaFiles.set(file, content);
+    }),
     writePersona: vi.fn((id: string, content: string) => {
       files.set(id, content);
     }),
@@ -552,6 +562,44 @@ describe('ConfigApplyService — agent CRUD（P2）', () => {
     await expect(apply.updatePersona('helper', '# v3', view.hash)).rejects.toBeInstanceOf(ConfigConflictError);
     expect(apply.getPersona('helper').content).toBe('# v2');
   });
+
+  it('persona 补充件单文件：清单 / 读 / 写（创建+更新）/ 冲突 / 守卫 / 热生效', async () => {
+    const before = service.read();
+    await apply.createAgent({ agent: { id: 'helper', model: 'standard' }, agentsMd: '# h', hash: before.hash });
+
+    // 清单（空目录 → 空数组）
+    expect(apply.listPersonaFiles('helper')).toEqual([]);
+
+    // 首建：不存在 content=null、hash=空内容 hash；PUT 创建
+    const missing = apply.getPersonaFile('helper', '10-soul.md');
+    expect(missing.content).toBeNull();
+    const created = await apply.updatePersonaFile('helper', '10-soul.md', '# soul v1', missing.hash);
+    expect(created.hash).toBe(apply.getPersonaFile('helper', '10-soul.md').hash);
+    expect(agentFiles.personaFiles.get('10-soul.md')).toBe('# soul v1');
+    expect(gateway.invalidateAgentBuild).toHaveBeenCalledWith('helper');
+
+    // 更新 + 乐观锁
+    const view = apply.getPersonaFile('helper', '10-soul.md');
+    await apply.updatePersonaFile('helper', '10-soul.md', '# soul v2', view.hash);
+    expect(apply.getPersonaFile('helper', '10-soul.md').content).toBe('# soul v2');
+    await expect(
+      apply.updatePersonaFile('helper', '10-soul.md', '# soul v3', view.hash),
+    ).rejects.toBeInstanceOf(ConfigConflictError);
+    expect(apply.getPersonaFile('helper', '10-soul.md').content).toBe('# soul v2');
+
+    // 清单带上 hash
+    const list = apply.listPersonaFiles('helper');
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ file: '10-soul.md', content: '# soul v2' });
+    expect(typeof list[0]!.hash).toBe('string');
+
+    // 守卫：文件名非法在读写两侧都拒（不动盘）
+    expect(() => apply.getPersonaFile('helper', '../evil.md')).toThrow(/invalid persona file name/);
+    await expect(
+      apply.updatePersonaFile('helper', '10-soul.md ', '# x', 'whatev'),
+    ).rejects.toThrow(/invalid persona file name/);
+    expect(agentFiles.writePersonaFile).toHaveBeenCalledTimes(2); // 创建 + 更新各一次，守卫拒绝未计入
+  });
 });
 
 describe('ConfigApplyService — review blocker 回归锚', () => {
@@ -661,7 +709,13 @@ describe('ConfigApplyService — P3（护栏/回滚/审计/模板）', () => {
   let gateway: GatewayStub;
   let agentFiles: AgentFilesStub;
   let apply: ConfigApplyService;
-  let auditEntries: Array<{ action: string; target?: string; backupPath?: string }>;
+  let auditEntries: Array<{
+    action: string;
+    target?: string;
+    backupPath?: string;
+    summary?: string;
+    file?: string;
+  }>;
   let templateStore: { presets: Array<Record<string, unknown>> };
 
   beforeEach(() => {
@@ -791,6 +845,22 @@ describe('ConfigApplyService — P3（护栏/回滚/审计/模板）', () => {
     expect(preset.recommendedEffectMode).toBe('project');
     expect(apply.listRolePresets().some((p) => p.id === 'my-role')).toBe(true);
     expect(auditEntries.some((e) => e.action === 'template.save')).toBe(true);
+  });
+
+  it('persona.update（按文件写入）：审计留痕带文件名', async () => {
+    const before = service.read();
+    await apply.createAgent({
+      agent: { id: 'helper', model: 'standard' },
+      agentsMd: '# h',
+      hash: before.hash,
+    });
+    const got = apply.getPersonaFile('helper', '20-identity.md');
+    await apply.updatePersonaFile('helper', '20-identity.md', '# identity', got.hash);
+    const entry = auditEntries.find(
+      (e) => e.action === 'persona.update' && e.file === '20-identity.md',
+    );
+    expect(entry).toBeTruthy();
+    expect(entry!.summary).toContain('20-identity.md');
   });
 
   it('另存模板 round-trip：personaFiles 入模板并回填 {{agentName}}', async () => {

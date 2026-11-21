@@ -91,8 +91,10 @@ export interface AgentFilesPort {
   ): Promise<void>;
   /** 读 AGENTS.md（home 指定时按 agent 配置的 home 解析）；不存在返回 null */
   readPersona(agentId: string, home?: string): string | null;
-  /** 读 persona/ 目录补充件（另存为模板 round-trip）；目录不存在返回空数组 */
+  /** 读 persona/ 目录补充件（另存为模板 round-trip / 控制台多文件编辑）；目录不存在返回空数组 */
   readPersonaFiles(agentId: string, home?: string): RolePersonaFileDto[];
+  /** 写单个 persona/ 补充件（文件名守卫在实现与服务层双侧；home 同 readPersonaFiles） */
+  writePersonaFile(agentId: string, file: string, content: string, home?: string): void;
   /** 写 AGENTS.md（home 指定时按 agent 配置的 home 解析） */
   writePersona(agentId: string, content: string, home?: string): void;
 }
@@ -115,6 +117,8 @@ export interface ConfigAuditEntry {
   backupPath?: string;
   /** 重锚定指纹对（`config.reattest`：旧→新，§8.4 审计要求「旧→新摘要」） */
   fingerprints?: { previous: string; current: string };
+  /** persona 补充件文件名（`persona.update` 按文件写入时） */
+  file?: string;
 }
 
 /** 自定义角色模板存取端口（daemon 注入 FileRoleTemplateStore） */
@@ -916,6 +920,74 @@ export class ConfigApplyService {
     await this.deps.gateway.invalidateAgentBuild(agentId);
     this.audit('persona.update', '更新 AGENTS.md（新会话生效）', {
       target: agentId,
+      hashAfter: computeConfigHash(content),
+    });
+    return { hash: computeConfigHash(content) };
+  }
+
+  /**
+   * 列出 persona/ 补充件（控制台多文件编辑的清单）
+   *
+   * @param agentId - agent id
+   * @returns `file + content + hash`（按文件名排序）；目录不存在返回空数组
+   * @throws agent 不在注册表
+   */
+  listPersonaFiles(agentId: string): Array<{ file: string; content: string; hash: string }> {
+    assertSafeConfigName(agentId);
+    const { home } = this.resolvePersonaTarget(agentId);
+    return this.deps.agentFiles
+      .readPersonaFiles(agentId, home)
+      .map((f) => ({ ...f, hash: computeConfigHash(f.content) }));
+  }
+
+  /**
+   * 读单个 persona/ 补充件
+   *
+   * @param agentId - agent id
+   * @param file - 裸文件名（如 `10-soul.md`）
+   * @returns 内容 + 内容 hash；文件不存在 content=null、hash=空内容 hash（便于首建）
+   * @throws agent 不在注册表 / 文件名非法
+   */
+  getPersonaFile(agentId: string, file: string): { content: string | null; hash: string } {
+    assertSafeConfigName(agentId);
+    assertSafePersonaFileName(file);
+    const { home } = this.resolvePersonaTarget(agentId);
+    const found = this.deps.agentFiles.readPersonaFiles(agentId, home).find((f) => f.file === file);
+    const content = found?.content ?? null;
+    return { content, hash: computeConfigHash(content ?? '') };
+  }
+
+  /**
+   * 写单个 persona/ 补充件（不存在则创建）：乐观锁 + 立即重建 + 审计
+   *
+   * @param agentId - agent id
+   * @param file - 裸文件名
+   * @param content - 文件全文
+   * @param expectedHash - 当前内容 hash（{@link getPersonaFile} 取得；空文件 = 空内容 hash）
+   * @returns 新内容 hash
+   * @throws agent 不在注册表 / 文件名非法 / {@link ConfigConflictError} 并发冲突
+   */
+  async updatePersonaFile(
+    agentId: string,
+    file: string,
+    content: string,
+    expectedHash: string,
+  ): Promise<{ hash: string }> {
+    assertSafeConfigName(agentId);
+    assertSafePersonaFileName(file);
+    const { home } = this.resolvePersonaTarget(agentId);
+    const current = this.deps.agentFiles
+      .readPersonaFiles(agentId, home)
+      .find((f) => f.file === file)?.content;
+    const currentHash = computeConfigHash(current ?? '');
+    if (currentHash !== expectedHash) {
+      throw new ConfigConflictError(currentHash);
+    }
+    this.deps.agentFiles.writePersonaFile(agentId, file, content, home);
+    await this.deps.gateway.invalidateAgentBuild(agentId);
+    this.audit('persona.update', `更新 persona/${file}（新会话生效）`, {
+      target: agentId,
+      file,
       hashAfter: computeConfigHash(content),
     });
     return { hash: computeConfigHash(content) };
