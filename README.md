@@ -7,7 +7,7 @@
 
 [中文文档](./README.zh.md) · [Documentation](./docs/) · [Architecture](./docs/architecture.md) · [Contributing](./docs/CONTRIBUTING.md)
 
-![License](https://img.shields.io/badge/license-Apache--2.0-blue) ![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![npm](https://img.shields.io/npm/v/octopi-agent?label=octopi-agent)
+[![CI](https://github.com/JK-Ai-Era/octopi/actions/workflows/ci.yml/badge.svg)](https://github.com/JK-Ai-Era/octopi/actions/workflows/ci.yml) ![License](https://img.shields.io/badge/license-Apache--2.0-blue) ![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![npm](https://img.shields.io/npm/v/octopi-agent?label=octopi-agent)
 
 ---
 
@@ -523,6 +523,14 @@ Octopi is pre-1.0 and moving fast. Being honest about the edges:
   vertical business workflow engine, or human-level IAM inside the engine —
   Octopi is not what you want. It is an engine for products that need
   continuity, learning, and governance *below* their own product logic.
+- **Concrete blockers** (check these before you start, not after):
+  - **Node.js ≥ 24 is a hard requirement.** We use the built-in `node:sqlite`
+    instead of shipping a native SQLite binding, because native bindings break
+    on cross-platform installs and are awkward to combine with vector search.
+    Node 22 and older will not install.
+  - **Multi-instance / horizontally-scaled deployments are not supported in v1.**
+    In-process Session Lease exists; cross-process lease does not. Quota, sessions,
+    and concurrency are single-process.
 
 Open items live in [docs/KNOWN-ISSUES.md](./docs/KNOWN-ISSUES.md).
 

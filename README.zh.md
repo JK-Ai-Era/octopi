@@ -9,7 +9,7 @@
 
 [English](./README.md) · [文档](./docs/) · [架构](./docs/architecture.zh.md) · [参与贡献](./docs/CONTRIBUTING.zh.md)
 
-![License](https://img.shields.io/badge/license-Apache--2.0-blue) ![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![npm](https://img.shields.io/npm/v/octopi-agent?label=octopi-agent)
+[![CI](https://github.com/JK-Ai-Era/octopi/actions/workflows/ci.yml/badge.svg)](https://github.com/JK-Ai-Era/octopi/actions/workflows/ci.yml) ![License](https://img.shields.io/badge/license-Apache--2.0-blue) ![Node](https://img.shields.io/badge/node-%3E%3D24-brightgreen) ![npm](https://img.shields.io/npm/v/octopi-agent?label=octopi-agent)
 
 ---
 

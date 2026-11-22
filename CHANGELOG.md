@@ -132,7 +132,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.125.0 (2026-11-23)
+## v0.125.1 (2026-11-23)
+
+### ci: add GitHub Actions workflow (test · lint · schema-sync)
+
+- **为什么**：README 声称 `550+ test files`、AGENTS.md 要求「改 Zod 就重新生成 `octopi.schema.json`」，但两者此前**没有任何自动检查**——测试是否仍绿只有作者自己知道，schema 分叉完全靠人记得。对一个要对外发布的引擎，这两件事都应当可被外人验证，而不是靠信任。
+- **三个 job 与各自防止的退化**：`test`（全量 5747 测试）；`lint`（eslint + tests 类型基线 + webui tsc）；`build-and-schema`（构建完整性 + `generate:schema` 后 `git diff --exit-code octopi.schema.json`）。
+- **顺序约束（实测得出，非推测）**：`scripts/generate-octopi-schema.mjs` 读取的是编译产物 `dist/config-schema/index.js`，而 `dist/` 被 `.gitignore` 排除、CI 全新 checkout 中不存在——已验证缺失时以 `ERR_MODULE_NOT_FOUND` 失败。故 schema 检查只能放在 build 之后，不能并入 test job。
+- **检查非空转已验证**：注入一个 Zod 字段并重新构建后，该步骤正确产生 3 行 schema diff 并失败；恢复后零 diff。
+- **刻意不做**：覆盖率门禁（覆盖率是描述不是质量，设门禁会诱导写无意义测试）、多平台矩阵（Windows 沙箱尚未实现，只会制造噪声）、真实 API e2e（`env` 中显式置空 `OPENAI_API_KEY`，防止将来误加 secret 使测试转为依赖外部服务）。
+- **同步**：README / README.zh.md 首屏加入 CI 徽章；`Status & boundaries` 增补可操作门槛（Node ≥ 24 的 `node:sqlite` 理由、v1 单进程限制），让读者在安装前而非安装后才知道。
+
+---
 
 ### feat(skills): 双层技能架构——公共技能层 + per-agent 覆盖层（C 方案）
 

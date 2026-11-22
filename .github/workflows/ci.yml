@@ -1,0 +1,104 @@
+# CI — 每次 push / PR 都跑。
+#
+# 设计原则：徽章必须"绿得有意义"。一个亮着绿灯但只跑 lint 的徽章，比没有
+# 徽章更糟——它训练读者不相信它。所以这里跑的三件事，每一件都对应一个真实
+# 存在、且目前无任何自动检查的风险：
+#
+#   1. npm test            → 5747 个测试。没有它，这些测试只是文件。
+#   2. generate:schema diff → AGENTS.md 要求"改 Zod 就重新生成 schema"，
+#                             但这条纪律完全靠人记得。忘了提交，对外发布的
+#                             schema 会与代码分叉，编辑器自动补全给出错误提示。
+#   3. npm run lint        → eslint + tests 类型检查 + webui tsc。
+#
+# ⚠️ 顺序约束（实证得来，不是推测）：scripts/generate-octopi-schema.mjs 读的是
+# dist/config-schema/index.js（编译产物），而 dist/ 被 .gitignore 排除、CI 的
+# 全新 checkout 里并不存在。已验证：无 dist 时该脚本以 ERR_MODULE_NOT_FOUND
+# 失败。所以 schema 检查必须放在 build 之后，不能放在 test job 里凭空跑。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的旧运行自动取消：省额度，也避免把过期结果当现行结论。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 测试不需要真实模型 key；显式置空，避免将来有人误把 key 加进 CI secrets
+  # 后，测试悄悄变成"依赖外部服务"的 e2e。
+  OPENAI_API_KEY: ''
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 与 package.json engines 一致（>=24）；Node 24 已是 Maintenance LTS。
+          node-version: 24
+          cache: npm
+
+      # ci 而非 install：严格按 lockfile 装，可复现。CI 里跑 install 会改写
+      # lockfile，那是事故。
+      - run: npm ci
+
+      - name: Test
+        run: npm test
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # webui 有独立 lockfile，root npm ci 不装它。lint 的最后一步是
+      # `tsc -p packages/webui --noEmit`，缺它的依赖会失败。
+      - name: Install webui dependencies
+        run: npm install --prefix packages/webui
+
+      - name: Lint, test types, webui types
+        run: npm run lint
+
+  build-and-schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install webui dependencies
+        run: npm install --prefix packages/webui
+
+      # build 产出 dist/（含 config-schema），下面的 schema 检查依赖它。
+      - name: Build
+        run: npm run build
+
+      # 生成后若 octopi.schema.json 有任何变化，说明有人改了 Zod 却忘了提交
+      # 生成结果 —— 这一步把 AGENTS.md 那条纪律机械化。
+      - name: Schema is in sync with Zod
+        run: |
+          npm run generate:schema
+          if ! git diff --exit-code octopi.schema.json; then
+            echo "::error::octopi.schema.json is stale. Run 'npm run generate:schema' and commit the result."
+            exit 1
+          fi
