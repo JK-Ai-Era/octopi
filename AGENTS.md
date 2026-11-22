@@ -88,10 +88,11 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
   browser-profiles/     # browser_* persistent login state (storageState <id>.json, 0600; lazy-created on profile persist)
   browser-providers/<id>/ # P3 isolated browser providers (camoufox: own camoufox-js + self-consistent playwright-core; never in the host dependency tree)
   plugin-state/<id>/    # per-plugin private state dir (0700; api.stateDir — plugin runtime state, never secrets)
+  skills/               # **shared skill layer** (seeded from packaged skills/, copy-if-missing; see docs/architecture.md)
   agents/<id>/          # agent home
     AGENTS.md           # main persona (loaded first by loadPersona)
     persona/            # supplemental persona (*.md, numeric prefix for order)
-    skills/             # skillDirectory target
+    skills/             # per-agent skill **override** layer (same-id skill wins over shared)
   workspace/<tenantId>/<agentId>/   # tool sandbox cwd (tenant-prefixed; arch/multi-tenancy.md §4)
 ```
 

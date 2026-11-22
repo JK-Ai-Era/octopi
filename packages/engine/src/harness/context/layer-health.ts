@@ -69,19 +69,27 @@ export async function probeAgentHomeHealth(
   const { existsSync } = await import('node:fs');
   const { readdirSync } = await import('node:fs');
   const { join } = await import('node:path');
+  const { getOctopiHome, sharedSkillsDir } = await import('../../paths.js');
 
-  const skillDir = join(home, 'skills');
-  let skillCount: number | undefined;
-  if (existsSync(skillDir)) {
+  // 双层技能计数（共享层 + agent 覆盖层，同名去重）——与 skills/manager.ts 双层合并同规
+  const skillDirs = [sharedSkillsDir(getOctopiHome()), join(home, 'skills')];
+  const skillIds = new Set<string>();
+  let dirSeen = false;
+  for (const skillDir of skillDirs) {
+    if (!existsSync(skillDir)) continue;
+    dirSeen = true;
     try {
       const entries = readdirSync(skillDir, { withFileTypes: true });
-      skillCount = entries.filter(
-        (e) => e.isDirectory() && existsSync(join(skillDir, e.name, 'SKILL.md')),
-      ).length;
+      for (const e of entries) {
+        if (e.isDirectory() && existsSync(join(skillDir, e.name, 'SKILL.md'))) {
+          skillIds.add(e.name);
+        }
+      }
     } catch {
-      skillCount = undefined;
+      // 单层不可读不吞全量：另一层仍计入
     }
   }
+  const skillCount = dirSeen ? skillIds.size : undefined;
 
   const personaLoaded =
     existsSync(join(home, 'AGENTS.md')) ||

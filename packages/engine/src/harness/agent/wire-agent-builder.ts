@@ -189,6 +189,8 @@ export interface AgentWireSpec {
   /** 文件式 persona 目录，或内联 systemPrompt */
   persona?: string | { systemPrompt?: string };
   skillDirectory?: string;
+  /** 公共技能层目录（OCTOPI_HOME/skills）：与 skillDirectory 组成双层发现，同名 agent 层赢 */
+  skillSharedDirectory?: string;
   /** Skill 启用清单（agents[].skills，按 skill id）；缺省 = 目录内全部启用 */
   skills?: string[];
   /** SEC-2 / E6 工具策略与会话权利天花板 */
@@ -328,26 +330,34 @@ export async function wireAgentBuilder(
     : agentHome
       ? join(agentHome, 'skills')
       : undefined;
+  const skillSharedDir = spec.skillSharedDirectory
+    ? expandHomePath(spec.skillSharedDirectory.trim())
+    : undefined;
+  // 双层发现：共享层先扫、agent 层同名赢（skillDirs 顺序即优先级）；共享层缺省不启用
+  const skillDirs = [skillSharedDir, skillDir].filter((d): d is string => !!d && existsSync(d));
   let skillManager: unknown;
-  if (skillDir && existsSync(skillDir)) {
+  if (skillDirs.length > 0) {
     try {
       const { DefaultSkillManager } = await import(
         '../extension/plugin-ecosystem/skills/manager.js'
       );
       skillManager = new DefaultSkillManager(undefined, spec.skills ? { only: spec.skills } : undefined);
-      await (skillManager as { discover: (d: string) => Promise<void> }).discover(skillDir);
+      await (skillManager as { discover: (d: string | readonly string[]) => Promise<void> }).discover(
+        skillDirs,
+      );
       builder.skills(
         skillManager as import('../extension/plugin-ecosystem/skills/types.js').SkillManager,
       );
     } catch (err) {
       console.warn(
-        `[AgentWire] skill discover failed for ${skillDir}: ${err instanceof Error ? err.message : String(err)}`,
+        `[AgentWire] skill discover failed for ${skillDirs.join(' + ')}: ${err instanceof Error ? err.message : String(err)}`,
       );
       skillManager = undefined;
     }
     // 无 manager 时 builder 仍可用目录兜底（allowlist 同样生效）
     builder.skillAllowlist(spec.skills);
-    builder.skillDirectory(skillDir);
+    if (skillDir) builder.skillDirectory(skillDir);
+    if (skillSharedDir) builder.skillSharedDirectory(skillSharedDir);
   }
 
   // ── Memory / Wisdom / Cognition（agent home 下 AgentDatabase） ──

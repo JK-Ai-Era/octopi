@@ -214,11 +214,11 @@ Agent home 目录约定（由 `initOctopi` / `ensureAgentDirs` 脚手架）：
 <agentHome>/
   AGENTS.md              # 主 persona，最先加载
   persona/               # 补充 persona（字母序；数字前缀控制顺序）
-  skills/                # 技能（可由 skillDirectory 指向）；随包 skills/ 种子落盘（copy-if-missing）
+  skills/                # per-agent 技能**覆盖层**（skillDirectory）；同名 skill 覆盖共享层
 # 注意：sessions 不在 agent home —— 见 OCTOPI_HOME/sessions/
 ```
 
-内置技能（如 `document-authoring` 家族：共享设计/QA/OOXML 工具链 + `docx`/`pdf`/`pptx`/`xlsx`）随包发布于 `skills/`，脚手架时（`ensureAgentDirs`）种子进 `agents/<id>/skills/`。种子按文件 copy-if-missing：已有文件绝不覆盖（用户数据优先），而后续版本**新增**的文件会在下次脚手架补种——技能树可能跨版本混放，完整升级需显式重装。
+内置技能（如 `document-authoring` 家族：共享设计/QA/OOXML 工具链 + `docx`/`pdf`/`pptx`/`xlsx`）随包发布于 `skills/`，脚手架时（`ensureAgentDirs`）种子进**公共技能层** `OCTOPI_HOME/skills/`——一份拷贝全 agent 共享。技能发现为**双层**：先扫共享层，再扫 per-agent 覆盖层（`agents/<id>/skills/`），同名 skill 由 agent 层赢（role preset 技能与用户定制住这里）。种子按文件 copy-if-missing：已有文件绝不覆盖（用户数据优先），而后续版本**新增**的文件会在下次脚手架补种——技能树可能跨版本混放，完整升级需显式重装。
 
 Memory / Cognition / Wisdom / Knowledge **不按目录落盘**，统一由 per-agent SQLite `AgentDatabase`（`agent.db`）承载。
 

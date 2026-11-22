@@ -3,10 +3,12 @@
 
 Two jobs:
 
-1. Repo-deploy drift: the deployed skill copy ($OCTOPI_HOME/agents/<id>/skills/)
-   must mirror the repo skills/ tree. Missing / extra / changed files FAIL
-   LOUDLY -- this exact drift once silently downgraded a live build to an
-   obsolete scratch copy of a skill.
+1. Two-layer repo-deploy drift (skill C-architecture): the SHARED layer
+   ($OCTOPI_HOME/skills/) must mirror the repo skills/ tree -- missing / extra /
+   changed files FAIL LOUDLY. Per-agent layers ($OCTOPI_HOME/agents/<id>/skills/)
+   are override layers: same-id skills there intentionally win over the shared
+   copy and are REPORTED, not failed. This drift once silently downgraded a live
+   build to an obsolete scratch copy of a skill.
 2. Capability probes: Python libs, LibreOffice, Node packages, CJK fonts, and
    whether any configured model accepts image input (which QA tier may be
    claimed -- see qa.md "Visual review tiers").
@@ -84,35 +86,54 @@ def diff_trees(repo: Path, deploy: Path) -> tuple[list[str], list[str], list[str
     return missing, extra, changed
 
 
-def check_drift(repo_skills: Path, deploy_roots: list[Path]) -> bool:
+def check_drift(repo_skills: Path, shared_root: Path | None, agent_roots: list[Path]) -> bool:
+    """Two-layer drift semantics (skill C-architecture, 2026-11-23):
+
+    - shared layer (OCTOPI_HOME/skills) = seeded mirror of repo skills/
+      -> strict mirror check, any drift FAILs
+    - agent layers (agents/<id>/skills) = override layer
+      -> same-id skills here intentionally OVERRIDE the shared copy;
+      report only (changed = override, extra = agent-private skill)
+    """
     ok = True
     print(f"[drift] repo skills/: {repo_skills}")
     if not repo_skills.is_dir():
         print(f"[drift] FAIL repo skills dir not found: {repo_skills}")
         return False
-    if not deploy_roots:
-        print("[drift] WARN no deploy skills dirs found (nothing to compare)")
-        return True
-    for dep in deploy_roots:
-        print(f"[drift] deploy: {dep}")
-        if not tree_snapshot(dep):
-            # An empty deploy tree is ambiguous (opted out vs wiped). Don't
-            # hard-fail intent we cannot infer -- but name the incident mode.
-            print(f"[drift] WARN {dep} has no skills deployed -- if this agent should "
-                  "carry the skill family, this IS the incident mode (restore from repo skills/)")
-            continue
-        missing, extra, changed = diff_trees(repo_skills, dep)
+
+    # ── shared layer: strict mirror ──
+    if shared_root is None or not shared_root.is_dir():
+        print(f"[drift] WARN shared layer missing ({shared_root}) -- run `octopi init` "
+              "to seed OCTOPI_HOME/skills from the package")
+    else:
+        print(f"[drift] shared layer: {shared_root}")
+        missing, extra, changed = diff_trees(repo_skills, shared_root)
         if not (missing or extra or changed):
-            print("[drift] OK identical (ignoring __pycache__/*.pyc)")
+            print("[drift] OK shared layer mirrors repo (ignoring __pycache__/*.pyc)")
+        else:
+            ok = False
+            for k in missing:
+                print(f"[drift] MISSING in shared: {k}")
+            for k in extra:
+                print(f"[drift] EXTRA in shared (stale residue?): {k}")
+            for k in changed:
+                print(f"[drift] CHANGED in shared: {k}")
+            print("[drift] FAIL -- restore shared layer from repo skills/ before authoring")
+
+    # ── agent layers: override layer, report only ──
+    for dep in agent_roots:
+        print(f"[drift] agent override layer: {dep}")
+        if not tree_snapshot(dep):
+            print("[drift] OK empty (all skills come from the shared layer)")
             continue
-        ok = False
-        for k in missing:
-            print(f"[drift] MISSING in deploy: {k}")
-        for k in extra:
-            print(f"[drift] EXTRA in deploy (stale residue?): {k}")
+        _, extra, changed = diff_trees(repo_skills, dep)
         for k in changed:
-            print(f"[drift] CHANGED: {k}")
-        print("[drift] FAIL -- restore from repo skills/ before authoring")
+            print(f"[drift] OVERRIDE (agent layer wins): {k}")
+        for k in extra:
+            print(f"[drift] agent-private skill file: {k}")
+        if not (extra or changed):
+            print("[drift] WARN agent layer is a byte-identical copy of repo -- "
+                  "redundant now that the shared layer exists; consider removing")
     return ok
 
 
@@ -245,11 +266,18 @@ def main() -> int:
 
     deploy_roots = args.deploy_skills
     if deploy_roots is None:
+        # two-layer layout: shared mirror + per-agent override layers
+        shared_root = args.octopi_home / "skills"
         agents = args.octopi_home / "agents"
-        deploy_roots = sorted(p for p in agents.glob("*/skills") if p.is_dir()) if agents.is_dir() else []
+        agent_roots = sorted(p for p in agents.glob("*/skills") if p.is_dir()) if agents.is_dir() else []
+    else:
+        # explicit --deploy-skills: treat first as shared mirror, rest as override layers
+        shared_root = deploy_roots[0] if deploy_roots else None
+        agent_roots = deploy_roots[1:]
 
     print("=== document-authoring preflight ===")
-    drift_ok = check_drift(args.repo_skills.resolve(), [p.resolve() for p in deploy_roots])
+    drift_ok = check_drift(args.repo_skills.resolve(), shared_root.resolve() if shared_root else None,
+                           [p.resolve() for p in agent_roots])
 
     deps_ok = True
     if not args.skip_deps:

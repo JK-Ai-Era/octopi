@@ -2,7 +2,7 @@
  * ContextLayerHealth 探针
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { probeContextLayerHealth } from '@octopi-agent/engine/harness/context/layer-health.js';
 import { InMemoryMemoryStore } from '@octopi-agent/engine/harness/memory/store.js';
 import { InMemoryWisdomStore } from '@octopi-agent/engine/harness/memory/wisdom.js';
@@ -53,6 +53,23 @@ describe('probeContextLayerHealth', () => {
 });
 
 describe('probeAgentHomeHealth', () => {
+  // 双层计数含共享层（OCTOPI_HOME/skills）——密封到临时 home，防真实部署数据串味
+  const origOctopiHome = process.env.OCTOPI_HOME;
+  let emptyHome: string;
+  beforeEach(async () => {
+    const os = await import('node:os');
+    const fs = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    emptyHome = await fs.mkdtemp(join(os.tmpdir(), 'octopi-home-seal-'));
+    process.env.OCTOPI_HOME = emptyHome;
+  });
+  afterEach(async () => {
+    if (origOctopiHome === undefined) delete process.env.OCTOPI_HOME;
+    else process.env.OCTOPI_HOME = origOctopiHome;
+    const fs = await import('node:fs/promises');
+    await fs.rm(emptyHome, { recursive: true, force: true });
+  });
+
   it('无 home 数据时 configured=false', async () => {
     const { probeAgentHomeHealth } = await import('@octopi-agent/engine/harness/context/layer-health.js');
     const health = await probeAgentHomeHealth('a3', 'C:\\no\\such\\home\\octopi-test');

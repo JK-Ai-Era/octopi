@@ -2677,7 +2677,11 @@ export class Gateway {
         ? expandHomePath(agent.skillDirectory.trim())
         : join(home, 'skills');
       try {
-        if (existsSync(skillDir)) {
+        // 双层发现（与 run-assembly 同规）：共享层先扫、agent 层同名赢
+        const { getOctopiHome, sharedSkillsDir } = await import('@octopi-agent/engine/paths.js');
+        const sharedDir = sharedSkillsDir(getOctopiHome());
+        const skillDirs = [sharedDir, skillDir].filter((d) => existsSync(d));
+        if (skillDirs.length > 0) {
           const { DefaultSkillManager } = await import(
             '@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/manager.js'
           );
@@ -2685,7 +2689,7 @@ export class Gateway {
             undefined,
             agent.skills ? { only: agent.skills } : undefined,
           );
-          await skillManager.discover(skillDir);
+          await skillManager.discover(skillDirs);
           this.registerSkillCommands(skillManager);
         }
       } catch (err) {

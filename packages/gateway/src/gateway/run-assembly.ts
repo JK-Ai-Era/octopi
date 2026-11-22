@@ -236,7 +236,7 @@ export class RunAssembly {
 
     const { existsSync } = await import('node:fs');
     const { join } = await import('node:path');
-    const { getOctopiHome } = await import('@octopi-agent/engine/paths.js');
+    const { getOctopiHome, sharedSkillsDir } = await import('@octopi-agent/engine/paths.js');
     const pathJoinForAttachments = join;
 
     const wired = await wireAgentBuilder(builder, {
@@ -252,6 +252,8 @@ export class RunAssembly {
             ? agent.persona
             : undefined,
       skillDirectory: agent.skillDirectory,
+      // 公共技能层（双层发现：共享层先扫、agent 层同名赢）
+      skillSharedDirectory: sharedSkillsDir(getOctopiHome()),
       skills: agent.skills,
       tools: agent.tools,
       maxSessionRights: agent.maxSessionRights,

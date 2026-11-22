@@ -81,6 +81,20 @@ function assertPathSegment(segment: string, label: string): string {
 }
 
 /**
+ * 公共技能层目录（`skills/`，双层 Skill 发现的共享层）。
+ *
+ * 与 `sessions/` / `knowledge/` / `plugins/` 同规：OCTOPI_HOME 固定布局，
+ * 非调参旋钮。内置技能种子灌入此处（copy-if-missing）；agent 覆盖层
+ * （`agents/<id>/skills/`）同名 skill 赢——见 skills/manager.ts discover 双层合并。
+ *
+ * @param octopiHome - OCTOPI_HOME 绝对路径
+ * @returns 公共技能层目录
+ */
+export function sharedSkillsDir(octopiHome: string): string {
+  return join(octopiHome, 'skills');
+}
+
+/**
  * agent home 物化路径（§4：`agents/<agentId>/`，registry 标注 tenantId）。
  *
  * @param octopiHome - OCTOPI_HOME 绝对路径

@@ -12,6 +12,8 @@ export interface SkillDefinition {
   description: string;
   filePath: string;
   source: 'bundled' | 'workspace' | 'plugin';
+  /** 双层发现的来源层：共享层（skillSharedDirectory）或 agent 覆盖层；单层部署不标注 */
+  layer?: 'shared' | 'agent';
   disableModelInvocation?: boolean;
   requiredTools?: string[];
   /**
@@ -23,7 +25,11 @@ export interface SkillDefinition {
 
 /** Skill 管理器接口 */
 export interface SkillManager {
-  discover(directory: string): Promise<void>;
+  /**
+   * 扫描技能目录。传入数组 = 双层发现：**按序合并，后层同 id 覆盖前层**
+   * （约定调用序 = [共享层, agent 层]，agent 层赢）。
+   */
+  discover(directory: string | readonly string[]): Promise<void>;
   formatForPrompt(): string;
   load(skillId: string): Promise<string | null>;
   list(): SkillDefinition[];

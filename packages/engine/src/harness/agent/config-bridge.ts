@@ -15,6 +15,7 @@
  */
 
 import type { HarnessConfig, AgentConfig, ContextEngineConfig, NormalizedModelInfo, ModelProviderConfig, NormalizedHarnessConfig } from '../../config.js';
+import { getOctopiHome, sharedSkillsDir } from '../../paths.js';
 import { createProviderFromConfig, createWireDumpSinkFromConfig, resolveModelConfig, wireObservability } from '../../config.js';
 import { SubsystemLoader } from '../collaboration/autonomous-subsystem/loader.js';
 import type { SubsystemSpec } from '../collaboration/autonomous-subsystem/types.js';
@@ -302,6 +303,8 @@ async function buildAgent(
       (typeof agentConfig.persona === 'string' ? agentConfig.persona : undefined),
     persona: agentConfig.persona,
     skillDirectory: agentConfig.skillDirectory,
+    // 公共技能层（双层发现：共享层先扫、agent 层同名赢）；与 run-assembly 同规
+    skillSharedDirectory: sharedSkillsDir(getOctopiHome()),
     skills: agentConfig.skills,
     tools: agentConfig.tools,
     maxSessionRights: agentConfig.maxSessionRights,

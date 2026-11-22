@@ -63,6 +63,7 @@ import {
   getOctopiHome,
   agentHomeDir,
   agentWorkspaceDir,
+  sharedSkillsDir,
 } from '@octopi-agent/engine/paths.js';
 
 export { DEFAULT_OCTOPI_HOME, OCTOPI_HOME_ENV, getOctopiHome };
@@ -395,8 +396,10 @@ export async function ensureAgentDirs(
     }
   }
 
-  // 内置技能种子：随包发布的 skills/ → agents/<id>/skills/（copy-if-missing，用户数据优先）
-  const skillSeed = seedBuiltinSkills(join(agentHome, 'skills'));
+  // 内置技能种子：随包发布的 skills/ → 公共技能层 OCTOPI_HOME/skills/
+  // （copy-if-missing，用户数据优先）。agent 覆盖层 agents/<id>/skills/ 用于
+  // role preset 技能与用户定制（同名覆盖公共层）；种子只灌公共层，一次全共享。
+  const skillSeed = seedBuiltinSkills(sharedSkillsDir(homeDir));
   if (skillSeed.builtinDir === null) {
     // 种子缺失（打包遗漏/目录被移走）：显式降级，不阻塞初始化
     console.warn('[octopi] builtin skills directory not found next to package; skill seeding skipped');

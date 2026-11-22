@@ -198,6 +198,8 @@ export class FileSystemSkillSource implements SkillSource {
 export class DefaultSkillManager implements SkillManager {
   private skills = new Map<string, SkillDefinition>();
   private source: SkillSource;
+  /** 每个 skill 的发现来源（双层时 load 须回到各自 source，不跟最后一次 discover 漂移） */
+  private sourceOf = new Map<string, SkillSource>();
   /** Skill id allowlist（`agents[].skills`）；undefined = 全部启用 */
   private readonly only?: ReadonlySet<string>;
 
@@ -222,34 +224,46 @@ export class DefaultSkillManager implements SkillManager {
    *   ├── video-frames/SKILL.md
    *   ├── pdf-reader/SKILL.md
    *   └── web-scraper/SKILL.md
+   *
+   * 传入数组 = 双层发现：按序扫描并合并，**后层同 id 覆盖前层**
+   * （约定调用序 `[共享层, agent 层]` → agent 层赢，实现 per-agent 覆盖）。
+   * 同层内同 id 出现两次属目录异常：先到先得 + 告警，不静默后写赢。
    */
-  async discover(directory: string): Promise<void> {
-    // 如果传入了目录路径，创建新的 FileSystemSkillSource
-    if (directory) {
-      this.source = new FileSystemSkillSource(directory);
-    }
+  async discover(directory: string | readonly string[]): Promise<void> {
+    const dirs = typeof directory === 'string' ? [directory] : [...directory];
+    // allowlist 未命中的 id 要对**合并后全集**判一次（跨层互补可凑齐 allowlist）
+    const seenIds = new Set<string>();
+    for (const [dirIdx, dir] of dirs.entries()) {
+      // 单目录向后兼容：替换 source（历史语义）；多层时 source 只兜底 load
+      const source = new FileSystemSkillSource(dir);
+      if (dirs.length === 1) this.source = source;
 
-    const discovered = await this.source.discover();
-    const discoveredIds = new Set(discovered.map((d) => d.id));
-    for (const item of discovered) {
-      // agents[].skills allowlist：未列入的 Skill 不进索引（load 经 skills map 天然拒绝）
-      if (this.only && !this.only.has(item.id)) continue;
-      const skill: SkillDefinition = {
-        id: item.id,
-        name: item.meta.name,
-        description: item.meta.description,
-        filePath: item.filePath,
-        source: 'workspace',
-        disableModelInvocation: item.meta.disableModelInvocation,
-        requiredTools: item.meta.requiredTools,
-        command: item.meta.command,
-      };
-      this.skills.set(skill.id, skill);
+      const discovered = await source.discover();
+      for (const item of discovered) {
+        // agents[].skills allowlist：未列入的 Skill 不进索引（load 经 skills map 天然拒绝）
+        if (this.only && !this.only.has(item.id)) continue;
+        // 多层约定调用序 [共享层, agent 覆盖层…]：后写赢 = 覆盖语义（正常路径，不告警）
+        const skill: SkillDefinition = {
+          id: item.id,
+          name: item.meta.name,
+          description: item.meta.description,
+          filePath: item.filePath,
+          source: 'workspace',
+          // 首层=共享层、其余=agent 覆盖层；单层部署不标注（不冒充分层事实）
+          ...(dirs.length > 1 ? { layer: (dirIdx === 0 ? 'shared' : 'agent') as 'shared' | 'agent' } : {}),
+          disableModelInvocation: item.meta.disableModelInvocation,
+          requiredTools: item.meta.requiredTools,
+          command: item.meta.command,
+        };
+        this.skills.set(skill.id, skill);
+        this.sourceOf.set(skill.id, source);
+        seenIds.add(item.id);
+      }
     }
     // allowlist 中未命中的 id（拼写错 / Skill 目录未落地）——fail-loud，防「静默全关」
     if (this.only) {
       for (const id of this.only) {
-        if (!discoveredIds.has(id)) {
+        if (!seenIds.has(id)) {
           console.warn(
             `[Skills] agents[].skills id "${id}" not found in skill directory (typo, or not landed yet)`,
           );
@@ -309,7 +323,9 @@ export class DefaultSkillManager implements SkillManager {
     const skill = this.skills.get(skillId);
     if (!skill) return null;
 
-    return this.source.load(skillId, skill.filePath);
+    // 双层发现：各自 skill 回各自 source（agent 层覆盖后读到的必须是覆盖层文件）
+    const source = this.sourceOf.get(skillId) ?? this.source;
+    return source.load(skillId, skill.filePath);
   }
 
   list(): SkillDefinition[] {

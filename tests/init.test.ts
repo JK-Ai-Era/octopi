@@ -283,12 +283,15 @@ describe('init', () => {
       expect(res.skipped).toHaveLength(0);
     });
 
-    it('ensureAgentDirs seeds builtin skills into agent home', async () => {
+    it('ensureAgentDirs seeds builtin skills into the shared layer (not agent home)', async () => {
       await ensureAgentDirs('default', tempDir);
-      const skillsDir = join(tempDir, 'agents/default/skills');
-      expect(existsSync(join(skillsDir, 'document-authoring', 'SKILL.md'))).toBe(true);
-      expect(existsSync(join(skillsDir, 'docx', 'SKILL.md'))).toBe(true);
-      expect(existsSync(join(skillsDir, 'pptx', 'SKILL.md'))).toBe(true);
+      // C 方案（2026-11-23）：内置种子灌公共技能层 OCTOPI_HOME/skills，一次全共享
+      const sharedDir = join(tempDir, 'skills');
+      expect(existsSync(join(sharedDir, 'document-authoring', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(sharedDir, 'docx', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(sharedDir, 'pptx', 'SKILL.md'))).toBe(true);
+      // agent 覆盖层只放 role preset / 用户定制——不再落内置拷贝
+      expect(existsSync(join(tempDir, 'agents/default/skills/document-authoring'))).toBe(false);
     });
     it('later-added files are seeded; modified files stay user-owned (mixed-version)', () => {
       const src = join(tempDir, 'builtin2');

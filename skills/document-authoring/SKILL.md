@@ -24,14 +24,14 @@ description: "Shared base for designing and authoring professional documents (Wo
 
 ## Source of truth: repo `skills/`, and preflight before you build
 
-- **The repo's `skills/` tree is authoritative.** The deployed copy (`~/.octopi/agents/default/skills/`) is a mirror. If a skill seems missing, thin, or outdated, **go to the repo `skills/` tree first** — never fall back to leftover copies found elsewhere in the workspace (a real incident: obsolete scratch copies of format skills were silently used as authoritative, and the whole job ran on stale guidance).
+- **The repo's `skills/` tree is authoritative.** The runtime uses a **two-layer layout**: the shared layer (`$OCTOPI_HOME/skills/`, seeded from the package) mirrors the repo; per-agent layers (`$OCTOPI_HOME/agents/<id>/skills/`) are **override layers** — a same-named skill there intentionally wins over the shared copy (role presets, user customizations). If a skill seems missing, thin, or outdated, **go to the repo `skills/` tree first** — never fall back to leftover copies found elsewhere in the workspace (a real incident: obsolete scratch copies of format skills were silently used as authoritative, and the whole job ran on stale guidance).
 - **Run preflight before starting a build** (it also proves which QA tier you may claim — see qa.md):
 
 ```bash
 python3 ../document-authoring/scripts/preflight.py
 ```
 
-  Preflight fails loudly on **deploy drift** (missing / extra / changed files vs repo `skills/`) and probes dependencies (Python libs, `soffice`, node packages from your workdir, CJK font visibility, vision-capable models in config). Fix drift by re-syncing from repo `skills/` — never edit the deploy copy in place.
+  Preflight fails loudly on **shared-layer drift** (missing / extra / changed vs repo `skills/`) and reports **agent-layer overrides** (intentional, listed for awareness). It also probes dependencies (Python libs, `soffice`, node packages from your workdir, CJK font visibility, vision-capable models in config). Fix shared drift by re-syncing from repo `skills/` — never edit the shared layer in place to "match" the repo.
 
 ## Shared OOXML toolkit (`scripts/office/`)
 

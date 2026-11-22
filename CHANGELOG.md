@@ -132,6 +132,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.125.0 (2026-11-23)
+
+### feat(skills): 双层技能架构——公共技能层 + per-agent 覆盖层（C 方案）
+
+- **架构**（大哥拍板）：Skill 发现从「per-agent 拷贝」改为**双层**——公共技能层 `OCTOPI_HOME/skills/`（随包种子、一份全共享）+ per-agent 覆盖层 `agents/<id>/skills/`（role preset 技能、用户定制），**同名 skill 由 agent 层赢**。动机：通用技能 N 份拷贝 → 1 份（升级一处生效，drift 面从 N 收敛到 1），同时给 agent 私有技能留正式位置。「同名覆盖」是双层并存的合并规则，不是动机本身。
+- **实现**：`paths.sharedSkillsDir`（布局派生单一来源，与 sessions/knowledge 同规，不开新配置旋钮）；`DefaultSkillManager.discover` 接受目录数组按序合并（后层同 id 覆盖），`load()` 按 per-skill sourceOf 回源（覆盖后读到的必须是覆盖层文件），`SkillDefinition.layer` 标注来源层；builder/wire-agent-builder/config-bridge/run-assembly/gateway 五处接线（共享层先扫、agent 层赢）；`probeAgentHomeHealth` 双层计数（同名去重）；init 内置种子改灌公共层（copy-if-missing 语义不变），agent 覆盖层不再落内置拷贝。
+- **pre-flight 适配**（skills/document-authoring/scripts/preflight.py）：drift 检查分两面——共享层对仓库严检（FAIL），agent 覆盖层仅报告（OVERRIDE 列表 + 整层冗余拷贝告警）。
+- **迁移**：存量部署按哈希比对上移公共层（未改动的移动、已改动的留覆盖层当定制）；文档双语同步（AGENTS.md 布局树 / architecture.md §3.1 / context-layer-contracts.md）。
+- **验证**：全量 5771 测试通过（新增 `tests/skill-layers.test.ts` 10 例：覆盖语义/load 回源/layer 标注/allowlist 跨层/缺层容错/prompt 路径）；typecheck 0/0；build 零错；arch check-sync 绿；本部署 preflight DRIFT OK 实测。
+
 ## v0.124.2 (2026-11-23)
 
 ### feat(skills): document-authoring skill 修订（首战复盘 P0×4+P1×2 全落地）

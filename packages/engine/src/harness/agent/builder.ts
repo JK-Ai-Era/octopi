@@ -573,6 +573,8 @@ export class AgentBuilder {
   private _systemPrompt?: string;
   /** Skill 目录（SKILL.md）；build 时 discover 并注入 system prompt 索引 */
   private _skillDirectory?: string;
+  /** 公共技能层目录（双层发现：共享层先扫、agent 覆盖层同名赢）；缺省不启用共享层 */
+  private _skillSharedDirectory?: string;
   /** Skill id allowlist（agents[].skills）；未设置 = 全部启用 */
   private _skillAllowlist?: string[];
   private _skillManager?: import('../extension/plugin-ecosystem/skills/types.js').SkillManager;
@@ -839,6 +841,15 @@ export class AgentBuilder {
    */
   skillDirectory(dir: string): this {
     this._skillDirectory = expandHomePath(dir.trim());
+    return this;
+  }
+
+  /**
+   * 设置公共技能层目录（双层发现：共享层先扫，agent 层（skillDirectory）同名覆盖）。
+   * `~` 形态在此展开（与 skillDirectory 同规，幂等）。
+   */
+  skillSharedDirectory(dir: string): this {
+    this._skillSharedDirectory = expandHomePath(dir.trim());
     return this;
   }
 
@@ -1828,19 +1839,22 @@ export class AgentBuilder {
       systemPrompt = this.buildDefaultSystemPrompt();
     }
 
-    // Skill：目录 discover（或外部注入的 manager）
-    if (!this._skillManager && this._skillDirectory) {
+    // Skill：目录 discover（或外部注入的 manager）——双层：共享层先扫，agent 层同名赢
+    const skillDirs = [this._skillSharedDirectory, this._skillDirectory].filter(
+      (d): d is string => !!d,
+    );
+    if (!this._skillManager && skillDirs.length > 0) {
       const { DefaultSkillManager } = await import('../extension/plugin-ecosystem/skills/manager.js');
       const mgr = new DefaultSkillManager(
-        this._skillDirectory,
+        undefined,
         this._skillAllowlist ? { only: this._skillAllowlist } : undefined,
       );
       try {
-        await mgr.discover(this._skillDirectory);
+        await mgr.discover(skillDirs);
         this._skillManager = mgr;
       } catch (err) {
         console.warn(
-          `[octopi] skill discover failed (${this._skillDirectory}): ${err instanceof Error ? err.message : String(err)}`,
+          `[octopi] skill discover failed (${skillDirs.join(' + ')}): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
