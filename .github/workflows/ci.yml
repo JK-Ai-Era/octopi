@@ -1,19 +1,26 @@
 # CI — 每次 push / PR 都跑。
 #
-# 设计原则：徽章必须"绿得有意义"。一个亮着绿灯但只跑 lint 的徽章，比没有
-# 徽章更糟——它训练读者不相信它。所以这里跑的三件事，每一件都对应一个真实
-# 存在、且目前无任何自动检查的风险：
+# 设计原则：徽章必须"绿得有意义"。一个亮着绿灯但什么都没真正验证的徽章，
+# 比没有徽章更糟——它训练读者不相信它。这里三件检查，每件都对应一个真实
+# 存在、且此前无任何自动检查的退化：
 #
-#   1. npm test            → 5747 个测试。没有它，这些测试只是文件。
-#   2. generate:schema diff → AGENTS.md 要求"改 Zod 就重新生成 schema"，
-#                             但这条纪律完全靠人记得。忘了提交，对外发布的
-#                             schema 会与代码分叉，编辑器自动补全给出错误提示。
-#   3. npm run lint        → eslint + tests 类型检查 + webui tsc。
+#   1. npm test（build 之后）→ 5771 个测试。没有它，这些测试只是文件。
+#   2. schema 同步检查        → AGENTS.md 要求"改 Zod 就重新生成 schema"，
+#                              但这条纪律完全靠人记得。
+#   3. npm run lint           → eslint + tests 类型基线 + webui tsc。
 #
-# ⚠️ 顺序约束（实证得来，不是推测）：scripts/generate-octopi-schema.mjs 读的是
-# dist/config-schema/index.js（编译产物），而 dist/ 被 .gitignore 排除、CI 的
-# 全新 checkout 里并不存在。已验证：无 dist 时该脚本以 ERR_MODULE_NOT_FOUND
-# 失败。所以 schema 检查必须放在 build 之后，不能放在 test job 里凭空跑。
+# ⚠️ 两条实证约束（第一次运行全红后查明的，不是推测）：
+#
+#   (a) 测试依赖构建产物。测试里有 `@octopi-agent/engine/harness` 这类裸导入，
+#       它们经 package.json#exports 解析到 packages/engine/dist/，另有 gateway
+#       测试 fork 的子进程入口 run-serve-child.js 也在 dist 内。全新 checkout
+#       没有 dist，实测 52 个文件 / 136 个用例失败。所以 test job 必须先 build。
+#
+#   (b) 不要 `npm install --prefix packages/webui`。packages/webui 是 npm
+#       workspace 成员（workspaces: ["packages/*"]），root `npm ci` 已把它的
+#       依赖装到根 node_modules；实测 `tsc -p packages/webui --noEmit` 直接通过。
+#       反而 --prefix 会脱离 workspace 上下文去 registry 查内部包版本，而仓库
+#       版本长期领先于已发布版本（0.125.1 vs registry 0.122.0），导致 ETARGET。
 
 name: CI
 
@@ -28,18 +35,20 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # 测试不需要真实模型 key；显式置空，避免将来有人误把 key 加进 CI secrets
-  # 后，测试悄悄变成"依赖外部服务"的 e2e。
+  # 测试不需要真实模型 key；显式置空，防止将来有人误加 secret 后测试悄悄
+  # 变成依赖外部服务的 e2e。
   OPENAI_API_KEY: ''
 
 jobs:
-  test:
+  # build 是 test 和 schema 的前置。单独成 job 便于看清失败归属，
+  # 也让 lint 能并行、不被构建耗时拖慢。
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           # 与 package.json engines 一致（>=24）；Node 24 已是 Maintenance LTS。
           node-version: 24
@@ -49,47 +58,6 @@ jobs:
       # lockfile，那是事故。
       - run: npm ci
 
-      - name: Test
-        run: npm test
-
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - run: npm ci
-
-      # webui 有独立 lockfile，root npm ci 不装它。lint 的最后一步是
-      # `tsc -p packages/webui --noEmit`，缺它的依赖会失败。
-      - name: Install webui dependencies
-        run: npm install --prefix packages/webui
-
-      - name: Lint, test types, webui types
-        run: npm run lint
-
-  build-and-schema:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - run: npm ci
-
-      - name: Install webui dependencies
-        run: npm install --prefix packages/webui
-
-      # build 产出 dist/（含 config-schema），下面的 schema 检查依赖它。
       - name: Build
         run: npm run build
 
@@ -102,3 +70,50 @@ jobs:
             echo "::error::octopi.schema.json is stale. Run 'npm run generate:schema' and commit the result."
             exit 1
           fi
+
+      # 测试依赖 dist（见文件头约束 a），所以把构建产物传给 test job，
+      # 避免重复构建。
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/
+            packages/*/dist/
+          retention-days: 1
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+
+      - name: Test
+        run: npm test
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint, test types, webui types
+        run: npm run lint

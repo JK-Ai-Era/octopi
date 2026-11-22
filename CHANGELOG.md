@@ -132,7 +132,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.125.1 (2026-11-23)
+## v0.125.2 (2026-11-23)
+
+### fix(ci): build before test, drop bogus webui install, actions v5
+
+- **首次运行全红的三个真实原因**（都是配置与实际不符，而非测试本身退化）：
+  1. **test job 缺 build**：测试内有 `@octopi-agent/engine/harness` 等裸导入，经 `package.json#exports` 解析到 `packages/engine/dist/`；`tests/gateway-agent-signal-mount.test.ts` 等还会 fork 子进程，其入口 `run-serve-child.js` 同样在 dist 内。全新 checkout 无 dist → 实测 52 个文件 / 136 个用例失败（CI 为 58/157，平台差异下少数用例不同）。
+  2. **`npm install --prefix packages/webui` 是错的**：`packages/webui` 属 workspace 成员（`workspaces: ["packages/*"]`），root `npm ci` 已把依赖装到根 `node_modules`，实测 `tsc -p packages/webui --noEmit` 直接通过。反而 `--prefix` 脱离 workspace 上下文去 registry 查内部包版本，而仓库版本长期领先于已发布版本（0.125.1 vs registry 0.122.0），触发 `ETARGET`。
+  3. `actions/checkout@v4`、`actions/setup-node@v4` 内部仍是 node20 运行时，被强制在 node24 上跑并产生弃用警告 → 升 `@v5`。
+- **改法**：拆出独立 `build` job（构建 + schema 同步检查），产物以 artifact 传给 `needs: build` 的 `test` job；`lint` 并行且只跑 `npm ci`。两条约束以注释写在 workflow 文件头，防止后续被"优化"回去。
+- **端到端验证**（本机模拟完整链路 `clean → npm ci → build → 删 dist → artifact → npm test`）：564 文件 / 5771 用例全绿；`generate:schema` 零 diff。Linux runner 上的最终结果以 CI 自身为准。
+
+---
 
 ### ci: add GitHub Actions workflow (test · lint · schema-sync)
 
