@@ -14,13 +14,24 @@ description: "Shared base for designing and authoring professional documents (Wo
 
 | Skill | Owns |
 |-------|------|
-| `document-authoring` (this) | design doctrine ([design.md](design.md)), QA protocol ([qa.md](qa.md)), shared OOXML toolkit (`scripts/office/`), PDF rendering helper (`scripts/convert_pdf_to_images.py`) |
+| `document-authoring` (this) | design doctrine ([design.md](design.md)), QA protocol ([qa.md](qa.md)), shared OOXML toolkit (`scripts/office/`), PDF rendering helper (`scripts/convert_pdf_to_images.py`), preflight & QA checkers (`scripts/`) |
 | `docx` | Word creation (docx-js), XML editing, tracked changes, comments |
 | `pdf` | PDF creation/manipulation (reportlab/pdf-lib/pypdf/qpdf), form filling |
-| `pptx` | Template-based slide editing, from-scratch decks (pptxgenjs) |
+| `pptx` | Template-based slide editing, from-scratch decks (pptxgenjs) + layout helpers (`scripts/layout-helpers.mjs`) |
 | `xlsx` | Spreadsheet creation/editing (openpyxl/pandas), formula recalculation |
 
 **Path convention**: paths in format skills are relative to that skill's directory; the shared toolkit is referenced as `../document-authoring/...`. "Skill root" always means the directory containing the SKILL.md you are reading.
+
+## Source of truth: repo `skills/`, and preflight before you build
+
+- **The repo's `skills/` tree is authoritative.** The deployed copy (`~/.octopi/agents/default/skills/`) is a mirror. If a skill seems missing, thin, or outdated, **go to the repo `skills/` tree first** — never fall back to leftover copies found elsewhere in the workspace (a real incident: obsolete scratch copies of format skills were silently used as authoritative, and the whole job ran on stale guidance).
+- **Run preflight before starting a build** (it also proves which QA tier you may claim — see qa.md):
+
+```bash
+python3 ../document-authoring/scripts/preflight.py
+```
+
+  Preflight fails loudly on **deploy drift** (missing / extra / changed files vs repo `skills/`) and probes dependencies (Python libs, `soffice`, node packages from your workdir, CJK font visibility, vision-capable models in config). Fix drift by re-syncing from repo `skills/` — never edit the deploy copy in place.
 
 ## Shared OOXML toolkit (`scripts/office/`)
 

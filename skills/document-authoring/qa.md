@@ -6,20 +6,66 @@
 
 1. Generate the output.
 2. **Render** to images (pipeline below).
-3. **Fresh-eyes review** of the rendered images with the checklist.
-4. **List the issues found** — including minor ones. (If empty, look again more critically.)
-5. Fix the issues.
-6. **Re-render and re-check the affected pages** — one fix often creates another problem.
-7. Repeat until a full pass reveals no new issues.
+3. **Machine checks first** (measured QA below) — geometry, overflow, pixels, content. These are cheap and deterministic; run them before spending review attention.
+4. **Visual review at the highest tier available** (tiers below) with the checklist.
+5. **List the issues found** — including minor ones. (If empty, look again more critically.)
+6. Fix the issues.
+7. **Re-render and re-check the affected pages** — one fix often creates another problem.
+8. Repeat until a full pass reveals no new issues.
 
 **Do not declare success until you've completed at least one fix-and-verify cycle.** A "done" report without QA is a claim, not an effect.
 
-## Fresh-eyes review
+## Visual review tiers (declare which tier ran)
+
+Visual QA has three tiers. **Whatever tier you reach, state it explicitly in the delivery note** — including "aesthetic judgment unverified" when below tier 1. A geometry-clean deck can still be ugly; only say what was actually checked.
+
+| Tier | What ran | What it proves |
+|------|----------|----------------|
+| **1 — Real vision** | A human or an image-capable reviewer actually looked at rendered pages | aesthetics + layout |
+| **2 — Measured only** | Machine checks (below) passed, no one saw the images | layout/geometry/content only — **declare: "aesthetic judgment unverified"** |
+| **3 — Content only** | Render pipeline unavailable; extraction-level checks only | content only — declare visual QA skipped entirely |
+
+- Probe your vision capability honestly (e.g. `file_read` a rendered PNG — if you receive an image you can see it; if you receive bytes/metadata you cannot). An agent without an image channel cannot do tier 1 by looking — do not pretend a pixel report is "review".
+- Tier 1 review can be **your own eyes or a subagent's** — but only a reviewer that genuinely receives images counts.
+
+## Fresh-eyes review (tier 1)
 
 You've been staring at the code and will see what you expect, not what's there.
 
-- If delegation is available (e.g. `delegate_dispatch`), send the rendered images to a subagent for visual inspection — even for 2–3 pages. Include expected content per image and the checklist below; ask for ALL issues, including minor ones.
-- If no delegation is available, review yourself with the checklist after a deliberate reset (re-read expectations first, scan page by page against the checklist, zoom into dense areas).
+- If delegation is available (e.g. `delegate_dispatch`) and the subagent has an image channel, send the rendered images for visual inspection — even for 2–3 pages. Include expected content per image and the checklist below; ask for ALL issues, including minor ones.
+- **Subagent dispatch protocol** (learned from a real QA failure where the reviewer mixed old and new renders):
+  - **Render-set hygiene**: every image batch carries its render timestamp; delete or clearly supersede old renders before dispatching. Tell the reviewer: "report only against images with timestamp ≥ <T>; if you see an older render, say so instead of reporting it."
+  - **Ask for measurements, not impressions**: findings must cite page + coordinates/box + measured value (e.g. "p7, gap between card bottom (y≈4.92) and footer (y≈5.34) is 0.42in but the two rows differ by 0.1in").
+  - **Image/source distinction**: the reviewer must label each finding as "seen in the rendered image" vs "read from source/layout data" — mixed reports caused double-fixes and false alarms.
+- If no reviewer with vision exists, you are at tier 2: run measured QA and declare it.
+
+## Measured QA (tier 2 — always run, even under tier 1)
+
+Machine checks catch what eyes miss (a 0.05in drift, a 1-in-255 contrast failure) and give tier-1 reviewers clean images to judge. Scripts live in `scripts/` of this skill:
+
+```bash
+# layout geometry: out-of-bounds, text overflow estimate, text overlaps, z-order occlusion
+node scripts/check-layout.cjs output.pptx
+
+# pixel gaps: declared-empty regions must render with zero ink
+#   manifest.json is EMITTED BY YOUR BUILD (see pptx skill layout-helpers.mjs
+#   emptyGap/expectInk/writeManifest) — never hand-copy coordinates
+python3 scripts/check-pixels.py manifest.json shots/
+
+# content placeholders at word boundaries (no "NaN" ⊂ "governance" false hits)
+python3 scripts/check-content.py output.pptx [--allow '{VAR}']
+
+# palette contrast before you commit colors (prints WCAG ratios)
+python3 scripts/contrast.py 028090 FFFFFF
+```
+
+- **Manifest is the single source of truth** for pixel checks: regions come from the build code (`emptyGap` calls beside the layout), so they cannot drift from the layout. A hand-copied region list is how checks go stale and misfire.
+- The layout script is `.cjs` on purpose — a `.js` script flips CJS/ESM with the ambient `package.json`; extension-agnostic tools must pin their module system.
+- Found-zero-on-first-pass rule applies here too: if a machine check reports clean but you never fed it real regions, it proved nothing.
+
+## Human spot-check (aesthetic backstop)
+
+When the deliverable is visually judged and tier 1 was not reached by the requester's own eyes, offer the cheap backstop: **send 3–5 key pages (cover, densest content page, conclusion) to the user for a glance before final delivery**. Human eyes are the only visual channel that is always available — use them for the aesthetic verdict instead of guessing.
 
 ## Render pipeline (all formats)
 

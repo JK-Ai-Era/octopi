@@ -82,6 +82,24 @@ slide.addText("• First item", { ... });  // Creates double bullets
 
 ---
 
+## Layout Helpers (use these instead of hand-math)
+
+`scripts/layout-helpers.mjs` derives text-frame geometry from one anchor — the failure mode it prevents is computing a card rect and its inner text box as two separate hand calculations that drift apart:
+
+```js
+import { Layout, card, chip, codeBlock, emptyGap, writeManifest } from "./scripts/layout-helpers.mjs";
+
+const L = new Layout({ slideW: 10, slideH: 5.625 });
+const { frame } = card(slide, { x: 0.5, y: 1.2, w: 9, h: 2.4, fill: "FFFFFF", accent: "028090" }, L);
+slide.addText("Title", { ...frame, fontSize: 14, bold: true });  // frame = card rect minus inset
+chip(slide, "Apache-2.0", { x: 0.5, y: 4.0, w: 1.6, h: 0.34, fill: "E6F7F4", color: "025F68" });
+
+// QA manifest: declare gaps that must render empty -- emitted beside the build,
+// consumed by ../document-authoring/scripts/check-pixels.py (single source of truth)
+emptyGap(L, 2, "gap between cards and footer", [0.5, 4.94, 9.5, 5.32]);
+writeManifest(L, "manifest.json", "output.pptx");
+```
+
 ## Shapes
 
 ```javascript

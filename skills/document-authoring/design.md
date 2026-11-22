@@ -27,6 +27,27 @@ Apply this whenever output is visually judged. The goal is work that looks **des
 
 Don't default to generic blue. Choose colors that reflect the specific topic.
 
+### Contrast is measurable — check before committing
+
+"Contrast is accessibility" is not a vibe. Every **foreground × background pair you actually use** must pass WCAG: **≥ 4.5:1 for body text**, **≥ 3:1 for large text (≥24pt) and non-text graphics**, and **≥ 3:1 between adjacent color bands** (two fills that touch must be distinguishable). Measure with `scripts/contrast.py <fg> <bg>` — never eyeball it.
+
+The starter palettes are starting points, **not pre-cleared pairings**. Full measured matrix (OK = ≥4.5 body-safe · LARGE = 3–4.5 large/graphics only · NO = <3, never as a text pair):
+
+| Palette | wht×Pri | wht×Sec | wht×Acc | blk×Pri | blk×Sec | blk×Acc | Pri×Sec | Pri×Acc | Sec×Acc |
+|---|---|---|---|---|---|---|---|---|---|
+| Midnight Executive | 13.83 OK | 1.39 NO | 1.00 NO | 1.52 NO | 15.15 OK | 21.00 OK | 9.98 OK | 13.83 OK | 1.39 NO |
+| Forest & Moss | 7.55 OK | 2.17 NO | 1.09 NO | 2.78 NO | 9.69 OK | 19.26 OK | 3.48 LARGE | 6.92 OK | 1.99 NO |
+| Coral Energy | 3.03 LARGE | 1.24 NO | 10.15 OK | 6.93 OK | 16.89 OK | 2.07 NO | 2.44 NO | 3.35 LARGE | 8.17 OK |
+| Warm Terracotta | 4.92 OK | 1.25 NO | 1.98 NO | 4.26 LARGE | 16.86 OK | 10.62 OK | 3.95 LARGE | 2.49 NO | 1.59 NO |
+| Ocean Gradient | 7.52 OK | 5.42 OK | 13.67 OK | 2.79 NO | 3.88 LARGE | 1.54 NO | 1.39 NO | 1.82 NO | 2.52 NO |
+| Charcoal Minimal | 9.90 OK | 1.12 NO | 16.10 OK | 2.12 NO | 18.76 OK | 1.30 NO | 8.84 OK | 1.63 NO | 14.38 OK |
+| Teal Trust | 4.67 OK | 2.98 NO | 2.26 NO | 4.49 LARGE | 7.04 OK | 9.28 OK | 1.57 NO | 2.06 NO | 1.32 NO |
+| Berry & Cream | 9.86 OK | 4.49 LARGE | 1.28 NO | 2.13 NO | 4.68 OK | 16.36 OK | 2.20 NO | 7.68 OK | 3.49 LARGE |
+| Sage Calm | 2.31 NO | 2.91 NO | 4.36 LARGE | 9.09 OK | 7.22 OK | 4.82 OK | 1.26 NO | 1.89 NO | 1.50 NO |
+| Cherry Bold | 8.89 OK | 1.07 NO | 10.15 OK | 2.36 NO | 19.64 OK | 2.07 NO | 8.31 OK | 1.14 NO | 9.49 OK |
+
+Traps this table exists to prevent: **Teal Trust** `00A896` on white = 2.98 (fails body text!), `02C39A` on `028090` = 2.06 (fails even as graphics) — its "Secondary/Accent" only work as fills behind **dark** text or as large graphics on the primary. **Sage Calm** and **Coral Energy** primaries fail white body text (2.31 / 3.03). When a pairing lands in NO/LARGE, either darken/lighten one side or change which color carries the text — and re-measure.
+
 ## Typography
 
 **Choose an interesting font pairing** — a header font with personality plus a clean body font.
@@ -42,15 +63,24 @@ Don't default to generic blue. Choose colors that reflect the specific topic.
 | Palatino | Garamond |
 | Consolas | Calibri |
 
-| Element | Size (slides) | Size (documents) |
-|---------|---------------|------------------|
-| Title | 36–44pt bold | 18–24pt bold |
-| Section header | 20–24pt bold | 13–16pt bold |
-| Body text | 14–16pt | 10.5–12pt |
-| Captions | 10–12pt muted | 8–9pt muted |
+| Element | Size (slides, pitch) | Size (slides, dense) | Size (documents) |
+|---------|----------------------|----------------------|------------------|
+| Title | 36–44pt bold | 22–26pt bold | 18–24pt bold |
+| Section header | 20–24pt bold | 16–18pt bold | 13–16pt bold |
+| Body text | 14–16pt | 11–13pt | 10.5–12pt |
+| Captions | 10–12pt muted | 8.5–10pt muted | 8–9pt muted |
 
 - Titles need strong size contrast (36pt+ vs 14–16pt body on slides) or they don't stand out.
-- **CJK text**: pick fonts that render on the target platform (e.g. 宋体/微软雅黑 on Windows, PingFang SC on macOS) and set a sensible fallback; avoid exotic display fonts for body text.
+- **Two slide profiles** — pick per deck type, not per slide: **pitch** (roadshow/announcement: few words, big type) vs **dense** (technical walkthrough/explainer: real sentences, tables, code — 22–26pt titles are correct here, and forcing 36pt titles into a dense deck is how overflow starts).
+
+### CJK typesetting rules
+
+- **Font choice**: pick fonts that render on the target platform (e.g. 宋体/微软雅黑 on Windows, PingFang SC on macOS) and set a sensible fallback; avoid exotic display fonts for body text. Verify availability (`fc-match "PingFang SC"`) — a missing CJK font silently substitutes and reflows every box.
+- **No orphan characters (孤字)**: a wrapped line must not end in a single character, and a single character must not sit alone on the last line. When a paragraph nearly fits, edit the wording — never let the wrap decide. Check every short text box after render.
+- **Never break inside tokens**: `${VAR}`, `octopi-agent`, `@octopi-agent/core`, URLs, code identifiers — these must survive line wrapping intact. In PPTX text boxes set the box wide enough (or insert an explicit line break at a sensible point); a `${VAR}` split across two lines reads as two different things.
+- **Punctuation discipline**: closing punctuation (，。、；：？！」』）) never starts a line; opening punctuation (「『（) never ends one. In tight boxes, adjust wording or box width rather than accepting a punctuation hang.
+- **Columns of fixed-width text** (code, aligned values, ASCII tables): compute width from character counts and font metrics — **never hand-count spaces** to align columns. In OOXML, use tabular layout or separate boxes positioned by computed x-coordinates instead of space padding.
+- **Mixed CJK/latin spacing**: keep a consistent rule (e.g. no extra spaces around latin tokens inside CJK, or a fixed thin gap) and apply it everywhere — inconsistent spacing is the most visible "assembled" tell in Chinese decks.
 
 ## Layout & spacing
 

@@ -53,6 +53,7 @@ Don't create boring slides. Plain bullets on a white background won't impress an
 Follow `../document-authoring/qa.md` — the loop is non-negotiable: render to images, fresh-eyes inspection (delegate when available), list issues, fix, re-render affected slides, repeat until a clean pass. For PPTX specifically:
 
 - Render: `python ../document-authoring/scripts/office/soffice.py --headless --convert-to pdf output.pptx` then `python ../document-authoring/scripts/convert_pdf_to_images.py output.pdf shots/`.
+- Machine checks (before/alongside visual review — full protocol in `../document-authoring/qa.md`): `node ../document-authoring/scripts/check-layout.cjs output.pptx` for geometry, `python ../document-authoring/scripts/check-content.py output.pptx` for placeholders, `python ../document-authoring/scripts/check-pixels.py manifest.json shots/` for declared gaps (manifest emitted by your build via `scripts/layout-helpers.mjs` `emptyGap`/`writeManifest` — never hand-copy regions).
 - Content QA first: extract with `document_read`; grep for leftover placeholder text:
   ```bash
   python ../document-authoring/scripts/office/unpack.py output.pptx unpacked/ && grep -riE "xxxx|lorem|ipsum|this.*(page|slide).*layout" unpacked/ppt/slides/

@@ -132,6 +132,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.124.2 (2026-11-23)
+
+### feat(skills): document-authoring skill 修订（首战复盘 P0×4+P1×2 全落地）
+
+- **内容**：PPT 实战复盘（`arch/doc-authoring-skill-retro.md`）驱动的 skill 修订——①qa.md 视觉 QA 分层（tier1 真视觉 / tier2 测量式 + 强制声明「审美未验证」/ tier3 仅内容）+ 子代理发包规范（渲染时间戳、只报当前图、引测量值、图文区分）+ 关键页人眼抽查兜底；②`scripts/preflight.py` 部署副本↔仓库 drift 检测（missing/extra/changed fail-loud；空目录=事故形态点名）+ 依赖/soffice/字体/视觉能力探测；③design.md 十套调色板 WCAG 对比度矩阵（`contrast.py` 实测，含 Teal Trust 2.98:1 等陷阱标注）+ CJK 断行守则（孤字、token 不断行、悬挂标点、列宽计算不手数空格）+ pitch/dense 双字号 profile；④SKILL.md 定源纪律：repo `skills/` 为准、部署副本只读镜像、skill 缺失先查仓库（防静默降级 scratch 旧版重演）。
+- **工具收编**（P1）：`check-layout.cjs`（几何/溢出/遮挡/z序，读 presentation.xml 不硬编码）、`check-pixels.py`（manifest 驱动像素间隙，PPI 由渲染推导，empty/ink 双断言）、`check-content.py`（词边界占位符扫描 + GUID/rels 误报排除 + `--allow` 白名单）、`contrast.py`（WCAG 实测）；`pptx/scripts/layout-helpers.mjs`（card/chip/codeBlock 单 anchor 派生 text frame，消灭双坐标手算；`emptyGap`/`writeManifest` 构建侧产出 manifest = 检查区单一事实源）。
+- **烟测即抓三个真 bug**：check-layout 扩展名 CJS/ESM 歧义（`.js` 在 repo 根被 `type:module` 判 ESM）、参数过滤 off-by-one、check-content 把 OOXML 图形名/GUID 误报为 slot——均已修并以首战 PPTX 实测全绿。
+- **清理**：scratch/doc-skills-migration 迁移残局（198 旧版文件，防再次误读）删除；OP-SKILL-1 三步收束归档。
+
 ## v0.124.1 (2026-11-23)
 
 ### refactor(context): 删除工具结果信封机制，只留 imageRef 引用（零兼容层）
