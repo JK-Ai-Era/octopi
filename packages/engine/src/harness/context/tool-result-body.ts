@@ -70,3 +70,19 @@ export function stripContentBlocks(result: unknown): unknown {
   const { [TOOL_RESULT_CONTENT_BLOCKS]: _dropped, ...rest } = record;
   return rest;
 }
+
+/**
+ * 信封块替换副本（水合/变换用）。总是返回携带新块的副本——调用方负责判变化
+ * （无信封/未变化时 hydrate 等调用方自行短路，避免无谓分配）。
+ *
+ * @param result - 工具原始返回对象
+ * @param blocks - 新的内容块数组
+ * @returns 替换信封后的结果副本
+ */
+export function withContentBlocks(
+  result: unknown,
+  blocks: Array<{ type: string; [key: string]: unknown }>,
+): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  return { ...(result as Record<string, unknown>), [TOOL_RESULT_CONTENT_BLOCKS]: blocks };
+}

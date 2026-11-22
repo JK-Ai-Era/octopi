@@ -91,6 +91,17 @@ export interface DefaultContextEngineConfig {
   budgetAllocator?: BudgetAllocator;
   /** Token 估算器 */
   tokenEstimator?: TokenEstimator;
+  /**
+   * 附件图像水合根（sessionsDir；附件路线 wire 面，arch/file-read-image-view.md §2.1）：
+   * 请求构建前把 root 内 url 形态 ImageBlock 换成 data 形态（base64 只活在请求里）。
+   * 缺省不水合（url 形态按不可发形态降级文字指针）。
+   */
+  imageAttachRoot?: string;
+  /**
+   * 水合成本闸（仅用户上传区；派生区载荷已闸过不重闸）。
+   * 缺省 DEFAULT_IMAGE_COST_GATE；接线到 imageView 配置为残余项（OP-IMG-1）。
+   */
+  imageAttachGate?: import('../extension/plugin-ecosystem/tools/image-view.js').ImageCostGateConfig;
   /** 智能路由器配置 */
   /** 头部保护消息数（默认 5：交接快照的「任务前因」）。压缩时刻的选段策略。 */
   protectFirstN?: number;
@@ -218,11 +229,13 @@ export class DefaultContextEngine implements ContextEngine {
 
   private config: Required<Omit<
     DefaultContextEngineConfig,
-    'compactEngine' | 'historyAging' | 'extensionHooks' | 'extensionIdentity' | 'transformStore'
+    'compactEngine' | 'historyAging' | 'extensionHooks' | 'extensionIdentity' | 'transformStore' | 'imageAttachRoot' | 'imageAttachGate'
   >> & {
     compactEngine: CompactEngine;
     historyAging: ToolResultAgingOptions;
     transformStore: TransformStore;
+    imageAttachRoot?: string;
+    imageAttachGate?: import('../extension/plugin-ecosystem/tools/image-view.js').ImageCostGateConfig;
   };
 
   private states: Map<string, CompactState> = new Map();
@@ -260,6 +273,8 @@ export class DefaultContextEngine implements ContextEngine {
       messageSelector: config?.messageSelector ?? new DefaultMessageSelector(),
       budgetAllocator: config?.budgetAllocator ?? new DefaultBudgetAllocator(),
       tokenEstimator,
+      imageAttachRoot: config?.imageAttachRoot,
+      imageAttachGate: config?.imageAttachGate,
       protectFirstN: config?.protectFirstN ?? 5,
       protectLastN: config?.protectLastN ?? 20,
       summaryBudget: config?.summaryBudget ?? {},
@@ -390,7 +405,12 @@ export class DefaultContextEngine implements ContextEngine {
         });
       }
       const view: RequestView = {
-        messages: this.buildLlmMessages(folded.view, systemPrompt, agingPlan, modelInput),
+        messages: this.buildLlmMessages(
+          await this.hydrateView(folded.view, sessionId, modelInput, agingPlan.agedIds),
+          systemPrompt,
+          agingPlan,
+          modelInput,
+        ),
         tools,
       };
       // 会话请求基线（摘要路径以它为比对对象；messages 半区含老化形态）
@@ -515,14 +535,19 @@ export class DefaultContextEngine implements ContextEngine {
     });
     // overflow 阶梯的统一出口读数：每条分支都只算一次 view + 一次估算 + 一次决策。
     // 此前同一表达式在 4 个分支内被手抄 4 次（每分支 3–4 遍），是「改一边忘另一边」的形状。
-    const overflowExit = (ms: Message[]): {
+    const overflowExit = async (ms: Message[]): Promise<{
       messages: LLMMessage[];
       estimatedTokens: number;
       readingSource: 'calibrated' | 'anchored' | 'raw';
       requestView: RequestView;
-    } => {
+    }> => {
       const requestView: RequestView = {
-        messages: this.buildLlmMessages(ms, systemPrompt, overflowAgingPlan, modelInput),
+        messages: this.buildLlmMessages(
+          await this.hydrateView(ms, sessionId, modelInput, overflowAgingPlan.agedIds),
+          systemPrompt,
+          overflowAgingPlan,
+          modelInput,
+        ),
         tools,
       };
       const rawTokens = estimateLLMMessages(requestView.messages) + rawEstimator.estimateTools(tools);
@@ -543,7 +568,12 @@ export class DefaultContextEngine implements ContextEngine {
       effectiveMessagesLimit;
     if (selection.overflow.length === 0 && fits(view)) {
       const sessionView: RequestView = {
-        messages: this.buildLlmMessages(view, systemPrompt, agingPlan, modelInput),
+        messages: this.buildLlmMessages(
+          await this.hydrateView(view, sessionId, modelInput, agingPlan.agedIds),
+          systemPrompt,
+          agingPlan,
+          modelInput,
+        ),
         tools,
       };
       // 会话请求基线：摘要路径以它为比对对象（messages 半区含老化形态）
@@ -616,7 +646,7 @@ export class DefaultContextEngine implements ContextEngine {
         durationMs: Date.now() - overflowStart,
         cancelled: true,
       });
-      const exit = overflowExit(view);
+      const exit = await overflowExit(view);
       this.freezeUsagePair(stateKey, estimateLLMMessages(exit.messages) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
       return {
         messages: exit.messages, // MJ1：与 fits 同源（overflow 豁免 aging）
@@ -670,7 +700,7 @@ export class DefaultContextEngine implements ContextEngine {
           durationMs: Date.now() - overflowStart,
           cancelled: true,
         });
-        const exit = overflowExit(view);
+        const exit = await overflowExit(view);
         this.freezeUsagePair(stateKey, estimateLLMMessages(exit.messages) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
         return {
           messages: exit.messages,
@@ -698,7 +728,7 @@ export class DefaultContextEngine implements ContextEngine {
             'This session is no longer suitable for continued work, or the current model does not fit the task scale — start a new session or switch to a model with a larger context window.',
           durationMs: Date.now() - overflowStart,
         });
-        const exit = overflowExit(view);
+        const exit = await overflowExit(view);
         this.freezeUsagePair(stateKey, estimateLLMMessages(exit.messages) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
         return {
           messages: exit.messages,
@@ -763,7 +793,7 @@ export class DefaultContextEngine implements ContextEngine {
         error: `overflow_convergence_failed: ${err instanceof Error ? err.message : String(err)}`,
         durationMs: Date.now() - overflowStart,
       });
-      const exit = overflowExit(view);
+      const exit = await overflowExit(view);
       this.freezeUsagePair(stateKey, estimateLLMMessages(exit.messages) + rawEstimator.estimateTools(tools), modelKey); // 装配出口=配对冻结点（早退轮也冻，防丢样）
       return {
         messages: exit.messages,
@@ -778,7 +808,12 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 8. 构建 LLM 消息（发送视图带本轮 overflow aging——豁免版只影响本次请求，
     // 下一 turn 正常规则照常（视图级、原文不动、天然可撤销）
-    const llmMessages = this.buildLlmMessages(view, systemPrompt, overflowAgingPlan, modelInput);
+    const llmMessages = this.buildLlmMessages(
+      await this.hydrateView(view, sessionId, modelInput, overflowAgingPlan.agedIds),
+      systemPrompt,
+      overflowAgingPlan,
+      modelInput,
+    );
     const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
     const decision = this.sizeLedger.decisionTokensWithSource(
       this.calKey(stateKey, modelKey),
@@ -1484,7 +1519,8 @@ export class DefaultContextEngine implements ContextEngine {
       // 请求视图（原子产物）：messages 与 tools 同批解析，摘要请求原样复用这份前缀。
       // 旧实现只取 messages 半区、tools 由调用方另传——2026-11-12 前缀缓存事故的形状。
       // recordBaseline:false —— 摘要请求不覆盖会话基线
-      const view = this.buildRequestView({
+      const view = await this.buildRequestView({
+        sessionId,
         messages: folded.view,
         systemPrompt,
         tools,
@@ -1762,7 +1798,8 @@ export class DefaultContextEngine implements ContextEngine {
     // messages：那正是「两半各走一路」的入口（评审 del-b5ffc13a MIN-4）。
     // recordBaseline:false —— 摘要请求不覆盖会话基线，否则护栏永远一致（形同虚设）
     const requestView = systemText
-      ? this.buildRequestView({
+      ? await this.buildRequestView({
+          sessionId,
           messages: folded.view,
           systemPrompt: systemText,
           tools: params.tools ?? [],
@@ -2348,7 +2385,8 @@ export class DefaultContextEngine implements ContextEngine {
    * @param input.aging - 老化计划（上游决策；此处不重新推导，避免静默推进）
    * @returns 请求视图
    */
-  private buildRequestView(input: {
+  private async buildRequestView(input: {
+    sessionId: string;
     messages: Message[];
     systemPrompt: string;
     tools: LLMToolDefinition[];
@@ -2364,11 +2402,17 @@ export class DefaultContextEngine implements ContextEngine {
     recordBaseline?: boolean;
     /** 基线所属状态键（与 compactStateKey 同源） */
     stateKey?: string;
-  }): RequestView {
+  }): Promise<RequestView> {
     // 只产出前缀两半；尾部摘要指令由 compact 引擎独占追加（单一追加点，
     // 否则重压/旁路会出现两条尾部指令——评审 del-b5ffc13a NIT-8）。
     const view: RequestView = {
-      messages: this.buildLlmMessages(input.messages, input.systemPrompt, input.aging, input.modelInput),
+      // 水合与主请求同源（M3：前缀逐字节同形是缓存契约）——摘要路径同样水合
+      messages: this.buildLlmMessages(
+        await this.hydrateView(input.messages, input.sessionId, input.modelInput, input.aging.agedIds),
+        input.systemPrompt,
+        input.aging,
+        input.modelInput,
+      ),
       tools: input.tools,
     };
     if (input.recordBaseline !== false && input.stateKey) {
@@ -2470,9 +2514,11 @@ export class DefaultContextEngine implements ContextEngine {
           : { url };
         return source;
       }
+      const rawNote = (block as unknown as { note?: unknown }).note;
+      const noteSuffix = typeof rawNote === 'string' && rawNote ? ` | ${rawNote}` : '';
       return {
         type: 'text',
-        text: `[image: ${typeof b.alt === 'string' ? b.alt : 'attachment'}${url ? ` | path: ${url}` : ''}${modelAcceptsInput(modelInput, 'image') ? '' : ' (model has no image input; shown as text)'}]`,
+        text: `[image: ${typeof b.alt === 'string' ? b.alt : 'attachment'}${url ? ` | path: ${url}` : ''}${noteSuffix}${modelAcceptsInput(modelInput, 'image') ? '' : ' (model has no image input; shown as text)'}]`,
       };
     }
     if (b.type === 'audio') {
@@ -2496,6 +2542,38 @@ export class DefaultContextEngine implements ContextEngine {
       };
     }
     return { type: 'text', text: `[${b.type} content]` };
+  }
+
+  /**
+   * 附件图像水合（wire 前，附件路线 wire 面）：url 形态 ImageBlock → data 形态。
+   * 挂全部请求构建点（含摘要路径——前缀与主请求逐字节同形是缓存契约，M3）；
+   * 无 imageAttachRoot 时原样返回。
+   *
+   * @param view - 视图消息（只读）
+   * @param sessionId - 会话 id（containment 根按会话取）
+   * @param modelInput - 模型输入模态（无图像能力直接跳过）
+   * @param agedIds - 已老化结果（其信封块必不发——跳过）
+   * @returns 克隆后的消息数组
+   */
+  private async hydrateView(
+    view: Message[],
+    sessionId: string,
+    modelInput?: ModelInputType[],
+    agedIds?: ReadonlySet<string>,
+  ): Promise<Message[]> {
+    const dir = this.config.imageAttachRoot;
+    if (!dir) return view;
+    const { hydrateAttachmentImages } = await import('../session/attachments/hydrate.js');
+    const { resolveSessionAttachmentsPaths } = await import('../session/attachments/paths.js');
+    const attachmentsRoot = resolveSessionAttachmentsPaths(dir, sessionId).root;
+    const derivedRoot = `${attachmentsRoot.replace(/[/\\]attachments$/, '')}/derived`;
+    return hydrateAttachmentImages(view, {
+      roots: [attachmentsRoot, derivedRoot],
+      derivedRoot,
+      ...(this.config.imageAttachGate ? { gate: this.config.imageAttachGate } : {}),
+      ...(modelInput ? { modelInput: modelInput as Array<'text' | 'image' | 'audio' | 'video'> } : {}),
+      ...(agedIds ? { agedToolCallIds: agedIds } : {}),
+    });
   }
 
   /**

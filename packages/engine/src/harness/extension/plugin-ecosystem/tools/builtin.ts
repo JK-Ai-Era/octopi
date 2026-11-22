@@ -446,7 +446,8 @@ function baseName(path: string): string {
 /**
  * file_read 图像分支：成本闸 + view 三态 + 富内容信封（arch/file-read-image-view.md §2.1/§2.2）。
  *
- * 信封契约：result 携带 `contentBlocks: [ImageBlock]`，文本指针走 toolResultBody（剥离
+ * 信封契约（附件路线）：结果只放引用——`attachmentId` + contentBlocks **url 形态**块
+ * （`{type:'image', url, mimeType, alt}`，零 base64）；文本指针走 toolResultBody（剥离
  * contentBlocks，防 base64 入 tool 文本）；convertMessage 消费 contentBlocks 挂图。
  * core 回退序列化（normalizeMessagesForLlm）不识别信封——该路仅无 convertToLlm 的裸
  * loop 使用，engine 工具必经 harness 主链路，实际不相交（若未来相交再收口）。
@@ -467,6 +468,7 @@ async function renderImageResult(
   viewArg: string | undefined,
   gateOverride: Partial<ImageCostGateConfig> | undefined,
   canSeeImage: boolean,
+  attachments: import('@octopi-agent/core/types/tools.js').ToolAttachmentStore | undefined,
 ): Promise<Record<string, unknown>> {
   const view = parseViewArg(viewArg);
   if (!VIEW_VALUES.includes(view)) {
@@ -506,18 +508,70 @@ async function renderImageResult(
 
   const gate: ImageCostGateConfig = { ...DEFAULT_IMAGE_COST_GATE, ...gateOverride };
   const gated = await applyImageCostGate(raw, image.format, gate);
-  return {
+  return attachGatedImage({
+    pointer,
+    gated,
+    attachments,
+    attachName: baseName(path),
+    alt: `${image.format} image (${baseName(path)})`,
+  });
+}
+
+/**
+ * 附件路线挂图（§0/§2.1）：gated 载荷入 session attachments，结果只放引用
+ * （attachmentId + url 形态块）。base64 永不进 result/JSONL。
+ *
+ * 无附件端口 / 入库失败：显式降级指针（attached:false + 原因标注），不硬错不静默。
+ *
+ * @param params - 指针元信息 + 闸后载荷 + 附件写入口
+ * @returns file_read 结果对象（指针 ± 引用块）
+ */
+async function attachGatedImage(params: {
+  pointer: Record<string, unknown>;
+  gated: import('./image-view.js').CostGatedImage;
+  attachments: import('@octopi-agent/core/types/tools.js').ToolAttachmentStore | undefined;
+  attachName: string;
+  alt: string;
+}): Promise<Record<string, unknown>> {
+  const { pointer, gated, attachments, attachName, alt } = params;
+  const merged: Record<string, unknown> = {
     ...pointer,
-    // GIF → PNG / WebP 兜底转码后 MIME 跟实际载荷走
-    mimeType: gated.block.mimeType ?? image.mime,
+    mimeType: gated.mimeType,
     width: gated.width,
     height: gated.height,
     sizeBytes: gated.sizeBytes,
     resized: gated.resized,
-    attached: true,
-    contentBlocks: [{ ...gated.block, alt: `${image.format} image (${baseName(path)})` }],
     ...(gated.note ? { note: gated.note } : {}),
   };
+  const prefix = gated.note ? `${gated.note}; ` : '';
+  if (!attachments) {
+    return {
+      ...merged,
+      attached: false,
+      note: `${prefix}(attachment store unavailable; image not attached — pointer only)`,
+    };
+  }
+  try {
+    const attachmentId = await attachments.save({
+      name: attachName,
+      mimeType: gated.mimeType,
+      data: gated.bytes,
+    });
+    return {
+      ...merged,
+      attached: true,
+      attachmentId,
+      contentBlocks: [
+        { type: 'image', url: attachments.absolutePath(attachmentId), mimeType: gated.mimeType, alt },
+      ],
+    };
+  } catch (err) {
+    return {
+      ...merged,
+      attached: false,
+      note: `${prefix}(attachment save failed: ${err instanceof Error ? err.message : String(err)}; pointer only)`,
+    };
+  }
 }
 
 /**
@@ -541,6 +595,7 @@ async function renderSvgResult(
   view: 'render' | 'both',
   gateOverride: Partial<ImageCostGateConfig> | undefined,
   canSeeImage: boolean,
+  attachments: import('@octopi-agent/core/types/tools.js').ToolAttachmentStore | undefined,
 ): Promise<Record<string, unknown>> {
   const size = probeSvgSize(raw.toString('utf-8'));
   const pointer: Record<string, unknown> = {
@@ -567,30 +622,29 @@ async function renderSvgResult(
 
   const gate: ImageCostGateConfig = { ...DEFAULT_IMAGE_COST_GATE, ...gateOverride };
   const gated = await renderSvgImage(raw, gate);
-  const block = { ...gated.block, alt: `svg render (${baseName(path)})` };
+  const attach = await attachGatedImage({
+    pointer,
+    gated,
+    attachments,
+    attachName: `${baseName(path)}.render.png`,
+    alt: `svg render (${baseName(path)})`,
+  });
   if (view === 'render') {
-    // render 独立结果：平铺尺寸 = 渲染载荷尺寸
-    return {
-      ...pointer,
-      renderedMime: 'image/png',
-      width: gated.width,
-      height: gated.height,
-      sizeBytes: gated.sizeBytes,
-      resized: gated.resized,
-      attached: true,
-      contentBlocks: [block],
-    };
+    // render 独立结果：平铺尺寸 = 渲染载荷尺寸；mimeType 保源 MIME（载荷在 renderedMime）
+    return { ...attach, mimeType: 'image/svg+xml', renderedMime: gated.mimeType };
   }
-  // both：源文件元信息（width/height/sizeBytes）不被渲染载荷覆盖——字段语义分离
+  // both：源文件元信息（width/height/sizeBytes）不被渲染载荷覆盖——字段语义分离；
+  // resized 沿载荷语义（=渲染载荷是否被缩放），与 render/光栅一致
   return {
-    ...pointer,
-    renderedMime: 'image/png',
+    ...attach,
+    mimeType: 'image/svg+xml',
+    width: size?.width ?? null,
+    height: size?.height ?? null,
+    sizeBytes: raw.byteLength,
+    renderedMime: gated.mimeType,
     renderedWidth: gated.width,
     renderedHeight: gated.height,
     renderedBytes: gated.sizeBytes,
-    renderedResized: gated.resized,
-    attached: true,
-    contentBlocks: [block],
   };
 }
 
@@ -698,6 +752,7 @@ export function createFileReadTool(options?: {
             args.view as string | undefined,
             options?.imageView,
             modelAcceptsInput(context?.modelInput, 'image'),
+            context?.attachments,
           );
         }
 
@@ -717,6 +772,7 @@ export function createFileReadTool(options?: {
                 svgView,
                 options?.imageView,
                 modelAcceptsInput(context?.modelInput, 'image'),
+                context?.attachments,
               );
             } catch (err) {
               // both 渲染失败不连坐源码：源码走文本路照常返回，失败显式标注（degrade explicitly）

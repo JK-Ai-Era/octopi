@@ -110,6 +110,8 @@ export function resolveContextEngine(
       ...(extension?.sessionsDir
         ? {
             transformStore: new JsonlTransformStore({ sessionsDir: extension.sessionsDir }),
+            // 附件路线 wire 面：url 形态图像块在请求构建时水合（base64 不落持久层）
+            imageAttachRoot: extension.sessionsDir,
           }
         : {}),
       ...(extension?.hooks === undefined ? {} : {

@@ -338,6 +338,8 @@ export class ThinkExecutor {
                 messages: [],
                 // 显式决策：think 子系统模型输入未声明 = 纯文本（P1 语义；要挂图需接子系统模型声明）
                 modelInput: undefined,
+                // 显式决策：子系统无会话附件存储——媒体工具降级为指针（不塞字节回 result）
+                attachments: undefined,
                 fileEffects: createUnconfiguredFileEffects(),
                 memoryEffects: createUnconfiguredMemoryEffects(),
                 // 与 convertToAgentTool 同构：工具部分输出通道（think 子系统 loop 未挂 onToolUpdate 时为空）

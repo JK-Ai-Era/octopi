@@ -74,7 +74,7 @@ describe('装配出口一致性（防漂移）', () => {
     expect(diffPrefixFingerprint(fingerprintRequestView(a as never), fingerprintRequestView(b as never))).toEqual(['messages']);
   });
 
-  it('红线：buildRequestView 必须透传 aging（漏传 → 与基线分叉）', () => {
+  it('红线：buildRequestView 必须透传 aging（漏传 → 与基线分叉）', async () => {
     const eng = new DefaultContextEngine({} as never);
     const h = history(['body '.repeat(400), 'body '.repeat(300)]);
     const opts = resolveToolResultAgingOptions({});
@@ -84,9 +84,9 @@ describe('装配出口一致性（防漂移）', () => {
     const plan = computeToolResultAgingPlan(h, opts, { toolAgers: perTool as never, ignoreTurnBoundary: true });
 
     // 走真实出口：buildRequestView 内部必须用传进来的 aging 产出 messages
-    const rv = (eng as unknown as {
-      buildRequestView: (i: unknown) => { messages: unknown[]; tools: unknown[] };
-    }).buildRequestView({ messages: h, systemPrompt: sys, tools, aging: plan, recordBaseline: false });
+    const rv = await (eng as unknown as {
+      buildRequestView: (i: unknown) => Promise<{ messages: unknown[]; tools: unknown[] }>;
+    }).buildRequestView({ sessionId: 's', messages: h, systemPrompt: sys, tools, aging: plan, recordBaseline: false });
 
     // 若 buildRequestView 忽略 aging（漏传/退化），此处会因「未老化」而失败
     const direct = (eng as unknown as { buildLlmMessages: (a: unknown, b: string, c: unknown) => unknown })

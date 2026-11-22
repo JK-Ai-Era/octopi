@@ -132,6 +132,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.124.0 (2026-11-23)
+
+### feat(context): file_read 图像通道改附件路线（结果只放引用、wire 水合、持久层零 base64）
+
+- **内容**：按 2026-11-23 拍板（M1-B）把 v0.123.0 的信封路线替换为附件路线：图像字节落会话存储、tool 结果只放引用（`attachmentId` + url 形态 `contentBlocks`），wire 请求构建时才水合为 data 形态——session JSONL 从此零 base64（`tests/harness/file-read-image.test.ts` 零 base64 钉）。`contentBlocks` 信封机制保留为通用富内容通道（data 形态块仍受支持）。
+- **派生媒体层（评审 B1 结构修正）**：可再生的读图派生品不进「用户资产 + 硬配额」的 attachments manifest——独立内容寻址区 `sessions/<sid>/derived/`（id = sha256(载荷)+载荷 MIME 扩展名）：同字节天然去重、与用户上传配额隔离、扩展名按载荷格式（「认内容不认扩展名」契约入库侧一致）、跨进程幂等写无 manifest 竞态。
+- **水合（wire 面）**：`session/attachments/hydrate.ts`——真坐标 containment（`isPathUnderRoots`；词法前缀可被目录符号链接绕过，评审 B2 实测）+ `readFileNoFollow`；派生区已闸载荷**不重闸**（结果元信息与 wire 载荷恒一致）；用户上传区过成本闸；stat 预检 + 消息级 memo（写后不可变）。
+- **摘要前缀同形（评审 M3）**：`buildRequestView`（摘要/压缩请求唯一出口）同源水合——前缀与主请求逐字节同形的缓存契约不因图像破缺，`checkSummaryPrefix` 护栏不误报。
+- **显式降级（评审 M6/M4）**：水合失败把**原因**写进块 note（wire 降级文字带因）+ `console.warn`；模型无图像能力 / 结果已老化 → 整批跳过（不读盘不编码）。
+- **验证**：全量 5761 测试通过（新增 13：真存储去重/配额隔离/扩展名、符号链接逃逸回归、file_read→派生存储→assemble 全链、原因标注、能力/老化跳过）；`npm run typecheck` 门禁 0/0；独立对抗式评审（2 blocker / 7 major / 13 minor / 3 nit）逐条处置——B1/B2/M3/M5/M6 修复、M2/M4/M7/M8 部分处置（M2 随派生层消解、M4 落能力/老化跳过+memo、M7 门禁清零、M8 补真存储链路）；残余（imageView 闸接线水合侧、工具写入口能力收敛、派生区回收策略）挂 `arch/open-problems.md` OP-IMG-1。
+- **无破坏性变更**：v0.123.0 信封 data 形态结果仍可读（水合对 data 形态直通）。
+
 ## v0.123.0 (2026-11-23)
 
 ### feat(context): file_read 图像查看与 SVG 双模式（vision 判据接线、富内容信封、成本闸、老化与估算同形）

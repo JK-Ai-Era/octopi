@@ -11,6 +11,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveSessionAttachmentsPaths } from './paths.js';
+import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
 import { attachmentExtension, isPathInside, sanitizeAttachmentName } from './sanitize.js';
 import {
   classifyAttachmentKind,
@@ -520,4 +521,65 @@ function guessMime(name: string): string {
     '.py': 'text/x-python',
   };
   return map[ext] ?? 'application/octet-stream';
+}
+
+/**
+ * 工具侧派生媒体存储（附件路线，arch/file-read-image-view.md §0/§2.1）。
+ *
+ * **放错层修正（M1-B 评审 B1）**：可再生的读图派生品不进「用户资产 + 硬配额」的
+ * session attachments manifest——它会与用户上传争 8 张配额（确定性功能死亡）、
+ * 污染附件面板/语义。派生媒体住独立内容寻址区 `sessions/<sid>/derived/`：
+ * - **内容寻址**：id = sha256(载荷) + 载荷 MIME 扩展名——同字节天然去重，
+ *   重读零成本、无配额计数、无 manifest、跨进程无竞态（幂等写）；
+ * - **扩展名按载荷**：file_read「认内容不认扩展名」契约在入库侧保持一致（M5）；
+ * - 回收：派生品可再生，随会话目录生命周期（归档/删除策略见 OP-IMG-1）。
+ *
+ * @param opts - sessionsDir + 会话 id
+ * @returns ToolAttachmentStore（core 契约）
+ */
+export function createToolAttachmentStore(opts: {
+  sessionsDir: string;
+  sessionId: string;
+}): import('@octopi-agent/core/types/tools.js').ToolAttachmentStore {
+  const derivedRoot = join(
+    opts.sessionsDir,
+    toSessionFileName(opts.sessionId),
+    'derived',
+  );
+  return {
+    async save(input: { name: string; mimeType: string; data: Uint8Array }): Promise<string> {
+      const hash = createHash('sha256').update(input.data).digest('hex');
+      const id = `${hash}${extensionForMime(input.mimeType)}`;
+      const abs = join(derivedRoot, id);
+      await mkdir(derivedRoot, { recursive: true });
+      try {
+        await writeFile(abs, Buffer.from(input.data), { flag: 'wx' });
+      } catch (err) {
+        // 内容寻址：EEXIST = 同字节已入库（并发同写/重读），幂等复用；其余 fail-loud
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      return id;
+    },
+    absolutePath(attachmentId: string): string {
+      const abs = join(derivedRoot, attachmentId);
+      if (!isPathInside(derivedRoot, abs)) throw new Error('invalid attachment id');
+      return abs;
+    },
+  };
+}
+
+/** 载荷 MIME → 扩展名（入库名按载荷格式，不沿用源文件名） */
+function extensionForMime(mimeType: string): string {
+  switch (mimeType) {
+    case 'image/png':
+      return '.png';
+    case 'image/jpeg':
+      return '.jpg';
+    case 'image/webp':
+      return '.webp';
+    case 'image/gif':
+      return '.gif';
+    default:
+      return '.bin';
+  }
 }

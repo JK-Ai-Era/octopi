@@ -9,8 +9,6 @@
  * 判据（是否挂图）不在本模块——统一走 core `modelAcceptsInput`（§2.3 唯一出口）。
  */
 
-import type { ImageBlock } from '@octopi-agent/core/types.js';
-
 /** 支持的光栅格式（嗅探面） */
 export type RasterFormat = 'png' | 'jpeg' | 'gif' | 'webp' | 'bmp';
 
@@ -162,12 +160,15 @@ export const DEFAULT_IMAGE_COST_GATE: ImageCostGateConfig = {
   quality: 82,
 };
 
-/** 成本闸处置产物：降采样后的内嵌载荷 + 指针元信息 */
+/** 成本闸处置产物：降采样后的载荷字节 + 指针元信息（附件路线：字节入附件存储，结果只放引用） */
 export interface CostGatedImage {
-  block: ImageBlock;
+  /** 成本闸后载荷字节（入附件存储；永不进 result/JSONL） */
+  bytes: Buffer;
+  /** 实际载荷 MIME（GIF 转码 / WebP 兜底后跟载荷走） */
+  mimeType: string;
   width: number;
   height: number;
-  /** 编码后字节数（内嵌载荷） */
+  /** 载荷字节数 */
   sizeBytes: number;
   resized: boolean;
   /** 处置标注（如「动图取首帧」「maxBytes 兜底转码」）；无特殊处置不带 */
@@ -217,7 +218,8 @@ export async function applyImageCostGate(
   // 无缩放且体积已在闸内：原样放行（不重编码——无损输入不降质，JPEG 不二次有损）
   if (!needsResize && format !== 'gif' && raw.byteLength <= gate.maxBytes) {
     return {
-      block: { type: 'image', data: raw.toString('base64'), mimeType: MIME_BY_FORMAT[format], alt: `${format} image` },
+      bytes: raw,
+      mimeType: MIME_BY_FORMAT[format],
       width,
       height,
       sizeBytes: raw.byteLength,
@@ -260,12 +262,8 @@ export async function applyImageCostGate(
   }
 
   return {
-    block: {
-      type: 'image',
-      data: out.data.toString('base64'),
-      mimeType: MIME_BY_FORMAT[outFormat],
-      alt: `${format} image`,
-    },
+    bytes: out.data,
+    mimeType: MIME_BY_FORMAT[outFormat],
     width: out.info.width,
     height: out.info.height,
     sizeBytes: out.info.size,
@@ -437,12 +435,8 @@ export async function renderSvgImage(raw: Buffer, gate: ImageCostGateConfig): Pr
   }
 
   return {
-    block: {
-      type: 'image',
-      data: rendered.toString('base64'),
-      mimeType: 'image/png',
-      alt: 'svg render',
-    },
+    bytes: rendered,
+    mimeType: 'image/png',
     width,
     height,
     sizeBytes: rendered.byteLength,

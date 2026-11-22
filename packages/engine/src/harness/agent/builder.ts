@@ -1886,6 +1886,8 @@ export class AgentBuilder {
             transformStore: new (await import('../session/transform-store.js')).JsonlTransformStore({
               sessionsDir: this._runnerConfig.sessionsDir,
             }),
+            // 附件路线 wire 面：url 形态图像块在请求构建时水合（base64 不落持久层）
+            imageAttachRoot: this._runnerConfig.sessionsDir,
           }
         : {}),
       ...(this._runnerConfig?.extensionHooks === undefined ? {} : {

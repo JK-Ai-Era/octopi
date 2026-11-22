@@ -33,6 +33,8 @@ export interface RunToolRuntime {
   memoryEffects: import("@octopi-agent/core/types/tools.js").MemoryEffectJournal;
   /** 图像降级判据能力半区（与 wire 同穿；镜像 ToolExecutionContext.modelInput） */
   modelInput?: import("@octopi-agent/core/types/agent-definition.js").ModelInputType[];
+  /** 会话附件写入口（附件路线；镜像 ToolExecutionContext.attachments） */
+  attachments?: import("@octopi-agent/core/types/tools.js").ToolAttachmentStore;
   /** L2 允许根 */
   pathRoots?: string[];
   /** Session undo roots that file tools must not write (D6-a) */

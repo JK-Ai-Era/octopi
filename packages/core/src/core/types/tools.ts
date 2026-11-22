@@ -164,6 +164,30 @@ export interface MemoryEffectJournal {
   recordDelete(domain: MemoryEffectDomain, id: string, before: unknown): Promise<void>;
 }
 
+/**
+ * 会话附件写入口（附件路线）。
+ *
+ * 与 photo_capture → sessionAttachment 同款通路：媒体字节进附件存储，
+ * 工具结果只携带引用。同一会话的写入串行（服务内部串行化）。
+ */
+export interface ToolAttachmentStore {
+  /**
+   * 注册会话附件（字节入库）。
+   *
+   * @param input - 文件名 + MIME + 字节（成本闸后载荷）
+   * @returns 附件 id（引用）
+   * @throws 超限 / 类型不允许（fail-loud，工具侧降级处置）
+   */
+  save(input: { name: string; mimeType: string; data: Uint8Array }): Promise<string>;
+  /**
+   * 附件绝对路径（挂 url 形态 ImageBlock 引用用）。
+   *
+   * @param attachmentId - save 返回的附件 id
+   * @returns 绝对路径
+   */
+  absolutePath(attachmentId: string): string;
+}
+
 /** 工具执行上下文 */
 export interface ToolExecutionContext {
   sessionId: string;
@@ -196,6 +220,13 @@ export interface ToolExecutionContext {
    * 由 Runner 注入 TurnFileUndoLog；缺失时文件写工具必须拒绝执行。
    */
   fileEffects: ToolFileEffects;
+  /**
+   * 会话附件写入口（附件路线，arch/file-read-image-view.md §0/§2.1）：
+   * 媒体字节入库（session attachments），工具结果只放引用（attachmentId + url 形态块）。
+   * 由 Runner 经 RunToolRuntime 注入；缺失 = 无附件存储，工具必须显式降级
+   * （指针 + 标注），禁止把字节塞回 result（base64 不入持久层）。
+   */
+  attachments?: ToolAttachmentStore;
   /**
    * 记忆面效应 journal（L3）。memory 写工具/装饰器经此记账。
    * 由 Runner 注入；缺失时记忆写必须拒绝执行（禁止静默免记）。

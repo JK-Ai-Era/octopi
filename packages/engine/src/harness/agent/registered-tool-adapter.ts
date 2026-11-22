@@ -66,6 +66,8 @@ export function registeredToolToAgentTool(tool: RegisteredTool): {
           messages: scope?.toolRuntime?.messages ?? [],
           // 模型输入模态镜像（P1 判据链）；显式传——逐字段枚举点漏字段已发生过两次
           modelInput: scope?.toolRuntime?.modelInput,
+          // 附件路线写入口镜像（缺失 = 工具显式降级）
+          attachments: scope?.toolRuntime?.attachments,
           abortSignal: signal,
           // 工具部分输出通道（展示用途）；无转发器时不给工具假通道
           ...(onUpdate ? { onUpdate } : {}),

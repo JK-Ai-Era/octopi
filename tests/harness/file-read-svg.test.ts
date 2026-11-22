@@ -41,6 +41,8 @@ function toolContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionCo
     messages: [],
     // P1 语义：能力声明缺省 = 纯文本——测试默认声明 vision
     modelInput: ['text', 'image'],
+    // 附件路线：默认给假附件存储（引用路线的前置）
+    attachments: fakeAttachmentStore().store,
     fileEffects: {
       recordWrite: async () => {},
       recordDelete: async () => {},
@@ -53,6 +55,31 @@ function toolContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionCo
   } as ToolExecutionContext;
 }
 
+/** 假附件存储（附件路线：字节入库、结果只放引用） */
+function fakeAttachmentStore(): { store: ToolExecutionContext['attachments']; paths: Map<string, string> } {
+  const paths = new Map<string, string>();
+  let n = 0;
+  return {
+    paths,
+    store: {
+      async save(input: { name: string; mimeType: string; data: Uint8Array }): Promise<string> {
+        const { mkdir } = await import('node:fs/promises');
+        const id = `att-${++n}`;
+        await mkdir(join(dir, 'attach-store'), { recursive: true });
+        const abs = join(dir, 'attach-store', `${id}-${input.name}`);
+        await writeFile(abs, Buffer.from(input.data));
+        paths.set(id, abs);
+        return id;
+      },
+      absolutePath(attachmentId: string): string {
+        const p = paths.get(attachmentId);
+        if (!p) throw new Error(`unknown attachment ${attachmentId}`);
+        return p;
+      },
+    },
+  };
+}
+
 async function readSvg(
   path: string,
   args: Record<string, unknown> = {},
@@ -62,12 +89,14 @@ async function readSvg(
   return (await tool.handler({ path, ...args }, context)) as Record<string, unknown>;
 }
 
-/** 解码 contentBlocks[0] 的 PNG 并采样 (x,y) 像素 */
+/** 解码 contentBlocks[0] 引用的 PNG 并采样 (x,y) 像素（附件路线：载荷在 url 文件） */
 async function pixelAt(result: Record<string, unknown>, x: number, y: number): Promise<[number, number, number]> {
-  const blocks = result.contentBlocks as { data: string; mimeType: string }[] | undefined;
+  const blocks = result.contentBlocks as { url: string; mimeType: string }[] | undefined;
   expect(blocks).toHaveLength(1);
+  if (!blocks) throw new Error('no contentBlocks');
   expect(blocks[0].mimeType).toBe('image/png');
-  const png = Buffer.from(blocks[0].data, 'base64');
+  const { readFile } = await import('node:fs/promises');
+  const png = await readFile(blocks[0].url);
   const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
   const idx = (y * info.width + x) * info.channels;
   return [data[idx], data[idx + 1], data[idx + 2]];

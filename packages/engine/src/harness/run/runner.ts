@@ -2020,6 +2020,13 @@ export class SessionAwareRunner {
           // 图像能力半区（P2，arch/file-read-image-view.md §2.3）：file_read 是否挂图的判据，
           // 从 run 级模型快照取（与 summarize/bound 同源）
           modelInput: resolvedModel?.input,
+          // 附件路线（§0/§2.1）：媒体字节入 session attachments、结果只放引用。
+          // 无 sessionsDir 不给端口——工具显式降级，禁止字节回 result。
+          attachments: this.config.sessionsDir
+            ? (
+                await import('../session/attachments/service.js')
+              ).createToolAttachmentStore({ sessionsDir: this.config.sessionsDir, sessionId })
+            : undefined,
         },
       };
 

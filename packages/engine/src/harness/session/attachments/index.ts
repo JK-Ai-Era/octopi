@@ -11,3 +11,4 @@ export * from './inject.js';
 export * from './intent.js';
 export * from './llm-intent.js';
 export * from './recall-index.js';
+export * from './hydrate.js';

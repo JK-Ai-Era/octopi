@@ -28,11 +28,36 @@ import {
 } from '@octopi-agent/engine/harness/context/tool-result-body.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 import type { Message, ToolResult } from '@octopi-agent/core/types.js';
-import type { ToolExecutionContext } from '@octopi-agent/core/types/tools.js';
+import type { ToolAttachmentStore, ToolExecutionContext } from '@octopi-agent/core/types/tools.js';
 
 // ── fixtures ──────────────────────────────────────────────────────────
 
 let dir: string;
+
+/** 内存/落盘假附件存储（附件路线：字节入库、结果只放引用） */
+function fakeAttachmentStore(): { store: ToolAttachmentStore; paths: Map<string, string> } {
+  const paths = new Map<string, string>();
+  let n = 0;
+  return {
+    paths,
+    store: {
+      async save(input: { name: string; mimeType: string; data: Uint8Array }): Promise<string> {
+        const { mkdir } = await import('node:fs/promises');
+        const id = `att-${++n}`;
+        await mkdir(join(dir, 'attach-store'), { recursive: true });
+        const abs = join(dir, 'attach-store', `${id}-${input.name}`);
+        await writeFile(abs, Buffer.from(input.data));
+        paths.set(id, abs);
+        return id;
+      },
+      absolutePath(attachmentId: string): string {
+        const p = paths.get(attachmentId);
+        if (!p) throw new Error(`unknown attachment ${attachmentId}`);
+        return p;
+      },
+    },
+  };
+}
 
 async function pngFixture(width: number, height: number, name: string): Promise<string> {
   const path = join(dir, name);
@@ -49,6 +74,8 @@ function toolContext(overrides?: Partial<ToolExecutionContext>): ToolExecutionCo
     messages: [],
     // P1 语义：能力声明缺省 = 纯文本（file_read 不挂图）——测试默认声明 vision
     modelInput: ['text', 'image'],
+    // 附件路线：默认给假附件存储（引用路线的前置）
+    attachments: fakeAttachmentStore().store,
     fileEffects: {
       recordWrite: async () => {},
       recordDelete: async () => {},
@@ -78,27 +105,33 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-// ── 重放一致：序列化往返（§5）────────────────────────────────────────
+// ── 引用路线：序列化往返与零 base64（§0/§2.1）────────────────────────
 
-describe('图像块序列化往返（session jsonl 持久面）', () => {
-  it('Message JSON 往返后信封块不丢不变', async () => {
+describe('引用路线：序列化往返与零 base64（M1 钉）', () => {
+  it('结果只放引用：JSON 往返后引用块不丢、全文零 base64', async () => {
     const p = await pngFixture(16, 16, 'roundtrip.png');
-    const res = await readImage(p);
+    const { readFile } = await import('node:fs/promises');
+    const result = await readImage(p);
+    // M1 钉：result 不携带图像字节（iVBOR = PNG base64 魔数）
+    const json = JSON.stringify(result);
+    expect(json).not.toContain('iVBOR');
+    expect(json.length).toBeLessThan(4000);
+    expect(result.attachmentId).toBeTruthy();
+
     const messages: Message[] = [
-      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: res }] },
+      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result }], timestamp: Date.now() },
     ];
     const revived = JSON.parse(JSON.stringify(messages)) as Message[];
     const blocks = extractContentBlocks(revived[0].toolResults?.[0].result);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].type).toBe('image');
-    expect((blocks[0] as { data: string }).data).toBe(
-      (res.contentBlocks as { data: string }[])[0].data,
-    );
-    // 序列化往返不改变正文剥离行为（base64 永不入 tool 文本）
-    expect(toolResultBody(revived[0].toolResults![0])).toBe(toolResultBody({ result: res }));
-    expect(toolResultBody(revived[0].toolResults![0])).not.toContain(
-      (res.contentBlocks as { data: string }[])[0].data,
-    );
+    const url = (blocks[0] as unknown as { url: string }).url;
+    expect(url).toBeTruthy();
+    // 引用可读回载荷（附件存储 = 字节唯一居所）
+    expect((await readFile(url)).length).toBeGreaterThan(0);
+    // 序列化往返不改变正文剥离行为（信封永不入 tool 文本）
+    expect(toolResultBody(revived[0].toolResults![0])).toBe(toolResultBody({ result }));
+    expect(toolResultBody(revived[0].toolResults![0])).not.toContain('contentBlocks');
   });
 
   it('展示投影剥离信封（gateway conversation adapter 同源）', async () => {
@@ -110,6 +143,15 @@ describe('图像块序列化往返（session jsonl 持久面）', () => {
     // 无信封结果原样返回同一引用（避免无谓分配）
     const plain = { content: 'hello' };
     expect(stripContentBlocks(plain)).toBe(plain);
+  });
+
+  it('无附件端口（库路径）→ 显式降级指针，不塞字节', async () => {
+    const p = await pngFixture(60, 60, 'nostore.png');
+    const result = await readImage(p, {}, toolContext({ attachments: undefined }));
+    expect(result.attached).toBe(false);
+    expect(extractContentBlocks(result)).toHaveLength(0);
+    expect(String(result.note)).toContain('attachment store unavailable');
+    expect(JSON.stringify(result)).not.toContain('iVBOR');
   });
 });
 
@@ -156,7 +198,7 @@ describe('成本闸：降采样 + 上限 fail-loud', () => {
     expect(gated.resized).toBe(true);
     expect(Math.max(gated.width, gated.height)).toBeLessThanOrEqual(DEFAULT_IMAGE_COST_GATE.maxEdge);
     expect(gated.sizeBytes).toBeLessThanOrEqual(DEFAULT_IMAGE_COST_GATE.maxBytes);
-    expect(gated.block.data).toBeTruthy();
+    expect(gated.bytes.length).toBeGreaterThan(0);
   });
 
   it('小图不放大（withoutEnlargement）', async () => {
@@ -369,7 +411,7 @@ describe('评审修复回归（光栅）', () => {
     const original = await readFile(p);
     const gated = await applyImageCostGate(original, 'png', DEFAULT_IMAGE_COST_GATE);
     expect(gated.resized).toBe(false);
-    expect(Buffer.from(gated.block.data, 'base64').equals(original)).toBe(true);
+    expect(gated.bytes.equals(original)).toBe(true);
   });
 
   it('噪点 PNG 超 maxBytes：WebP 兜底转码而非报错（M4）', async () => {
@@ -378,7 +420,7 @@ describe('评审修复回归（光栅）', () => {
     const png = await sharp(noise, { raw: { width: 1600, height: 1200, channels: 3 } }).png().toBuffer();
     const gated = await applyImageCostGate(png, 'png', DEFAULT_IMAGE_COST_GATE);
     expect(gated.resized).toBe(true);
-    expect(gated.block.mimeType).toBe('image/webp');
+    expect(gated.mimeType).toBe('image/webp');
     expect(String(gated.note)).toContain('transcoded to webp');
     expect(gated.sizeBytes).toBeLessThanOrEqual(DEFAULT_IMAGE_COST_GATE.maxBytes);
   });

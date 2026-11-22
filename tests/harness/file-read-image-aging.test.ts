@@ -26,7 +26,8 @@ import {
   estimateLLMMessages,
 } from '@octopi-agent/engine/harness/context/token-estimator.js';
 import { IMAGE_TOKEN_ESTIMATE } from '@octopi-agent/engine/harness/context/token-constants.js';
-import type { Message, LLMMessage } from '@octopi-agent/core/types.js';
+import type { Message } from '@octopi-agent/core/types.js';
+import type { LLMMessage } from '@octopi-agent/core/interfaces/model-provider.js';
 
 // ── fixtures ──────────────────────────────────────────────────────────
 
@@ -101,8 +102,9 @@ describe('老化计划集成（base64 不滞留视图）', () => {
         role: 'assistant',
         content: '',
         toolCalls: [{ id: 'c1', name: 'file_read', arguments: { path: '/tmp/demo.png' } }],
+        timestamp: Date.now(),
       },
-      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: imageResult() }] },
+      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: imageResult() }], timestamp: Date.now() },
     ];
     const opts = resolveToolResultAgingOptions();
     const agers = collectToolAgers([{ name: 'file_read', ageResult: tool.ageResult }]);
@@ -126,12 +128,12 @@ describe('token 估算：信封图像块计入', () => {
 
   it('信封贡献 ≈ 图像固定成本 + label（不再漏计为 0）', () => {
     const withEnv: Message[] = [
-      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: imageResult() }] },
+      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: imageResult() }], timestamp: Date.now() },
     ];
     const stripped = imageResult();
     delete stripped.contentBlocks;
     const without: Message[] = [
-      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: stripped }] },
+      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: stripped }], timestamp: Date.now() },
     ];
     const delta = est.estimateMessages(withEnv) - est.estimateMessages(without);
     // 图像固定成本 + '[image: …]' label + 1 条聚合消息开销
@@ -142,7 +144,7 @@ describe('token 估算：信封图像块计入', () => {
   it('同形红线：domain 口径与 wire（LLM）口径读数差 < 1%', () => {
     const result = imageResult();
     const domain: Message[] = [
-      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result }] },
+      { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result }], timestamp: Date.now() },
     ];
     // wire 形状（convertMessage tool 分派）：tool 文本指针 + 一条 engine-authored user 消息挂图
     const wire: LLMMessage[] = [
