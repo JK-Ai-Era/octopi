@@ -20,9 +20,11 @@ export { getTextContent, hasMediaContent } from './messages.js';
 
 // ── 模型能力 / 工具策略 ──
 export type {
+  ModelInputType,
   ModelInfo,
   ToolPolicy,
 } from './agent-definition.js';
+export { modelAcceptsInput } from './agent-definition.js';
 export { DEFAULT_CONTEXT_WINDOW } from './model-info.js';
 
 // ── Session ──

@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 import type { Message, SessionMeta } from '@octopi-agent/core/types.js';
 import type { SessionData } from '../types.js';
+import { stripContentBlocks } from '../../context/tool-result-body.js';
 import type { SessionAclService } from '../../governance/session-acl/service.js';
 import type { EffectiveSessionRights, SessionParticipant, SessionRights } from '../../governance/session-acl/types.js';
 import { computeEffectiveRights } from '../../governance/session-acl/rights.js';
@@ -557,7 +558,9 @@ class DefaultSessionHistoryPort implements SessionHistoryPort {
         toolIo: includeToolIo
           ? {
               args: (m.toolCalls ?? []).map((c) => c.arguments),
-              results: (m.toolResults ?? []).map((r) => r.result),
+              // 富内容信封剥离：历史文本化永不携带 base64（tool 文本不变量；
+              // 图像以指针元信息在场，重挂载需回 run 内信封/attachment）
+              results: (m.toolResults ?? []).map((r) => stripContentBlocks(r.result)),
             }
           : undefined,
       });

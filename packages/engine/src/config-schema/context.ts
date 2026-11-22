@@ -134,6 +134,21 @@ export const SummaryConfigSchema = z.object({
     .optional(),
 });
 
+/**
+ * file_read 图像查看成本闸（arch/file-read-image-view.md §2.5：数值走配置，无硬编码旋钮）。
+ * 缺省值的单一来源在 tools/image-view.ts `DEFAULT_IMAGE_COST_GATE`（此处不重复声明数值）。
+ */
+export const ImageViewConfigSchema = z.object({
+  /** 降采样目标长边（px；缺省 1024） */
+  maxEdge: z.number().int().positive().optional(),
+  /** 编码后字节上限（超限 fail-loud 拒绝；缺省 512KB） */
+  maxBytes: z.number().int().positive().optional(),
+  /** 输入像素上限（解码前拒绝，防解压炸弹；缺省 40MP） */
+  maxPixels: z.number().int().positive().optional(),
+  /** JPEG/WebP 有损编码质量（缺省 82） */
+  quality: z.number().int().min(1).max(100).optional(),
+});
+
 /** 公用能力：documents（DocumentPort 读抽取） */
 export const DocumentsConfigSchema = z.object({
   extract: z

@@ -1938,6 +1938,7 @@ export class AgentBuilder {
         sessionId,
         agentId,
         modelKey: snapshot?.ref,
+        modelInput: snapshot?.input,
         messages,
         systemPrompt,
         tools,

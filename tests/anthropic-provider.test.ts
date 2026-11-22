@@ -169,3 +169,50 @@ describe('Provider 协议差异对比', () => {
     expect(typeof anthropic.stream).toBe('function');
   });
 });
+
+describe('富内容信封图像 wire（B1 回归）', () => {
+  const provider = new AnthropicProvider({ name: 'anthropic', apiKey: 'test-key', models: ['claude-x'] });
+
+  function wireOf(userContent: unknown[]): Record<string, unknown> {
+    return provider.wireBodyFor(
+      {
+        model: 'claude-x',
+        messages: [{ role: 'user', content: userContent }],
+      } as never,
+      'chat',
+    ) as Record<string, unknown>;
+  }
+
+  test('data URL 图像块 → Anthropic base64 image source（不再拍平为 [object Object]）', () => {
+    const body = wireOf([
+      { type: 'text', text: '[image: png image]' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,QUFBQQ==' } },
+    ]);
+    const content = (body.messages as Array<{ content: unknown }>)[0].content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({ type: 'text', text: '[image: png image]' });
+    expect(content[1]).toEqual({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'QUFBQQ==' },
+    });
+    expect(JSON.stringify(body)).not.toContain('[object Object]');
+  });
+
+  test('http(s) 图像块 → url source；不可发形态 → 文字降级标注', () => {
+    const body = wireOf([
+      { type: 'image_url', image_url: { url: 'https://example.com/a.png' } },
+      { type: 'image_url', image_url: { url: '/local/path.png' } },
+    ]);
+    const content = (body.messages as Array<{ content: unknown }>)[0].content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({ type: 'image', source: { type: 'url', url: 'https://example.com/a.png' } });
+    expect(content[1].type).toBe('text');
+    expect(String((content[1] as { text: string }).text)).toContain('unpublishable');
+    expect(JSON.stringify(body)).not.toContain('[object Object]');
+  });
+
+  test('未知块类型 → 文字标注降级（不静默丢、不拒收）', () => {
+    const body = wireOf([{ type: 'input_audio', input_audio: { data: 'xxx' } }]);
+    const content = (body.messages as Array<{ content: unknown }>)[0].content as Array<Record<string, unknown>>;
+    expect(content[0].type).toBe('text');
+    expect(String((content[0] as { text: string }).text)).toContain('not representable');
+  });
+});

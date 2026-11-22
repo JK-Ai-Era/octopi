@@ -132,6 +132,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.123.0 (2026-11-23)
+
+### feat(context): file_read 图像查看与 SVG 双模式（vision 判据接线、富内容信封、成本闸、老化与估算同形）
+
+- **内容**：`file_read` 从纯文本工具升级为多模态工具（设计 `arch/file-read-image-view.md`）：魔数嗅探认内容不认扩展名（png/jpeg/gif/webp 可解码；bmp 识别但仅元信息——解码器不支持，显式降级不硬错）；光栅图经成本闸后以富内容信封 `result.contentBlocks` 挂图、tool 文本保持指针；`view` 参数 auto|text|render|both——SVG 默认源码即产物，render/both 经 resvg 非脚本渲染器光栅化（`<script>` 不执行、外部 http/file 引用不拉取，实测固化为安全回归）。
+- **判据**：`modelAcceptsInput(models[].input, 'image')` 唯一出口（未声明=纯文本）；无 vision 模型只回指针+降级标注，不白烧图像 token。此前 `models[].input` 字段只有人写、没人读，本次补上消费方。
+- **wire 分派**：`convertMessage` 把信封块转成紧随 tool 轮的 engine-authored user 消息（Anthropic 连续 user 由 normalize 归并进 tool_result 轮）；Anthropic 适配器补内容块数组 → `image` base64/url source 形态转换（此前数组 content 被 `String()` 拍平成 `[object Object]` 噪声、图像全丢——连带修复用户上传图同型老缺陷）。
+- **base64 不变量**（永不入 tool 文本/事件/展示/索引）：`toolResultBody` 剥离信封；`tool.exec.end` 事件出口净化（WS 广播不带载荷）；gateway conversation 展示投影、session_read 历史文本化、session_search 索引 snippet 同源剥离（`stripContentBlocks` 单一实现）。
+- **老化**：图像读取老化为 `[aged] image read <path>` 定位指针，先于摘要豁免（both 模式已摘要结果也丢信封——可重读/重摘要，base64 不可留）。
+- **估算同形**：domain 口径补计信封块（图像固定成本 + `[image: …]` label + 聚合消息开销，与 wire 分派同形；无 vision 时按可发形态上界计，不低估）。
+- **成本闸**（`imageView` 配置段；缺省 maxEdge 1024 / maxBytes 512KB / maxPixels 40MP / quality 82）：maxPixels 渲染前拒绝（解压炸弹）→ 无缩放且体积在闸内**原样放行不重编码**（无损不降质）→ 原生编码超 maxBytes 时 **WebP 兜底转码**（显式标注）→ 仍超限 fail-loud 拒绝（不截断图）；动图取首帧显式标注。
+- **一致性**：`view` 非法值全分支 fail-loud；SVG both 渲染失败不连坐源码（源码照常 + renderError 标注）；both 模式源文件元信息与渲染载荷字段分离。
+- **验证**：全量 5747 测试通过（较基线新增 60：图像/SVG/老化估算/Anthropic wire/判据）；独立对抗式评审（1 blocker / 9 major / 10 minor / 6 nit）逐条核实处置——blocker B1（Anthropic 图像 wire）与 M2/M3/M4/M7 及多数 minor/nit 修复于本条目；M5/M6/M8 残余挂 `arch/open-problems.md` OP-IMG-1。
+- **通道决策（已拍板）**：图像通道**最终方向回附件路线**（图像落 session attachments、结果只放引用）；本期以信封路线收口（tool 文本/事件/展示/索引出口已全剥 base64，session JSONL 原文暂存 base64），附件路线另立实施轮（评审 M1 + `arch/file-read-image-view.md` 偏离记录）。
+- **无破坏性变更**：`view` 为新增可选参数，文本文件行为不变。
+
 ## v0.122.0 (2026-11-22)
 
 ### feat(skills): 内置文档设计编写技能家族随包发布并种子落盘（document-authoring + docx/pdf/pptx/xlsx）

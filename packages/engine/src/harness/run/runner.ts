@@ -28,6 +28,7 @@ import { createSessionStateMachine } from '../session/state-machine.js';
 import type { StateMachine } from '@octopi-agent/core/primitives/state-machine.js';
 import { HeuristicTokenEstimator } from '../context/index.js';
 import { collectToolAgers, collectToolArgAgers } from '../context/tool-result-aging.js';
+import { stripContentBlocks } from '../context/tool-result-body.js';
 import { OpsAuditJournal, OpsAuditFileExportSink, type OpsAuditEvent, type OpsAuditExportSink } from '../extension/execution-environment/ops-audit.js';
 import { getOctopiHome } from '../../paths.js';
 import { extractLayerQuery } from '../context/layer-types.js';
@@ -472,7 +473,8 @@ export function adaptLoopEvent(
           toolName: event.toolCall.name,
           args: event.toolCall.arguments,
           hasError: !!event.result.isError,
-          result: event.result.content,
+          // 事件出口净化：富内容信封（base64）不进事件面（WS 广播/observatory 不需要图像载荷）
+          result: stripContentBlocks(event.result.content),
           durationMs: event.result.durationMs,
           purpose: event.result.purpose,
           ...(event.result.source === undefined ? {} : { source: event.result.source }),
@@ -2015,6 +2017,9 @@ export class SessionAwareRunner {
           sessionToolRights: runToolRights,
           sessionRights: runSessionRights,
           agentToolPolicy: runToolPolicy,
+          // 图像能力半区（P2，arch/file-read-image-view.md §2.3）：file_read 是否挂图的判据，
+          // 从 run 级模型快照取（与 summarize/bound 同源）
+          modelInput: resolvedModel?.input,
         },
       };
 

@@ -3,6 +3,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
+import { stripContentBlocks } from '../../context/tool-result-body.js';
 import type {
   SessionHistoryMatchField,
   SessionHistoryQueryMode,
@@ -249,9 +250,11 @@ function safeJson(value: unknown): string | null {
 
 function safeResultText(result: unknown): string | null {
   if (result == null) return null;
-  if (typeof result === 'string') return result.slice(0, 500);
+  // 富内容信封剥离：索引 snippet 永不携带 base64（同 renderMessage 不变量）
+  const stripped = stripContentBlocks(result);
+  if (typeof stripped === 'string') return stripped.slice(0, 500);
   try {
-    return JSON.stringify(result).slice(0, 500);
+    return JSON.stringify(stripped).slice(0, 500);
   } catch {
     return null;
   }

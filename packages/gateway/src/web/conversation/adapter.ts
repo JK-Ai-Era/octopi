@@ -14,6 +14,7 @@ import type {
   MessageRecord,
 } from '../sdk/client.js';
 import { extractUserMessageText } from '@octopi-agent/engine/harness/context/turn-envelope.js';
+import { stripContentBlocks } from '@octopi-agent/engine/harness/context/tool-result-body.js';
 import type { Message } from '@octopi-agent/core/types.js';
 import { isChatReplayHidden } from '@octopi-agent/engine/harness/context/layer-types.js';
 import { classifyError, makeDiagnosticId, securityBlockedCopy } from '@octopi-agent/engine/config-admin/error-copy.js';
@@ -301,7 +302,8 @@ export class ConversationAdapter {
                   ...it,
                   status: isError ? 'error' : 'success',
                   purpose: purposeFromEnd ?? (it as ToolConversationItem).purpose,
-                  result: event.data?.result,
+                  // 展示投影剥离富内容信封（base64 不是展示数据；tool-result-body 同源）
+                  result: stripContentBlocks(event.data?.result),
                   error: isError ? String(event.data?.result ?? 'Tool failed') : undefined,
                   endedAt: event.timestamp ?? Date.now(),
                 }
@@ -864,7 +866,8 @@ export class ConversationAdapter {
                 purpose: tr.purpose ?? purposeByCallId.get(tr.toolCallId ?? ''),
                 toolCallId: tr.toolCallId ?? `tc_${ts}`,
                 status: tr.isError ? 'error' : 'success',
-                result: tr.result,
+                // 展示投影剥离富内容信封（base64 不是展示数据；tool-result-body 同源）
+                result: stripContentBlocks(tr.result),
                 error: tr.isError ? String(tr.result ?? tr.error ?? 'Tool failed') : undefined,
                 expandable: true,
               });

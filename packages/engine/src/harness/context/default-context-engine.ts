@@ -19,8 +19,9 @@
  * - 实际 token 数回写
  */
 
-import type { Message, ToolResultAger } from '@octopi-agent/core/types.js';
-import { getTextContent } from '@octopi-agent/core/types.js';
+import type { Message, ToolResultAger, ModelInputType } from '@octopi-agent/core/types.js';
+import { getTextContent, modelAcceptsInput } from '@octopi-agent/core/types.js';
+import { extractContentBlocks } from './tool-result-body.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { RequestView } from '@octopi-agent/core/loop/types.js';
 import type {
@@ -323,6 +324,8 @@ export class DefaultContextEngine implements ContextEngine {
       emit,
       loadCompactState,
     } = params;
+    // 图像降级判据的能力半区（与 wire 同穿——估算/回声/摘要前缀形状必须与实际请求一致）
+    const modelInput = params.modelInput;
     // E4：引擎内部状态键 = (sessionId, agentId)
     const stateKey = compactStateKey(sessionId, agentId);
     const ledger = await this.loadLedger(sessionId, agentId, messages, loadCompactState);
@@ -370,6 +373,7 @@ export class DefaultContextEngine implements ContextEngine {
               contextWindow,
               maxOutputTokens,
               signal: params.signal,
+              modelInput,
             })
           : undefined;
       if (proactive) folded = proactive.fold;
@@ -386,7 +390,7 @@ export class DefaultContextEngine implements ContextEngine {
         });
       }
       const view: RequestView = {
-        messages: this.buildLlmMessages(folded.view, systemPrompt, agingPlan),
+        messages: this.buildLlmMessages(folded.view, systemPrompt, agingPlan, modelInput),
         tools,
       };
       // 会话请求基线（摘要路径以它为比对对象；messages 半区含老化形态）
@@ -476,6 +480,7 @@ export class DefaultContextEngine implements ContextEngine {
       contextWindow,
       maxOutputTokens,
       signal: params.signal,
+      modelInput,
     });
     folded = proactive.fold;
     let view = proactive.view;
@@ -517,7 +522,7 @@ export class DefaultContextEngine implements ContextEngine {
       requestView: RequestView;
     } => {
       const requestView: RequestView = {
-        messages: this.buildLlmMessages(ms, systemPrompt, overflowAgingPlan),
+        messages: this.buildLlmMessages(ms, systemPrompt, overflowAgingPlan, modelInput),
         tools,
       };
       const rawTokens = estimateLLMMessages(requestView.messages) + rawEstimator.estimateTools(tools);
@@ -538,7 +543,7 @@ export class DefaultContextEngine implements ContextEngine {
       effectiveMessagesLimit;
     if (selection.overflow.length === 0 && fits(view)) {
       const sessionView: RequestView = {
-        messages: this.buildLlmMessages(view, systemPrompt, agingPlan),
+        messages: this.buildLlmMessages(view, systemPrompt, agingPlan, modelInput),
         tools,
       };
       // 会话请求基线：摘要路径以它为比对对象（messages 半区含老化形态）
@@ -593,7 +598,7 @@ export class DefaultContextEngine implements ContextEngine {
     const overflowStart = Date.now();
     // 事件计量口径（M3 统一，报告尺 reportRequestTokens）：compact 对 = 全请求估算
     //（fold+老化+system+tools，未校准）、同一集合前后对——与 manual before/after 同式。
-    const compactTokensBefore = this.reportRequestTokens(view, systemPrompt, tools, overflowAgingPlan, rawEstimator);
+    const compactTokensBefore = this.reportRequestTokens(view, systemPrompt, tools, overflowAgingPlan, rawEstimator, modelInput);
     emit?.({
       type: 'context.compact.start',
       sessionId,
@@ -733,7 +738,7 @@ export class DefaultContextEngine implements ContextEngine {
       });
 
       // 估算一次、两处引用（tokensAfter 与 contextSize 同值同源）
-      const tokensAfter = this.reportRequestTokens(view, systemPrompt, tools, overflowAgingPlan, rawEstimator);
+      const tokensAfter = this.reportRequestTokens(view, systemPrompt, tools, overflowAgingPlan, rawEstimator, modelInput);
       emit?.({
         type: 'context.compact.end',
         sessionId,
@@ -773,7 +778,7 @@ export class DefaultContextEngine implements ContextEngine {
 
     // 8. 构建 LLM 消息（发送视图带本轮 overflow aging——豁免版只影响本次请求，
     // 下一 turn 正常规则照常（视图级、原文不动、天然可撤销）
-    const llmMessages = this.buildLlmMessages(view, systemPrompt, overflowAgingPlan);
+    const llmMessages = this.buildLlmMessages(view, systemPrompt, overflowAgingPlan, modelInput);
     const rawEstimatedTokens = estimateLLMMessages(llmMessages) + rawEstimator.estimateTools(tools);
     const decision = this.sizeLedger.decisionTokensWithSource(
       this.calKey(stateKey, modelKey),
@@ -906,9 +911,10 @@ export class DefaultContextEngine implements ContextEngine {
     tools: LLMToolDefinition[] | undefined,
     agingPlan: ToolResultAgingPlan,
     raw: TokenEstimator,
+    modelInput?: ModelInputType[],
   ): number {
     return (
-      estimateLLMMessages(this.buildLlmMessages(view, systemPrompt ?? '', agingPlan)) +
+      estimateLLMMessages(this.buildLlmMessages(view, systemPrompt ?? '', agingPlan, modelInput)) +
       raw.estimateTools(tools ?? [])
     );
   }
@@ -928,11 +934,12 @@ export class DefaultContextEngine implements ContextEngine {
     view: Message[],
     systemPrompt: string,
     agingPlan: ToolResultAgingPlan,
+    modelInput?: ModelInputType[],
   ): string {
     const conversation = view.filter(
       (m) => m.metadata?.source !== 'contextSummary' && m.metadata?.source !== 'contextLedger',
     );
-    return this.buildLlmMessages(conversation, systemPrompt, agingPlan)
+    return this.buildLlmMessages(conversation, systemPrompt, agingPlan, modelInput)
       // 正文投影必须覆盖 block 形态（2026-11-13 实测）：
       // LLM message 的 content 多为 content block 数组（本次真实摘要请求 1059 条中
       // 1037 条是 list），`String(content)` 对数组返回 "[object Object]"——这些消息
@@ -1246,6 +1253,8 @@ export class DefaultContextEngine implements ContextEngine {
     maxOutputTokens?: number;
     /** run 中止信号（P3）：摘要调用随之取消（不写记录、不推进状态） */
     signal?: AbortSignal;
+    /** 图像降级判据能力半区（与 wire 同穿） */
+    modelInput?: ModelInputType[];
   }): Promise<{ view: Message[]; fold: FoldResult; droppedSummary?: string }> {
     const {
       sessionId,
@@ -1458,7 +1467,7 @@ export class DefaultContextEngine implements ContextEngine {
       return { view: folded.view, fold: folded };
     }
     // 事件计量口径同 overflow（M3 统一，报告尺 reportRequestTokens）：全请求估算、同集合前后对
-    const compactTokensBefore = this.reportRequestTokens(folded.view, systemPrompt, tools, agingPlan, rawEstimator);
+    const compactTokensBefore = this.reportRequestTokens(folded.view, systemPrompt, tools, agingPlan, rawEstimator, params.modelInput);
     emit?.({
       type: 'context.compact.start',
       sessionId,
@@ -1480,12 +1489,13 @@ export class DefaultContextEngine implements ContextEngine {
         systemPrompt,
         tools,
         aging: agingPlan,
+        modelInput: params.modelInput,
         recordBaseline: false,
       });
       const llmPrefix = view.messages;
       this.checkSummaryPrefix(stateKey, view);
       // 回声源排除既有摘要占位：模型续写上一份交接书不是「复读原文」
-      const echoSource = this.buildEchoSource(folded.view, systemPrompt, agingPlan);
+      const echoSource = this.buildEchoSource(folded.view, systemPrompt, agingPlan, params.modelInput);
       // P3 可观测：摘要请求即将发出——如实上报请求体量与预算，UI 不再只显示「进行中」。
       // 体量含工具面：tools 与 messages 一起构成真实 wire 请求（前缀 tools → system → messages）。
       emit?.({
@@ -1660,7 +1670,7 @@ export class DefaultContextEngine implements ContextEngine {
     });
 
     // 估算一次、两处引用（tokensAfter 与 contextSize 同值同源）
-    const tokensAfter = this.reportRequestTokens(folded.view, systemPrompt, tools, agingPlan, rawEstimator);
+    const tokensAfter = this.reportRequestTokens(folded.view, systemPrompt, tools, agingPlan, rawEstimator, params.modelInput);
     emit?.({
       type: 'context.compact.end',
       sessionId,
@@ -1717,6 +1727,8 @@ export class DefaultContextEngine implements ContextEngine {
     loadCompactState?: (sessionId: string) => Promise<ContextCompactSnapshot | undefined> | ContextCompactSnapshot | undefined;
     /** 中止信号（P3）：手动压缩通常无 run 级 signal，仅摘要预算生效（传了则一并取消） */
     signal?: AbortSignal;
+    /** 图像降级判据能力半区（与 wire 同穿；manual 路由调用方从会话模型解析注入） */
+    modelInput?: ModelInputType[];
   }): Promise<CompactOutcome> {
     const { sessionId, messages, summarize, estimator } = params;
     const stateKey = params.stateKey ?? compactStateKey(sessionId, params.agentId);
@@ -1743,7 +1755,7 @@ export class DefaultContextEngine implements ContextEngine {
     // **基数**存 raw 同形读数、比较点按当前 ratio 折算（M-3，评审 del-e1ee43ef）——report
     // vs decision 两把尺各有其职，勿互换（互换会搅乱增长门基数，见 arch/context-size-accounting.md §10.19）。
     const rawRequestViewTokens = (fold: { view: Message[] }): number =>
-      this.reportRequestTokens(fold.view, systemText, params.tools, agingPlan, raw);
+      this.reportRequestTokens(fold.view, systemText, params.tools, agingPlan, raw, params.modelInput);
     const tokensBefore = rawRequestViewTokens(folded);
     // P2：前缀 = 折叠视图（与主会话请求同形）。
     // 只能由 buildRequestView 产出（messages+tools 原子）——不接受调用方单独塞
@@ -1755,6 +1767,7 @@ export class DefaultContextEngine implements ContextEngine {
           systemPrompt: systemText,
           tools: params.tools ?? [],
           aging: agingPlan,
+          modelInput: params.modelInput,
           recordBaseline: false,
         })
       : undefined;
@@ -1769,7 +1782,7 @@ export class DefaultContextEngine implements ContextEngine {
     // 回声源只用引擎自建的前缀形状（前缀=调用方视图时形状不可知）
     const echoSource =
       llmPrefix
-        ? this.buildEchoSource(folded.view, systemText ?? '', agingPlan)
+        ? this.buildEchoSource(folded.view, systemText ?? '', agingPlan, params.modelInput)
         : undefined;
     const protectFirstN = this.config.protectFirstN;
     const protectLastN = this.config.protectLastN;
@@ -2057,6 +2070,8 @@ export class DefaultContextEngine implements ContextEngine {
     toolArgAgers?: ReadonlySet<string>;
     /** run 中止信号（F1）：透传至摘要/压缩调用，run abort 即取消（不写记录） */
     signal?: AbortSignal;
+    /** 图像降级判据能力半区（与 wire 同穿） */
+    modelInput?: ModelInputType[];
   }): Promise<CompactOutcome> {
     const stateKey = compactStateKey(input.sessionId, input.agentId);
     // R1（评审 #5）：manual 压缩同样是决策路径（目标裁剪 / tokensBefore|After 读数），
@@ -2338,6 +2353,8 @@ export class DefaultContextEngine implements ContextEngine {
     systemPrompt: string;
     tools: LLMToolDefinition[];
     aging: ToolResultAgingPlan;
+    /** 图像降级判据能力半区（与 wire 同穿） */
+    modelInput?: ModelInputType[];
     /**
      * 记录为「最近一次会话请求」基线（默认 true）
      *
@@ -2351,7 +2368,7 @@ export class DefaultContextEngine implements ContextEngine {
     // 只产出前缀两半；尾部摘要指令由 compact 引擎独占追加（单一追加点，
     // 否则重压/旁路会出现两条尾部指令——评审 del-b5ffc13a NIT-8）。
     const view: RequestView = {
-      messages: this.buildLlmMessages(input.messages, input.systemPrompt, input.aging),
+      messages: this.buildLlmMessages(input.messages, input.systemPrompt, input.aging, input.modelInput),
       tools: input.tools,
     };
     if (input.recordBaseline !== false && input.stateKey) {
@@ -2373,6 +2390,8 @@ export class DefaultContextEngine implements ContextEngine {
     messages: Message[],
     systemPrompt: string,
     aging: ToolResultAgingPlan,
+    /** 图像降级判据能力半区——必传（显式 undefined 也是一次决策）：漏传会静默放行图像给纯文本模型 */
+    modelInput: ModelInputType[] | undefined,
   ): LLMMessage[] {
     const result: LLMMessage[] = [];
 
@@ -2403,10 +2422,80 @@ export class DefaultContextEngine implements ContextEngine {
         msg.role === 'system'
           ? { ...msg, role: 'user' as const, metadata: { ...msg.metadata, source: 'engineHint' } }
           : msg;
-      result.push(...this.convertMessage(llmMsg, aging));
+      result.push(...this.convertMessage(llmMsg, aging, modelInput));
     }
 
     return result;
+  }
+
+  /**
+   * 转换内容块为 LLM 块格式（多模态消息与工具富内容信封共用；判据单一落点）。
+   *
+   * 图像降级判据 = 数据形态 ∧ 模型能力（arch/file-read-image-view.md §2.3）：
+   * - 数据形态：仅 data:/http(s) 可进 vision；本地路径降为文字指针，避免 provider 拒收
+   * - 模型能力：modelAcceptsInput（唯一出口）——input 未声明 image 时降为文字指针，
+   *   不给纯文本模型白烧 ~1200 token/图
+   *
+   * @param block - 域内容块（ContentBlock 形状）
+   * @param modelInput - 模型输入模态声明（缺省 = 纯文本）
+   * @returns LLM 内容块（image_url / input_audio / text）
+   */
+  private convertContentBlock(
+    block: { type: string; [key: string]: unknown } | import('@octopi-agent/core/types.js').ContentBlock,
+    modelInput: ModelInputType[] | undefined,
+  ): { type: string; [key: string]: unknown } {
+    // ContentBlock 联合类型无索引签名；统一按松形状读字段（块结构本来就是开放形状）
+    const b = block as unknown as {
+      type: string;
+      text?: string;
+      url?: string;
+      data?: string;
+      mimeType?: string;
+      alt?: string;
+      name?: string;
+      sizeBytes?: number;
+    };
+    if (b.type === 'text') {
+      return { type: 'text', text: b.text };
+    }
+    if (b.type === 'image') {
+      const url = typeof b.url === 'string' ? b.url : '';
+      const data = typeof b.data === 'string' ? b.data : '';
+      const sendableForm = data.length > 0 || /^https?:\/\//i.test(url) || /^data:/i.test(url);
+      const canSendImage = sendableForm && modelAcceptsInput(modelInput, 'image');
+      if (canSendImage) {
+        const source: { type: string; [key: string]: unknown } = { type: 'image_url' };
+        source.image_url = data.length > 0
+          ? { url: `data:${typeof b.mimeType === 'string' ? b.mimeType : 'image/png'};base64,${data}` }
+          : { url };
+        return source;
+      }
+      return {
+        type: 'text',
+        text: `[image: ${typeof b.alt === 'string' ? b.alt : 'attachment'}${url ? ` | path: ${url}` : ''}${modelAcceptsInput(modelInput, 'image') ? '' : ' (model has no image input; shown as text)'}]`,
+      };
+    }
+    if (b.type === 'audio') {
+      return {
+        type: 'input_audio',
+        input_audio: {
+          data: typeof b.data === 'string' ? b.data : '',
+          format: (typeof b.mimeType === 'string' ? b.mimeType.split('/')[1] : undefined) ?? 'mp3',
+        },
+      };
+    }
+    // file / 其他：文字指针（正文在 sessionAttachment 资料块；深读用 file_read）
+    if (b.type === 'file') {
+      const name = typeof b.name === 'string' ? b.name : 'attachment';
+      const size = b.sizeBytes != null ? ` ${b.sizeBytes}B` : '';
+      const mime = typeof b.mimeType === 'string' ? ` ${b.mimeType}` : '';
+      const path = typeof b.url === 'string' && b.url ? ` | path: ${b.url}` : '';
+      return {
+        type: 'text',
+        text: `[attachment: ${name}${mime}${size}${path} — use file_read to open]`,
+      };
+    }
+    return { type: 'text', text: `[${b.type} content]` };
   }
 
   /**
@@ -2418,7 +2507,7 @@ export class DefaultContextEngine implements ContextEngine {
    * - 工具结果消息
    * - 多模态消息
    */
-  private convertMessage(msg: Message, aging?: ToolResultAgingPlan): LLMMessage[] {
+  private convertMessage(msg: Message, aging: ToolResultAgingPlan | undefined, modelInput: ModelInputType[] | undefined): LLMMessage[] {
     const result: LLMMessage[] = [];
 
     // 清理无效消息
@@ -2443,6 +2532,30 @@ export class DefaultContextEngine implements ContextEngine {
           name: tr.name,
         });
       }
+      // 富内容信封（P2，arch/file-read-image-view.md §2.1/§2.4）：result.contentBlocks 挂图。
+      // tool 文本保持指针（toolResultBody 已剥离信封）；图像块紧随 tool 消息之后走一条
+      // engine-authored user 消息——跨 provider 可移植（OpenAI chat tool 消息仅文本；
+      // Anthropic 侧连续 user 由 anthropic-message-normalize 归并进 tool_result 轮）。
+      // 老化命中的结果不带块（指针已降级，§2.5 图像读取老化为定位指针、不保留 base64）。
+      const richBlocks: Array<{ type: string; [key: string]: unknown }> = [];
+      for (const tr of msg.toolResults ?? []) {
+        if (aging && aging.agedIds.has(tr.toolCallId)) continue;
+        for (const block of extractContentBlocks(tr.result)) {
+          // 判据/形态转换与多模态分支共用（convertContentBlock）：数据形态 ∧ 模型能力
+          const converted = this.convertContentBlock(block, modelInput);
+          if (converted.type === 'text') {
+            // 降级文本自带原因标注（能力不足/形态不可发），照发不重复 label
+            richBlocks.push(converted);
+            continue;
+          }
+          const alt = (block as unknown as { alt?: unknown }).alt;
+          const label = typeof alt === 'string' ? `[image: ${alt}]` : '[image]';
+          richBlocks.push({ type: 'text', text: label }, converted);
+        }
+      }
+      if (richBlocks.length > 0) {
+        result.push({ role: 'user', content: richBlocks });
+      }
     } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
       // 带工具调用的 assistant 消息
       // F1-B2：与结果同步老化的参数降级为键值摘要（id/name 不动，arguments 仍是合法 JSON）
@@ -2466,55 +2579,7 @@ export class DefaultContextEngine implements ContextEngine {
       });
     } else if (Array.isArray(msg.content)) {
       // 多模态消息：转换为 LLM 内容块格式
-      const llmContent = msg.content.map(block => {
-        if (block.type === 'text') {
-          return { type: 'text', text: block.text };
-        }
-        if (block.type === 'image') {
-          // 仅 data:/http(s) 可进 vision；本地路径降为文字指针，避免 provider 拒收
-          const url = typeof block.url === 'string' ? block.url : '';
-          const canSendImage =
-            (block.data && block.data.length > 0) ||
-            /^https?:\/\//i.test(url) ||
-            /^data:/i.test(url);
-          if (canSendImage) {
-            const source: Record<string, unknown> = { type: 'image_url' };
-            if (block.data) {
-              source.image_url = {
-                url: `data:${block.mimeType ?? 'image/png'};base64,${block.data}`,
-              };
-            } else {
-              source.image_url = { url };
-            }
-            return source;
-          }
-          return {
-            type: 'text',
-            text: `[image: ${block.alt ?? 'attachment'}${url ? ` | path: ${url}` : ''}]`,
-          };
-        }
-        if (block.type === 'audio') {
-          return {
-            type: 'input_audio',
-            input_audio: {
-              data: block.data ?? '',
-              format: block.mimeType?.split('/')[1] ?? 'mp3',
-            },
-          };
-        }
-        // file / 其他：文字指针（正文在 sessionAttachment 资料块；深读用 file_read）
-        if (block.type === 'file') {
-          const name = block.name ?? 'attachment';
-          const size = block.sizeBytes != null ? ` ${block.sizeBytes}B` : '';
-          const mime = block.mimeType ? ` ${block.mimeType}` : '';
-          const path = block.url ? ` | path: ${block.url}` : '';
-          return {
-            type: 'text',
-            text: `[attachment: ${name}${mime}${size}${path} — use file_read to open]`,
-          };
-        }
-        return { type: 'text', text: `[${block.type} content]` };
-      });
+      const llmContent = msg.content.map(block => this.convertContentBlock(block, modelInput));
       result.push({
         role: msg.role,
         content: llmContent as Array<{ type: string; [key: string]: unknown }>,

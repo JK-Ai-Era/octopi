@@ -21,9 +21,19 @@
  */
 
 import type { RegisteredTool } from '@octopi-agent/core/types.js';
+import { modelAcceptsInput } from '@octopi-agent/core/types/agent-definition.js';
 import { gateEffect } from '../../execution-environment/effect-policy.js';
 
 import { createFileEditTool } from './file-edit.js';
+import {
+  DEFAULT_IMAGE_COST_GATE,
+  applyImageCostGate,
+  probeImage,
+  probeSvgSize,
+  renderSvgImage,
+  sniffSvg,
+  type ImageCostGateConfig,
+} from './image-view.js';
 import { detectEol, toEol } from './eol.js';
 import { createFileSearchTool } from './file-search.js';
 import { createFileOpsTools } from './file-ops.js';
@@ -401,12 +411,198 @@ export function createShellTool(options?: {
  * 也是「当初是否读全」的证据。摘要结果（`summary.applied`）不老化——它已被提炼，
  * 丢弃后要再跑一次摘要才能拿回同等信息，成本远高于保留。
  *
+ * 图像分支（§2.5）先于摘要豁免：kind=image/svg 的结果老化为 `[aged] image read` 定位
+ * 指针，不保留 base64（信封随整体改写消失）。
+ *
  * @param result - file_read 的原始返回对象
- * @returns 一行定位事实；已摘要/字段不全时 undefined（保留原文）
+ * @returns 一行定位事实；已摘要文本结果/字段不全时 undefined（保留原文）
  */
+/**
+ * view 参数取值（单一清单；校验单一落点 parseViewArg）
+ */
+const VIEW_VALUES = ['auto', 'text', 'render', 'both'] as const;
+type ViewMode = (typeof VIEW_VALUES)[number];
+
+/**
+ * view 参数解析与校验（唯一裁决点：非法值一律 fail-loud，文本文件也一样）
+ *
+ * @param viewArg - 原始 view 参数（缺省 auto）
+ * @returns 合法 view 值
+ * @throws 非法值
+ */
+function parseViewArg(viewArg: string | undefined): ViewMode {
+  const view = (viewArg ?? 'auto') as ViewMode;
+  if (!VIEW_VALUES.includes(view)) {
+    throw new Error(`invalid view \"${viewArg}\": must be auto|text|render|both`);
+  }
+  return view;
+}
+
+/** 路径 basename（alt 标注用；多图历史里区分是哪张） */
+function baseName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+/**
+ * file_read 图像分支：成本闸 + view 三态 + 富内容信封（arch/file-read-image-view.md §2.1/§2.2）。
+ *
+ * 信封契约：result 携带 `contentBlocks: [ImageBlock]`，文本指针走 toolResultBody（剥离
+ * contentBlocks，防 base64 入 tool 文本）；convertMessage 消费 contentBlocks 挂图。
+ * core 回退序列化（normalizeMessagesForLlm）不识别信封——该路仅无 convertToLlm 的裸
+ * loop 使用，engine 工具必经 harness 主链路，实际不相交（若未来相交再收口）。
+ *
+ * @param path - 已过 containment 的绝对路径
+ * @param raw - 文件原始字节
+ * @param image - 嗅探结果（格式 + 尺寸）
+ * @param viewArg - view 参数（auto|text|render|both，缺省 auto）
+ * @param gateOverride - 成本闸配置覆盖（config imageView 段）
+ * @param canSeeImage - 模型图像能力（core modelAcceptsInput；false = 只回指针+元信息）
+ * @returns file_read 结果对象（文本指针 ± contentBlocks）
+ * @throws 成本闸超限（fail-loud，不截断图）
+ */
+async function renderImageResult(
+  path: string,
+  raw: Buffer,
+  image: { format: import('./image-view.js').RasterFormat; mime: string; size: { width: number; height: number } | null },
+  viewArg: string | undefined,
+  gateOverride: Partial<ImageCostGateConfig> | undefined,
+  canSeeImage: boolean,
+): Promise<Record<string, unknown>> {
+  const view = parseViewArg(viewArg);
+  if (!VIEW_VALUES.includes(view)) {
+    throw new Error(`invalid view "${viewArg}": must be auto|text|render|both`);
+  }
+  const wantImage = view === 'auto' || view === 'render' || view === 'both';
+
+  const pointer: Record<string, unknown> = {
+    kind: 'image',
+    path,
+    mimeType: image.mime,
+    width: image.size?.width ?? null,
+    height: image.size?.height ?? null,
+    sizeBytes: raw.byteLength,
+    view,
+  };
+
+  // view=text：只要元信息；模型无图像能力：同（§2.3 ①，不白烧图像 token）
+  if (!wantImage || !canSeeImage) {
+    return {
+      ...pointer,
+      attached: false,
+      note: !wantImage
+        ? 'view=text: metadata only, image not attached'
+        : '(model has no image input; metadata only, shown as text)',
+    };
+  }
+
+  // BMP：解码器不支持（sharp 输入格式不含 bmp）——显式降级元信息指针，不硬错不静默
+  if (image.format === 'bmp') {
+    return {
+      ...pointer,
+      attached: false,
+      note: 'bmp decode not supported by the image decoder; metadata only',
+    };
+  }
+
+  const gate: ImageCostGateConfig = { ...DEFAULT_IMAGE_COST_GATE, ...gateOverride };
+  const gated = await applyImageCostGate(raw, image.format, gate);
+  return {
+    ...pointer,
+    // GIF → PNG / WebP 兜底转码后 MIME 跟实际载荷走
+    mimeType: gated.block.mimeType ?? image.mime,
+    width: gated.width,
+    height: gated.height,
+    sizeBytes: gated.sizeBytes,
+    resized: gated.resized,
+    attached: true,
+    contentBlocks: [{ ...gated.block, alt: `${image.format} image (${baseName(path)})` }],
+    ...(gated.note ? { note: gated.note } : {}),
+  };
+}
+
+/**
+ * file_read SVG render/both 分支：resvg 光栅化 + 成本闸（arch/file-read-image-view.md §2.2）。
+ *
+ * 返回对象为**可合并片段**：view=render 独立作为结果；view=both 与源码文本路结果合并
+ * （字段覆盖）。安全姿势：resvg 非脚本渲染器——`<script>` 不执行、外部引用不拉取
+ * （image-view.ts 实现注释与测试固化）。
+ *
+ * @param path - 已过 containment 的绝对路径
+ * @param raw - SVG 文件原始字节
+ * @param view - render|both（auto/text 不进本函数）
+ * @param gateOverride - 成本闸配置覆盖（config imageView 段）
+ * @param canSeeImage - 模型图像能力（core modelAcceptsInput；false = 不渲染，只回指针）
+ * @returns 可合并结果片段（指针元信息 ± contentBlocks）
+ * @throws 尺寸无法确定 / 成本闸超限 / 渲染失败（fail-loud）
+ */
+async function renderSvgResult(
+  path: string,
+  raw: Buffer,
+  view: 'render' | 'both',
+  gateOverride: Partial<ImageCostGateConfig> | undefined,
+  canSeeImage: boolean,
+): Promise<Record<string, unknown>> {
+  const size = probeSvgSize(raw.toString('utf-8'));
+  const pointer: Record<string, unknown> = {
+    kind: 'svg',
+    path,
+    mimeType: 'image/svg+xml',
+    width: size?.width ?? null,
+    height: size?.height ?? null,
+    sizeBytes: raw.byteLength,
+    view,
+  };
+
+  // 模型无图像能力：不渲染（不白烧 CPU/token），只回指针 + 降级标注（§2.3 ①）
+  if (!canSeeImage) {
+    return {
+      ...pointer,
+      attached: false,
+      note:
+        view === 'both'
+          ? '(model has no image input; rendering skipped — source included)'
+          : '(model has no image input; rendering skipped, metadata only — use view=auto/text for source)',
+    };
+  }
+
+  const gate: ImageCostGateConfig = { ...DEFAULT_IMAGE_COST_GATE, ...gateOverride };
+  const gated = await renderSvgImage(raw, gate);
+  const block = { ...gated.block, alt: `svg render (${baseName(path)})` };
+  if (view === 'render') {
+    // render 独立结果：平铺尺寸 = 渲染载荷尺寸
+    return {
+      ...pointer,
+      renderedMime: 'image/png',
+      width: gated.width,
+      height: gated.height,
+      sizeBytes: gated.sizeBytes,
+      resized: gated.resized,
+      attached: true,
+      contentBlocks: [block],
+    };
+  }
+  // both：源文件元信息（width/height/sizeBytes）不被渲染载荷覆盖——字段语义分离
+  return {
+    ...pointer,
+    renderedMime: 'image/png',
+    renderedWidth: gated.width,
+    renderedHeight: gated.height,
+    renderedBytes: gated.sizeBytes,
+    renderedResized: gated.resized,
+    attached: true,
+    contentBlocks: [block],
+  };
+}
+
 function ageFileReadResult(result: unknown): string | undefined {
   if (!result || typeof result !== 'object') return undefined;
   const r = result as Record<string, unknown>;
+  // 图像分支（§2.5）先于摘要豁免：图像读取老化为定位指针，不保留 base64——
+  // 信封随整体改写消失。both 模式已摘要的正文一并让位（可重读/重摘要，base64 不可留）。
+  if (r.kind === 'image' || r.kind === 'svg') {
+    const path = typeof r.path === 'string' ? r.path : 'unknown';
+    return `[aged] image read ${path} — call file_read for current image`;
+  }
   const summary = r.summary as { applied?: boolean } | undefined;
   if (summary?.applied === true) return undefined;
   const from = r.fromLine;
@@ -419,17 +615,32 @@ function ageFileReadResult(result: unknown): string | undefined {
 
 export function createFileReadTool(options?: {
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
+  /** 图像查看成本闸（config `imageView`；缺省 DEFAULT_IMAGE_COST_GATE） */
+  imageView?: Partial<import('./image-view.js').ImageCostGateConfig>;
 }): RegisteredTool {
   return {
     definition: {
       name: 'file_read',
       capabilities: ['fs-read'],
-      description: 'Read the contents of a file. Supports text files. Use offset and limit for large files.',
+      description:
+        'Read the contents of a file. Text files return their content (use offset and limit for large files). ' +
+        'Raster images (png/jpeg/gif/webp — detected by content, not extension; bmp is detected but metadata-only) are attached as an inline image ' +
+        'for vision-capable models and return a pointer with dimensions (use view=text for metadata only, no image tokens). ' +
+        'SVG files return their source as text by default; view=render rasterizes them with a non-scripting renderer ' +
+        '(embedded <script> is never executed, external references are never fetched) and view=both returns source plus the rendering.',
       parameters: {
         path: {
           type: 'string',
           description: 'Path to the file to read (~/… expands to the user home, subject to path containment)',
           required: true,
+        },
+        view: {
+          type: 'string',
+          description:
+            "How to return renderable content: 'auto' (default: raster image → image view, everything else → text) | " +
+            "'text' (metadata/source only; never attaches an image) | 'render' (force image view; SVG is rasterized " +
+            "via a non-scripting renderer) | 'both' (metadata/source + image view). Semantics ignored for plain text files; invalid values are rejected.",
+          enum: ['auto', 'text', 'render', 'both'],
         },
         offset: {
           type: 'number',
@@ -469,11 +680,63 @@ export function createFileReadTool(options?: {
       const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, containmentOptions(context));
       const offset = (args.offset as number) ?? 1;
       const limit = (args.limit as number) ?? 2000;
+      // view 一律校验（文本文件忽略语义值，但非法值 fail-loud——不能让打错字的调用以为拿到了图）
+      parseViewArg(args.view as string | undefined);
 
       try {
-        const content = context?.refuseFinalSymlink
-          ? await readFileNoFollow(path, 'utf8')
-          : await readFile(path, 'utf-8');
+        // 二进制读入后嗅探（魔数认内容不认扩展名）：图像走图像分支，其余按 utf-8 文本
+        const raw = context?.refuseFinalSymlink
+          ? await readFileNoFollow(path, 'buffer')
+          : await readFile(path);
+        const image = probeImage(raw);
+        if (image) {
+          // 图像能力判据走 core modelAcceptsInput 唯一出口（§2.3；缺省=纯文本）
+          return await renderImageResult(
+            path,
+            raw,
+            image,
+            args.view as string | undefined,
+            options?.imageView,
+            modelAcceptsInput(context?.modelInput, 'image'),
+          );
+        }
+
+        // SVG（§2.2）：auto/text → 源码即产物（下方文本路）；render/both → resvg 光栅化
+        let svgAttach: Record<string, unknown> | null = null;
+        if (sniffSvg(raw)) {
+          const svgView = parseViewArg(args.view as string | undefined);
+          if (!VIEW_VALUES.includes(svgView)) {
+            throw new Error(`invalid view \"${args.view}\": must be auto|text|render|both`);
+          }
+          if (svgView === 'render' || svgView === 'both') {
+            let frag: Record<string, unknown>;
+            try {
+              frag = await renderSvgResult(
+                path,
+                raw,
+                svgView,
+                options?.imageView,
+                modelAcceptsInput(context?.modelInput, 'image'),
+              );
+            } catch (err) {
+              // both 渲染失败不连坐源码：源码走文本路照常返回，失败显式标注（degrade explicitly）
+              if (svgView !== 'both') throw err;
+              frag = {
+                kind: 'svg',
+                path,
+                mimeType: 'image/svg+xml',
+                view: svgView,
+                attached: false,
+                renderError: err instanceof Error ? err.message : String(err),
+                note: 'render failed; source included — see renderError',
+              };
+            }
+            if (svgView === 'render') return frag;
+            svgAttach = frag;
+          }
+        }
+
+        const content = raw.toString('utf-8');
         const lines = content.split('\n');
         const totalLines = lines.length;
 
@@ -501,7 +764,7 @@ export function createFileReadTool(options?: {
             'Use file_read with offset/limit to continue reading, or summarize=force for an overview.',
         });
 
-        return {
+        const textResult = {
           content: applied.body,
           totalLines,
           truncated: end < totalLines || applied.bodyTruncated,
@@ -511,6 +774,8 @@ export function createFileReadTool(options?: {
           summary: applied.summary,
           summaryUsage: applied.usage,
         };
+        // view=both：源码文本 + 渲染图（片段字段覆盖指针元信息）
+        return svgAttach ? { ...textResult, ...svgAttach } : textResult;
       } catch (error) {
         throw new Error(`Failed to read file "${path}": ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -973,6 +1238,8 @@ export function createFileListTool(options?: {
 /** 获取内置工具（零依赖，所有环境可用）。shell 靠后注册，提示模型优先专用工具 */
 export function getBuiltinTools(options?: {
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
+  /** file_read 图像查看成本闸（config imageView 段；缺省 DEFAULT_IMAGE_COST_GATE） */
+  imageView?: Partial<import('./image-view.js').ImageCostGateConfig>;
   documentPort?: import('./document-tools.js').DocumentToolOptions['documentPort'];
   /** CredentialStore for http_request.credential（SEC-3c 接线） */
   credentials?: import('../../../governance/credentials/store.js').CredentialStore | null;
@@ -982,7 +1249,7 @@ export function getBuiltinTools(options?: {
   requireCredentialBindings?: boolean;
 }): RegisteredTool[] {
   return [
-    createFileReadTool({ summary: options?.summary }),
+    createFileReadTool({ summary: options?.summary, imageView: options?.imageView }),
     createFileListTool({ summary: options?.summary }),
     createFileWriteTool(),
     createFileDeleteTool(),

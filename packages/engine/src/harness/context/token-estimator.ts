@@ -22,7 +22,7 @@ import type { TokenEstimator } from './types.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import { estimateTextTokens, contentBlockSegment, toolCallSegment } from './token-estimate-fns.js';
 import { estimateSegments, sumSegments, textSegment, classifyChars, type Segment } from './token-segments.js';
-import { toolResultBody } from './tool-result-body.js';
+import { toolResultBody, extractContentBlocks } from './tool-result-body.js';
 
 // Re-export for callers that only need text estimation
 export { estimateTextTokens } from './token-estimate-fns.js';
@@ -54,11 +54,27 @@ function fromDomainMessage(message: Message): Segment[] {
     }
   }
   if (message.toolResults) {
+    let richCount = 0;
     for (const tr of message.toolResults) {
       const body = toolResultBody(tr);
       const { chars, cjk } = classifyChars(body);
       segments.push({ kind: 'tool_result', chars, cjk, isError: tr.error !== undefined });
+      // 富内容信封（arch/file-read-image-view.md §2.4 wire 分派同形）：非老化结果的
+      // contentBlocks 聚合成一条 engine-authored user 消息挂图——每块按可发形态计
+      // （图像固定成本 + `[image: alt]` label 文本 + 1 条消息开销）。无 vision 时
+      // wire 降级为文本：估算按可发形态（上界），预算守卫不低估方向安全。
+      for (const block of extractContentBlocks(tr.result)) {
+        const type = (block as { type?: unknown }).type;
+        segments.push(contentBlockSegment(block as { type?: string; text?: string }));
+        // label 与 wire 分派同形：只有图像块前挂 `[image: …]`（降级/其余块 wire 侧无 label）
+        if (type === 'image' || type === 'image_url' || type === 'input_image') {
+          const alt = (block as { alt?: unknown }).alt;
+          segments.push(textSegment(typeof alt === 'string' ? `[image: ${alt}]` : '[image]'));
+        }
+        richCount += 1;
+      }
     }
+    if (richCount > 0) segments.push({ kind: 'message_overhead', count: 1 });
   }
   return segments;
 }

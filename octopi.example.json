@@ -125,6 +125,13 @@
     }
   },
 
+  "imageView": {
+    "maxEdge": 1024,
+    "maxBytes": 524288,
+    "maxPixels": 40000000,
+    "quality": 82
+  },
+
   "context": {
     "constitution": {
       "mode": "product",

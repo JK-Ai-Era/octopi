@@ -1125,6 +1125,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     documentPort: await gateway.getDocumentPort().catch(() => null),
     octopiHome: getOctopiHome(),
     summary: config.summary,
+    imageView: config.imageView,
     levelMap: config.models?.level,
     webSearch: config.webSearch,
     browser: config.browser,

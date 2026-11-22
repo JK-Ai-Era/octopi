@@ -676,6 +676,20 @@ export interface SummaryCapabilityConfig {
 }
 
 /**
+ * file_read 图像查看成本闸（arch/file-read-image-view.md §2.5；缺省值见 tools/image-view.ts）
+ */
+export interface ImageViewConfig {
+  /** 降采样目标长边（px） */
+  maxEdge?: number;
+  /** 编码后字节上限（超限 fail-loud） */
+  maxBytes?: number;
+  /** 输入像素上限（解码前拒绝） */
+  maxPixels?: number;
+  /** JPEG/WebP 有损编码质量 */
+  quality?: number;
+}
+
+/**
  * 公用能力 documents（DocumentPort 读抽取）
  */
 export interface DocumentsCapabilityConfig {
@@ -985,6 +999,8 @@ export interface HarnessConfig {
   summary?: SummaryCapabilityConfig;
   /** 公用能力 documents（DocumentPort 读抽取） */
   documents?: DocumentsCapabilityConfig;
+  /** file_read 图像查看成本闸 */
+  imageView?: ImageViewConfig;
   /** system prompt 七层装配器 / 全局宪法（唯一声明面：context 域；v0.98.11 起顶层简写已删除） */
   context?: {
     constitution?: ConstitutionConfig;

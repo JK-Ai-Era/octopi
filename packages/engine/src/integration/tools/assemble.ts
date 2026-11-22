@@ -31,6 +31,8 @@ export interface GlobalToolSetContext {
   octopiHome: string;
   /** octopi.json summary 块（形状透传；内部按原装配收窄） */
   summary?: unknown;
+  /** octopi.json imageView 块（file_read 图像成本闸） */
+  imageView?: import('../../config.js').ImageViewConfig;
   /** octopi.json models.level（summary 档位表） */
   levelMap?: unknown;
   /** octopi.json webSearch 块 */
@@ -194,10 +196,24 @@ export async function assembleGlobalTools(ctx: GlobalToolSetContext): Promise<Re
   }
 
   const { createToolSet } = await import('../../harness/extension/plugin-ecosystem/tools/tool-set.js');
+  // imageView 形状收窄：只取已知数值旋钮（防拼写错误静默生效）
+  const imageViewCfg = (():
+    | Partial<import('../../harness/extension/plugin-ecosystem/tools/image-view.js').ImageCostGateConfig>
+    | undefined => {
+    const raw = ctx.imageView;
+    if (!raw) return undefined;
+    const out: Partial<import('../../harness/extension/plugin-ecosystem/tools/image-view.js').ImageCostGateConfig> = {};
+    if (typeof raw.maxEdge === 'number') out.maxEdge = raw.maxEdge;
+    if (typeof raw.maxBytes === 'number') out.maxBytes = raw.maxBytes;
+    if (typeof raw.maxPixels === 'number') out.maxPixels = raw.maxPixels;
+    if (typeof raw.quality === 'number') out.quality = raw.quality;
+    return Object.keys(out).length > 0 ? out : undefined;
+  })();
   const { all } = createToolSet({
     webSearch,
     browser,
     summary: summarySupport,
+    imageView: imageViewCfg,
     sessionHistory,
     documentPort: ctx.documentPort,
     credentials: credentialStore,

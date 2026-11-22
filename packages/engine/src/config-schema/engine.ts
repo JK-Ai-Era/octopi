@@ -20,6 +20,7 @@ import {
   ContextAssemblerConfigSchema,
   ContextEngineConfigSchema,
   DocumentsConfigSchema,
+  ImageViewConfigSchema,
   SummaryConfigSchema,
 } from './context.js';
 import {
@@ -64,6 +65,8 @@ export const engineConfigSchema = z.object({
   summary: SummaryConfigSchema.optional(),
   /** 公用能力 documents（DocumentPort 读抽取） */
   documents: DocumentsConfigSchema.optional(),
+  /** file_read 图像查看成本闸（arch/file-read-image-view.md §2.5） */
+  imageView: ImageViewConfigSchema.optional(),
   /** Knowledge 全局缺省（agents[].knowledge.recall 覆盖） */
   knowledge: KnowledgeConfigSchema.optional(),
   context: z

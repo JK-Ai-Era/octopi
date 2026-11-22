@@ -8,6 +8,24 @@
 /** 输入模态声明 */
 export type ModelInputType = 'text' | 'image' | 'audio' | 'video';
 
+/**
+ * 模型输入模态判据（唯一出口）：模型是否接受某输入模态
+ *
+ * 语义与 {@link ModelInfo.input} 一致：**未声明 = 纯文本**（`['text']`）。
+ * 消费方（convertMessage 图像降级、file_read 图像返回）一律经此判断，
+ * 禁止散点 `input?.includes(...)`——判据语义只此一处（arch/file-read-image-view.md §2.3）。
+ *
+ * @param input - 输入模态声明（`ModelInfo.input` / `ResolvedModel.input` 透传），可缺省
+ * @param kind - 待判模态
+ * @returns 接受该模态返回 true
+ */
+export function modelAcceptsInput(
+  input: ModelInputType[] | undefined | null,
+  kind: ModelInputType,
+): boolean {
+  return (input ?? ['text']).includes(kind);
+}
+
 /** 模型能力声明 */
 export interface ModelInfo {
   name: string;

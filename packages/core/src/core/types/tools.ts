@@ -247,6 +247,12 @@ export interface ToolExecutionContext {
   /** L2 级别 */
   pathContainment?: 'strict' | 'soft' | 'none';
   /**
+   * 会话模型输入模态（`ResolvedModel.input` 透传，engine 经 toolRuntime 注入）。
+   * 图像挂载判据的模型能力半区——判据唯一出口仍是 core `modelAcceptsInput`。
+   * 缺省 = 纯文本（同 `modelAcceptsInput` 语义）：file_read 不挂图，只回文字指针+元信息。
+   */
+  modelInput?: import('./agent-definition.js').ModelInputType[];
+  /**
    * host-gate 效应确认（P4）。effects=host-gate 时非事务效应必须经此。
    * 由 Runner 注入宿主回调；缺失时非事务效应拒绝执行。
    * 返回 {@link HitlDecision} 或 {@link ConfirmOutcome}（带归因：谁批的/哪条通道，

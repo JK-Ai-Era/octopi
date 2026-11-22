@@ -292,6 +292,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     cognition: config.cognition,
     wisdom: config.wisdom,
     documents: config.documents,
+    imageView: config.imageView,
     summary: config.summary,
     webSearch: config.webSearch,
     browser: config.browser,

@@ -153,8 +153,14 @@ export function isFinalSymlink(path: string): boolean {
  * @param encoding - text encoding
  * @returns file contents
  */
-export async function readFileNoFollow(path: string, encoding: 'utf8'): Promise<string> {
+export async function readFileNoFollow(path: string, encoding: 'utf8'): Promise<string>;
+export async function readFileNoFollow(path: string, encoding: 'buffer'): Promise<Buffer>;
+export async function readFileNoFollow(
+  path: string,
+  encoding: 'utf8' | 'buffer',
+): Promise<string | Buffer> {
   const { open, constants } = await import('node:fs/promises');
+  const enc = encoding === 'buffer' ? undefined : encoding;
   // O_NOFOLLOW is POSIX-only. On Windows it is absent, and `0 | undefined` is
   // `0` — which would silently mean "follow the link", the opposite of intent.
   // Fall back to an lstat pre-check there: it keeps refusing dangling links
@@ -165,14 +171,14 @@ export async function readFileNoFollow(path: string, encoding: 'utf8'): Promise<
     }
     const handle = await open(path, 'r');
     try {
-      return await handle.readFile({ encoding });
+      return await handle.readFile(enc === undefined ? undefined : { encoding: enc });
     } finally {
       await handle.close();
     }
   }
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    return await handle.readFile({ encoding });
+    return await handle.readFile(enc === undefined ? undefined : { encoding: enc });
   } finally {
     await handle.close();
   }

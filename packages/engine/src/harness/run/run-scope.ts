@@ -31,6 +31,8 @@ export interface RunToolRuntime {
   fileEffects: ToolFileEffects;
   /** 本轮记忆面 journal（L3 P2） */
   memoryEffects: import("@octopi-agent/core/types/tools.js").MemoryEffectJournal;
+  /** 图像降级判据能力半区（与 wire 同穿；镜像 ToolExecutionContext.modelInput） */
+  modelInput?: import("@octopi-agent/core/types/agent-definition.js").ModelInputType[];
   /** L2 允许根 */
   pathRoots?: string[];
   /** Session undo roots that file tools must not write (D6-a) */

@@ -124,6 +124,8 @@ export interface GatewayConfig {
   knowledge?: import('@octopi-agent/engine/config.js').HarnessConfig['knowledge'];
   /** 公用能力 documents（DocumentPort 读抽取） */
   documents?: import('@octopi-agent/engine/config.js').HarnessConfig['documents'];
+  /** file_read 图像查看成本闸（arch/file-read-image-view.md §2.5；工具面装配用） */
+  imageView?: import('@octopi-agent/engine/config.js').HarnessConfig['imageView'];
   /** 公用能力 summary（L1/L2 压缩；全局工具面装配用，§10 tool 面随执行节点） */
   summary?: import('@octopi-agent/engine/config.js').HarnessConfig['summary'];
   /** web search（web_search 工具面装配用） */

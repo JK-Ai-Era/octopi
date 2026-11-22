@@ -40,6 +40,8 @@ export interface ToolSetConfig {
   };
   /** Summary 公用能力（http_request / file_read L1/L2） */
   summary?: import('../../../context/capabilities/summary/index.js').ToolSummarySupport;
+  /** file_read 图像查看成本闸（config imageView 段；缺省 DEFAULT_IMAGE_COST_GATE） */
+  imageView?: Partial<import('./image-view.js').ImageCostGateConfig>;
   /** CredentialStore — http_request.credential（绑定强制见 store.resolve） */
   credentials?: import('../../../governance/credentials/store.js').CredentialStore | null;
   /** http_request 网络门禁（默认拒私网） */
@@ -64,6 +66,7 @@ export function createToolSet(config?: ToolSetConfig): ToolSet {
   const taskService = config?.sessionTaskService ?? config?.taskTracker;
   const builtin = getBuiltinTools({
     summary: config?.summary,
+    imageView: config?.imageView,
     documentPort: config?.documentPort,
     credentials: config?.credentials,
     network: config?.network,

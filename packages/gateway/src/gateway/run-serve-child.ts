@@ -365,6 +365,7 @@ async function main(): Promise<void> {
     documentPort,
     octopiHome: boot.octopiHome,
     summary: config.summary,
+    imageView: config.imageView,
     levelMap: config.levels,
     webSearch: config.webSearch,
     browser: config.browser,

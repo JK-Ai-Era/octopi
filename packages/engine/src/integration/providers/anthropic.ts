@@ -558,7 +558,54 @@ export class AnthropicProvider implements ModelProvider {
       };
     }
 
+    // 富内容消息（多模态 / engine-authored 图像信封消息）：块级转换，禁止拍平成
+    // String()（曾产出 "[object Object]" 噪声——图像丢失 + 污染对话）
+    if (Array.isArray(msg.content)) {
+      return { role, content: this.toAnthropicContentBlocks(msg.content as Array<Record<string, unknown>>) };
+    }
+
     return { role, content: textContent };
+  }
+
+  /**
+   * OpenAI 风格内容块数组 → Anthropic 内容块数组（图像形态转换；不可发块显式降级为文字）
+   *
+   * - `text` → `{type:'text'}`
+   * - `image_url` → data URL 走 base64 source，http(s) 走 url source；
+   *   其余形态（本地路径等）降级为文字指针（provider 不收）
+   * - 其余块类型（input_audio 等）→ 文字标注降级（Anthropic 无对应形态，不静默丢）
+   *
+   * @param blocks - OpenAI 风格内容块数组
+   * @returns Anthropic 内容块数组
+   */
+  private toAnthropicContentBlocks(blocks: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (const block of blocks) {
+      const type = typeof block.type === 'string' ? block.type : undefined;
+      if (type === 'text') {
+        out.push({ type: 'text', text: typeof block.text === 'string' ? block.text : String(block.text ?? '') });
+        continue;
+      }
+      if (type === 'image_url') {
+        const url = String((block.image_url as Record<string, unknown> | undefined)?.url ?? '');
+        const dataMatch = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(url);
+        if (dataMatch && dataMatch[2]) {
+          out.push({
+            type: 'image',
+            source: { type: 'base64', media_type: dataMatch[1], data: dataMatch[3] },
+          });
+          continue;
+        }
+        if (/^https?:\/\//i.test(url)) {
+          out.push({ type: 'image', source: { type: 'url', url } });
+          continue;
+        }
+        out.push({ type: 'text', text: `[image: unpublishable source, shown as text | ${url.slice(0, 200)}]` });
+        continue;
+      }
+      out.push({ type: 'text', text: `[${type ?? 'unknown'} content: not representable in this provider, shown as text]` });
+    }
+    return out;
   }
 
   /**

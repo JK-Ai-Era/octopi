@@ -91,6 +91,8 @@ type StructuralEngine = {
      */
     toolAgers?: ReadonlyMap<string, ToolResultAger>;
     toolArgAgers?: ReadonlySet<string>;
+    /** 图像降级判据能力半区（与 wire 同穿；镜像 DefaultContextEngine.compactStructural 签名） */
+    modelInput?: import('@octopi-agent/core/types/agent-definition.js').ModelInputType[];
     /** F22：cache-miss 旁路事件出口（ContextEmitFn 形状，经 observerHub 直采进 timeline） */
     emit?: (event: CompactEmitEvent) => void;
     /** run 中止信号（F1）：透传至摘要/压缩调用，run abort 即取消 */
@@ -950,6 +952,9 @@ export class RunHost implements RunBackend {
           loadCompactState: input.loadCompactState,
           toolAgers: surface.toolAgers,
           toolArgAgers: surface.toolArgAgers,
+          // 图像降级判据（P1，arch/file-read-image-view.md）：manual 摘要前缀与会话
+          // 请求必须同形——能力半区从会话模型绑定取（与 summarize 同一 bound）
+          modelInput: bound?.input,
           // 摘要请求窗口护栏（评审 F5）：窗口/输出上限随会话模型绑定注入，防最满时压缩被 400
           contextWindow: bound?.contextWindow,
           maxOutputTokens: bound?.maxOutputTokens,

@@ -208,6 +208,13 @@ export interface AssembleParams {
   agentId?: string;
   /** provider/model 标识（P1-a 校准 ratio 分键，如 `mock/m`；缺省时校准归入 'unknown'） */
   modelKey?: string;
+  /**
+   * 模型输入模态声明（`ResolvedModel.input` 透传）——图像块降级判据的模型能力半区。
+   *
+   * 缺省 = 纯文本（core `modelAcceptsInput` 语义）：图像块降为文字指针。
+   * 估算面与 wire 面必须同传（否则估算多算图像块、决策读数漂移）。
+   */
+  modelInput?: import('@octopi-agent/core/types/agent-definition.js').ModelInputType[];
   /** 当前消息历史 */
   messages: Message[];
   /** 系统提示词 */
