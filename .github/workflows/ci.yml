@@ -26,8 +26,9 @@
 #       查内部包版本，而仓库版本长期领先于已发布版本（0.125.2 vs registry
 #       0.122.0），触发 ETARGET。
 #
-#   (c) actions/checkout@v5、actions/setup-node@v5 才声明 node24 运行时；
-#       @v4 仍是 node20，会被强制运行并刷弃用警告。
+#   (c) 所有 action 必须声明 node24 运行时。checkout@v5、setup-node@v5、
+#       upload-artifact@v7、download-artifact@v8 均已是 node24；@v4 及以下仍是
+#       node20，会被强制在 node24 上跑并刷 deprecation 警告。
 
 name: CI
 
@@ -80,7 +81,7 @@ jobs:
 
       # 测试依赖 dist（见文件头约束 a），所以把构建产物传给 test job，
       # 避免重复构建。
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: |
@@ -102,7 +103,7 @@ jobs:
 
       - run: npm ci
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
 
@@ -125,7 +126,7 @@ jobs:
 
       # lint 也依赖 dist：各 package 的 types 指向 ./dist/*.d.ts，
       # typecheck-tests 与 webui tsc 缺了它会出现大量 TS2307（见文件头约束 a）。
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
 

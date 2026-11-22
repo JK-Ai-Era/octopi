@@ -132,7 +132,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.125.3 (2026-11-23)
+## v0.125.4 (2026-11-23)
+
+### ci: artifacts actions to node24 runtimes (upload@v7, download@v8)
+
+- **现象**：三个 job 全绿，但仍刷 3 条 warning——`upload-artifact@v4` 与 `download-artifact@v4` 声明 node20 运行时，被强制在 node24 上执行。
+- **依据（读 action.yml 而非看版本号猜）**：`runs.using` 是运行时声明的唯一权威来源。实测 `upload-artifact` 的 `v6` 与 `main` 均为 `node24`（v6.0.0 发布说明即「prepare release v6.0.0 for Node.js 24 support」，当前最新 v7.0.2）；`download-artifact` 的 `v7.0.0` 同样以 node24 为主题，当前主版本已是 **v8**（v8.0.2）。
+- **改动**：`upload-artifact@v4 → v7`；`download-artifact@v4 → v8`（两处）。文件头约束 (c) 相应改为「所有 action 必须声明 node24」，并列出已验证版本，避免后续回退。
+- **未改接口**：`name` / `path` 输入与 `download-artifact` 的默认解压行为在两个主版本间保持兼容，本次仅换运行时。
+
+---
 
 ### fix(isolation): bwrap needs an explicit --dev /dev; Seatbelt tests are darwin-only
 
