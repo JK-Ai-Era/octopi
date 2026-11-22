@@ -132,7 +132,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.125.2 (2026-11-23)
+## v0.125.3 (2026-11-23)
+
+### fix(isolation): bwrap needs an explicit --dev /dev; Seatbelt tests are darwin-only
+
+- **真实 bug（Linux 上 21 个用例失败的主因）**：bwrap 以**完全空的 tmpfs 为根**启动，`--unshare-all` 只创建命名空间、**不提供 `/dev`**（man bwrap 明确：/dev 需 `--dev DEST` 或 `--dev-bind` 显式要求）。原 argv 绑定了 `/usr /bin /lib /etc` 却没有 `/dev`，于是任何打开 `/dev/null` 的程序都报 `could not open '/dev/null' for reading and writing`——git 首当其冲，导致 `git_status` / `git_status_snapshot` / undo EOL / dedicated-tools 全链路失败。**同一原因连带 `path-denylist-coverage` 的 git 用例**（其 fixture 直接跑 `git init/commit`）。
+  - 修法：argv 增加 `--dev /dev`（挂载新 devtmpfs，非宿主 bind，不引入逃逸面）。
+  - 同时修正一句错误注释（原写 "bwrap supplies its own /dev"，是它误导了实现）。
+- **测试错在平台假设，不是代码**：`explainSeatbeltExecDenial` 只在 darwin 被生产路径调用（`withExecDiagnostics` 首行即 `if (process.platform !== 'darwin') return pending`），但测试无守卫地在 Linux 上跑它，并断言 macOS 布局 `/usr/sbin/chroot`；Ubuntu 上 chroot 在 `/usr/bin/chroot`，绝对路径 stat 不到 → 解析返回 null → `kind` 为 `undefined`。修法：该 describe 加 `describe.skipIf(process.platform !== 'darwin')`，语义上更准确（这段逻辑与 bwrap 无关）。
+- **验证**：macOS 全量 5771 用例通过、Seatbelt 6 个用例在 darwin 上仍正常运行（未误跳过）；Linux 侧以 CI 为准。
+
+---
 
 ### fix(ci): build before test, drop bogus webui install, actions v5
 

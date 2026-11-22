@@ -380,6 +380,13 @@ export class ProcessSandbox implements SandboxProvider {
     const bwrapArgs = [
       '--die-with-parent',
       '--unshare-all',
+      // bwrap starts from a completely empty tmpfs root: namespaces and mounts
+      // are independent, so --unshare-all does NOT provide /dev. Without this,
+      // anything that opens /dev/null (git among many others) fails with
+      // "could not open '/dev/null' for reading and writing". `--dev` mounts a
+      // fresh devtmpfs (not a host bind), so it adds no escape surface.
+      '--dev',
+      '/dev',
       '--ro-bind',
       '/usr',
       '/usr',
@@ -760,8 +767,10 @@ export function buildSeatbeltProfile(
 }
 
 /**
- * POSIX stdio devices the jail must keep writable (macOS Seatbelt only;
- * bwrap supplies its own /dev). Character sinks cannot escape the jail.
+ * POSIX stdio devices the jail must keep writable (macOS Seatbelt only).
+ * bwrap handles this differently: it needs an explicit `--dev /dev` to get a
+ * devtmpfs at all (see the bwrap argv builder), after which the devices exist
+ * without further profile edits. Character sinks cannot escape the jail.
  */
 export const SEATBELT_DEVICE_WRITE_ALLOW = [
   '/dev/null',

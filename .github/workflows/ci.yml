@@ -9,18 +9,25 @@
 #                              但这条纪律完全靠人记得。
 #   3. npm run lint           → eslint + tests 类型基线 + webui tsc。
 #
-# ⚠️ 两条实证约束（第一次运行全红后查明的，不是推测）：
+# ⚠️ 三条实证约束（第一次运行全红后查明的，不是推测）：
 #
-#   (a) 测试依赖构建产物。测试里有 `@octopi-agent/engine/harness` 这类裸导入，
-#       它们经 package.json#exports 解析到 packages/engine/dist/，另有 gateway
-#       测试 fork 的子进程入口 run-serve-child.js 也在 dist 内。全新 checkout
-#       没有 dist，实测 52 个文件 / 136 个用例失败。所以 test job 必须先 build。
+#   (a) 全部三个检查都依赖构建产物，不只是测试。各 package 的 package.json
+#       把 `types` 指向 ./dist/*.d.ts，因此任何 tsc 检查（lint 里的
+#       typecheck-tests 与 webui tsc）在没有 dist 时都会报
+#       TS2307 "Cannot find module ..." 一片红。测试另有两处依赖：
+#       `@octopi-agent/engine/harness` 这类裸导入经 exports 落到 packages/*/dist，
+#       以及 gateway 测试 fork 的子进程入口 run-serve-child.js 也在 dist 内。
+#       实测：无 dist 时 52 个测试文件 / 136 个用例失败，lint 报数十条 TS2307。
+#       → build 必须作为 test 与 lint 的共同前置，不能只挂给 test。
 #
 #   (b) 不要 `npm install --prefix packages/webui`。packages/webui 是 npm
 #       workspace 成员（workspaces: ["packages/*"]），root `npm ci` 已把它的
-#       依赖装到根 node_modules；实测 `tsc -p packages/webui --noEmit` 直接通过。
-#       反而 --prefix 会脱离 workspace 上下文去 registry 查内部包版本，而仓库
-#       版本长期领先于已发布版本（0.125.1 vs registry 0.122.0），导致 ETARGET。
+#       依赖装到根 node_modules。反而 --prefix 会脱离 workspace 上下文去 registry
+#       查内部包版本，而仓库版本长期领先于已发布版本（0.125.2 vs registry
+#       0.122.0），触发 ETARGET。
+#
+#   (c) actions/checkout@v5、actions/setup-node@v5 才声明 node24 运行时；
+#       @v4 仍是 node20，会被强制运行并刷弃用警告。
 
 name: CI
 
@@ -103,6 +110,7 @@ jobs:
         run: npm test
 
   lint:
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -114,6 +122,12 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # lint 也依赖 dist：各 package 的 types 指向 ./dist/*.d.ts，
+      # typecheck-tests 与 webui tsc 缺了它会出现大量 TS2307（见文件头约束 a）。
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
 
       - name: Lint, test types, webui types
         run: npm run lint

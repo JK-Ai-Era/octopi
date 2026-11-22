@@ -424,9 +424,15 @@ describe('privilege deny list is a cross-platform superset', () => {
   });
 });
 
-describe('exec denial attribution (EPERM is not self-explanatory)', () => {
-  const wrap = async () =>
-    await import('@octopi-agent/engine/harness/extension/execution-environment/sandbox.js');
+describe.skipIf(process.platform !== 'darwin')(
+  'exec denial attribution (EPERM is not self-explanatory)',
+  () => {
+    // Seatbelt-only: withExecDiagnostics short-circuits on non-darwin hosts
+    // (sandbox.ts: `if (process.platform !== 'darwin') return pending`), so
+    // this logic never runs against bwrap. Testing it on Linux asserted
+    // macOS path layouts (/usr/sbin/chroot) that Linux does not have.
+    const wrap = async () =>
+      await import('@octopi-agent/engine/harness/extension/execution-environment/sandbox.js');
 
   it('attributes setuid exec and names the OS invariant', async () => {
     const { explainSeatbeltExecDenial } = await wrap();
@@ -487,4 +493,5 @@ describe('exec denial attribution (EPERM is not self-explanatory)', () => {
       await explainSeatbeltExecDenial({ stderr: 'cat: /nope: No such file or directory\n', cwd: '/tmp' }),
     ).toBeNull();
   });
-});
+  },
+);
