@@ -129,29 +129,29 @@ describe('hydrateAttachmentImages', () => {
     expect(out[0]).toBe(msgs[0]);
   });
 
-  it('已老化结果的信封块跳过（M4）', async () => {
+  it('已老化结果的 imageRef 跳过（M4）', async () => {
     const result = {
       kind: 'image',
-      contentBlocks: [{ type: 'image', url: imgPath, mimeType: 'image/png', alt: 'a.png' }],
+      imageRef: { url: imgPath, mimeType: 'image/png', alt: 'a.png' },
     };
     const out = await hydrateAttachmentImages([toolEnvelopeMessage(result)], opts({
       agedToolCallIds: new Set(['c1']),
     }));
-    const blocks = (out[0].toolResults![0].result as { contentBlocks: LooseBlock[] }).contentBlocks;
-    expect(blocks[0].data).toBeUndefined();
+    const ref = (out[0].toolResults![0].result as { imageRef: LooseBlock }).imageRef;
+    expect(ref.data).toBeUndefined();
   });
 
-  it('信封块水合：result.contentBlocks url → data，且原 result 不动', async () => {
+  it('imageRef 水合：url → data，且原 result 不动', async () => {
     const result = {
       kind: 'image',
       path: imgPath,
-      contentBlocks: [{ type: 'image', url: imgPath, mimeType: 'image/png', alt: 'a.png' }],
+      imageRef: { url: imgPath, mimeType: 'image/png', alt: 'a.png' },
     };
     const msgs = [toolEnvelopeMessage(result)];
     const out = await hydrateAttachmentImages(msgs, opts());
-    const blocks = (out[0].toolResults![0].result as { contentBlocks: LooseBlock[] }).contentBlocks;
-    expect(blocks[0].data).toBeTruthy();
-    expect((result.contentBlocks[0] as unknown as { data?: string }).data).toBeUndefined();
+    const ref = (out[0].toolResults![0].result as { imageRef: LooseBlock }).imageRef;
+    expect(ref.data).toBeTruthy();
+    expect((result.imageRef as unknown as { data?: string }).data).toBeUndefined();
   });
 });
 
@@ -172,7 +172,8 @@ describe('wire 端到端（file_read → 真派生存储 → assemble）', () =>
         memoryEffects: { recordWrite: async () => {}, recordDelete: async () => {} },
       } as never,
     )) as Record<string, unknown>;
-    expect(res.attachmentId).toBeTruthy();
+    expect(res.imageRef).toBeTruthy();
+    expect((res.imageRef as { attachmentId: string }).attachmentId).toBeTruthy();
     // 零 base64：结果只放引用
     expect(JSON.stringify(res)).not.toContain('iVBOR');
 

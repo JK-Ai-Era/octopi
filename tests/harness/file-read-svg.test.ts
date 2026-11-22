@@ -89,14 +89,14 @@ async function readSvg(
   return (await tool.handler({ path, ...args }, context)) as Record<string, unknown>;
 }
 
-/** 解码 contentBlocks[0] 引用的 PNG 并采样 (x,y) 像素（附件路线：载荷在 url 文件） */
+/** 解码 imageRef 引用的 PNG 并采样 (x,y) 像素（附件路线：载荷在 url 文件） */
 async function pixelAt(result: Record<string, unknown>, x: number, y: number): Promise<[number, number, number]> {
-  const blocks = result.contentBlocks as { url: string; mimeType: string }[] | undefined;
-  expect(blocks).toHaveLength(1);
-  if (!blocks) throw new Error('no contentBlocks');
-  expect(blocks[0].mimeType).toBe('image/png');
+  const ref = result.imageRef as { url: string; mimeType: string } | undefined;
+  expect(ref).toBeTruthy();
+  if (!ref) throw new Error('no imageRef');
+  expect(ref.mimeType).toBe('image/png');
   const { readFile } = await import('node:fs/promises');
-  const png = await readFile(blocks[0].url);
+  const png = await readFile(ref.url);
   const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
   const idx = (y * info.width + x) * info.channels;
   return [data[idx], data[idx + 1], data[idx + 2]];
@@ -155,7 +155,7 @@ describe('view 双模式：auto/text = 源码即产物', () => {
     for (const args of [{}, { view: 'auto' }, { view: 'text' }]) {
       const res = await readSvg(p, args);
       expect(res.content).toContain('<rect');
-      expect(res.contentBlocks).toBeUndefined();
+      expect(res.imageRef).toBeUndefined();
     }
   });
 
@@ -282,7 +282,7 @@ describe('成本闸与降级', () => {
     const p = await svgFixture(src, 'novision.svg');
     const res = await readSvg(p, { view: 'render' }, toolContext({ modelInput: ['text'] }));
     expect(res.attached).toBe(false);
-    expect(res.contentBlocks).toBeUndefined();
+    expect(res.imageRef).toBeUndefined();
     expect(String(res.note)).toContain('no image input');
   });
 
@@ -292,7 +292,7 @@ describe('成本闸与降级', () => {
     const res = await readSvg(p, { view: 'both' }, toolContext({ modelInput: ['text'] }));
     expect(res.content).toContain('<rect');
     expect(res.attached).toBe(false);
-    expect(res.contentBlocks).toBeUndefined();
+    expect(res.imageRef).toBeUndefined();
   });
 });
 

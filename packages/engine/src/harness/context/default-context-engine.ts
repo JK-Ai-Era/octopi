@@ -21,7 +21,7 @@
 
 import type { Message, ToolResultAger, ModelInputType } from '@octopi-agent/core/types.js';
 import { getTextContent, modelAcceptsInput } from '@octopi-agent/core/types.js';
-import { extractContentBlocks } from './tool-result-body.js';
+import { readImageRef } from './tool-result-body.js';
 import type { LLMMessage, LLMToolDefinition } from '@octopi-agent/core/interfaces/model-provider.js';
 import type { RequestView } from '@octopi-agent/core/loop/types.js';
 import type {
@@ -2610,26 +2610,26 @@ export class DefaultContextEngine implements ContextEngine {
           name: tr.name,
         });
       }
-      // 富内容信封（P2，arch/file-read-image-view.md §2.1/§2.4）：result.contentBlocks 挂图。
-      // tool 文本保持指针（toolResultBody 已剥离信封）；图像块紧随 tool 消息之后走一条
+      // 图像引用（附件路线，arch/file-read-image-view.md §2.1/§2.4）：result.imageRef 挂图。
+      // tool 文本保持指针（toolResultBody 只序列化引用）；图像块紧随 tool 消息之后走一条
       // engine-authored user 消息——跨 provider 可移植（OpenAI chat tool 消息仅文本；
       // Anthropic 侧连续 user 由 anthropic-message-normalize 归并进 tool_result 轮）。
-      // 老化命中的结果不带块（指针已降级，§2.5 图像读取老化为定位指针、不保留 base64）。
+      // 老化命中的结果不带引用（指针已降级，§2.5 图像读取老化为定位指针）。
+      // 信封机制（result.contentBlocks）已废除：遗留数据不进 wire（只作防泄漏消毒）。
       const richBlocks: Array<{ type: string; [key: string]: unknown }> = [];
       for (const tr of msg.toolResults ?? []) {
         if (aging && aging.agedIds.has(tr.toolCallId)) continue;
-        for (const block of extractContentBlocks(tr.result)) {
-          // 判据/形态转换与多模态分支共用（convertContentBlock）：数据形态 ∧ 模型能力
-          const converted = this.convertContentBlock(block, modelInput);
-          if (converted.type === 'text') {
-            // 降级文本自带原因标注（能力不足/形态不可发），照发不重复 label
-            richBlocks.push(converted);
-            continue;
-          }
-          const alt = (block as unknown as { alt?: unknown }).alt;
-          const label = typeof alt === 'string' ? `[image: ${alt}]` : '[image]';
-          richBlocks.push({ type: 'text', text: label }, converted);
+        const ref = readImageRef(tr.result);
+        if (!ref || (!ref.data && !ref.url)) continue;
+        // 判据/形态转换与多模态分支共用（convertContentBlock）：数据形态 ∧ 模型能力
+        const converted = this.convertContentBlock({ type: 'image', ...ref }, modelInput);
+        if (converted.type === 'text') {
+          // 降级文本自带原因标注（能力不足/形态不可发），照发不重复 label
+          richBlocks.push(converted);
+          continue;
         }
+        const label = typeof ref.alt === 'string' ? `[image: ${ref.alt}]` : '[image]';
+        richBlocks.push({ type: 'text', text: label }, converted);
       }
       if (richBlocks.length > 0) {
         result.push({ role: 'user', content: richBlocks });

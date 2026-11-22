@@ -132,6 +132,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.124.1 (2026-11-23)
+
+### refactor(context): 删除工具结果信封机制，只留 imageRef 引用（零兼容层）
+
+- **内容**：按大哥拍板「不要留兼容层」删除 v0.123.0 信封路线的全部残留支持面——`TOOL_RESULT_CONTENT_BLOCKS` / `extractContentBlocks` / `withContentBlocks` 废除；`convertMessage` 分派、token 估算、水合全部改走**单一引用字段** `imageRef: {attachmentId, url, mimeType, alt}`。旧「data 形态块仍受支持」承诺撤销：遗留 `contentBlocks` 数据不再有 wire 转换路，只作**死数据消毒**（`stripLegacyRichContent`：tool 文本/展示/索引/事件四出口剥离，防 v0.123.x 会话的 base64 泄漏）。
+- **顺带修一个真破口**：水合态 `imageRef.data`（视图克隆里的 base64）此前会随 `toolResultBody` 泄入 tool 文本——测试钉住后 `toolResultBody` 消毒面扩展为「遗留信封 + 水合态 data」（base64 只走图像通道，永不入工具文本）。
+- **残余消解**：core 裸 loop 回退序列化对 imageRef 天然安全（引用可 JSON 化）——OP-IMG-1 旧项 M8 随信封废除关闭；「contentBlocks 通用信任面」隐患（评审 minor-8）一并消失。
+- **验证**：全量 5761 测试通过；typecheck 门禁 0/0；构建零错。测试面随形状迁移（imageRef 断言 + 遗留消毒钉 + tool 文本无 base64 钉）。
+
 ## v0.124.0 (2026-11-23)
 
 ### feat(context): file_read 图像通道改附件路线（结果只放引用、wire 水合、持久层零 base64）

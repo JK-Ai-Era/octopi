@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { createFileReadTool } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/builtin.js';
 import {
   toolResultBody,
-  extractContentBlocks,
+  readImageRef,
 } from '@octopi-agent/engine/harness/context/tool-result-body.js';
 import {
   resolveToolResultAgingOptions,
@@ -41,7 +41,7 @@ function imageResult(): Record<string, unknown> {
     sizeBytes: 75,
     view: 'auto',
     attached: true,
-    contentBlocks: [{ type: 'image', data: 'QUFBQUFBQUE=', mimeType: 'image/png', alt: 'png image' }],
+    imageRef: { data: 'QUFBQUFBQUE=', mimeType: 'image/png', alt: 'png image' },
   };
 }
 
@@ -116,7 +116,7 @@ describe('老化计划集成（base64 不滞留视图）', () => {
     const aged = view[1].toolResults?.[0];
     expect(typeof aged?.result).toBe('string');
     expect(String(aged?.result)).toContain('[aged] image read');
-    expect(extractContentBlocks(aged?.result)).toHaveLength(0);
+    expect(readImageRef(aged?.result)).toBeNull();
     expect(toolResultBody({ result: aged?.result })).not.toContain('QUFB');
   });
 });
@@ -131,7 +131,7 @@ describe('token 估算：信封图像块计入', () => {
       { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: imageResult() }], timestamp: Date.now() },
     ];
     const stripped = imageResult();
-    delete stripped.contentBlocks;
+    delete stripped.imageRef;
     const without: Message[] = [
       { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result: stripped }], timestamp: Date.now() },
     ];
@@ -158,7 +158,7 @@ describe('token 估算：信封图像块计入', () => {
         role: 'user',
         content: [
           { type: 'text', text: '[image: png image]' },
-          { type: 'image_url', image_url: { url: `data:image/png;base64,${(result.contentBlocks as { data: string }[])[0].data}` } },
+          { type: 'image_url', image_url: { url: `data:image/png;base64,${(result.imageRef as { data: string }).data}` } },
         ],
       },
     ] as unknown as LLMMessage[];

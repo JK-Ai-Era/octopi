@@ -10,36 +10,46 @@
 const cache = new WeakMap<object, string>();
 
 /**
- * 工具富内容信封字段名（arch/file-read-image-view.md §2.1）。
+ * v0.123.x 遗留信封字段名（**已废除**，仅作防泄漏闸的剥离目标）。
  *
- * 工具结果对象可携带 `contentBlocks: ContentBlock[]` 作为**消息级富内容**：
- * - 文本序列化（本文件）一律剥离，防 base64 进 tool 文本（token 炸弹 + 计数漂移）；
- * - wire 面由 `convertMessage` 消费（tool 分支提取 → 挂 ImageBlock，§2.4 分派）；
- * - 老化（ageResult）整体改写 result 时信封随之消失，不留 base64（§2.5）。
+ * 信封路线（result.contentBlocks 携 data 形态 base64）已于 v0.124.1 整体删除：
+ * 现行结果只携 `imageRef` 引用（arch/file-read-image-view.md §2.1），base64 只活在
+ * wire 水合后的视图里。旧会话数据可能仍含此字段——所有文本化/展示/索引/事件出口
+ * 一律剥离它（`stripLegacyRichContent`），防遗留 base64 泄入 tool 文本。**无生产者、
+ * 无 wire 转换路**：这不是兼容层，是死数据消毒。
  */
-export const TOOL_RESULT_CONTENT_BLOCKS = 'contentBlocks';
+const LEGACY_CONTENT_BLOCKS = 'contentBlocks';
+
+/** 图像引用（附件路线）：结果只放引用；data 形态仅存在于水合后的视图 */
+export interface ToolImageRef {
+  /** 派生媒体区 id（内容寻址文件名） */
+  attachmentId?: string;
+  /** 引用地址（持久形态 = 本地绝对路径；水合后视图可携 data） */
+  url?: string;
+  /** data 形态载荷（仅水合后视图；持久层永不落） */
+  data?: string;
+  mimeType?: string;
+  alt?: string;
+}
 
 /**
- * 从工具结果提取富内容块（信封读口；convertMessage / 消费方唯一入口）。
+ * 图像引用读口（附件路线唯一引形：`result.imageRef`）。
  *
  * @param result - 工具原始返回对象
- * @returns 内容块数组；无信封返回空数组
+ * @returns 引用对象；无引用返回 null
  */
-export function extractContentBlocks(result: unknown): Array<{ type: string; [key: string]: unknown }> {
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
-  const blocks = (result as Record<string, unknown>)[TOOL_RESULT_CONTENT_BLOCKS];
-  if (!Array.isArray(blocks)) return [];
-  return blocks.filter(
-    (b): b is { type: string; [key: string]: unknown } =>
-      Boolean(b) && typeof b === 'object' && typeof (b as { type?: unknown }).type === 'string',
-  );
+export function readImageRef(result: unknown): ToolImageRef | null {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  const ref = (result as Record<string, unknown>).imageRef;
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return null;
+  return ref as ToolImageRef;
 }
 
 /**
  * 序列化工具结果正文：error → `{"error":...}`；string result 原文；否则 JSON。
  *
- * 富内容信封（contentBlocks）在此**整体剥离**——正文只留指针/元信息；
- * base64 载荷永远不进 tool 文本。
+ * 消毒（base64 永不入 tool 文本）：①v0.123.x 遗留信封字段；②水合态 `imageRef.data`
+ * （hydrate 在视图克隆里注入的 base64 只允许走 richBlocks 图像通道，不进文本）。
  *
  * @param tr - 工具结果（error / result 至少其一）
  * @returns 正文字符串
@@ -53,36 +63,36 @@ export function toolResultBody(tr: { error?: string; result?: unknown }): string
       ? JSON.stringify({ error: tr.error })
       : typeof tr.result === 'string'
         ? tr.result
-        : JSON.stringify(stripContentBlocks(tr.result) ?? null);
+        : JSON.stringify(sanitizeResultForText(tr.result) ?? null);
   cache.set(key, body);
   return body;
 }
 
-/** 剥离信封字段后的结果副本（无信封原样返回，避免无谓分配）
- *
- * 公开导出：展示投影（gateway conversation adapter）是信封的合法消费者——
- * base64 不是展示数据，投影面剥离与 toolResultBody 同一实现（one source of truth）。
- */
-export function stripContentBlocks(result: unknown): unknown {
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
-  const record = result as Record<string, unknown>;
-  if (!(TOOL_RESULT_CONTENT_BLOCKS in record)) return result;
-  const { [TOOL_RESULT_CONTENT_BLOCKS]: _dropped, ...rest } = record;
-  return rest;
+/** 文本化消毒：遗留信封 + 水合态 imageRef.data 一律不入 tool 文本 */
+function sanitizeResultForText(result: unknown): unknown {
+  const stripped = stripLegacyRichContent(result);
+  if (!stripped || typeof stripped !== 'object' || Array.isArray(stripped)) return stripped;
+  const record = stripped as Record<string, unknown>;
+  const ref = record.imageRef;
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return stripped;
+  if (!('data' in (ref as Record<string, unknown>))) return stripped;
+  const { data: _payload, ...refRest } = ref as Record<string, unknown>;
+  return { ...record, imageRef: refRest };
 }
 
 /**
- * 信封块替换副本（水合/变换用）。总是返回携带新块的副本——调用方负责判变化
- * （无信封/未变化时 hydrate 等调用方自行短路，避免无谓分配）。
+ * 遗留信封字段剥离（防泄漏闸，非兼容层）。
+ *
+ * v0.123.x 会话数据的 result.contentBlocks 可能携 base64——tool 文本、展示投影、
+ * 搜索索引、事件出口一律不得携带它。现行结果无此字段（原样返回同一引用）。
  *
  * @param result - 工具原始返回对象
- * @param blocks - 新的内容块数组
- * @returns 替换信封后的结果副本
+ * @returns 剥离遗留字段后的结果副本（无遗留字段原样返回）
  */
-export function withContentBlocks(
-  result: unknown,
-  blocks: Array<{ type: string; [key: string]: unknown }>,
-): unknown {
+export function stripLegacyRichContent(result: unknown): unknown {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
-  return { ...(result as Record<string, unknown>), [TOOL_RESULT_CONTENT_BLOCKS]: blocks };
+  const record = result as Record<string, unknown>;
+  if (!(LEGACY_CONTENT_BLOCKS in record)) return result;
+  const { [LEGACY_CONTENT_BLOCKS]: _dropped, ...rest } = record;
+  return rest;
 }

@@ -5,7 +5,7 @@
  * - 魔数嗅探（伪装扩展名必须识别）
  * - 成本闸：降采样 + 上限 fail-loud（拒绝而非截断）
  * - view 三态（auto/text/both；render 对光栅等价 auto）
- * - 富内容信封：result.contentBlocks 挂图 + 文本指针；toolResultBody 剥离防 base64 入文本
+ * - 图像引用：result.imageRef 挂图 + 文本指针（零 base64）；信封已废除（遗留消毒见 stripLegacyRichContent）
  * - convertMessage tool 分派：信封块 → wire 图像（能力判据复用 P1 落点）
  */
 
@@ -23,8 +23,8 @@ import {
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/image-view.js';
 import {
   toolResultBody,
-  extractContentBlocks,
-  stripContentBlocks,
+  readImageRef,
+  stripLegacyRichContent,
 } from '@octopi-agent/engine/harness/context/tool-result-body.js';
 import { DefaultContextEngine } from '@octopi-agent/engine/harness/context/default-context-engine.js';
 import type { Message, ToolResult } from '@octopi-agent/core/types.js';
@@ -116,40 +116,42 @@ describe('引用路线：序列化往返与零 base64（M1 钉）', () => {
     const json = JSON.stringify(result);
     expect(json).not.toContain('iVBOR');
     expect(json.length).toBeLessThan(4000);
-    expect(result.attachmentId).toBeTruthy();
+    expect(result.imageRef).toBeTruthy();
 
     const messages: Message[] = [
       { role: 'tool', content: '', toolResults: [{ toolCallId: 'c1', name: 'file_read', result }], timestamp: Date.now() },
     ];
     const revived = JSON.parse(JSON.stringify(messages)) as Message[];
-    const blocks = extractContentBlocks(revived[0].toolResults?.[0].result);
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0].type).toBe('image');
-    const url = (blocks[0] as unknown as { url: string }).url;
+    const ref = readImageRef(revived[0].toolResults?.[0].result);
+    expect(ref).not.toBeNull();
+    const url = ref!.url;
     expect(url).toBeTruthy();
-    // 引用可读回载荷（附件存储 = 字节唯一居所）
-    expect((await readFile(url)).length).toBeGreaterThan(0);
-    // 序列化往返不改变正文剥离行为（信封永不入 tool 文本）
+    // 引用可读回载荷（派生媒体区 = 字节唯一居所）
+    expect((await readFile(url as string)).length).toBeGreaterThan(0);
+    // 序列化往返不改变正文序列化行为（工具文本无 base64）
     expect(toolResultBody(revived[0].toolResults![0])).toBe(toolResultBody({ result }));
-    expect(toolResultBody(revived[0].toolResults![0])).not.toContain('contentBlocks');
+    expect(toolResultBody(revived[0].toolResults![0])).not.toContain('iVBOR');
   });
 
-  it('展示投影剥离信封（gateway conversation adapter 同源）', async () => {
+  it('遗留信封消毒（防泄漏闸，gateway conversation adapter 同源）', async () => {
     const p = await pngFixture(16, 16, 'projection.png');
     const res = await readImage(p);
-    const stripped = stripContentBlocks(res) as Record<string, unknown>;
+    const stripped = stripLegacyRichContent(res) as Record<string, unknown>;
     expect(stripped.contentBlocks).toBeUndefined();
     expect(stripped.attached).toBe(true); // 指针元信息保留
-    // 无信封结果原样返回同一引用（避免无谓分配）
+    // v0.123.x 遗留 data 信封必须被剥离（防 base64 泄入展示/文本）
+    const legacy = { content: 'ok', contentBlocks: [{ type: 'image', data: 'iVBORw0KGgo=' }] };
+    expect((stripLegacyRichContent(legacy) as Record<string, unknown>).contentBlocks).toBeUndefined();
+    // 无遗留字段原样返回同一引用（避免无谓分配）
     const plain = { content: 'hello' };
-    expect(stripContentBlocks(plain)).toBe(plain);
+    expect(stripLegacyRichContent(plain)).toBe(plain);
   });
 
   it('无附件端口（库路径）→ 显式降级指针，不塞字节', async () => {
     const p = await pngFixture(60, 60, 'nostore.png');
     const result = await readImage(p, {}, toolContext({ attachments: undefined }));
     expect(result.attached).toBe(false);
-    expect(extractContentBlocks(result)).toHaveLength(0);
+    expect(result.imageRef).toBeUndefined();
     expect(String(result.note)).toContain('attachment store unavailable');
     expect(JSON.stringify(result)).not.toContain('iVBOR');
   });
@@ -238,16 +240,14 @@ describe('file_read 图像分支', () => {
     expect(result.mimeType).toBe('image/png');
     expect(result.width).toBe(300);
     expect(result.height).toBe(200);
-    const blocks = extractContentBlocks(result);
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0].type).toBe('image');
+    expect(result.imageRef).toBeTruthy();
   });
 
   it('text：只回元信息，不挂图', async () => {
     const p = await pngFixture(300, 200, 'text-view.png');
     const result = await readImage(p, { view: 'text' });
     expect(result.attached).toBe(false);
-    expect(extractContentBlocks(result)).toHaveLength(0);
+    expect(result.imageRef).toBeUndefined();
     expect(result.width).toBe(300);
     expect(String(result.note)).toContain('metadata only');
   });
@@ -256,14 +256,14 @@ describe('file_read 图像分支', () => {
     const p = await pngFixture(120, 90, 'both.png');
     const result = await readImage(p, { view: 'both' });
     expect(result.attached).toBe(true);
-    expect(extractContentBlocks(result)).toHaveLength(1);
+    expect(result.imageRef).toBeTruthy();
   });
 
   it('render 对光栅图等价 auto（SVG render 归 P3）', async () => {
     const p = await pngFixture(50, 50, 'render.png');
     const result = await readImage(p, { view: 'render' });
     expect(result.attached).toBe(true);
-    expect(extractContentBlocks(result)).toHaveLength(1);
+    expect(result.imageRef).toBeTruthy();
   });
 
   it('非法 view → fail-loud', async () => {
@@ -275,7 +275,7 @@ describe('file_read 图像分支', () => {
     const p = await pngFixture(200, 100, 'novision.png');
     const result = await readImage(p, {}, toolContext({ modelInput: ['text'] }));
     expect(result.attached).toBe(false);
-    expect(extractContentBlocks(result)).toHaveLength(0);
+    expect(result.imageRef).toBeUndefined();
     expect(String(result.note)).toContain('no image input');
   });
 
@@ -284,14 +284,14 @@ describe('file_read 图像分支', () => {
     await writeFile(p, 'hello\nworld\n');
     const result = await readImage(p);
     expect(result.content).toBe('hello\nworld\n');
-    expect(extractContentBlocks(result)).toHaveLength(0);
+    expect(result.imageRef).toBeUndefined();
   });
 });
 
-// ── 信封剥离（防 base64 入 tool 文本） ────────────────────────────────
+// ── toolResultBody 遗留信封消毒（防 base64 入 tool 文本）──────────────
 
-describe('toolResultBody 信封剥离', () => {
-  it('contentBlocks 不进文本序列化', () => {
+describe('toolResultBody 遗留信封消毒', () => {
+  it('v0.123.x 遗留 contentBlocks 不进文本序列化', () => {
     const tr: ToolResult = {
       toolCallId: 't1',
       name: 'file_read',
@@ -307,17 +307,16 @@ describe('toolResultBody 信封剥离', () => {
     expect(body).toContain('/x.png');
   });
 
-  it('无信封结果序列化不变', () => {
+  it('无遗留字段结果序列化不变', () => {
     const tr: ToolResult = { toolCallId: 't1', name: 'file_read', result: { content: 'hi', totalLines: 1 } };
     expect(toolResultBody(tr)).toBe(JSON.stringify(tr.result));
   });
 
-  it('extractContentBlocks 只认信封', () => {
-    expect(extractContentBlocks(null)).toEqual([]);
-    expect(extractContentBlocks({ contentBlocks: 'no' })).toEqual([]);
-    expect(extractContentBlocks({ contentBlocks: [{ type: 'image' }, { notype: 1 }] })).toEqual([
-      { type: 'image' },
-    ]);
+  it('readImageRef 只认 imageRef（信封读口已废除）', () => {
+    expect(readImageRef(null)).toBeNull();
+    expect(readImageRef({ imageRef: 'no' })).toBeNull();
+    expect(readImageRef({ contentBlocks: [{ type: 'image' }] })).toBeNull(); // 遗留信封不作数
+    expect(readImageRef({ imageRef: { url: '/x' } })).toEqual({ url: '/x' });
   });
 });
 
@@ -349,29 +348,33 @@ describe('convertMessage 工具富内容分派', () => {
     kind: 'image',
     path: '/shots/a.png',
     attached: true,
-    contentBlocks: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png', alt: 'a.png' }],
+    imageRef: { data: 'aGVsbG8=', mimeType: 'image/png', alt: 'a.png' },
   };
 
-  it('信封块 → wire image_url（有能力模型）', async () => {
+  it('imageRef → wire image_url（有能力模型；data 形态为水合后视图形状）', async () => {
     const view = await viewOf([toolMessage(imageResult)], ['text', 'image']);
     expect(view).toContain('image_url');
     expect(view).toContain('data:image/png;base64,aGVsbG8=');
     expect(view).toContain('/shots/a.png');
   });
 
-  it('tool 文本指针不含 base64', async () => {
+  it('tool 文本指针不含 base64（载荷只走图像通道）', async () => {
     const view = await viewOf([toolMessage(imageResult)], ['text', 'image']);
-    expect(view).not.toContain('contentBlocks');
+    const parsed = JSON.parse(view) as Array<{ role: string; content: unknown }>;
+    const toolText = String(parsed.find((m) => m.role === 'tool')?.content ?? '');
+    expect(toolText).not.toContain('aGVsbG8=');
+    // 图像载荷只出现在图像通道（image_url data URL）
+    expect(view).toContain('data:image/png;base64,');
   });
 
-  it('纯文本模型 → 信封降级为文字（含原因标注）', async () => {
+  it('纯文本模型 → imageRef 降级为文字（含原因标注）', async () => {
     const view = await viewOf([toolMessage(imageResult)], ['text']);
     expect(view).not.toContain('image_url');
     expect(view).not.toContain('aGVsbG8=');
     expect(view).toContain('no image input');
   });
 
-  it('无信封的工具结果不受影响', async () => {
+  it('无引用的工具结果不受影响', async () => {
     const view = await viewOf([toolMessage({ content: 'plain', totalLines: 3 })], ['text', 'image']);
     expect(view).toContain('plain');
     expect(view).not.toContain('image_url');
@@ -400,7 +403,7 @@ describe('评审修复回归（光栅）', () => {
     await writeFile(p, bmp);
     const res = await readImage(p);
     expect(res.attached).toBe(false);
-    expect(res.contentBlocks).toBeUndefined();
+    expect(res.imageRef).toBeUndefined();
     expect(String(res.note)).toContain('bmp decode not supported');
     expect(res.width).toBe(8);
   });

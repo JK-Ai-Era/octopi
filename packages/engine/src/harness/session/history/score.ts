@@ -3,7 +3,7 @@
  */
 
 import type { Message } from '@octopi-agent/core/types.js';
-import { stripContentBlocks } from '../../context/tool-result-body.js';
+import { stripLegacyRichContent } from '../../context/tool-result-body.js';
 import type {
   SessionHistoryMatchField,
   SessionHistoryQueryMode,
@@ -250,8 +250,8 @@ function safeJson(value: unknown): string | null {
 
 function safeResultText(result: unknown): string | null {
   if (result == null) return null;
-  // 富内容信封剥离：索引 snippet 永不携带 base64（同 renderMessage 不变量）
-  const stripped = stripContentBlocks(result);
+  // 遗留信封消毒（v0.123.x 数据防泄漏闸）：索引 snippet 永不携带 base64
+  const stripped = stripLegacyRichContent(result);
   if (typeof stripped === 'string') return stripped.slice(0, 500);
   try {
     return JSON.stringify(stripped).slice(0, 500);

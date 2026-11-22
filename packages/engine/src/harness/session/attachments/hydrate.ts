@@ -20,7 +20,7 @@
 import type { Message } from '@octopi-agent/core/types.js';
 import { stat } from 'node:fs/promises';
 import { isPathUnderRoots, readFileNoFollow } from '../../shared/paths/index.js';
-import { extractContentBlocks, withContentBlocks } from '../../context/tool-result-body.js';
+import { readImageRef } from '../../context/tool-result-body.js';
 import { modelAcceptsInput } from '@octopi-agent/core/types/agent-definition.js';
 import {
   DEFAULT_IMAGE_COST_GATE,
@@ -94,7 +94,7 @@ export async function hydrateAttachmentImages(
           trs.push(tr);
           continue;
         }
-        const newResult = await hydrateResultEnvelope(tr.result, opts);
+        const newResult = await hydrateResultImageRef(tr.result, opts);
         if (newResult === tr.result) {
           trs.push(tr);
           continue;
@@ -114,18 +114,15 @@ export async function hydrateAttachmentImages(
   return anyChanged ? out : messages;
 }
 
-/** 结果信封块水合（无信封原样返回同一引用） */
-async function hydrateResultEnvelope(result: unknown, opts: HydrateImageOptions): Promise<unknown> {
-  const blocks = extractContentBlocks(result);
-  if (blocks.length === 0) return result;
-  const hydrated: Array<{ type: string; [key: string]: unknown }> = [];
-  let changed = false;
-  for (const b of blocks) {
-    const hb = await hydrateBlock(b as LooseBlock, opts);
-    if (hb !== b) changed = true;
-    hydrated.push(hb as { type: string; [key: string]: unknown });
-  }
-  return changed ? withContentBlocks(result, hydrated) : result;
+/** 结果图像引用水合（imageRef url → data 形态副本；无引用/未变化原样返回同一引用） */
+async function hydrateResultImageRef(result: unknown, opts: HydrateImageOptions): Promise<unknown> {
+  const ref = readImageRef(result);
+  if (!ref) return result;
+  const block = { type: 'image', ...ref };
+  const hb = await hydrateBlock(block as LooseBlock, opts);
+  if (hb === block) return result;
+  const { type: _type, ...nextRef } = hb as Record<string, unknown>;
+  return { ...(result as Record<string, unknown>), imageRef: nextRef };
 }
 
 /** 单块水合：url 形态本地图像 → data 形态；其余原样（同引用） */

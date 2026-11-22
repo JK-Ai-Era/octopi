@@ -446,11 +446,11 @@ function baseName(path: string): string {
 /**
  * file_read 图像分支：成本闸 + view 三态 + 富内容信封（arch/file-read-image-view.md §2.1/§2.2）。
  *
- * 信封契约（附件路线）：结果只放引用——`attachmentId` + contentBlocks **url 形态**块
- * （`{type:'image', url, mimeType, alt}`，零 base64）；文本指针走 toolResultBody（剥离
- * contentBlocks，防 base64 入 tool 文本）；convertMessage 消费 contentBlocks 挂图。
- * core 回退序列化（normalizeMessagesForLlm）不识别信封——该路仅无 convertToLlm 的裸
- * loop 使用，engine 工具必经 harness 主链路，实际不相交（若未来相交再收口）。
+ * 信封契约（附件路线）：结果只放引用——`imageRef: {attachmentId, url, mimeType, alt}`
+ * （零 base64；v0.123.x 的 contentBlocks 信封已废除，仅留防泄漏消毒）。文本指针走
+ * toolResultBody（只序列化引用）；convertMessage 消费 imageRef 挂图。
+ * core 回退序列化（normalizeMessagesForLlm）对 imageRef 天然安全（引用可 JSON 化，
+ * 无 base64）——信封废除后该路不再有 token 炸弹面。
  *
  * @param path - 已过 containment 的绝对路径
  * @param raw - 文件原始字节
@@ -518,13 +518,13 @@ async function renderImageResult(
 }
 
 /**
- * 附件路线挂图（§0/§2.1）：gated 载荷入 session attachments，结果只放引用
- * （attachmentId + url 形态块）。base64 永不进 result/JSONL。
+ * 附件路线挂图（§0/§2.1）：gated 载荷入会话派生媒体区，结果只放引用
+ * （`imageRef: {attachmentId, url, mimeType, alt}`）。base64 永不进 result/JSONL。
  *
  * 无附件端口 / 入库失败：显式降级指针（attached:false + 原因标注），不硬错不静默。
  *
  * @param params - 指针元信息 + 闸后载荷 + 附件写入口
- * @returns file_read 结果对象（指针 ± 引用块）
+ * @returns file_read 结果对象（指针 ± 图像引用）
  */
 async function attachGatedImage(params: {
   pointer: Record<string, unknown>;
@@ -560,10 +560,12 @@ async function attachGatedImage(params: {
     return {
       ...merged,
       attached: true,
-      attachmentId,
-      contentBlocks: [
-        { type: 'image', url: attachments.absolutePath(attachmentId), mimeType: gated.mimeType, alt },
-      ],
+      imageRef: {
+        attachmentId,
+        url: attachments.absolutePath(attachmentId),
+        mimeType: gated.mimeType,
+        alt,
+      },
     };
   } catch (err) {
     return {
