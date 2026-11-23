@@ -105,7 +105,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 ### Architecture constitution (required reading)
 
 - **Constitution**: [`docs/north-star.md`](docs/north-star.md) - **Read the constitution before any design, implementation, or review.**
-  - Invariants **I1–I6** / **E1–E7** are binding; **violation = bug**.
+  - The invariant tables (§2: constitutional I-series / engineering E-series) are binding; **violation = bug**.
   - Do not restate or paraphrase invariants in this file. Semantics live only in the constitution (§2 definitions, §8 implementation mapping).
   - Architecture acceptance is judged by invariants (constitution §8), not by "tests green" alone.
   - To change an invariant: edit the constitution and its change log — never patch the summary here.

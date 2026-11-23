@@ -136,6 +136,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.126.5 (2026-11-23)
+
+### docs(contributing): CONTRIBUTING 对齐当前架构与提交纪律；不变量引用去枚举化
+
+- **不变量引用去枚举**：CONTRIBUTING 检查清单与 AGENTS.md 原手抄宪法编号「I1–I6 / E1–E7」，E8（2026-10-18 缓存稳定装配）加入后已失真。两处改为指向 `docs/north-star.md` §2 不变量表：AGENTS.md 自身规则要求不复述不变量、以宪法为准，枚举副本必随下次新增不变量再次漂移。宪法变更日志中的历史「E1–E7 unchanged」是历史记录，按 append-only 不改。
+- **Config 同步指引修正**：原「同步 `src/config-schema.ts`、`octopi.schema.json`、`octopi.example.json`」指向兼容垫片文件且漏掉生成步骤；改为真实编辑面（`packages/engine/src/config-schema/` Zod + 根 `src/config-schema/` 组合层）+ `npm run generate:schema`（`octopi.schema.json` 为生成物，勿手改；`octopi.example.json` 须对生成 schema 保持有效）。
+- **新增「提交与 Pull Request 规范」**：Conventional Commits（描述英文、单一职责）、每个 content commit 同 commit 内完成版本 bump + CHANGELOG + tag、公共文档双语同落（英文为准）、PR 前 lint/test 通过。Release 一节同步改为「bump 随每个 content commit；发布为维护者独立步骤」，与 AGENTS.md 口径一致。此前这些纪律只存在于 AGENTS.md（面向 AI 代理），外部人类贡献者不可见。
+- **验证**：双语两版逐段对照一致；本次改动引用的路径与脚本名逐一核实存在。审查中另发现的遗留项未在本次处理：7 个 `arch/*.md` 内部文档同持「E1–E7」枚举（内部件，待定夺）；「Architecture Document Versioning」制度与 `architecture.md` 实际维护状态不符（仍标 v0.36.0 initial）；「Documentation Sync」与「Documentation Sync Rules」两节内容重叠。
+
+---
+
 ## v0.126.4 (2026-11-23)
 
 ### docs(agents): 规则 7 精简为纯操作指令，通用锚点原则下沉到 file_edit 工具说明

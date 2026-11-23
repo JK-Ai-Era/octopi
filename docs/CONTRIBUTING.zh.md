@@ -1,6 +1,6 @@
 # Octopi 贡献指南
 
-> **语言说明**：英文版见 [CONTRIBUTING.md](./CONTRIBUTING.md)。本文为中文对译，变更须双语同步。
+> **语言说明**：英文版见 [CONTRIBUTING.md](./CONTRIBUTING.md)。本文为中文对译；任何变更须在同一 commit 内双语同落，两版不一致时以英文为准。
 > 本文档面向 Octopi 项目的开发者和贡献者。
 > 如果你是集成开发者（选用 Octopi 作为 Agent 底座），请参考 [architecture.zh.md](./architecture.zh.md) 中的公共 API 示例。
 
@@ -68,7 +68,7 @@ npm run web            # webui vite dev server
   - 改 `session.messages` 的 Gateway 路径（如 `truncateMessagesFrom`）须持 **同一 `sessionLease`**，避免与 Runner 写回竞态
   - 上下文租约 `session.idleExpiryMs`：**opt-in**，只截 LLM 默认窗口，不删 Discourse；超窗走 compact，新开用 `/new`
 - 历史检索：`session_search` / `session_read`（Information 原文，≠ `memory_search` 命题）；索引投影见内部规格（不对外）
-- Config 变更：同步 `src/config-schema.ts`、`octopi.schema.json`、`octopi.example.json`
+- Config 变更：编辑 `packages/engine/src/config-schema/` 的 Zod schema + 根 `src/config-schema/` 组合层，然后运行 `npm run generate:schema`（`src/config-schema.ts` 只是兼容转出口；`octopi.schema.json` 是生成物，勿手改）。保持 `octopi.example.json` 对生成 schema 有效
 
 **依赖方向：外 → 内。修改内层时必须确认不影响外层。**
 
@@ -143,7 +143,8 @@ npm test -- -t "SecurityGuard"
 - [ ] 新增的接口/类型是否有文档说明
 - [ ] 测试数量是否更新
 - [ ] `CHANGELOG.md` 是否记录变更
-- [ ] 未违反 [架构宪法](./north-star.zh.md) 不变量（I1–I6 / E1–E7）
+- [ ] 公共文档变更已在本 commit 内双语同落（英文为准）
+- [ ] 未违反 [架构宪法](./north-star.zh.md) 不变量（现行清单见 `north-star.md` §2）
 
 ### 架构文档版本号
 
@@ -162,7 +163,7 @@ npm run release:prep -- 0.56.0   # 五包同号 + 依赖钉版
 npm run release:print            # 打印发布顺序
 ```
 
-流程：改版本 → 写 `CHANGELOG` → commit + tag → 按 `core → engine → gateway → webui → octopi-agent` 发布。详见 `AGENTS.md` Version Numbering Rules。
+版本 bump 落在**每个 content commit**（见[提交与 Pull Request 规范](#提交与-pull-request-规范)）；发布是维护者独立步骤，按 `core → engine → gateway → webui → octopi-agent` 依赖序执行。完整纪律见 `AGENTS.md` → Version Numbering Rules / Changelog Discipline。
 
 ## 新增模块检查清单
 
@@ -205,6 +206,13 @@ my-plugin/
 - [ ] 我已更新被修改模块的 `README.md`
 - [ ] 我已更新 `docs/architecture.md`（如涉及）
 - [ ] 我已更新 `CHANGELOG.md`
+
+## 提交与 Pull Request 规范
+
+- **Commit 格式**：[Conventional Commits](https://www.conventionalcommits.org/)——`<type>(<scope>): <description>`；type 取 `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`。`<description>` 必须用**英文**。每个 commit 单一职责。
+- **每个 content commit 在同一 commit 内完成发行杂务**：按分段规则选版本号（major=用户显式要求；minor=重大功能或架构变更；patch=其余），运行 `npm run release:prep -- <X.Y.Z>`，向 `CHANGELOG.md` 顶部插入 `## v<X.Y.Z> (YYYY-MM-DD)` 条目，代码 + 版本文件 + `CHANGELOG.md` 一并提交，并立即打 tag（`git tag v<X.Y.Z>`）。
+- **公共文档双语同步**：`docs/*`、`README.md`、`CONTRIBUTING.md` 的任何改动必须在**同一 commit** 内同时落到英文文件与其 `*.zh.md` 对译；英文版为准。
+- **开 PR 前**：本地 `npm run lint` 与 `npm test` 通过；按[文档同步规范](#文档同步规范)更新文档；变更不违反[架构宪法](./north-star.zh.md)不变量。
 
 ## 许可证与贡献授权
 

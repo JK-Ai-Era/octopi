@@ -1,6 +1,6 @@
 # Octopi Contributing Guide
 
-> **Language note**: This English edition is the **working authority**. The Chinese translation is [`CONTRIBUTING.zh.md`](./CONTRIBUTING.zh.md). Keep both in sync.
+> **Language note**: This English edition is the **working authority**. The Chinese translation is [`CONTRIBUTING.zh.md`](./CONTRIBUTING.zh.md). Every change must land in both files in the same commit; when the two disagree, English wins.
 > This document is for developers and contributors to the Octopi project.
 > If you are an integration developer (adopting Octopi as your agent substrate), see the public API examples in [architecture.md](./architecture.md).
 
@@ -69,7 +69,7 @@ Implementation status and open items: [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) 
   - Gateway paths that mutate `session.messages` (e.g. `truncateMessagesFrom`) must hold the **same `sessionLease`** to avoid races with Runner write-back
   - Context lease `session.idleExpiryMs`: **opt-in**; only truncates the LLM default window, does not delete Discourse; over-window goes to compact; start fresh with `/new`
 - History retrieval: `session_search` / `session_read` (Information originals, ≠ `memory_search` propositions); index projection is an internal spec (not public)
-- Config changes: keep `src/config-schema.ts`, `octopi.schema.json`, `octopi.example.json` in sync
+- Config changes: edit the Zod schemas in `packages/engine/src/config-schema/` + the root `src/config-schema/` compose, then run `npm run generate:schema` (`src/config-schema.ts` is only a compatibility re-export; `octopi.schema.json` is generated — never hand-edit it). Keep `octopi.example.json` valid against the generated schema
 
 **Dependency direction: outer → inner. When changing an inner layer, confirm it does not affect outer layers.**
 
@@ -144,7 +144,8 @@ Before committing, confirm:
 - [ ] New interfaces/types are documented
 - [ ] Test count updated
 - [ ] `CHANGELOG.md` records the change
-- [ ] No violation of [Architecture Constitution](./north-star.md) invariants (I1–I6 / E1–E7)
+- [ ] Public-doc changes land in both `*.md` and `*.zh.md` in this commit (English authoritative)
+- [ ] No violation of [Architecture Constitution](./north-star.md) invariants (live list: §2 of `north-star.md`)
 
 ### Architecture Document Versioning
 
@@ -163,7 +164,7 @@ npm run release:prep -- 0.56.0   # same version on all five packages + pin deps
 npm run release:print            # print publish order
 ```
 
-Flow: bump version → write `CHANGELOG` → commit + tag → publish in order `core → engine → gateway → webui → octopi-agent`. See `AGENTS.md` Version Numbering Rules.
+Version bumps happen on **every content commit** (see [Commit & Pull Request Conventions](#commit--pull-request-conventions)); publishing is a separate, maintainer-driven step in dependency order `core → engine → gateway → webui → octopi-agent`. Full discipline: `AGENTS.md` → Version Numbering Rules / Changelog Discipline.
 
 ## New Module Checklist
 
@@ -206,6 +207,13 @@ Checklist:
 - [ ] I updated the modified module’s `README.md`
 - [ ] I updated `docs/architecture.md` (if applicable)
 - [ ] I updated `CHANGELOG.md`
+
+## Commit & Pull Request Conventions
+
+- **Commit format**: [Conventional Commits](https://www.conventionalcommits.org/) — `<type>(<scope>): <description>`; types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`. The `<description>` must be written in **English**. Each commit has a single responsibility.
+- **Every content commit carries its release chores in the same commit**: pick the version segment (major = explicit user request; minor = major feature or architecture change; patch = everything else), run `npm run release:prep -- <X.Y.Z>`, prepend the `## v<X.Y.Z> (YYYY-MM-DD)` entry to `CHANGELOG.md`, commit code + version files + `CHANGELOG.md` together, and tag the commit right away (`git tag v<X.Y.Z>`).
+- **Public docs are bilingual**: any change to `docs/*`, `README.md`, or `CONTRIBUTING.md` lands in both the English file and its `*.zh.md` translation **in the same commit**; English is authoritative.
+- **Before opening a PR**: `npm run lint` and `npm test` pass locally; documentation is synced per [Documentation Sync](#documentation-sync); the change does not violate the [Architecture Constitution](./north-star.md) invariants.
 
 ## License and Contribution Grant
 
