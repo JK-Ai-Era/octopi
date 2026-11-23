@@ -136,6 +136,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.126.4 (2026-11-23)
+
+### docs(agents): 规则 7 精简为纯操作指令，通用锚点原则下沉到 file_edit 工具说明
+
+- **分层归位**：「锚定插入边界、绝不用要保留的行当 old_text」是通用 file_edit 用法（任何仓库、任何账本类文件都适用），与 CHANGELOG 约定无关，移入 `packages/engine/src/harness/extension/plugin-ecosystem/tools/file-edit.ts` 的工具说明，在每次调用现场生效；CHANGELOG 专属的版本集校验程序（与 `HEAD` 比对 `## v` 行集合）留在 AGENTS.md 规则 7。
+- **规则 7 精简**：只保留「要怎么做」（锚法 + 写后校验），删除机制叙述与事故背景——事故记录在 v0.126.3 条目里，AGENTS.md 不承担记忆职责。
+- **验证**：description 字符串无测试/快照消费方（全仓检索仅主仓定义处 + 他人 worktree 副本，后者未动）；两处改动均读回确认落盘。本条目写入即按规则 7 以插入边界为锚，写后做版本集比对确认零丢失。
+
+---
+
 ## v0.126.3 (2026-11-23)
 
 ### docs(agents): Changelog Discipline 增规则 7——以插入点为锚，并做版本集校验

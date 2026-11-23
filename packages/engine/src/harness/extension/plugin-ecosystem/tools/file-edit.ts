@@ -60,7 +60,7 @@ export function createFileEditTool(): RegisteredTool {
     definition: {
       name: 'file_edit',
       capabilities: ['fs-write', 'fs-read'],
-      description: 'Edit a file by replacing specific text. More precise than file_write for targeted changes. Supports selecting which occurrence to replace and dry-run preview. old_text must match the CURRENT file content — if your view of the file is stale, re-read before editing; do not batch several edits against the same file in one turn (each edit builds on the previous result, stale batches lose changes).',
+      description: 'Edit a file by replacing specific text. More precise than file_write for targeted changes. Supports selecting which occurrence to replace and dry-run preview. old_text must match the CURRENT file content — if your view of the file is stale, re-read before editing; do not batch several edits against the same file in one turn (each edit builds on the previous result, stale batches lose changes). When inserting text before a section, anchor old_text on the boundary you are inserting before (e.g. the separator and next heading), never on a line you intend to keep — replacing a kept heading can silently rename it or swallow the section beneath.',
       parameters: {
         path: {
           type: 'string',
