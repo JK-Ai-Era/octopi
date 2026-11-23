@@ -136,6 +136,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.126.6 (2026-11-23)
+
+### docs(arch): 遗留项修复批——不变量引用全仓去枚举、架构文档改修订戳、CONTRIBUTING 结构合并、Loop/Core 依赖措辞归真
+
+- **不变量引用去枚举收尾**：7 个 `arch/*.md` 的「I1–I6 / E1–E7」手抄枚举统一改为指向 `docs/north-star.md` §2 不变量表（`plugin-system-v1.md` 只改前置阅读行，其「2026-11-09 拍板」历史叙述与宪法变更日志历史行按 append-only 不动）。至此全仓活文档不再持有会漂移的不变量编号副本。
+- **架构文档版本制度退役（拍板选项 C）**：`architecture.md` 不设文档级语义化版本（原方案自 v0.36.0 起从未被维护），改为头部修订戳 `Revised: <date> (as of <repo version>)`；两版头部已换新戳（2026-11-23 / v0.126.6）。
+- **CONTRIBUTING 结构合并**：「Documentation Sync Rules」整节并入「Documentation Sync」（`Module README Sync` 子节 + 单一检查清单补「模块 README」项），删除与变更类型表重复的 §1 段落；`Release Versions` 小节移入「提交与 Pull Request 规范」之下（已确认无外部锚点引用）。
+- **Loop/Core 依赖措辞归真**：代码取证结论——`loop/` 依赖 `core/` 的类型/接口/纯工具（`elision` 为值导入），`core/` 零反向依赖（其 README 明文「不 import Harness / Integration / Loop」）；真实依赖次序为 Integration → Harness → Loop → Core，`core/`（共享词汇表+端口+原语）是最内层，Loop 建立其上。CONTRIBUTING 分层表、architecture.md §1.2、AGENTS.md Layer 0 描述三处措辞修正并补明示次序。**待拍板**：「Layer 0: Loop / Layer 1: Core」编号叙事与真实依赖深度相反（活文档 5 处 + 2 张嵌套图），重编号（Kernel=0/Loop=1）或保留编号加注，另行呈报。
+- **其余小项**：New Module Checklist 层清单补 Loop/Gateway/套件 `src/`；TS 版本措辞对齐 caret 范围（6.x/5.x）；插件简图对齐 Manifest v1 真实契约（`apiVersion: "1"`、entry 强制、`contributes` 与注册一致、注册≠挂载）。
+- **验证**：`arch/check-sync.sh` 全绿；双语逐段对照一致；编辑中实测两文件标点形态不同（EN 弯引号/ZH 直引号），均已按各自原文精确改写。
+
+---
+
 ## v0.126.5 (2026-11-23)
 
 ### docs(contributing): CONTRIBUTING 对齐当前架构与提交纪律；不变量引用去枚举化

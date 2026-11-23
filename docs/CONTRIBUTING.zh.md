@@ -7,7 +7,7 @@
 ## 环境要求
 
 - Node.js >= 24（持久层使用内置 `node:sqlite`，无需原生 SQLite 扩展编译）
-- TypeScript 6.0.x（根包/engine/gateway 构建；`packages/webui` 用 5.5.x）；两者都来自
+- TypeScript 6.x（根包/engine/gateway 构建；`packages/webui` 用 5.x）；两者都来自
   `devDependencies`，`npm install` 即可
 
 ## 开发命令
@@ -43,7 +43,7 @@ npm run web            # webui vite dev server
 
 | 层 | 目录 | 职责 | 依赖 |
 |---|---|---|---|
-| Loop | `packages/core/src/loop/` | 纯执行循环（`agentLoop`、`callModel`） | 仅依赖 Core 类型 |
+| Loop | `packages/core/src/loop/` | 纯执行循环（`agentLoop`、`callModel`） | Core 类型与纯工具（无状态、无 I/O） |
 | Core | `packages/core/src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
 | Harness | `packages/engine/src/harness/` | 产品域组织（见 `docs/domains.md`） | 依赖 Core + Loop |
 | Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | 外部系统适配 | 依赖 Core + Loop + Harness |
@@ -70,7 +70,7 @@ npm run web            # webui vite dev server
 - 历史检索：`session_search` / `session_read`（Information 原文，≠ `memory_search` 命题）；索引投影见内部规格（不对外）
 - Config 变更：编辑 `packages/engine/src/config-schema/` 的 Zod schema + 根 `src/config-schema/` 组合层，然后运行 `npm run generate:schema`（`src/config-schema.ts` 只是兼容转出口；`octopi.schema.json` 是生成物，勿手改）。保持 `octopi.example.json` 对生成 schema 有效
 
-**依赖方向：外 → 内。修改内层时必须确认不影响外层。**
+**依赖方向：外 → 内。修改内层时必须确认不影响外层。** 具体次序：Integration → Harness → Loop → Core（Loop 建立在 Core 类型之上；Core 绝不 import Loop）。
 
 ## 测试规范
 
@@ -135,24 +135,61 @@ npm test -- -t "SecurityGuard"
 | 修改架构不变量 | **`docs/north-star.md`**（须显式评审）+ `CHANGELOG.md` |
 | 测试数量变化 | `README.md` + `CHANGELOG.md` |
 
+### 模块 README 同步
+
+修改任何模块时，同步更新该模块目录下的 `README.md`：
+
+- **职责变化** — 更新"职责"和"不做什么"部分
+- **新增/删除文件** — 更新"文件说明"部分
+- **依赖变化** — 更新"依赖"部分
+- **新增模块** — 创建对应的 `README.md`
+
 ### 文档更新检查清单
 
 提交前确认：
 
 - [ ] `docs/architecture.md` 对应章节是否更新（若涉及）
+- [ ] 被修改模块的 `README.md` 是否已更新（职责 / 文件说明 / 依赖）
 - [ ] 新增的接口/类型是否有文档说明
 - [ ] 测试数量是否更新
 - [ ] `CHANGELOG.md` 是否记录变更
 - [ ] 公共文档变更已在本 commit 内双语同落（英文为准）
 - [ ] 未违反 [架构宪法](./north-star.zh.md) 不变量（现行清单见 `north-star.md` §2）
 
-### 架构文档版本号
+### 架构文档修订戳
 
-`architecture.md` 使用语义化版本号：
+`architecture.md` 不设文档级语义化版本（原 v0.x 方案自 v0.36.0 后从未维护，现正式退役）。实质性修改 `architecture.md` 时更新其头部修订戳 **`修订：<日期>（<仓库版本> 时点）`**；完整历史在 git，用户可见的架构变更记入 `CHANGELOG.md`。
 
-- **Major (v2 → v3)**: 整体架构调整、核心概念变更
-- **Minor (v2.0 → v2.1)**: 新增模块、重要接口变更
-- **Patch (v2.0.1 → v2.0.2)**: 勘误、细节补充
+## 新增模块检查清单
+
+新增一个模块时：
+
+1. 确定它属于哪一层（Loop / Core / Harness / Integration / Gateway / 套件 `src/`）
+2. 在对应层的 `index.ts` 中导出
+3. 在 `src/index.ts` 中添加导出（如果是公共 API）
+4. 编写测试文件 `tests/<module>.test.ts`
+5. 更新 `docs/architecture.md` 对应章节（若对外可见行为/结构变化）
+6. 更新 `CHANGELOG.md`
+
+## Plugin 开发
+
+Plugin 目录结构（Manifest v1 完整契约见 [Plugin 系统文档](plugin-system.zh.md)）：
+
+```
+my-plugin/
+├── octopi.plugin.json   ← Manifest v1（`apiVersion: "1"`）——无版本 manifest 在 import 前即被拒
+├── index.js             ← 编译后的 ESM 入口（路径在 manifest 中声明；`definePlugin`）
+└── package.json
+```
+
+注意：manifest 是安装期声明权威（`entry`、`engine.octopi` 版本范围；`contributes` 必须与入口实际注册一致）；**注册 ≠ 挂载**——贡献的 Tool 只有列入目标 Agent 的 `tools.allow` 才会暴露。
+
+## 提交与 Pull Request 规范
+
+- **Commit 格式**：[Conventional Commits](https://www.conventionalcommits.org/)——`<type>(<scope>): <description>`；type 取 `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`。`<description>` 必须用**英文**。每个 commit 单一职责。
+- **每个 content commit 在同一 commit 内完成发行杂务**：按分段规则选版本号（major=用户显式要求；minor=重大功能或架构变更；patch=其余），运行 `npm run release:prep -- <X.Y.Z>`，向 `CHANGELOG.md` 顶部插入 `## v<X.Y.Z> (YYYY-MM-DD)` 条目，代码 + 版本文件 + `CHANGELOG.md` 一并提交，并立即打 tag（`git tag v<X.Y.Z>`）。
+- **公共文档双语同步**：`docs/*`、`README.md`、`CONTRIBUTING.md` 的任何改动必须在**同一 commit** 内同时落到英文文件与其 `*.zh.md` 对译；英文版为准。
+- **开 PR 前**：本地 `npm run lint` 与 `npm test` 通过；按[文档同步规范](#文档同步规范)更新文档；变更不违反[架构宪法](./north-star.zh.md)不变量。
 
 ### 发行版本（五包锁步）
 
@@ -163,56 +200,7 @@ npm run release:prep -- 0.56.0   # 五包同号 + 依赖钉版
 npm run release:print            # 打印发布顺序
 ```
 
-版本 bump 落在**每个 content commit**（见[提交与 Pull Request 规范](#提交与-pull-request-规范)）；发布是维护者独立步骤，按 `core → engine → gateway → webui → octopi-agent` 依赖序执行。完整纪律见 `AGENTS.md` → Version Numbering Rules / Changelog Discipline。
-
-## 新增模块检查清单
-
-新增一个模块时：
-
-1. 确定它属于哪一层（Core / Harness / Integration）
-2. 在对应层的 `index.ts` 中导出
-3. 在 `src/index.ts` 中添加导出（如果是公共 API）
-4. 编写测试文件 `tests/<module>.test.ts`
-5. 更新 `docs/architecture.md` 对应章节（若对外可见行为/结构变化）
-6. 更新 `CHANGELOG.md`
-
-## Plugin 开发
-
-Plugin 目录结构：
-```
-my-plugin/
-├── octopi.plugin.json   ← manifest
-└── index.ts             ← 入口（definePlugin）
-```
-
-详见 [Plugin 系统文档](plugin-system.zh.md)。
-
-## 文档同步铁律
-
-### 1. 架构文档同步
-
-修改涉及架构调整时（接口变更、新增模块、依赖方向变化），同步更新 `docs/architecture.md`；若触及长期不变量，必须修订 **`docs/north-star.md`** 并走评审。
-
-### 2. 模块 README 同步
-
-修改任何模块时，同步更新该模块目录下的 `README.md`：
-
-- **职责变化** — 更新"职责"和"不做什么"部分
-- **新增/删除文件** — 更新"文件说明"部分
-- **依赖变化** — 更新"依赖"部分
-- **新增模块** — 创建对应的 `README.md`
-
-检查清单：
-- [ ] 我已更新被修改模块的 `README.md`
-- [ ] 我已更新 `docs/architecture.md`（如涉及）
-- [ ] 我已更新 `CHANGELOG.md`
-
-## 提交与 Pull Request 规范
-
-- **Commit 格式**：[Conventional Commits](https://www.conventionalcommits.org/)——`<type>(<scope>): <description>`；type 取 `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`。`<description>` 必须用**英文**。每个 commit 单一职责。
-- **每个 content commit 在同一 commit 内完成发行杂务**：按分段规则选版本号（major=用户显式要求；minor=重大功能或架构变更；patch=其余），运行 `npm run release:prep -- <X.Y.Z>`，向 `CHANGELOG.md` 顶部插入 `## v<X.Y.Z> (YYYY-MM-DD)` 条目，代码 + 版本文件 + `CHANGELOG.md` 一并提交，并立即打 tag（`git tag v<X.Y.Z>`）。
-- **公共文档双语同步**：`docs/*`、`README.md`、`CONTRIBUTING.md` 的任何改动必须在**同一 commit** 内同时落到英文文件与其 `*.zh.md` 对译；英文版为准。
-- **开 PR 前**：本地 `npm run lint` 与 `npm test` 通过；按[文档同步规范](#文档同步规范)更新文档；变更不违反[架构宪法](./north-star.zh.md)不变量。
+版本 bump 落在**每个 content commit**（见上文）；发布是维护者独立步骤，按 `core → engine → gateway → webui → octopi-agent` 依赖序执行。完整纪律见 `AGENTS.md` → Version Numbering Rules / Changelog Discipline。
 
 ## 许可证与贡献授权
 

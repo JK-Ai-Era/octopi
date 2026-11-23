@@ -7,7 +7,7 @@
 ## Requirements
 
 - Node.js >= 24 (the persistence layer uses built-in `node:sqlite`; no native SQLite extension build)
-- TypeScript 6.0.x for the root/engine/gateway build (`packages/webui` stays on 5.5.x); both come from
+- TypeScript 6.x for the root/engine/gateway build (`packages/webui` stays on 5.x); both come from
   `devDependencies`, so `npm install` is enough
 
 ## Development Commands
@@ -44,7 +44,7 @@ The project uses a four-layer onion architecture + DDD domain organization:
 
 | Layer | Directory | Responsibility | Dependencies |
 |---|---|---|---|
-| Loop | `packages/core/src/loop/` | Pure execution loop (`agentLoop`, `callModel`) | Core types only |
+| Loop | `packages/core/src/loop/` | Pure execution loop (`agentLoop`, `callModel`) | Core types & pure utilities (stateless, no I/O) |
 | Core | `packages/core/src/core/` | Mechanism primitives + interface contracts + core types | No external dependencies |
 | Harness | `packages/engine/src/harness/` | Product domain organization (see `docs/domains.md`) | Core + Loop |
 | Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | External system adapters | Core + Loop + Harness |
@@ -71,7 +71,7 @@ Implementation status and open items: [docs/KNOWN-ISSUES.md](./KNOWN-ISSUES.md) 
 - History retrieval: `session_search` / `session_read` (Information originals, ≠ `memory_search` propositions); index projection is an internal spec (not public)
 - Config changes: edit the Zod schemas in `packages/engine/src/config-schema/` + the root `src/config-schema/` compose, then run `npm run generate:schema` (`src/config-schema.ts` is only a compatibility re-export; `octopi.schema.json` is generated — never hand-edit it). Keep `octopi.example.json` valid against the generated schema
 
-**Dependency direction: outer → inner. When changing an inner layer, confirm it does not affect outer layers.**
+**Dependency direction: outer → inner. When changing an inner layer, confirm it does not affect outer layers.** Concrete order: Integration → Harness → Loop → Core (Loop builds on Core types; Core never imports Loop).
 
 ## Testing Standards
 
@@ -136,24 +136,61 @@ summary/compact/document live under `tests/harness/capabilities/`).
 | Change architecture invariants | **`docs/north-star.md`** (explicit review required) + `CHANGELOG.md` |
 | Test count changes | `README.md` + `CHANGELOG.md` |
 
+### Module README Sync
+
+When modifying any module, update that module directory’s `README.md` in sync:
+
+- **Responsibility changes** — update “Responsibilities” and “What it does not do”
+- **Files added/removed** — update “File notes”
+- **Dependency changes** — update “Dependencies”
+- **New module** — create the corresponding `README.md`
+
 ### Documentation Update Checklist
 
 Before committing, confirm:
 
 - [ ] Matching section in `docs/architecture.md` updated (if applicable)
+- [ ] The modified module’s `README.md` is updated (responsibilities / file notes / dependencies)
 - [ ] New interfaces/types are documented
 - [ ] Test count updated
 - [ ] `CHANGELOG.md` records the change
 - [ ] Public-doc changes land in both `*.md` and `*.zh.md` in this commit (English authoritative)
 - [ ] No violation of [Architecture Constitution](./north-star.md) invariants (live list: §2 of `north-star.md`)
 
-### Architecture Document Versioning
+### Architecture Document Revision Stamp
 
-`architecture.md` uses semantic versioning:
+There is no document-level semantic version for `architecture.md` (the former v0.x scheme is retired — it stopped being maintained after v0.36.0). When you materially change `architecture.md`, update its header stamp **`Revised: <date> (as of <repo version>)`**; full history lives in git, and user-visible architecture changes are recorded in `CHANGELOG.md`.
 
-- **Major (v2 → v3)**: overall architecture changes, core concept changes
-- **Minor (v2.0 → v2.1)**: new modules, important interface changes
-- **Patch (v2.0.1 → v2.0.2)**: errata, detail supplements
+## New Module Checklist
+
+When adding a module:
+
+1. Decide which layer it belongs to (Loop / Core / Harness / Integration / Gateway / suite `src/`)
+2. Export it from that layer’s `index.ts`
+3. Add the export in `src/index.ts` (if it is public API)
+4. Write test file `tests/<module>.test.ts`
+5. Update the matching section of `docs/architecture.md` (if externally visible behavior/structure changed)
+6. Update `CHANGELOG.md`
+
+## Plugin Development
+
+Plugin directory layout (full Manifest v1 contract: [Plugin system docs](plugin-system.md)):
+
+```
+my-plugin/
+├── octopi.plugin.json   ← Manifest v1 (`apiVersion: "1"`) — unversioned manifests are rejected before import
+├── index.js             ← compiled ESM entry (path declared in the manifest; `definePlugin`)
+└── package.json
+```
+
+Notes: the manifest is the installation-time declaration authority (`entry`, `engine.octopi` range; `contributes` must match what the entry registers); registration is **not** Tool exposure — a contributed Tool is only mounted when listed in the target Agent's `tools.allow`.
+
+## Commit & Pull Request Conventions
+
+- **Commit format**: [Conventional Commits](https://www.conventionalcommits.org/) — `<type>(<scope>): <description>`; types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`. The `<description>` must be written in **English**. Each commit has a single responsibility.
+- **Every content commit carries its release chores in the same commit**: pick the version segment (major = explicit user request; minor = major feature or architecture change; patch = everything else), run `npm run release:prep -- <X.Y.Z>`, prepend the `## v<X.Y.Z> (YYYY-MM-DD)` entry to `CHANGELOG.md`, commit code + version files + `CHANGELOG.md` together, and tag the commit right away (`git tag v<X.Y.Z>`).
+- **Public docs are bilingual**: any change to `docs/*`, `README.md`, or `CONTRIBUTING.md` lands in both the English file and its `*.zh.md` translation **in the same commit**; English is authoritative.
+- **Before opening a PR**: `npm run lint` and `npm test` pass locally; documentation is synced per [Documentation Sync](#documentation-sync); the change does not violate the [Architecture Constitution](./north-star.md) invariants.
 
 ### Release Versions (five-package lockstep)
 
@@ -164,56 +201,7 @@ npm run release:prep -- 0.56.0   # same version on all five packages + pin deps
 npm run release:print            # print publish order
 ```
 
-Version bumps happen on **every content commit** (see [Commit & Pull Request Conventions](#commit--pull-request-conventions)); publishing is a separate, maintainer-driven step in dependency order `core → engine → gateway → webui → octopi-agent`. Full discipline: `AGENTS.md` → Version Numbering Rules / Changelog Discipline.
-
-## New Module Checklist
-
-When adding a module:
-
-1. Decide which layer it belongs to (Core / Harness / Integration)
-2. Export it from that layer’s `index.ts`
-3. Add the export in `src/index.ts` (if it is public API)
-4. Write test file `tests/<module>.test.ts`
-5. Update the matching section of `docs/architecture.md` (if externally visible behavior/structure changed)
-6. Update `CHANGELOG.md`
-
-## Plugin Development
-
-Plugin directory layout:
-```
-my-plugin/
-├── octopi.plugin.json   ← manifest
-└── index.ts             ← entry (definePlugin)
-```
-
-See the [Plugin system docs](plugin-system.md).
-
-## Documentation Sync Rules
-
-### 1. Architecture Documentation Sync
-
-When a change involves architecture adjustments (interface changes, new modules, dependency direction changes), update `docs/architecture.md` in sync; if it touches long-term invariants, you must revise **`docs/north-star.md`** and go through review.
-
-### 2. Module README Sync
-
-When modifying any module, update that module directory’s `README.md` in sync:
-
-- **Responsibility changes** — update “Responsibilities” and “What it does not do”
-- **Files added/removed** — update “File notes”
-- **Dependency changes** — update “Dependencies”
-- **New module** — create the corresponding `README.md`
-
-Checklist:
-- [ ] I updated the modified module’s `README.md`
-- [ ] I updated `docs/architecture.md` (if applicable)
-- [ ] I updated `CHANGELOG.md`
-
-## Commit & Pull Request Conventions
-
-- **Commit format**: [Conventional Commits](https://www.conventionalcommits.org/) — `<type>(<scope>): <description>`; types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`. The `<description>` must be written in **English**. Each commit has a single responsibility.
-- **Every content commit carries its release chores in the same commit**: pick the version segment (major = explicit user request; minor = major feature or architecture change; patch = everything else), run `npm run release:prep -- <X.Y.Z>`, prepend the `## v<X.Y.Z> (YYYY-MM-DD)` entry to `CHANGELOG.md`, commit code + version files + `CHANGELOG.md` together, and tag the commit right away (`git tag v<X.Y.Z>`).
-- **Public docs are bilingual**: any change to `docs/*`, `README.md`, or `CONTRIBUTING.md` lands in both the English file and its `*.zh.md` translation **in the same commit**; English is authoritative.
-- **Before opening a PR**: `npm run lint` and `npm test` pass locally; documentation is synced per [Documentation Sync](#documentation-sync); the change does not violate the [Architecture Constitution](./north-star.md) invariants.
+Version bumps happen on **every content commit** (see above); publishing is a separate, maintainer-driven step in dependency order `core → engine → gateway → webui → octopi-agent`. Full discipline: `AGENTS.md` → Version Numbering Rules / Changelog Discipline.
 
 ## License and Contribution Grant
 

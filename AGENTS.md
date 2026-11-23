@@ -112,7 +112,7 @@ Scaffolded by `src/init.ts` (`initOctopi` / `ensureAgentDirs`). Keep init, types
 - **External docs**: `docs/` (constitution, architecture, contracts). **Internal design**: `arch/` (gitignored; implementation handoffs live here).
 
 ### The 4-Layer Architecture
-1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Zero state, zero external dependencies. Protocol events only (`AgentLoopEvent`).
+1.  **Layer 0: Loop** — Pure execution loop (`agentLoop`). Stateless, no I/O; builds only on Core type contracts (kernel vocabulary + pure helpers). Protocol events only (`AgentLoopEvent`).
 2.  **Layer 1: Core** — Mechanism primitives (EventBus, StateMachine) and Interface contracts. No strategy implementations. Does **not** re-export Loop.
 3.  **Layer 2: Harness** — **10 product domains** (domain-first directories under `packages/engine/src/harness/`; counts only from `docs/domains.yaml`) + cross-cutting **capabilities**: `harness/context/capabilities/` (summary/compact — Context assembly only) and `harness/capabilities/document` (Document extraction Port, shared by session/knowledge/tools; sole wiring `createDocumentPortFromConfig` + `documents.*`). Admission bar: stable Ports spanning ≥2 domains; no product policy; not Integration peripherals. **Runnable Agent facade** lives at `harness/run/agent` (`Agent.run()` = reliability, E5 entry). Strategies and workflows live here. See `docs/domains.md`.
 4.  **Layer 3: Integration** — External adapters (LLM Providers, Storage, Observability).

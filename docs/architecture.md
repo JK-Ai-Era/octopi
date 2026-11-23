@@ -1,6 +1,6 @@
 # Octopi Architecture Design
 
-> Version: v0.36.0 (initial) | Date: 2026-09-21 | **Proofread: 2026-10-11 (as of v0.70.0; module trees corrected against code; counts authoritative from `docs/domains.yaml`; specialized topics follow their dedicated docs)**
+> **Revised: 2026-11-23 (as of v0.126.6)** | Opened: 2026-09-21 | **Proofread: 2026-10-11 (as of v0.70.0; module trees corrected against code; counts authoritative from `docs/domains.yaml`; specialized topics follow their dedicated docs)**
 >
 > This document is the complete architecture design of Octopi.
 > Long-term invariants: see the [Architecture Constitution](./north-star.md).
@@ -27,13 +27,13 @@ The ways these components can be composed are infinite. The framework does not p
 ### 1.2 Four-layer separation
 
 ```
-Loop          → pure execution loop, zero external dependencies
+Loop          → pure execution loop (stateless, no I/O; builds on Core types & pure helpers)
 Core          → mechanism primitives + interface contracts + core types
 Harness       → domain implementations; each domain is self-contained
 Integration   → external system adapters
 ```
 
-**Dependency direction: outer → inner. Inner layers do not know outer layers exist.**
+**Dependency direction: outer → inner. Inner layers do not know outer layers exist.** Concrete order: Integration → Harness → Loop → Core — the shared vocabulary (types/ports) lives at the floor (`core/`); Loop is built on it, never the reverse.
 
 ### 1.3 Evolving toward the unknown
 
