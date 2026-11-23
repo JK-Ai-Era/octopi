@@ -13,7 +13,7 @@
 - SubsystemRuntime — 核心运行时
 - SubsystemLoader — 子系统目录加载（config.yaml + SUBSYSTEM.md + handler.ts）
 - SenseEngine / MetricsStore — 条件触发、冷却期、循环防护
-- ThinkExecutor / ModelResolver — code / llm / hybrid 执行与模型降级
+- ThinkExecutor / ModelResolver — code / llm / hybrid 执行与模型降级（`handler.ts` 仅 code/hybrid 装配：code=handler 纯代码；llm=systemPrompt 驱动、**无 handler**；hybrid=preProcess→llm→postProcess。权威语义表见 `docs/autonomous-subsystem.md`）
 - SignalBus — context / steering / event / escalate 四通道投递
 - SubsystemSessionManager — ephemeral/persistent × global/agent/session 隔离
 - AuditWriter / AuditReader — 运行审计

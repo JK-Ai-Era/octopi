@@ -136,6 +136,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.126.9 (2026-11-24)
+
+### docs(subsystem): README 补 think 三模式的 handler.ts 归属说明
+
+- `autonomous-subsystem/README.md` ThinkExecutor 行注明：`handler.ts` 仅 code/hybrid 装配（code=handler 纯代码；llm=systemPrompt 驱动**无 handler**；hybrid=preProcess→llm→postProcess），权威语义表指向 `docs/autonomous-subsystem.md`。起因：该行只列 "code / llm / hybrid" 无归属说明，设计讨论中曾据此误配「handler.ts + llm 模式」矛盾组合。
+
+---
+
 ## v0.126.8 (2026-11-23)
 
 ### fix(webui): 新会话空态快捷提示只保留「你能做什么？」
