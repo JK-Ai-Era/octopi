@@ -1052,7 +1052,6 @@ export class OctopiRuntimeStore extends EventTarget {
     // 同会话重开：live 状态永远不比 cache 旧，不缓存也不 restore/reset
 
     const view = await this.client.getSession(sessionId);
-    this.currentSession = view;
 
     let tasks: SessionTaskView[] = [];
     try {
@@ -1078,6 +1077,8 @@ export class OctopiRuntimeStore extends EventTarget {
 
     // ── 同会话重开：live 为权威，刷新 tasks/approvals/questions/clientToolCalls ──
     if (isSameSession) {
+      // 会话元数据与 chat 一起提交（原子）：此后再无可能让两者分属不同会话
+      this.currentSession = view;
       this.chat = { ...this.chat, tasks, schedules, approvals, questions, clientToolCalls };
       this.dispatch('session', new SessionEvent('session', { session: this.currentSession }));
       this.dispatch('tasks', new TasksEvent('tasks', { tasks }));
@@ -1212,13 +1213,18 @@ export class OctopiRuntimeStore extends EventTarget {
           ? cachedStatus!
           : 'idle';
     // 切回后必须恢复 engineActive，否则迟到的 running/tools 状态会被忽略
-    this.engineActive =
+    const nextEngineActive =
       derivedRunStatus === 'tools' || derivedRunStatus === 'streaming' || derivedRunStatus === 'waiting' || derivedRunStatus === 'sending';
 
     // 重试状态与 runStatus 同理：只在缓存仍活跃时恢复，
     // 否则「上次切走时正在重试、回来时 run 早已结束」会留下僵尸角标。
-    const restoredModelRetry = usedCacheItems && this.engineActive ? (cached?.modelRetry ?? null) : null;
+    const restoredModelRetry = usedCacheItems && nextEngineActive ? (cached?.modelRetry ?? null) : null;
 
+    // 「活动会话」的两个投影（currentSession / chat）必须一起提交：
+    // 此前 currentSession 在 getSession 之后就被赋值，若后续任一 await 抛错，
+    // 会留下 currentSession=新会话、chat=旧会话的双真源，UI 与 rename/pin 补丁各认一个。
+    this.currentSession = view;
+    this.engineActive = nextEngineActive;
     this.chat = {
       sessionId,
       agentId: view.meta.agentId,
@@ -1490,6 +1496,12 @@ export class OctopiRuntimeStore extends EventTarget {
 
     const session = await this.client.createSession({ agentId, ...options });
 
+    // 三个列表先取到局部变量：新建会话已落服务端，若在 chat 字面量里 await 后抛错，
+    // 会留下 currentSession=新会话、chat=旧会话的双真源。全部取完再一次性提交。
+    const approvals = await this.client.listApprovals(session.id);
+    const questions = await this.client.listQuestions(session.id);
+    const clientToolCalls = await this.client.listClientToolCalls(session.id);
+
     this.conversationAdapter.reset();
     this.currentSession = {
       meta: session,
@@ -1504,9 +1516,9 @@ export class OctopiRuntimeStore extends EventTarget {
       streamingContent: '',
       runStatus: 'idle',
       tools: [],
-      approvals: await this.client.listApprovals(session.id),
-      questions: await this.client.listQuestions(session.id),
-      clientToolCalls: await this.client.listClientToolCalls(session.id),
+      approvals,
+      questions,
+      clientToolCalls,
       clientStreams: [],
       clientStreamSamples: new Map(),
       inspector: {},

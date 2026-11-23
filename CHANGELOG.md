@@ -137,6 +137,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.127.4 (2026-11-24)
+
+### fix(gateway): openSession / createSession 原子提交 currentSession 与 chat
+
+- **双真源缺陷**：`OctopiRuntimeStore` 的「活动会话」有两个投影——`currentSession`（元数据，供 UI 头部、rename/pin 补丁、`refreshContextHealth` 读）与 `chat`（会话态）。`openSession` 在 `getSession` 返回后立刻写 `currentSession`，而其后的 `listApprovals` / `listQuestions` / `listClientToolCalls` / 消息分页 / 观测快照仍是一长串 await；`createSession` 更把三个 `list*` 的 await 直接写在 `chat` 对象字面量求值期间。任一后续 await 抛错，就留下 `currentSession`=新会话、`chat`=旧会话的双真源——UI 与 rename/pin 各认一个，新建会话还会变成孤儿（已在服务端落库却没有客户端状态）。
+- **修法**：两处都改成「await 只用于取局部变量，最后在一个同步段里一起提交 `currentSession` + `chat`」。`engineActive` 原本也提前赋值，一并后移（中间态读改用局部变量 `nextEngineActive`）。失败路径由此天然正确——抛错时两个投影都还是旧值，不需要任何回滚代码。
+- 回归 4 条（`tests/web/runtime-active-session-atomicity.test.ts`）：切会话中途失败、同会话刷新中途失败、`createSession` 中途失败、正常切换一致性。已用临时回退旧实现验证用例确实变红（分别报 `s-b`、`s-new` 与期望 `s-a` 不符）。`tests/web` 14 文件 / 104 用例通过。
+
+---
+
 ## v0.127.3 (2026-11-24)
 
 ### fix(webui): 切换 agent 失败时回到切换前状态，而不是拆成空态
