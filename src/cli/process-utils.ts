@@ -177,8 +177,7 @@ export async function killProcess(
     } catch {
       // taskkill 对已退出/无权限进程会非零退出；以存活探测为准
     }
-    await delay(100);
-    return !isProcessAlive(pid);
+    return waitForExit(pid, KILL_SETTLE_MS);
   }
 
   try {
@@ -198,7 +197,54 @@ export async function killProcess(
   } catch {
     // already exited
   }
+  // SIGKILL 的内核回收是异步的：立即探测仍会成功，必须等它真正消失再判定。
+  // 缺了这一步会把"已杀掉的进程"报成"仍存活"，进而留下过期的 pid 文件。
+  return waitForExit(pid, KILL_SETTLE_MS);
+}
+
+/** SIGKILL / taskkill 之后等待回收的上限（轮询到退出即返回） */
+const KILL_SETTLE_MS = 1000;
+
+/**
+ * 等待进程真正消失
+ *
+ * @param pid - 目标 PID
+ * @param timeoutMs - 最长等待
+ * @returns 是否已确认退出
+ */
+async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await delay(100);
+  }
   return !isProcessAlive(pid);
+}
+
+/**
+ * 按平台生成"进程杀不掉"时的恢复提示
+ *
+ * 不能用一条写死的 Windows 命令：在 macOS/Linux 上那是用户敲不出来的指令。
+ *
+ * @param pid - 仍需处理的 PID
+ * @param platform - 平台（便于测试注入）
+ * @returns 说明行与可执行命令
+ */
+export function describeKillRecovery(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+): { lead: string; command: string } {
+  if (platform === 'win32') {
+    return {
+      lead: 'If it was started from an elevated shell, stop it from an elevated terminal:',
+      command: `taskkill /PID ${pid} /F`,
+    };
+  }
+  // Unix：权限不足通常来自以更高权限（sudo/launchd）启动的实例
+  return {
+    lead: 'If it was started with higher privileges, stop it from that context:',
+    command: `kill -9 ${pid}`,
+  };
 }
 
 /** 终结占用指定端口的进程 */

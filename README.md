@@ -145,49 +145,16 @@ octopi agent new
 
 ---
 
-## Build with it
+## Build your own agent
 
-### Embed in code
+Three steps, in the order you actually decide them: **what it is** → **how it
+remembers** → **what it can touch**.
 
-```typescript
-import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
+### Start from files
 
-const { runner, runtime } = await new AgentBuilder()
-  .model(new OpenAIProvider({
-    apiKey: process.env.OPENAI_API_KEY!,
-    models: ['gpt-6.1-terra'],
-    defaultModel: 'gpt-6.1-terra',
-  }))
-  .persona('./my-agent')
-  .build();
-
-const userMessage = { role: 'user' as const, content: 'hello', timestamp: Date.now() };
-
-for await (const event of runner.handle('session-1', userMessage, {
-  systemPrompt: '', // let the runner resolve persona per run (hot-reload aware)
-  agentId: 'default',
-  sessionId: 'session-1',
-})) {
-  if (event.type === 'llm_stream_delta') {
-    process.stdout.write(String(event.data?.delta ?? ''));
-  }
-}
-
-runtime?.dispose(); // autonomous subsystems hold timers — dispose so the process can exit
-```
-
-`runner.handle()` is the session-aware entry: it owns the session lifecycle and
-write-back. Leaving `systemPrompt` empty lets the runner resolve persona per run
-(editing `AGENTS.md` takes effect on the next message); passing a string pins
-that prompt for the call. For a single agent with no host session store,
-`build({ mode: 'core' })` plus `agent.run()` is the library-level path. Hosts
-that already have a config file can skip the builder: `buildFromConfigFile()`
-returns a `Map` of `agentId → BuiltAgent` (`agent`, `runner`, `runtime`, …).
-
-### Files as configuration
-
-Persona and skills are plain Markdown — diffable, reviewable, versionable.
-Extension = add a file. Composition = overlay directories.
+An agent is a directory. Persona and skills are plain Markdown — diffable,
+reviewable, versionable. Extension = add a file. Composition = overlay
+directories.
 
 ```text
 my-agent/
@@ -204,10 +171,61 @@ my-agent/
 The learning substrate (Memory / Cognition / Wisdom) lives in a per-agent
 SQLite store — it is *grown*, not hand-written. See [docs/memory.md](./docs/memory.md).
 
-### Mount MCP servers
+### Run it in your code
 
-The MCP SDK client is an Integration adapter — import it from its subpath, not
-the package root:
+```typescript
+import { AgentBuilder, JsonlSessionStore, OpenAIProvider } from 'octopi-agent';
+
+const { runner, runtime } = await new AgentBuilder()
+  .model(new OpenAIProvider({
+    apiKey: process.env.OPENAI_API_KEY!,
+    models: ['gpt-6.1-terra'],
+    defaultModel: 'gpt-6.1-terra',
+  }))
+  .persona('./my-agent')
+  // The builder's default store is in-memory: sessions vanish on process exit.
+  // Pass one explicitly, or you have built the amnesia this engine exists to fix.
+  .store(new JsonlSessionStore({ sessionsDir: './sessions' }))
+  .build();
+
+const userMessage = { role: 'user' as const, content: 'hello', timestamp: Date.now() };
+
+for await (const event of runner.handle('session-1', userMessage, {
+  systemPrompt: '', // empty = resolve persona per run (hot-reload aware)
+})) {
+  if (event.type === 'llm_stream_delta') {
+    process.stdout.write(String(event.data?.delta ?? ''));
+  }
+}
+
+runtime?.dispose(); // autonomous subsystems hold timers — dispose to let the process exit
+```
+
+`runner.handle()` is the session-aware entry: it owns the session lifecycle and
+write-back. Leaving `systemPrompt` empty lets the runner resolve persona per run
+(editing `AGENTS.md` takes effect on the next message); passing a string pins
+that prompt for the call.
+
+**Two paths, and they are not the same size.** Building by hand (above) means you
+also wire the substrate yourself — `.memoryStore(...)`, `.wisdomStore(...)` — or
+your agent has a persona but no memory. `buildFromConfigFile()` is the other path:
+it runs the canonical wiring (`wireAgentBuilder`), which attaches SQLite-backed
+memory / wisdom / cognition against the agent home, and returns a `Map` of
+`agentId → BuiltAgent` (`{ agent, runner, runtime, ... }`). It does **not** pick a
+session store for you — that stays your call, exactly as above.
+For a single agent with no host session store, `build({ mode: 'core' })`
+plus `agent.run()` is the bare library-level path.
+
+**You own identity.** `RunConfig.principal` carries who is driving; if you host
+real users, pass it per call and map your `conversationId` to `sessionId` before
+calling. Omitting it is the no-host path — fine for a CLI you own, wrong the
+moment a second user exists. The engine never infers a principal from prose.
+
+### Give it tools
+
+Tools arrive from three places: built-in harness tools, host-registered tools
+(`agent.registerTool`), and MCP servers. The MCP SDK client is an Integration
+adapter — import it from its subpath, not the package root:
 
 ```typescript
 import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
@@ -225,16 +243,16 @@ const { agent, runner, mcpManager, runtime } = await new AgentBuilder()
   })
   .build();
 
-// same loop as above, now with the MCP server's tools in the tool set
-console.log(agent.context.tools?.map((t) => t.name));
+console.log(agent.tools.map((t) => t.name));
 
 await mcpManager.disconnectAll(); // MCP servers keep child processes alive
 runtime?.dispose();
 ```
 
-Tools arrive namespaced as `{serverId}__{toolName}` (separator `__`), so the
-server above registers its own tools under a `filesystem` prefix — two servers
-advertising the same tool name cannot collide.
+Tools are namespaced as `{serverId}__{toolName}` (separator `__`), so the server
+above registers under a `filesystem` prefix and two servers advertising the same
+tool name cannot collide. `effectPolicy` (I5) governs what those tools may touch;
+see [docs/architecture.md](./docs/architecture.md) for the containment modes.
 
 ---
 

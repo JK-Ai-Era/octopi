@@ -121,46 +121,13 @@ octopi agent new
 
 ---
 
-## 动手构建
+## 构建你自己的 agent
 
-### 嵌入代码
+三步，按你真实的决策顺序：**它是什么** → **它怎么记事** → **它能碰什么**。
 
-```typescript
-import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
+### 从文件开始
 
-const { runner, runtime } = await new AgentBuilder()
-  .model(new OpenAIProvider({
-    apiKey: process.env.OPENAI_API_KEY!,
-    models: ['gpt-6.1-terra'],
-    defaultModel: 'gpt-6.1-terra',
-  }))
-  .persona('./my-agent')
-  .build();
-
-const userMessage = { role: 'user' as const, content: 'hello', timestamp: Date.now() };
-
-for await (const event of runner.handle('session-1', userMessage, {
-  systemPrompt: '', // 交给 runner 每轮解析 persona（改文件下一轮即生效）
-  agentId: 'default',
-  sessionId: 'session-1',
-})) {
-  if (event.type === 'llm_stream_delta') {
-    process.stdout.write(String(event.data?.delta ?? ''));
-  }
-}
-
-runtime?.dispose(); // 自主子系统持有定时器——dispose 后进程才能退出
-```
-
-`runner.handle()` 是会话感知入口：会话生命周期与写回都由它负责。`systemPrompt` 留空时由 runner 每轮
-解析 persona（改 `AGENTS.md` 下一轮即生效）；传字符串则把该 prompt 钉死在本次调用上。若只要单个 agent、
-不需要宿主会话存储，`build({ mode: 'core' })` + `agent.run()` 是库层路径。已有配置文件的宿主可以跳过
-builder：`buildFromConfigFile()` 返回 `agentId → BuiltAgent` 的 `Map`（含 `agent`、`runner`、
-`runtime` 等）。
-
-### 文件即配置
-
-Persona 与技能就是 Markdown——可 diff、可评审、可版本管理。扩展 = 加一个文件。组合 = 叠加目录。
+一个 agent 就是一个目录。Persona 与技能就是 Markdown——可 diff、可评审、可版本管理。扩展 = 加一个文件。组合 = 叠加目录。
 
 ```text
 my-agent/
@@ -176,9 +143,45 @@ my-agent/
 
 学习基质（Memory / Cognition / Wisdom）住在每个 agent 自己的 SQLite 库里——它是*长出来的*，不是手写的。见 [docs/memory.zh.md](./docs/memory.zh.md)。
 
-### 挂载 MCP 服务器
+### 在你的代码里跑起来
 
-MCP SDK 客户端是 Integration 适配器——从子路径导入，不在包根：
+```typescript
+import { AgentBuilder, JsonlSessionStore, OpenAIProvider } from 'octopi-agent';
+
+const { runner, runtime } = await new AgentBuilder()
+  .model(new OpenAIProvider({
+    apiKey: process.env.OPENAI_API_KEY!,
+    models: ['gpt-6.1-terra'],
+    defaultModel: 'gpt-6.1-terra',
+  }))
+  .persona('./my-agent')
+  // builder 的默认存储是内存版：进程一退，会话就没了。
+  // 显式传一个，否则你搭出来的正是这个引擎要解决的那个「失忆」。
+  .store(new JsonlSessionStore({ sessionsDir: './sessions' }))
+  .build();
+
+const userMessage = { role: 'user' as const, content: 'hello', timestamp: Date.now() };
+
+for await (const event of runner.handle('session-1', userMessage, {
+  systemPrompt: '', // 留空 = 每轮解析 persona（改文件下一轮即生效）
+})) {
+  if (event.type === 'llm_stream_delta') {
+    process.stdout.write(String(event.data?.delta ?? ''));
+  }
+}
+
+runtime?.dispose(); // 自主子系统持有定时器——dispose 后进程才能退出
+```
+
+`runner.handle()` 是会话感知入口：会话生命周期与写回都由它负责。`systemPrompt` 留空时由 runner 每轮解析 persona（改 `AGENTS.md` 下一轮即生效）；传字符串则把该 prompt 钉死在本次调用上。
+
+**两条路径，体量不一样。** 手搓（上面这条）意味着你还得自己接基质——`.memoryStore(...)`、`.wisdomStore(...)`，否则你的 agent 有人格却没有记忆。另一条是 `buildFromConfigFile()`：它走权威装配（`wireAgentBuilder`），把 SQLite 背书的 memory / wisdom / cognition 挂到 agent home，返回 `agentId → BuiltAgent` 的 `Map`（含 `agent`、`runner`、`runtime` 等）。它**不替你选会话存储**——那仍是你自己的决定，与上面一致。若只要单个 agent、不需要宿主会话存储，`build({ mode: 'core' })` + `agent.run()` 是最朴素的库层路径。
+
+**身份归你管。** `RunConfig.principal` 携带「谁在驱动」；若你托管真实用户，每次调用都要传，并在调用前把你的 `conversationId` 映射成 `sessionId`。省略它等于走无宿主路径——自己用的 CLI 没问题，第二个用户出现的瞬间就不对了。引擎永不从自然语言里猜 principal。
+
+### 给它工具
+
+工具来自三处：内建 harness 工具、宿主注册工具（`agent.registerTool`）、以及 MCP 服务器。MCP SDK 客户端是 Integration 适配器——从子路径导入，不在包根：
 
 ```typescript
 import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
@@ -196,15 +199,13 @@ const { agent, runner, mcpManager, runtime } = await new AgentBuilder()
   })
   .build();
 
-// 与上面的循环相同，只是工具面里多了这个 MCP 服务器的工具
-console.log(agent.context.tools?.map((t) => t.name));
+console.log(agent.tools.map((t) => t.name));
 
 await mcpManager.disconnectAll(); // MCP 服务器是子进程，不断开会挂住进程
 runtime?.dispose();
 ```
 
-工具以 `{serverId}__{toolName}` 命名空间注册（分隔符为 `__`），上面这个服务器注册的工具都挂在
-`filesystem` 前缀下——两个服务器提供同名工具也不会撞。
+工具以 `{serverId}__{toolName}` 命名空间注册（分隔符 `__`），上面这个服务器注册的工具都挂在 `filesystem` 前缀下——两个服务器提供同名工具也不会撞。`effectPolicy`（I5）管住这些工具能碰什么；隔离档位见 [docs/architecture.zh.md](./docs/architecture.zh.md)。
 
 ---
 

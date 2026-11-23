@@ -32,6 +32,7 @@ import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
 import { webuiStartCommand, webuiStopCommand } from './webui.js';
 import {
   delay,
+  describeKillRecovery,
   findPidOnPort,
   getProcessName,
   isProcessAlive,
@@ -824,9 +825,10 @@ export async function serveStopCommand(args: Pick<CliArgs, 'port' | 'config'> = 
         startedAt: pidFile?.startedAt ?? new Date().toISOString(),
       });
     }
+    const recovery = describeKillRecovery(keepPid ?? 0);
     console.warn('⚠️  Gateway stop incomplete — process still alive.');
-    console.warn('   If it was started from an elevated shell, stop it from an elevated terminal:');
-    console.warn(`   taskkill /PID ${keepPid} /F`);
+    console.warn(`   ${recovery.lead}`);
+    console.warn(`   ${recovery.command}`);
   }
 
   console.log(anyStillAlive ? '⚠️  Gateway not fully stopped.' : '✅ Gateway stopped.');

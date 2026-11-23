@@ -132,6 +132,28 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.126.0 (2026-11-23)
+
+### fix(cli): `serve stop` 不再误报，且恢复提示按平台生成
+
+- **误报根因**：`killProcess` 发出 SIGKILL 后**立即**探测存活（`src/cli/process-utils.ts`）。内核回收是异步的，此刻 `kill(pid,0)` 仍成功，于是把「已杀掉」报成「仍存活」，并保留过期的 `gateway.pid`，污染后续 `status`/`start` 判断。实测复现：修复前 `killProcess → false` 而 300ms 后进程实际已消失；修复后 `→ true`（587ms，等到回收）。
+- **改法**：新增 `waitForExit()`，SIGKILL 后轮询至进程真正消失（上限 1s）；Windows 分支同步替换原先固定的 `await delay(100)`，两条平台路径判死口径统一。
+- **恢复提示平台化**：原 `daemon.ts` 无条件输出 `taskkill /PID <pid> /F`——那是 Windows 命令，在 macOS/Linux 上用户敲不出来。新增 `describeKillRecovery(pid, platform)`，Unix 返回 `kill -9 <pid>` 与对应说明。若不改，误报时给出的「出路」本身也是错的。
+- **验证**：`tests/cli-process-utils.test.ts` 新增 3 例（其中 1 例用**忽略 SIGTERM** 的子进程强制走 SIGKILL 路径，正是修复前必然误报的场景；1 例断言 Unix 下提示不含 `taskkill`）。12 例全绿，`tsc` 干净，`eslint` 干净。
+- **已知未修（需单独决策）**：`isSelfOrAncestorPid` 的祖先保护未区分平台——Unix 的 `kill(pid)` 不杀进程树，因此当 CLI 自身由目标 gateway 派生时（如 agent 工具 shell），`serve stop` 会因「拒杀祖先」而完全失效，且它给出的 `kill -9` 提示同样会被拒。Windows 侧该保护是必要的（`taskkill /T` 杀整棵树）。改动涉及「何种情况下允许 CLI 杀进程」，未擅自扩大范围。
+
+### docs(readme): 重写构建章节——按构建者顺序，并补上两处会误导人的缺口
+
+- **标题**：`Build with it` → **`Build your own agent`**（中文「构建你自己的 agent」）。原标题是笼统的英文习语，看不出「拿它建我自己的 agent」这层意思。
+- **顺序**：`Embed in code → Files as configuration → Mount MCP servers`（功能清单顺序）改为 **`Start from files` → `Run it in your code` → `Give it tools`**（它是什么 → 它怎么记事 → 它能碰什么），对应构建者真实的决策顺序。开篇一句话点明三步。
+- **缺口一：默认存储会失忆**。`builder.ts` 的 `_store ?? new InMemorySessionStore()` 使示例照抄即「进程退出会话消失」——恰是 README 开篇列为第一面墙的 Amnesia。示例改为显式 `.store(new JsonlSessionStore({ sessionsDir }))`，并用注释点明原因，而非默默替换。
+- **缺口二：身份归属缺失**。`RunConfig.principal` 存在且开篇边界规则第一条就是「Host 提供 Principal」，但示例完全没提，读者会误以为引擎自己管人。补「You own identity」段：何时必须传 principal、`conversationId` 如何映射 `sessionId`、省略等价于无宿主路径。
+- **补两条路径的真实差异**：手搓 `AgentBuilder` 需自行接基质（`.memoryStore()` / `.wisdomStore()`），否则「有人格没记忆」；`buildFromConfigFile()` 走 `wireAgentBuilder` 并自动挂 SQLite 背书的 memory/wisdom/cognition。**核对中发现初稿写错**——我原先写成「同时也接好会话存储」，实查 `wireAgentBuilder` 只传 `sessionsDir` 给 `transformStore`，**不注入 SessionStore**（gateway 在 `run-assembly.ts:229` 自行 `.store(...)`）；已改为「它不替你选会话存储」。
+- **修正一处类型错误**：工具列表示例原写 `agent.context.tools.map(...)`，但 `AgentContext.tools` 是 `AgentTool[] | undefined`，严格模式下不能直接 `.map`。改用 `agent.tools`（getter 保证 `?? []`，非空）。
+- **验证**：新引用的每个符号均对照源码核实——`JsonlSessionStore` 由根包导出（`engine/src/index.ts:326`）、构造参数为 `sessionsDir`、`agent.registerTool` 为公开方法、`build()` 的 `runtime` 为可选字段（故 `runtime?.dispose()` 正确）。两版结构对称：H2=14 / H3=13，三节顺序一致。
+
+---
+
 ## v0.125.5 (2026-11-23)
 
 ### docs(readme): Quick Start 前移 + 新增 Build with it 节；宪法章改为「先说是什么、再说怎么起作用」

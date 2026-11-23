@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import {
   delay,
+  describeKillRecovery,
   findPidOnPort,
   getProcessName,
   isProcessAlive,
@@ -123,4 +124,33 @@ describe('process-utils', () => {
     expect(killed).toBe(true);
     expect(isProcessAlive(pid!)).toBe(false);
   }, 20_000);
+
+  test('killProcess reports true after SIGKILL even when SIGTERM is ignored', async () => {
+    // 忽略 SIGTERM 迫使走 SIGKILL；内核回收是异步的，若实现立即探测就会
+    // 把"已杀掉"报成"仍存活"（stop 误报 + 残留 pid 文件的根因）。
+    const pid = spawnDetached(process.execPath, [
+      '-e',
+      "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)",
+    ]);
+    expect(pid).not.toBeNull();
+    await delay(300); // 让 SIGTERM handler 先完成注册
+
+    const killed = await killProcess(pid!, { timeoutMs: 300 });
+    expect(killed).toBe(true);
+    // 返回值必须反映真实状态：报 true 的同时进程确已退出
+    expect(isProcessAlive(pid!)).toBe(false);
+  }, 20_000);
+
+  test('describeKillRecovery gives a platform-appropriate command', () => {
+    const win = describeKillRecovery(1234, 'win32');
+    expect(win.command).toBe('taskkill /PID 1234 /F');
+
+    for (const platform of ['darwin', 'linux'] as const) {
+      const unix = describeKillRecovery(1234, platform);
+      // 不能在 macOS/Linux 上让用户敲 Windows 命令
+      expect(unix.command).not.toContain('taskkill');
+      expect(unix.command).toBe('kill -9 1234');
+      expect(unix.lead).toContain('higher privileges');
+    }
+  });
 });
