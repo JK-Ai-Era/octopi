@@ -136,6 +136,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.126.10 (2026-11-24)
+
+### docs(subsystem): README 新增 Think 三模式机制与选型小节
+
+- 「Think 三模式：机制与选型」小节：三模式执行机制表（执行流 / 必需件 / handler.ts 归属）+ 按判定逻辑本质的选型准则（语义判断→`llm`、语义+代码钩子→`hybrid`、确定性规则→`code`）+ 反例（code handler 里堆正则启发式代理语义判断=错误抽象）。机制表逐行对齐 ThinkExecutor 实际行为链（executeCode/executeLLM/executeHybrid + boundary/validator 强制件）。起因：机制归属不清曾致设计时误配「handler.ts + llm 模式」矛盾组合（v0.126.9 修归属，本条补全机制与选型，让开发一眼可决策）。
+
+---
+
 ## v0.126.9 (2026-11-24)
 
 ### docs(subsystem): README 补 think 三模式的 handler.ts 归属说明
