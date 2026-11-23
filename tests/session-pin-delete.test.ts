@@ -124,7 +124,7 @@ describe('session pin & delete', () => {
     expect(removed).toContain(created.id);
 
     // 幂等：再次删除视为成功（多端并发删除不互相报错）
-    await expect(gateway.deleteSession(created.id)).resolves.toBeUndefined();
+    await expect(gateway.deleteSession(created.id)).resolves.toEqual({ sealed: 0, purgeAt: null });
 
     // Run 在途拒绝且不删数据
     const second = await gateway.createSession({ agentId: 'a1' });

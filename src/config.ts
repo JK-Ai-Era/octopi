@@ -297,6 +297,7 @@ export function toGatewayConfig(config: NormalizedHarnessConfig): GatewayConfig 
     webSearch: config.webSearch,
     browser: config.browser,
     schedules: config.schedules,
+    archives: config.archives,
     concurrency: config.concurrency,
     plugins: config.plugins,
     knowledge: config.knowledge,

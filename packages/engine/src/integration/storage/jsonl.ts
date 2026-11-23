@@ -109,7 +109,8 @@ function withMetaLock<T>(metaPath: string, fn: () => Promise<T>): Promise<T> {
 }
 
 export class JsonlSessionStore implements SessionStore<SessionData> {
-  private readonly sessionsDir: string;
+  /** Session 权威目录（封存服务据以定位会话文件；注入 store 时与 home 解耦） */
+  readonly sessionsDir: string;
   private readonly index?: SessionIndexSink;
   /** 同 sessionId 读改写串行（save / updateMetadata / syncMessages / delete） */
   private readonly writeQueues = new Map<string, Promise<void>>();
@@ -314,7 +315,7 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     };
   }
 
-  private async removeSessionFiles(sessionId: string): Promise<void> {
+  private async removeSessionFiles(sessionId: string, relocateTo?: string): Promise<void> {
     // 元索引先摘（meta RMW 归锁 + 原子写）、数据文件后删（MAJ-1，评审 del-3c3fcfeb）：
     // 旧序「先删文件、后截断写回索引」曾让并发 delete 6ms 即损坏整份元索引，且读旧
     // 写回会复活/吞掉他人条目。新序 crash 只会留孤儿文件（磁盘清理兜底），不留幽灵
@@ -327,24 +328,46 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
         await this.writeMetaIndex(allMeta);
       });
     }
-    for (const p of [this.sessionFile(sessionId), this.sessionStateFile(sessionId)]) {
-      if (await fileExists(p)) {
-        await unlink(p);
+    const { rm, rename, cp, mkdir } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { toSessionFileName } = await import('@octopi-agent/core/session-filename.js');
+    const base = toSessionFileName(sessionId);
+    const sessionDir = join(this.sessionsDir, base);
+    if (relocateTo) await mkdir(relocateTo, { recursive: true });
+    /** 单路径处置：relocate=整体搬迁（跨盘 EXDEV 退化为 cp+rm）；否则 unlink */
+    const moveOrUnlink = async (src: string, destName: string): Promise<void> => {
+      if (!(await fileExists(src))) return;
+      if (!relocateTo) {
+        await unlink(src);
+        return;
+      }
+      const dest = join(relocateTo, destName);
+      try {
+        await rename(src, dest);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+        await cp(src, dest, { recursive: true });
+        await rm(src, { recursive: true, force: true });
+      }
+    };
+    await moveOrUnlink(this.sessionFile(sessionId), `${base}.jsonl`);
+    await moveOrUnlink(this.sessionStateFile(sessionId), `${base}.state.json`);
+    // OP-15：会话附件目录随 session 删除清理；转换记录同理（F6：摘要正文含用户内容）；
+    // derived 同清（读图派生品含用户内容，曾漏删 —— arch/session-archive-recycle.md §1）
+    for (const dir of ['attachments', 'transform', 'derived']) {
+      try {
+        await moveOrUnlink(join(sessionDir, dir), dir);
+      } catch (err) {
+        // 封存模式 fail loud（打包正确性依赖搬迁完整）；旧删除路径吞、留磁盘清理兜底
+        if (relocateTo) throw err;
       }
     }
-    // OP-15：会话附件目录随 session 删除清理；转换记录同理（F6：摘要正文含用户内容）
-    try {
-      const { rm } = await import('node:fs/promises');
-      const { join } = await import('node:path');
-      const { toSessionFileName } = await import('@octopi-agent/core/session-filename.js');
-      for (const dir of ['attachments', 'transform']) {
-        await rm(join(this.sessionsDir, toSessionFileName(sessionId), dir), {
-          recursive: true,
-          force: true,
-        });
-      }
-    } catch {
-      // 附件/转换记录清理失败不阻断 session 删除；残留由磁盘清理兜底
+    if (relocateTo) {
+      // undo 不入封存包：onClose（commit/discard）已在封存前收尾，残迹直接清
+      await rm(join(sessionDir, 'undo'), { recursive: true, force: true });
+      // 会话目录只剩空壳则移除；仍有未知残留（未入包也未清）则保留待 doctor 扫描，不静默吞
+      const { rmdir } = await import('node:fs/promises');
+      await rmdir(sessionDir).catch(() => undefined);
     }
   }
 
@@ -619,9 +642,17 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     return entries.filter((e) => (e.lifecycle ?? 'active') === lifecycle);
   }
 
-  async delete(sessionId: string): Promise<void> {
+  /**
+   * 移除会话数据。
+   *
+   * @param sessionId - 会话 id
+   * @param options.relocateTo - 封存模式：数据文件（jsonl/state/attachments/transform/derived）
+   *   整体迁往该目录（供 bundle 打包），而非就地删除；undo 不入包（onClose 已收尾）。
+   *   封存模式下清理失败如实上抛（fail loud），不走"磁盘清理兜底"降级。
+   */
+  async delete(sessionId: string, options?: { relocateTo?: string }): Promise<void> {
     return this.withWriteLock(sessionId, async () => {
-      await this.removeSessionFiles(sessionId);
+      await this.removeSessionFiles(sessionId, options?.relocateTo);
       this.syncCaches.delete(sessionId);
       if (this.index) {
         try {
@@ -636,5 +667,31 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
   async exists(sessionId: string): Promise<boolean> {
     return (await fileExists(this.sessionFile(sessionId)))
       || (await fileExists(this.sessionStateFile(sessionId)));
+  }
+
+  /**
+   * 读元索引单条（封存旁车捕获用；只读）
+   *
+   * @param sessionId - 会话 id
+   * @returns 元条目；不存在返回 null
+   */
+  async getMeta(sessionId: string): Promise<SessionMeta | null> {
+    return (await this.readMetaIndex())[sessionId] ?? null;
+  }
+
+  /**
+   * 恢复回填元索引单条（封存恢复用；覆盖现存条目）。
+   * 置于 load/save 之前：save 的 buildIndexEntry 以 data.meta 为底，
+   * 先回填原始条目才能保住 createdAt/channelId 等非 state 权威字段。
+   *
+   * @param meta - 元条目
+   */
+  async restoreMeta(meta: SessionMeta): Promise<void> {
+    const metaPath = this.metaFile();
+    await withMetaLock(metaPath, async () => {
+      const allMeta = await this.readMetaIndex();
+      allMeta[meta.id] = meta;
+      await this.writeMetaIndex(allMeta);
+    });
   }
 }

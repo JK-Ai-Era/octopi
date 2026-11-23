@@ -393,8 +393,25 @@ export class WebApiRouter {
         }
         if (singleIdentity !== 'host' && !singleIdentity.isPlatformAdmin) {
           const target = await this.gateway.getSession(singleSessionMatch[1]);
-          const targetTenant = target?.tenantId ?? DEFAULT_TENANT_ID;
-          if (!target || targetTenant !== singleIdentity.tenantId) {
+          let targetTenant = target?.tenantId ?? DEFAULT_TENANT_ID;
+          let known = !!target;
+          if (!target) {
+            // 回落封存注册表：archived→trashed 等对已封存 id 的操作也过租户闸
+            // （getSession 只读热库，直接 404 会把租户用户的"归档→回收站"堵死）
+            try {
+              const entry = (await this.gateway.listArchives()).find(
+                (e) => e.sessionId === singleSessionMatch[1],
+              );
+              if (entry) {
+                known = true;
+                // 注册表 tenantId 存储为 string；来源=SessionMeta.tenantId（TenantId 品牌），边界收窄
+                targetTenant = entry.tenantId as typeof targetTenant;
+              }
+            } catch {
+              // 封存子系统不可用（无 relocate 能力）：无归档可查，按未知处理
+            }
+          }
+          if (!known || targetTenant !== singleIdentity.tenantId) {
             return this.json(res, 404, { ok: false, error: 'Session not found' });
           }
         }
@@ -643,8 +660,8 @@ export class WebApiRouter {
 
       if (sessionMatch && method === 'DELETE') {
         try {
-          await this.gateway.deleteSession(sessionMatch[1]);
-          return this.json(res, 200, { ok: true, data: { id: sessionMatch[1] } });
+          const result = await this.gateway.deleteSession(sessionMatch[1]);
+          return this.json(res, 200, { ok: true, data: { id: sessionMatch[1], ...result } });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           const code = msg.includes('session_running')
@@ -652,6 +669,113 @@ export class WebApiRouter {
             : msg.includes('not found')
               ? 404
               : 400;
+          return this.json(res, code, { ok: false, error: msg });
+        }
+      }
+
+      // ── 会话封存（归档/回收站；arch/session-archive-recycle.md §4） ──
+
+      const sessionArchiveMatch = relativePath.match(/^\/sessions\/([^/]+)\/archive$/);
+      if (sessionArchiveMatch && method === 'POST') {
+        // 租户闸由 /sessions/:id* 单会话闸覆盖（在本分支之前）
+        try {
+          const result = await this.gateway.archiveSession(sessionArchiveMatch[1]);
+          return this.json(res, 200, { ok: true, data: { id: sessionArchiveMatch[1], ...result } });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = msg.includes('session_running')
+            ? 409
+            : msg.includes('not found')
+              ? 404
+              : 400;
+          return this.json(res, code, { ok: false, error: msg });
+        }
+      }
+
+      const archivesListMatch = relativePath.match(/^\/archives$/);
+      if (archivesListMatch && method === 'GET') {
+        const identity = this.resolveRequestUser(req);
+        if (identity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        const stateRaw = url.searchParams.get('state');
+        if (stateRaw !== null && stateRaw !== 'archived' && stateRaw !== 'trashed') {
+          // 非法参数不静默当"全部"（fail loud）
+          return this.json(res, 400, {
+            ok: false,
+            error: `invalid state: ${stateRaw} (expected archived|trashed)`,
+          });
+        }
+        const state = stateRaw === 'archived' || stateRaw === 'trashed' ? stateRaw : undefined;
+        let items;
+        try {
+          items = await this.gateway.listArchives(state);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return this.json(res, msg.includes('archive_unavailable') ? 400 : 500, {
+            ok: false,
+            error: msg,
+          });
+        }
+        // 租户可见性（与 /sessions/:id* 同款）：非宿主/平台 admin 只见本租户
+        if (identity !== 'host' && !identity.isPlatformAdmin) {
+          items = items.filter((e) => e.tenantId === identity.tenantId);
+        }
+        return this.json(res, 200, { ok: true, data: items });
+      }
+
+      const archiveRestoreMatch = relativePath.match(/^\/archives\/([^/]+)\/restore$/);
+      if (archiveRestoreMatch && method === 'POST') {
+        const identity = this.resolveRequestUser(req);
+        if (identity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        try {
+          const entry = (await this.gateway.listArchives()).find((e) => e.sessionId === archiveRestoreMatch[1]);
+          if (!entry || (identity !== 'host' && !identity.isPlatformAdmin && entry.tenantId !== identity.tenantId)) {
+            // 404（非 403）：不泄漏他租户封存的存在性
+            return this.json(res, 404, { ok: false, error: 'Not found' });
+          }
+          const result = await this.gateway.restoreArchive(archiveRestoreMatch[1]);
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = /not found/.test(msg)
+            ? 404
+            : /archive_unavailable|session_id_conflict|entry_not_ready|bundle_manifest_invalid|group_partial/.test(msg)
+              ? 400
+              : 500; // 非输入错误不伪装成客户端错误（可观测）
+          return this.json(res, code, { ok: false, error: msg });
+        }
+      }
+
+      const archivePurgeMatch = relativePath.match(/^\/archives\/([^/]+)$/);
+      if (archivePurgeMatch && method === 'DELETE') {
+        // 彻底删除（不可逆）：API 层确认闩，误触直达一律拒绝
+        if (url.searchParams.get('confirm') !== 'true') {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'confirm=true is required for permanent delete',
+          });
+        }
+        const identity = this.resolveRequestUser(req);
+        if (identity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        try {
+          const entry = (await this.gateway.listArchives()).find((e) => e.sessionId === archivePurgeMatch[1]);
+          if (!entry || (identity !== 'host' && !identity.isPlatformAdmin && entry.tenantId !== identity.tenantId)) {
+            return this.json(res, 404, { ok: false, error: 'Not found' });
+          }
+          const result = await this.gateway.purgeArchive(archivePurgeMatch[1]);
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const code = /not found/.test(msg)
+            ? 404
+            : /archive_unavailable|entry_not_ready|group_partial/.test(msg)
+              ? 400
+              : 500;
           return this.json(res, code, { ok: false, error: msg });
         }
       }

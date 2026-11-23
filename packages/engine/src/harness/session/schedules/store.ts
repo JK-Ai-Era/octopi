@@ -165,8 +165,27 @@ export class SessionScheduleStore {
    * @param schedule - 完整记录
    */
   insert(schedule: SessionSchedule): void {
+    this.writeRow(schedule, false);
+  }
+
+  /**
+   * 恢复回插（封存恢复用；同 id 幂等覆盖）
+   *
+   * @param schedule - 完整记录
+   */
+  restore(schedule: SessionSchedule): void {
+    this.writeRow(schedule, true);
+  }
+
+  /**
+   * 写行（insert / restore 共用一份列清单，防两处漂移）
+   *
+   * @param schedule - 完整记录
+   * @param orReplace - true = INSERT OR REPLACE（restore 幂等）
+   */
+  private writeRow(schedule: SessionSchedule, orReplace: boolean): void {
     const stmt = this.db.prepare(`
-      INSERT INTO schedules (
+      INSERT${orReplace ? ' OR REPLACE' : ''} INTO schedules (
         id, session_id, agent_id, kind, fire_at, interval_ms, cron_expr,
         next_fire_at, max_runs, run_count, payload_json, coalesce_key, catch_up,
         status, created_at, created_by_run_id, last_fire_at, last_fire_id,

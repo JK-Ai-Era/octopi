@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { AgentConfigSchema, ChannelConfigSchema, PluginConfigSchema } from './agent.js';
+import { ArchivesConfigSchema } from './archives.js';
 import { DefaultsSchema, ModelsConfigSchema } from './models.js';
 import {
   AgentRuntimeJsonConfigSchema,
@@ -60,6 +61,8 @@ export const engineConfigSchema = z.object({
   modelCall: ModelCallConfigSchema.optional(),
   agentRuntime: AgentRuntimeJsonConfigSchema.optional(),
   schedules: SchedulesJsonConfigSchema.optional(),
+  /** 会话封存/回收站保留策略（arch/session-archive-recycle.md §6） */
+  archives: ArchivesConfigSchema.optional(),
   contextEngine: ContextEngineConfigSchema.optional(),
   /** 公用能力 summary（capabilities） */
   summary: SummaryConfigSchema.optional(),

@@ -7,7 +7,7 @@
  * @layer harness/session — Session 域纯内存默认实现（非生产落盘后端）。
  */
 
-import type { SessionStore, SessionListFilter } from '@octopi-agent/core/interfaces/session-store.js';
+import type { SessionStore, SessionListFilter, SessionDeleteOptions } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionMeta, SessionAgentMatchPick, TenantId } from '@octopi-agent/core/types.js';
 import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import { readTitleState, sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
@@ -115,7 +115,11 @@ export class InMemorySessionStore implements SessionStore<SessionData> {
       }));
   }
 
-  async delete(sessionId: string): Promise<void> {
+  async delete(sessionId: string, options?: SessionDeleteOptions): Promise<void> {
+    if (options?.relocateTo) {
+      // 内存实现无文件可搬迁：静默忽略会打出空封存包丢正文，必须 fail loud
+      throw new Error('session_store_relocate_unsupported: InMemorySessionStore cannot relocate session files');
+    }
     this.sessions.delete(sessionId);
   }
 

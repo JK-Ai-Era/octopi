@@ -18,6 +18,28 @@
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'failed';
 
 /**
+ * 会话封存条目（归档/回收站；与引擎 `integration/storage/archives/service.ts` 的
+ * `ArchiveEntryInfo` 传输投影对齐，权威类型在该模块）。
+ */
+export interface ArchiveEntryInfoDto {
+  sessionId: string;
+  groupSealId: string;
+  parentSessionId: string | null;
+  state: 'archived' | 'trashed';
+  phase: 'sealing' | 'ready' | 'restoring';
+  sealedBy: 'manual' | 'trash' | 'auto';
+  title: string;
+  agentId: string;
+  tenantId: string;
+  createdAt: number | null;
+  endedAt: number | null;
+  sealedAt: number;
+  purgeAt: number | null;
+  bytes: number;
+  messageCount: number;
+}
+
+/**
  * 对话斜杠命令目录项（与 `CommandCatalogItem` 的传输投影对齐）。
  * 权威类型：`harness/extension/plugin-ecosystem/commands/types.ts`。
  */
@@ -1253,9 +1275,43 @@ export class OctopiClient {
     return data?.data as SessionSummary;
   }
 
-  /** 删除会话（Run 在途时服务端返回 409） */
-  async deleteSession(sessionId: string): Promise<void> {
-    await this.deleteJson(`/sessions/${encodeURIComponent(sessionId)}`);
+  /** 移入回收站（软删：整组封存为 trashed，TTL 内可恢复；Run 在途时服务端返回 409） */
+  async deleteSession(
+    sessionId: string,
+  ): Promise<{ sealed: number; purgeAt: number | null }> {
+    const data = await this.deleteJson(`/sessions/${encodeURIComponent(sessionId)}`);
+    return data?.data as { sealed: number; purgeAt: number | null };
+  }
+
+  /** 手动归档会话（永久封存，可恢复；spawnBy 子会话级联整组） */
+  async archiveSession(sessionId: string): Promise<{ sealed: number }> {
+    const data = await this.postJson(`/sessions/${encodeURIComponent(sessionId)}/archive`, {});
+    return data?.data as { sealed: number };
+  }
+
+  /** 列出封存条目（归档/回收站） */
+  async listArchives(state?: 'archived' | 'trashed'): Promise<ArchiveEntryInfoDto[]> {
+    const query = state ? `?state=${encodeURIComponent(state)}` : '';
+    const data = await this.getJson(`/archives${query}`);
+    return data?.data as ArchiveEntryInfoDto[];
+  }
+
+  /** 恢复封存会话（级联组整组解封回热库；warnings 显式降级说明） */
+  async restoreArchive(
+    sessionId: string,
+  ): Promise<{ restored: string[]; warnings: string[] }> {
+    const data = await this.postJson(`/archives/${encodeURIComponent(sessionId)}/restore`, {});
+    return data?.data as { restored: string[]; warnings: string[] };
+  }
+
+  /** 彻底删除封存会话（不可逆；服务端要求 confirm=true，本方法已带） */
+  async purgeArchive(
+    sessionId: string,
+  ): Promise<{ purged: string[]; warnings: string[] }> {
+    const data = await this.deleteJson(
+      `/archives/${encodeURIComponent(sessionId)}?confirm=true`,
+    );
+    return data?.data as { purged: string[]; warnings: string[] };
   }
 
   /** Session temporary effect roots (append-only, session lifetime) */

@@ -571,6 +571,29 @@ export class SessionScheduleService {
     return store.deleteBySession(sessionId);
   }
 
+  /**
+   * 封存快照：导出该会话全部作业行（archive bundle manifest；只读）
+   *
+   * @param sessionId - 会话 id
+   * @returns 作业行列表
+   */
+  snapshotForArchive(sessionId: string): SessionSchedule[] {
+    return this.requireStore().list({ sessionId });
+  }
+
+  /**
+   * 封存恢复：回插作业行并重臂（幂等；恢复会话后到期语义按 catchUp 走）
+   *
+   * @param rows - 快照行
+   */
+  restoreForArchive(rows: SessionSchedule[]): void {
+    for (const row of rows) {
+      this.requireStore().restore(row);
+      this.disarm(row.id);
+      this.arm(row);
+    }
+  }
+
   // ── timer 臂 ──
 
   private disarm(id: string): void {

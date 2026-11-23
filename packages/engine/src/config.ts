@@ -993,6 +993,8 @@ export interface HarnessConfig {
   agentRuntime?: AgentRuntimeJsonConfig;
   /** SessionSchedule 预算与兜底 tick */
   schedules?: SchedulesJsonConfig;
+  /** 会话封存/回收站保留策略（arch/session-archive-recycle.md §6） */
+  archives?: import('./config-schema/archives.js').ArchivesConfig;
   /** 上下文引擎配置 */
   contextEngine?: ContextEngineConfig;
   /** 公用能力 summary（harness/context/capabilities） */

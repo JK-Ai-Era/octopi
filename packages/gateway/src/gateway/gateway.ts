@@ -28,6 +28,7 @@ import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent
 import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
 import type { EffectPolicyConfig, ProcessIsolationProfile } from '@octopi-agent/engine';
 import { expandHomePath } from '@octopi-agent/engine/paths.js';
+import { SessionArchiveService, type ArchiveEntryInfo } from '@octopi-agent/engine/integration/storage/archives/service.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
 import type { HookContext } from '@octopi-agent/engine/harness/shared/types/hook-context.js';
@@ -365,8 +366,9 @@ function projectStore<T>(
         }
       : {}),
     list: (filter) => inner.list(filter),
-    delete: async (sessionId) => {
-      await inner.delete(sessionId);
+    delete: async (sessionId, options) => {
+      // options（relocateTo）如实转发：封存搬迁走本门面时不得吞参数（吞了=空包丢正文）
+      await inner.delete(sessionId, options);
       await hooks.remove(sessionId);
     },
     exists: (sessionId) => inner.exists(sessionId),
@@ -675,6 +677,13 @@ export class Gateway {
     });
     return this.assemblyInstance;
   }
+
+  /** 封存服务（归档/回收站；懒构造唯一实例，close 于 stopLifecycle） */
+  private archiveSvc?: SessionArchiveService;
+  /** ensureStore 捕获的权威 store（投影门面的 inner；封存 port 扩展面从此取） */
+  private rawStore?: SessionStore<SessionData>;
+  /** 每日保留任务（到期 purge + 自动冷归档） */
+  private archiveRetentionTimer?: NodeJS.Timeout;
 
   constructor(config: GatewayConfig, store?: SessionStore<SessionData>) {
     this.config = config;
@@ -997,6 +1006,7 @@ export class Gateway {
   private async ensureStore(): Promise<void> {
     if (this._storeReady) return;
     const raw = this.store ?? (await createDefaultStore(this.config.agents));
+    this.rawStore = raw;
     // 投影单写者=gateway 门面（MAJ-1 修复）：装配与 store 来源解耦——注入 store
     //（生产组合根 daemon.ts）与默认工厂同走投影门面，写口写后补投影。
     this.sessionIndex = await createProjectionIndex();
@@ -1044,6 +1054,13 @@ export class Gateway {
     this.clientTools.stopVisibilityRefresh();
     this.sessionSchedules?.dispose();
     this.sessionSchedules = undefined;
+    // 封存服务：停每日保留任务并关注册表句柄（下次 start 懒重建）
+    if (this.archiveRetentionTimer) {
+      clearInterval(this.archiveRetentionTimer);
+      this.archiveRetentionTimer = undefined;
+    }
+    this.archiveSvc?.close();
+    this.archiveSvc = undefined;
     this.registry?.close();
     this.registry = undefined;
     try {
@@ -1266,6 +1283,9 @@ export class Gateway {
       spawnInstance: (_version, buildRef, instanceId) => this.spawnRunInstance(instanceId, buildRef),
       probeOptions: () => ({ securityIntegrityConfigured: this.config.securityIntegrity !== undefined }),
     });
+
+    // 封存保留任务：启动对账（补崩溃矩阵遗留）+ 到期清除/自动冷归档（每日幂等）
+    this.startArchiveRetention();
 
     // P0c A′ 脉搏单源：run 实例的周期任务由 gateway 调度器单发驱动（实例零 self-arm 定时器，
     // arch/service-topology-p0c.md §3）。key 为实例自述的 opaque 键；归属决策在调度器、
@@ -1917,14 +1937,41 @@ export class Gateway {
   }
 
   /**
-   * 删除会话：先按 onClose 收掉残留 undo，再删存储。幂等：已不存在视为成功。
+   * 删除会话 = 移入回收站（软删，arch/session-archive-recycle.md §2）：
+   * 整组（spawnBy 子会话级联）封存为 trashed，TTL（缺省 30 天）到期由保留任务销毁；
+   * 已手动归档的会话改标 trashed（归档 → 回收站）。幂等：不存在视为成功。
    *
    * @param sessionId - 目标会话
-   * @throws Run 在途（session_running: …）——在途删除会让落盘于删除之后的 Run 把会话写回来，必须先停再删。
-   *   残余竞态（已知，见 arch/open-problems.md OP-WEB-3）：守卫与 store.delete 之间新准入的 Run 仍可能在删除后
-   *   落盘复活，admission 侧尚无删除互斥；窗口已用删前二次校验收窄，未根除。
+   * @throws Run 在途（session_running: …）——在途封存会让落盘于封存之后的 Run 把会话写回来，必须先停再封。
+   *   残余竞态（已知，见 arch/open-problems.md OP-WEB-3）：守卫与封存之间新准入的 Run 仍可能在封存后
+   *   落盘复活，admission 侧尚无封存互斥；窗口已用封前二次校验收窄，未根除。
    */
-  async deleteSession(sessionId: string): Promise<void> {
+  async deleteSession(sessionId: string): Promise<{ sealed: number; purgeAt: number | null }> {
+    await this.ensureStore();
+    const svc = this.getArchiveService();
+    if (!svc) {
+      // 无封存能力的 store（InMemory 等非落盘后端）：删除=立即硬删（无处可封）。
+      // 这是能力分支而非双实现——有封存能力的 store 一律走软删，不落此路。
+      await this.hardDeleteSession(sessionId);
+      return { sealed: 0, purgeAt: null };
+    }
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      // 幂等：删除已不在热库的会话视为成功；仅 archived → trashed 改标（已 trashed 再删
+      // 不重置 TTL，防误触拉长回收站寿命）
+      const entry = svc.list().find((e) => e.sessionId === sessionId);
+      if (entry && entry.state === 'archived') {
+        const marked = await svc.trash(sessionId);
+        return { sealed: marked.length, purgeAt: marked[0]?.purgeAt ?? null };
+      }
+      return { sealed: 0, purgeAt: null };
+    }
+    const { sealed } = await this.sealSessionGroup(sessionId, { state: 'trashed', sealedBy: 'trash' });
+    return { sealed: sealed.length, purgeAt: sealed[0]?.purgeAt ?? null };
+  }
+
+  /** 硬删（无封存能力 store 的删除路径；原 deleteSession 语义：守卫→关账→删→广播） */
+  private async hardDeleteSession(sessionId: string): Promise<void> {
     const session = await this.store.load(sessionId);
     if (!session) {
       // 幂等：删除已不存在的会话视为成功（多端并发删除不互相报错）
@@ -1945,6 +1992,283 @@ export class Gateway {
     await this.store.delete(sessionId);
     // 其他已订阅端同步移除卡片，避免点开已删会话才报错
     this.broadcastSessionEvent('session.removed', sessionId, {}, session.agentId ?? session.meta.agentId);
+  }
+
+  /** 手动归档会话（永久封存，可恢复；级联组整组）。要求会话在热库。 */
+  async archiveSession(sessionId: string): Promise<{ sealed: number }> {
+    await this.ensureStore();
+    const session = await this.store.load(sessionId);
+    if (!session) {
+      throw new Error(`Session "${sessionId}" not found`);
+    }
+    const { sealed } = await this.sealSessionGroup(sessionId, { state: 'archived', sealedBy: 'manual' });
+    return { sealed: sealed.length };
+  }
+
+  /** 封存子系统不可用（store 无 relocate 能力）时 fail loud，不静默降级 */
+  private requireArchiveService(): SessionArchiveService {
+    const svc = this.getArchiveService();
+    if (!svc) {
+      throw new Error(
+        'archive_unavailable: session store lacks relocate support (archive/trash disabled for this backend)',
+      );
+    }
+    return svc;
+  }
+
+  /**
+   * 恢复封存会话（级联组整组解封回热库）
+   *
+   * @param sessionId - 组内任一会话 id
+   * @returns 恢复的会话 id 与显式降级警告（如 knowledge 重登记待 P1）
+   */
+  async restoreArchive(
+    sessionId: string,
+  ): Promise<{ restored: string[]; warnings: string[] }> {
+    await this.ensureStore();
+    const svc = this.requireArchiveService();
+    const { restored, warnings } = await svc.restore(sessionId);
+    for (const entry of restored) {
+      // 其他已订阅端把卡片放回列表（与 session.removed 对称）
+      this.broadcastSessionEvent('session.restored', entry.sessionId, {}, entry.agentId);
+    }
+    return { restored: restored.map((e) => e.sessionId), warnings };
+  }
+
+  /**
+   * 彻底删除封存会话（不可逆；级联组整组销毁）
+   *
+   * @param sessionId - 组内任一会话 id
+   * @returns 销毁的会话 id 与警告
+   */
+  async purgeArchive(
+    sessionId: string,
+  ): Promise<{ purged: string[]; warnings: string[] }> {
+    await this.ensureStore();
+    return this.requireArchiveService().purge(sessionId);
+  }
+
+  /**
+   * 列出封存条目（归档/回收站）
+   *
+   * @param state - 状态过滤（缺省全部）
+   * @returns 条目列表
+   */
+  async listArchives(state?: 'archived' | 'trashed'): Promise<ArchiveEntryInfo[]> {
+    await this.ensureStore();
+    return this.requireArchiveService().list(state);
+  }
+
+  /**
+   * 封存整组（trash / manual 共用）：组级在途守卫 → 组内关账（undo/pending/Hitl）→
+   * 封前二次守卫 → seal → 广播移除。
+   *
+   * @param sessionId - 组根（用户点删的那个）
+   * @param opts.state - 封存状态
+   * @param opts.sealedBy - 封存来源
+   * @throws 任一成员 Run 在途（整组拒绝，不半封）
+   */
+  private async sealSessionGroup(
+    sessionId: string,
+    opts: { state: 'archived' | 'trashed'; sealedBy: 'manual' | 'trash' | 'auto' },
+  ): Promise<import('@octopi-agent/engine/integration/storage/archives/service.js').SealResult> {
+    const group = await this.resolveSealGroup(sessionId);
+    for (const meta of group) {
+      if (this.runtime.hasActiveRunForSession(meta.id)) {
+        throw new Error(`session_running: cannot delete "${meta.id}" while a run is active`);
+      }
+    }
+    for (const meta of group) {
+      this.cancelPendingApprovals(meta.id);
+      this.cancelPendingQuestions(meta.id);
+      this.clearHitlSessionCache(meta.id);
+      await this.applySessionClosePolicy(meta.id);
+    }
+    // 封前二次校验，收窄守卫到封存之间的 Run 准入窗口
+    for (const meta of group) {
+      if (this.runtime.hasActiveRunForSession(meta.id)) {
+        throw new Error(`session_running: cannot delete "${meta.id}" while a run is active`);
+      }
+    }
+    const svc = this.requireArchiveService();
+    const result = await svc.seal({
+      sessionId,
+      state: opts.state,
+      sealedBy: opts.sealedBy,
+      groupSessionIds: group.map((m) => m.id).filter((id) => id !== sessionId),
+    });
+    for (const meta of group) {
+      // 其他已订阅端同步移除卡片，避免点开已删会话才报错
+      this.broadcastSessionEvent('session.removed', meta.id, {}, meta.agentId);
+    }
+    return result;
+  }
+
+  /**
+   * 解析级联封存组：自身 + 全部 spawnBy 后代（同租户；整组共进退，恢复也整组）
+   *
+   * @param sessionId - 组根
+   * @returns 组内 meta 列表（含根；spawnBy 链）
+   */
+  private async resolveSealGroup(sessionId: string): Promise<SessionMeta[]> {
+    const sessions = await this.store.list();
+    const root = sessions.find((m) => m.id === sessionId);
+    if (!root) return [];
+    const tenant = root.tenantId ?? DEFAULT_TENANT_ID;
+    const childrenOf = new Map<string, SessionMeta[]>();
+    for (const meta of sessions) {
+      const parent = meta.spawnBy?.parentSessionId;
+      if (!parent) continue;
+      if ((meta.tenantId ?? DEFAULT_TENANT_ID) !== tenant) continue;
+      const arr = childrenOf.get(parent) ?? [];
+      arr.push(meta);
+      childrenOf.set(parent, arr);
+    }
+    const out: SessionMeta[] = [root];
+    const seen = new Set<string>([sessionId]);
+    const queue = [sessionId];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      for (const child of childrenOf.get(cur) ?? []) {
+        if (seen.has(child.id)) continue;
+        seen.add(child.id);
+        out.push(child);
+        queue.push(child.id);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 构造/返回封存服务（唯一实例；ensureStore 之后调用）。
+   * store 无 relocate 扩展面（InMemory 等）→ null（能力缺失，调用方分支）；
+   * 有扩展面则构造失败如实上抛（有封存能力的部署不允许静默失去封存）。
+   */
+  private getArchiveService(): SessionArchiveService | null {
+    if (this.archiveSvc) return this.archiveSvc;
+    const home = getOctopiHome();
+    const raw = this.rawStore as
+      | (SessionStore<SessionData> & {
+          sessionsDir?: string;
+          restoreMeta?: (meta: SessionMeta) => Promise<void>;
+          listByLifecycle?: (
+            lifecycle: 'active' | 'recent' | 'archived',
+          ) => Promise<SessionMeta[]>;
+        })
+      | undefined;
+    if (!raw?.restoreMeta || !raw.listByLifecycle || !raw.sessionsDir) {
+      return null;
+    }
+    const restoreMeta = raw.restoreMeta.bind(raw);
+    const listByLifecycle = raw.listByLifecycle.bind(raw);
+    this.archiveSvc = new SessionArchiveService({
+      // 会话目录跟注入 store 走（评审 major-6：写死 OCTOPI_HOME/sessions 会对别处 store 错靶）
+      sessionsDir: raw.sessionsDir,
+      archivesDir: join(home, 'archives'),
+      store: {
+        // 写口走投影门面：delete 含 hooks.remove 投影摘除、save 写后补投影（恢复重建复用同一挂点）
+        load: (id) => this.store.load(id),
+        save: (id, data) => this.store.save(id, data),
+        delete: (id, options) => this.store.delete(id, options),
+        restoreMeta,
+        listByLifecycle,
+      },
+      schedules: {
+        snapshotForArchive: (id) => this.sessionSchedules?.snapshotForArchive(id) ?? [],
+        purgeSession: (id) => this.sessionSchedules?.purgeSession(id) ?? 0,
+        restoreForArchive: (rows) => {
+          this.sessionSchedules?.restoreForArchive(rows as never[]);
+        },
+      },
+      knowledge: {
+        purgeSessionSources: async (sessionId, sourceIds, agentId) => {
+          // 失败不回滚封存（knowledge service 不可用不应阻断删除）；doctor 扫描兜底，审计留痕
+          for (const sourceId of sourceIds) {
+            try {
+              await this.removeKnowledgeSource(sourceId);
+            } catch (err) {
+              console.warn(
+                `[Gateway] purge knowledge source failed (${sourceId}): ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          if (agentId) {
+            try {
+              const client = await this.getKnowledgeClient();
+              await client.clearSessionVisibility(agentId, sessionId);
+            } catch (err) {
+              console.warn(
+                `[Gateway] clear knowledge session visibility failed (${sessionId}): ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+        },
+      },
+      wireDumpDir:
+        this.config.observability?.llmRequestDump?.dir ??
+        join(home, 'logs', 'llm-requests'),
+      includeLlmDumps: this.config.archives?.includeLlmDumps === true,
+      ...(this.config.archives?.trashRetentionDays !== undefined
+        ? { trashRetentionDays: this.config.archives.trashRetentionDays }
+        : {}),
+      ...(this.config.archives?.autoArchive !== undefined
+        ? { autoArchive: this.config.archives.autoArchive }
+        : {}),
+    });
+    return this.archiveSvc;
+  }
+
+  /** 封存保留任务：启动对账 + 到期清除/自动冷归档（每日幂等）；无封存能力则显式禁用 */
+  private startArchiveRetention(): void {
+    if (this.archiveRetentionTimer) return;
+    const svc = this.getArchiveService();
+    if (!svc) {
+      console.warn(
+        '[Gateway] archive subsystem disabled: session store lacks relocate support (trash/auto-archive unavailable)',
+      );
+      return;
+    }
+    void svc
+      .reconcile()
+      .then((report) => {
+        for (const w of report.warnings) console.warn(`[Gateway] archive reconcile: ${w}`);
+      })
+      .catch((err: unknown) =>
+        console.warn(
+          `[Gateway] archive reconcile failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    void this.runArchiveRetention();
+    this.archiveRetentionTimer = setInterval(() => {
+      void this.runArchiveRetention();
+    }, 24 * 60 * 60 * 1000);
+    this.archiveRetentionTimer.unref?.();
+  }
+
+  /** 跑一轮保留任务（到期 purge + 自动冷归档；在跑 run 的会话跳过自动封存） */
+  private async runArchiveRetention(): Promise<void> {
+    try {
+      const svc = this.getArchiveService();
+      if (!svc) return;
+      const report = await svc.runRetention(undefined, (id) =>
+        this.runtime.hasActiveRunForSession(id),
+      );
+      // 自动冷归档走组级封存（关账 + spawnBy 级联 + 广播）；服务只提名候选（评审 major-3）
+      for (const id of report.autoArchiveCandidates) {
+        try {
+          await this.sealSessionGroup(id, { state: 'archived', sealedBy: 'auto' });
+        } catch (err) {
+          console.warn(
+            `[Gateway] auto-archive ${id} skipped: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      for (const w of report.warnings) console.warn(`[Gateway] archive retention: ${w}`);
+    } catch (err) {
+      console.warn(
+        `[Gateway] archive retention failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async stop(): Promise<void> {

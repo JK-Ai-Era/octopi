@@ -26,6 +26,15 @@ export interface SessionListFilter {
   tenantId?: TenantId;
 }
 
+/** delete 的可选能力参数 */
+export interface SessionDeleteOptions {
+  /**
+   * 封存搬迁目标目录：数据文件整体迁往该目录而非就地删除（会话归档机制用）。
+   * 不支持搬迁的实现遇该参数必须抛错（禁止静默忽略——忽略即空封存包丢正文）。
+   */
+  relocateTo?: string;
+}
+
 /**
  * SessionStore 接口
  *
@@ -77,8 +86,14 @@ export interface SessionStore<T = unknown> {
   /** 列出 session 元数据；可选按参与 agent 过滤 */
   list(filter?: SessionListFilter): Promise<SessionMeta[]>;
 
-  /** 按 sessionId 删除 */
-  delete(sessionId: string): Promise<void>;
+  /**
+   * 按 sessionId 删除
+   *
+   * @param sessionId - 会话 id
+   * @param options.relocateTo - 封存搬迁：数据文件整体迁往该目录而非就地删除
+   *   （JsonlSessionStore 支持；不支持的实现遇该参数必须抛错，禁止静默忽略）
+   */
+  delete(sessionId: string, options?: SessionDeleteOptions): Promise<void>;
 
   /** 按 sessionId 检查是否存在 */
   exists(sessionId: string): Promise<boolean>;

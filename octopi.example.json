@@ -278,6 +278,17 @@
     "tickIntervalMs": 60000
   },
 
+  "archives": {
+    "trashRetentionDays": 30,
+    "includeLlmDumps": false,
+    "autoArchive": {
+      "enabled": true,
+      "recentRetentionDays": 30,
+      "forceDays": 90,
+      "retentionDays": 180
+    }
+  },
+
   "channels": [{
     "type": "http",
     "port": 18180,
