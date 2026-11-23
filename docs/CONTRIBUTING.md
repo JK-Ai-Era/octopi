@@ -44,8 +44,8 @@ The project uses a four-layer onion architecture + DDD domain organization:
 
 | Layer | Directory | Responsibility | Dependencies |
 |---|---|---|---|
+| Core (kernel) | `packages/core/src/core/` | Mechanism primitives + interface contracts + core types (the shared vocabulary) | No external dependencies (dependency floor) |
 | Loop | `packages/core/src/loop/` | Pure execution loop (`agentLoop`, `callModel`) | Core types & pure utilities (stateless, no I/O) |
-| Core | `packages/core/src/core/` | Mechanism primitives + interface contracts + core types | No external dependencies |
 | Harness | `packages/engine/src/harness/` | Product domain organization (see `docs/domains.md`) | Core + Loop |
 | Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | External system adapters | Core + Loop + Harness |
 

@@ -1,8 +1,8 @@
 # Loop — 纯执行循环
 
-> Layer: Layer 0
+> Layer: Layer 1
 
-Agent 的核心执行循环。纯函数 + 回调扩展，零外部依赖。
+Agent 的核心执行循环。纯函数 + 回调扩展，只依赖 Core 内核词汇与纯工具。
 
 **核心理念**：`agentLoop()` 是一个纯 async generator — 输入消息 → 调用 LLM → 执行工具 → 输出协议事件。不持有状态，不依赖 EventBus、SecurityGuard。**可运行门面在 `harness/agent`（`Agent.run()`）。**
 

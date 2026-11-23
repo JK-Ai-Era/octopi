@@ -351,12 +351,12 @@ Information ──蒸馏──► Memory ──织网──► Cognition ──�
 │  │           knowledge · activation · run · context ·     ││
 │  │           extension · collaboration                    ││
 │  │  ┌────────────────────────────────────────────────────┐││
-│  │  │  Layer 1  Core——EventBus · StateMachine ·          │││
-│  │  │           Kernel ports（ModelProvider、Security-   │││
-│  │  │           Guard、RunGuard、ErrorStrategy……）        │││
+│  │  │  Layer 1  Loop——纯 async generator：               │││
+│  │  │           agentLoop · callModel · classifyError    │││
 │  │  │  ┌────────────────────────────────────────────────┐│││
-│  │  │  │  Layer 0  Loop——纯 async generator：           ││││
-│  │  │  │  agentLoop · callModel · classifyError         ││││
+│  │  │  │  Layer 0  Core（内核）——EventBus ·              ││││
+│  │  │  │  StateMachine · Kernel ports（ModelProvider、   ││││
+│  │  │  │  SecurityGuard、RunGuard、ErrorStrategy……）     ││││
 │  │  │  └────────────────────────────────────────────────┘│││
 │  │  └────────────────────────────────────────────────────┘││
 │  └────────────────────────────────────────────────────────┘│
@@ -365,7 +365,7 @@ Information ──蒸馏──► Memory ──织网──► Cognition ──�
 
 Octopi Harness 分 10 个产品域——治理、会话、智能体、记忆、知识、激活、运行、上下文、扩展、协作——按三个平面分组：*权威*（治理 · 会话 · 智能体 · 记忆 · 知识）、*阶段*（激活 · 运行）、*能力*（上下文 · 扩展 · 协作）。计数权威是 [docs/domains.yaml](./docs/domains.yaml)，叙事见 [docs/domains.zh.md](./docs/domains.zh.md)。
 
-Loop 层是**纯 async generator**——零状态、零外部依赖——所以它之上的整个运行时都是可替换的契约：`ModelProvider`、`SessionStore`、`ContextEngine`、`SecurityGuard`……
+Loop 层是**纯 async generator**——零状态、无 I/O、只建立在内核词汇表之上——所以它之上的整个运行时都是可替换的契约：`ModelProvider`、`SessionStore`、`ContextEngine`、`SecurityGuard`……
 
 ---
 

@@ -43,8 +43,8 @@ npm run web            # webui vite dev server
 
 | 层 | 目录 | 职责 | 依赖 |
 |---|---|---|---|
+| Core（内核） | `packages/core/src/core/` | 机制原语 + 接口契约 + 核心类型（共享词汇表） | 无外部依赖（依赖地板） |
 | Loop | `packages/core/src/loop/` | 纯执行循环（`agentLoop`、`callModel`） | Core 类型与纯工具（无状态、无 I/O） |
-| Core | `packages/core/src/core/` | 机制原语 + 接口契约 + 核心类型 | 无外部依赖 |
 | Harness | `packages/engine/src/harness/` | 产品域组织（见 `docs/domains.md`） | 依赖 Core + Loop |
 | Integration | `packages/engine/src/integration/` + `packages/gateway/src/` | 外部系统适配 | 依赖 Core + Loop + Harness |
 

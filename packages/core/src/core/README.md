@@ -1,6 +1,6 @@
 # Core — Kernel 契约 + 机制原语
 
-> Layer: Layer 1
+> Layer: Layer 0
 
 **产品定位**：Agent Runtime Kernel Contract — 一次 agent run 的稳定合同。
 

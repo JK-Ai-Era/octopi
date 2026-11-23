@@ -1,6 +1,6 @@
 # @octopi-agent/core
 
-Octopi **Core** — pure execution loop (`agentLoop`) + Kernel contracts (Layer 0–1).
+Octopi **Core** — Kernel contracts (Layer 0) + pure execution loop `agentLoop` (Layer 1).
 
 ```sh
 npm i @octopi-agent/core

@@ -1,6 +1,6 @@
 # Primitives — 基础设施原语
 
-> Layer: Layer 1
+> Layer: Layer 0
 
 框架的基础设施原语。机制性组件，供 Harness 层使用。
 

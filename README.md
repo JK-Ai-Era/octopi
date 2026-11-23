@@ -501,12 +501,12 @@ dependencies.**
 │  │           knowledge · activation · run · context ·     ││
 │  │           extension · collaboration                    ││
 │  │  ┌────────────────────────────────────────────────────┐││
-│  │  │  Layer 1  Core — EventBus · StateMachine ·         │││
-│  │  │           Kernel ports (ModelProvider, Security-   │││
-│  │  │           Guard, RunGuard, ErrorStrategy, …)       │││
+│  │  │  Layer 1  Loop — pure async generator:             │││
+│  │  │           agentLoop · callModel · classifyError    │││
 │  │  │  ┌────────────────────────────────────────────────┐│││
-│  │  │  │  Layer 0  Loop — pure async generator:         ││││
-│  │  │  │  agentLoop · callModel · classifyError         ││││
+│  │  │  │  Layer 0  Core (kernel) — EventBus ·           ││││
+│  │  │  │  StateMachine · Kernel ports (ModelProvider,   ││││
+│  │  │  │  SecurityGuard, RunGuard, ErrorStrategy, …)    ││││
 │  │  │  └────────────────────────────────────────────────┘│││
 │  │  └────────────────────────────────────────────────────┘││
 │  └────────────────────────────────────────────────────────┘│
@@ -521,8 +521,7 @@ collaboration). The count authority is
 [docs/domains.yaml](./docs/domains.yaml); the narrative is
 [docs/domains.md](./docs/domains.md).
 
-The Loop layer is a **pure async generator** — zero state, zero external
-dependencies — so the entire runtime above it is contracts you can swap:
+The Loop layer is a **pure async generator** — zero state, no I/O, built only on the kernel vocabulary — so the entire runtime above it is contracts you can swap:
 `ModelProvider`, `SessionStore`, `ContextEngine`, `SecurityGuard`, …
 
 ---

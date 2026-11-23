@@ -1,6 +1,6 @@
 # Octopi 架构设计文档
 
-> **修订：2026-11-23（v0.126.6 时点）** | 初版：2026-09-21 | **校对：2026-10-11（v0.70.0 时点；模块树等已按代码校正，计数权威 `docs/domains.yaml`，专题以各专篇为准）**
+> **修订：2026-11-23（v0.126.7 时点）** | 初版：2026-09-21 | **校对：2026-10-11（v0.70.0 时点；模块树等已按代码校正，计数权威 `docs/domains.yaml`，专题以各专篇为准）**
 >
 > **语言说明**：英文版见 [architecture.md](./architecture.md)。本文为中文对译，变更须双语同步。
 >
@@ -63,61 +63,23 @@ AI 在早期阶段，应用构建思路在不断发展。架构设计的核心�
 │  │  Layer 2: Harness — 10 个产品域 + 横切/基建              ││
 │  │                                                              ││
 │  │  ┌──────────────────────────────────────────────────────────┐││
-│  │  │  Layer 1: Core — 机制原语 + 接口契约 + 核心类型           │││
+│  │  │  Layer 1: Loop — 纯执行循环                              │││
+│  │  │  agentLoop · callModel · classifyError                   │││
 │  │  │                                                          │││
 │  │  │  ┌──────────────────────────────────────────────────────┐│││
-│  │  │  │  Layer 0: Loop — 纯执行循环                          ││││
-│  │  │  │  agentLoop · callModel · classifyError           ││││
+│  │  │  │  Layer 0: Core（内核）— 契约 · 类型 · 原语            ││││
+│  │  │  │  EventBus、StateMachine 等机制原语                    ││││
 │  │  │  └──────────────────────────────────────────────────────┘│││
 │  │  └──────────────────────────────────────────────────────────┘││
 │  └──────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Layer 0: Loop — 纯执行循环
-
-**职责**：调用 LLM → 解析响应 → 执行工具 → 循环。通过 async generator yield 事件流。
-
-**特性**：零外部依赖。不依赖 EventBus、SecurityGuard、Budget。所有扩展通过 AgentLoopConfig 回调注入。
-
-**关键不变量**：
-- LLM 业务失败永不 throw（`onError` 仅 `retry`/`abort`；终止必 yield `agent_end`）
-- 工具批次内全部 `terminate=true` → `agent_end(should_stop)`
-- `tool_results` 与 `tool_calls` 一一对应（含中止占位）
-- 流式优先使用 provider 透传的 `finishReason`（`done` chunk）
-- `step_end.phase`：`pre_tools`（工具即将执行）/ `final`（本步无工具路径结束）
-- 事件词表仅 Loop 协议；budget/run_guard 事件在 `HarnessLoopEvent`
-- 进入 `ModelProvider` 的 messages 已规范化（toolResults 展开、tool_calls 字符串化）
-- 引擎只托管 `metadata.source === 'systemPrompt'` 的 system；无 metadata 一律保留
-
-#### `step_end.phase` — UI / 上层消费约定
-
-| phase | 含义 | UI 应做什么 |
-|-------|------|-------------|
-| `pre_tools` | 本步 LLM 返回 tool_calls，消息已入历史，**工具尚未/正在执行** | 保持「进行中」；可展示工具列表；**不要**把 run 置为 idle |
-| `final` | 本步无工具路径结束（纯文本 / followUp / 截断回灌 / 错误重试） | 可 finalize 助手消息；可置 idle |
-| `error: true`（与 `final` 同时） | 本次 LLM 调用失败；**只**出现在重试中途（彻底失败直接 `agent_end reason='error'`） | `content` 是本次调用的**部分流出，不是回答**——不得当回复外发/按正常消息 finalize；气泡标 error；保持 run 进行中（后面还有重试） |
-
-**不要**把每一次 `step_end` 都当成「本 run 结束」。工具路径下 `pre_tools` 之后还有 `tool_*` 事件；终止时可能直接 `agent_end`，**不会再补** final step_end。
-
-Runner 映射到 EventBus 的 `step.end` 时会带上 `data.phase` 与 `data.error`。Web `runStatus`：`pre_tools → 'tools'`，`final → 'idle'`，`error → 'waiting'`。TUI 在 `pre_tools` 与 `error` 时保持 processing。
-
-```
-packages/core/src/loop/
-├── agent-loop.ts         # agentLoop() — 纯函数
-├── call-model.ts         # callModel() — LLM 调用（watchdog + finishReason）
-├── error-classifier.ts   # classifyError() — 错误分类
-├── types.ts              # AgentLoopConfig, AgentLoopEvent 等
-└── index.ts
-```
-
-可运行 Agent 门面在 `packages/engine/src/harness/agent/`（`run()` = reliability 包装）。
-
-### Layer 1: Core — 机制原语 + 接口契约
+### Layer 0: Core（内核）— 机制原语 + 接口契约 + 核心类型
 
 **职责**：定义框架的所有契约（接口），提供基础设施原语（EventBus 等），定义核心类型。
 
-**特性**：不依赖任何外层。不包含策略实现。**不 re-export Loop**（`agentLoop` / `AgentLoopEvent` 从 `loop/` 导入；Agent 门面从 `harness/agent/` 导入）。
+**特性**：依赖地板——不依赖任何其他层。不包含策略实现。**不 re-export Loop**（`agentLoop` / `AgentLoopEvent` 从 `loop/` 导入；Agent 门面从 `harness/run/agent/` 导入）。
 
 ```
 packages/core/src/core/
@@ -152,6 +114,45 @@ packages/core/src/core/
 产品事件词表在 `harness/shared/events/`（AgentEventMap / AgentEvents / scenario-events）。
 
 Domain 契约在 **harness 领域内**（memory、mcp、delegation、orchestration…），不在 Core。
+
+### Layer 1: Loop — 纯执行循环
+
+**职责**：调用 LLM → 解析响应 → 执行工具 → 循环。通过 async generator yield 事件流。
+
+**特性**：只建立在 Core 内核词汇表与纯工具之上。不依赖 EventBus、SecurityGuard、Budget。所有扩展通过 AgentLoopConfig 回调注入。
+
+**关键不变量**：
+- LLM 业务失败永不 throw（`onError` 仅 `retry`/`abort`；终止必 yield `agent_end`）
+- 工具批次内全部 `terminate=true` → `agent_end(should_stop)`
+- `tool_results` 与 `tool_calls` 一一对应（含中止占位）
+- 流式优先使用 provider 透传的 `finishReason`（`done` chunk）
+- `step_end.phase`：`pre_tools`（工具即将执行）/ `final`（本步无工具路径结束）
+- 事件词表仅 Loop 协议；budget/run_guard 事件在 `HarnessLoopEvent`
+- 进入 `ModelProvider` 的 messages 已规范化（toolResults 展开、tool_calls 字符串化）
+- 引擎只托管 `metadata.source === 'systemPrompt'` 的 system；无 metadata 一律保留
+
+#### `step_end.phase` — UI / 上层消费约定
+
+| phase | 含义 | UI 应做什么 |
+|-------|------|-------------|
+| `pre_tools` | 本步 LLM 返回 tool_calls，消息已入历史，**工具尚未/正在执行** | 保持「进行中」；可展示工具列表；**不要**把 run 置为 idle |
+| `final` | 本步无工具路径结束（纯文本 / followUp / 截断回灌 / 错误重试） | 可 finalize 助手消息；可置 idle |
+| `error: true`（与 `final` 同时） | 本次 LLM 调用失败；**只**出现在重试中途（彻底失败直接 `agent_end reason='error'`） | `content` 是本次调用的**部分流出，不是回答**——不得当回复外发/按正常消息 finalize；气泡标 error；保持 run 进行中（后面还有重试） |
+
+**不要**把每一次 `step_end` 都当成「本 run 结束」。工具路径下 `pre_tools` 之后还有 `tool_*` 事件；终止时可能直接 `agent_end`，**不会再补** final step_end。
+
+Runner 映射到 EventBus 的 `step.end` 时会带上 `data.phase` 与 `data.error`。Web `runStatus`：`pre_tools → 'tools'`，`final → 'idle'`，`error → 'waiting'`。TUI 在 `pre_tools` 与 `error` 时保持 processing。
+
+```
+packages/core/src/loop/
+├── agent-loop.ts         # agentLoop() — 纯函数
+├── call-model.ts         # callModel() — LLM 调用（watchdog + finishReason）
+├── error-classifier.ts   # classifyError() — 错误分类
+├── types.ts              # AgentLoopConfig, AgentLoopEvent 等
+└── index.ts
+```
+
+可运行 Agent 门面在 `packages/engine/src/harness/run/agent/`（`run()` = reliability 包装）。
 
 ### Layer 2: Harness — 10 个产品域 + 横切/基建
 

@@ -1,6 +1,6 @@
 # Octopi Architecture Design
 
-> **Revised: 2026-11-23 (as of v0.126.6)** | Opened: 2026-09-21 | **Proofread: 2026-10-11 (as of v0.70.0; module trees corrected against code; counts authoritative from `docs/domains.yaml`; specialized topics follow their dedicated docs)**
+> **Revised: 2026-11-23 (as of v0.126.7)** | Opened: 2026-09-21 | **Proofread: 2026-10-11 (as of v0.70.0; module trees corrected against code; counts authoritative from `docs/domains.yaml`; specialized topics follow their dedicated docs)**
 >
 > This document is the complete architecture design of Octopi.
 > Long-term invariants: see the [Architecture Constitution](./north-star.md).
@@ -61,61 +61,23 @@ Security is not “add a security module”; every layer carries a security resp
 │  │  Layer 2: Harness — 10 product domains + cross-cutting/infra ││
 │  │                                                              ││
 │  │  ┌──────────────────────────────────────────────────────────┐││
-│  │  │  Layer 1: Core — mechanism primitives + interface contracts + core types │││
+│  │  │  Layer 1: Loop — pure execution loop                     │││
+│  │  │  agentLoop · callModel · classifyError                   │││
 │  │  │                                                          │││
 │  │  │  ┌──────────────────────────────────────────────────────┐│││
-│  │  │  │  Layer 0: Loop — pure execution loop                 ││││
-│  │  │  │  agentLoop · callModel · classifyError           ││││
+│  │  │  │  Layer 0: Core (kernel) — contracts · types ·        ││││
+│  │  │  │  primitives (EventBus, StateMachine)                 ││││
 │  │  │  └──────────────────────────────────────────────────────┘│││
 │  │  └──────────────────────────────────────────────────────────┘││
 │  └──────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Layer 0: Loop — pure execution loop
-
-**Responsibility**: call LLM → parse response → execute tools → loop. Emits an event stream via async generator `yield`.
-
-**Traits**: zero external dependencies. Does not depend on EventBus, SecurityGuard, or Budget. All extensions are injected through `AgentLoopConfig` callbacks.
-
-**Key invariants**:
-- LLM business failures never throw (`onError` only `retry`/`abort`; termination always yields `agent_end`)
-- All items in a tool batch with `terminate=true` → `agent_end(should_stop)`
-- `tool_results` and `tool_calls` correspond one-to-one (including abort placeholders)
-- Streaming prefers the provider passthrough `finishReason` (`done` chunk)
-- `step_end.phase`: `pre_tools` (tools about to run) / `final` (this step ends on a no-tool path)
-- Event vocabulary is Loop-protocol only; budget/run_guard events live in `HarnessLoopEvent`
-- Messages entering `ModelProvider` are normalized (toolResults expanded, tool_calls stringified)
-- The engine only manages systems with `metadata.source === 'systemPrompt'`; systems without metadata are always kept
-
-#### `step_end.phase` — UI / upper-layer consumption contract
-
-| phase | Meaning | What the UI should do |
-|-------|---------|------------------------|
-| `pre_tools` | This turn’s LLM returned tool_calls; messages are already in history; **tools have not run / are running** | Keep “in progress”; may show the tool list; **do not** set the run to idle |
-| `final` | This turn ends on a no-tool path (plain text / followUp / truncation re-feed / error retry) | May finalize the assistant message; may set idle |
-| `error: true` (with `final`) | This LLM attempt failed; emitted **only** mid-retry (the final failure goes straight to `agent_end reason='error'`) | `content` is this call’s **partial output, not an answer** — never send it as a reply / finalize it as a normal message; mark the bubble as error; keep the run in progress (a retry follows) |
-
-**Do not** treat every `step_end` as “this run ended”. On the tool path there are `tool_*` events after `pre_tools`; on termination it may go straight to `agent_end` — **no** final `step_end` is added afterwards.
-
-When the Runner maps this to EventBus `step.end`, it carries `data.phase` and `data.error`. Web `runStatus`: `pre_tools → 'tools'`, `final → 'idle'`, `error → 'waiting'`. TUI stays in processing on `pre_tools` and on `error`.
-
-```
-packages/core/src/loop/
-├── agent-loop.ts         # agentLoop() — pure function
-├── call-model.ts         # callModel() — LLM call (watchdog + finishReason)
-├── error-classifier.ts   # classifyError() — error classification
-├── types.ts              # AgentLoopConfig, AgentLoopEvent, etc.
-└── index.ts
-```
-
-The runnable Agent facade lives at `packages/engine/src/harness/agent/` (`run()` = reliability wrapper).
-
-### Layer 1: Core — mechanism primitives + interface contracts
+### Layer 0: Core (kernel) — mechanism primitives + interface contracts + core types
 
 **Responsibility**: define all of the framework’s contracts (interfaces), provide infrastructure primitives (EventBus, etc.), and define core types.
 
-**Traits**: depends on no outer layer. Contains no strategy implementations. **Does not re-export Loop** (`agentLoop` / `AgentLoopEvent` are imported from `loop/`; the Agent facade is imported from `harness/agent/`).
+**Traits**: the dependency floor — depends on no other layer. Contains no strategy implementations. **Does not re-export Loop** (`agentLoop` / `AgentLoopEvent` are imported from `loop/`; the Agent facade is imported from `harness/run/agent/`).
 
 ```
 packages/core/src/core/
@@ -150,6 +112,45 @@ packages/core/src/core/
 Product event vocabulary lives in `harness/shared/events/` (AgentEventMap / AgentEvents / scenario-events).
 
 Domain contracts live **inside harness domains** (memory, mcp, delegation, orchestration, …), not in Core.
+
+### Layer 1: Loop — pure execution loop
+
+**Responsibility**: call LLM → parse response → execute tools → loop. Emits an event stream via async generator `yield`.
+
+**Traits**: builds only on the Core kernel vocabulary and pure helpers. Does not depend on EventBus, SecurityGuard, or Budget. All extensions are injected through `AgentLoopConfig` callbacks.
+
+**Key invariants**:
+- LLM business failures never throw (`onError` only `retry`/`abort`; termination always yields `agent_end`)
+- All items in a tool batch with `terminate=true` → `agent_end(should_stop)`
+- `tool_results` and `tool_calls` correspond one-to-one (including abort placeholders)
+- Streaming prefers the provider passthrough `finishReason` (`done` chunk)
+- `step_end.phase`: `pre_tools` (tools about to run) / `final` (this step ends on a no-tool path)
+- Event vocabulary is Loop-protocol only; budget/run_guard events live in `HarnessLoopEvent`
+- Messages entering `ModelProvider` are normalized (toolResults expanded, tool_calls stringified)
+- The engine only manages systems with `metadata.source === 'systemPrompt'`; systems without metadata are always kept
+
+#### `step_end.phase` — UI / upper-layer consumption contract
+
+| phase | Meaning | What the UI should do |
+|-------|---------|------------------------|
+| `pre_tools` | This turn’s LLM returned tool_calls; messages are already in history; **tools have not run / are running** | Keep “in progress”; may show the tool list; **do not** set the run to idle |
+| `final` | This turn ends on a no-tool path (plain text / followUp / truncation re-feed / error retry) | May finalize the assistant message; may set idle |
+| `error: true` (with `final`) | This LLM attempt failed; emitted **only** mid-retry (the final failure goes straight to `agent_end reason='error'`) | `content` is this call’s **partial output, not an answer** — never send it as a reply / finalize it as a normal message; mark the bubble as error; keep the run in progress (a retry follows) |
+
+**Do not** treat every `step_end` as “this run ended”. On the tool path there are `tool_*` events after `pre_tools`; on termination it may go straight to `agent_end` — **no** final `step_end` is added afterwards.
+
+When the Runner maps this to EventBus `step.end`, it carries `data.phase` and `data.error`. Web `runStatus`: `pre_tools → 'tools'`, `final → 'idle'`, `error → 'waiting'`. TUI stays in processing on `pre_tools` and on `error`.
+
+```
+packages/core/src/loop/
+├── agent-loop.ts         # agentLoop() — pure function
+├── call-model.ts         # callModel() — LLM call (watchdog + finishReason)
+├── error-classifier.ts   # classifyError() — error classification
+├── types.ts              # AgentLoopConfig, AgentLoopEvent, etc.
+└── index.ts
+```
+
+The runnable Agent facade lives at `packages/engine/src/harness/run/agent/` (`run()` = reliability wrapper).
 
 ### Layer 2: Harness — 10 product domains + cross-cutting/infrastructure
 

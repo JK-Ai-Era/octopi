@@ -1,6 +1,6 @@
 # Types — 核心类型定义
 
-> Layer: Layer 1
+> Layer: Layer 0
 
 框架的核心类型。按职责拆分为子模块。
 

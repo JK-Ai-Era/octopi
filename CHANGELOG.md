@@ -136,6 +136,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.126.7 (2026-11-23)
+
+### docs(arch): 拍板 A 落地——四层编号重排为依赖深度（L0=Core(kernel) / L1=Loop）
+
+- **决策**（大哥 2026-11-23 拍板 A）：Layer 编号 = 依赖深度。L0=Core（kernel：类型/端口/原语，依赖地板）、L1=Loop（纯执行循环，建于内核契约之上）、L2=Harness、L3=Integration；真实次序 Integration → Harness → Loop → Core。原「L0=Loop 最底层」叙事与代码依赖方向相反，正式退役（v0.126.6 遗留的「待拍板」就此关闭）。
+- **落点**：AGENTS.md 四层清单与包描述；architecture.md/.zh.md §1.2 列表序 + §2 嵌套图（内两层交换）+ Layer 0/1 两节整体换位重编；README.md/.zh.md 嵌套图与散文；CONTRIBUTING.md/.zh.md 分层表换行序；packages/core/README 与 core/{core,interfaces,primitives,types}/README、loop/README 层标签；arch/overview.md 嵌套图、run-guard-refactor.md、summary-compact.md 层号。
+- **顺带修正**：architecture 双语的 Agent 门面路径 `harness/agent/` → 实际的 `harness/run/agent/`（与 AGENTS 口径对齐）；Loop 节 Traits 与 README/loop README 的「零外部依赖」措辞改为「只建立在 Core 内核词汇/纯工具之上」。
+- **不动**：changelog 历史条目（含 v0.126.6 的待拍板记录，append-only）；`.worktrees/context-accounting` 副本；arch/overview.md 安全防护图的「Layer 0+1: 规则引擎」（安全五层防护的独立编号空间，非四层架构义）。
+- **验证**：全仓正则扫「Layer 0: Loop / Layer 1: Core」旧组合零残留（历史与 worktree 除外）；`arch/check-sync.sh` 通过；修订戳规则即时执行（architecture 双语 as-of 升 v0.126.7）。
+
+---
+
 ## v0.126.6 (2026-11-23)
 
 ### docs(arch): 遗留项修复批——不变量引用全仓去枚举、架构文档改修订戳、CONTRIBUTING 结构合并、Loop/Core 依赖措辞归真
