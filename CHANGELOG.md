@@ -137,6 +137,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.127.3 (2026-11-24)
+
+### fix(webui): 切换 agent 失败时回到切换前状态，而不是拆成空态
+
+- 旧行为用 `closeCurrentSession()` + `clearActiveSessionUi()` 收尾：把一个完好的旧会话拆掉落进「未选中」空态，左栏又按已回滚的 agentId 过滤已被换成新 agent 的列表 → 显示「暂无历史会话」。用一个新错误掩盖切换失败，用户既丢位置又看不到自己的会话。
+- 现在只做两件事：`setAgentId(prevAgentId)` 还原选择 + `await store.refreshSessions(prevAgentId)` 重拉旧 agent 的会话列表；**不再关闭、不再清空活动会话**（`store.openSession` 失败时 `chat` 仍指旧会话、组件 `activeSessionId` 也只在成功后更新，「不动」即「回到切换前」）。
+- 补 `suppressAutoOpenRef`：回滚期间重拉列表会再派发一次 `sessions` 事件，若切换前本是空态，原逻辑会顺手自动打开一个会话——那就不是「回到切换前」了。抑制只在回滚窗口生效，`finally` 复位。
+- 回归 2 条：有活动会话时失败仍高亮原会话且 `store.chat` 不变、左栏不出现「暂无历史会话」；切换前为空态时回滚只更新列表、不自动打开会话。webui 全量 135 用例通过。
+
+---
+
 ## v0.127.2 (2026-11-24)
 
 ### feat(webui): 输入草稿 / 待发附件 / 上次会话按会话与 agent 本地持久化

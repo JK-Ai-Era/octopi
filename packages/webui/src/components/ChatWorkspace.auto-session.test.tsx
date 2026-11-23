@@ -585,3 +585,74 @@ describe('切 agent 回到该 agent 上次的会话', () => {
     await expectActiveSession('Task A'); // 记录失效 → 最近交互
   });
 });
+
+describe('切 agent 失败回到切换前状态', () => {
+  it('失败后 agent / 会话列表 / 活动会话都保持原样，并外显错误', async () => {
+    h.agents.push({
+      id: 'alt',
+      model: { model: 'stub-model-alt' },
+      effectMode: 'workspace',
+      effectModeSource: 'default',
+    });
+    h.sessions = [
+      { id: 's-a1', agentId: 'default', title: 'Task A', lastInteractionAt: 2_000 },
+      { id: 's-b1', agentId: 'alt', title: 'Task B', lastInteractionAt: 1_000 },
+    ];
+    renderWorkspace();
+    await composer();
+    await expectActiveSession('Task A');
+    const store = h.stores[0]!;
+    expect(store.chat.sessionId).toBe('s-a1');
+
+    // alt 的会话列表拉取失败
+    h.failRefreshFor = 'alt';
+    fireEvent.click(screen.getByText('alt', { selector: 'div' }));
+
+    // 错误外显（同一错误在侧栏与对话区各提示一次，故用 getAllByText）
+    await waitFor(() => {
+      expect(screen.getAllByText('操作失败，详情见对话流中的错误卡。').length).toBeGreaterThan(0);
+    });
+
+    // 回到 default：左栏仍是它的会话（不是「暂无历史会话」），且高亮仍在 Task A
+    await expectActiveSession('Task A');
+    expect(sessionRow('Task A')).toBeTruthy();
+    expect(screen.queryByText('暂无历史会话')).toBeNull();
+    // 当前 agent 仍为 default（按钮选中态）
+    expect(
+      screen.getByText('default', { selector: 'div' }).closest('button')?.className,
+    ).toContain('agent-btn-selected');
+    // 发送目标仍是原会话，不会串到 alt
+    expect(store.chat.sessionId).toBe('s-a1');
+    expect(store.chat.agentId).toBe('default');
+  });
+
+  it('失败回滚不会顺手自动打开别的会话（切换前是空态就仍是空态）', async () => {
+    h.agents.push({
+      id: 'alt',
+      model: { model: 'stub-model-alt' },
+      effectMode: 'workspace',
+      effectModeSource: 'default',
+    });
+    // default 有历史会话，但不做自动打开：让首连列表为空
+    h.sessions = [];
+    renderWorkspace();
+    await composer();
+    await waitFor(() => expect(screen.getByText('暂无历史会话')).toBeTruthy());
+
+    // 这时 default 才出现历史会话（模拟会话由另一端创建）
+    h.sessions = [
+      { id: 's-a1', agentId: 'default', title: 'Task A', lastInteractionAt: 2_000 },
+      { id: 's-b1', agentId: 'alt', title: 'Task B', lastInteractionAt: 1_000 },
+    ];
+    h.failRefreshFor = 'alt';
+    fireEvent.click(screen.getByText('alt', { selector: 'div' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('操作失败，详情见对话流中的错误卡。').length).toBeGreaterThan(0);
+    });
+    // 回滚重拉 default 列表：列表更新，但不应自动打开会话（切换前是空态）
+    await waitFor(() => expect(sessionRow('Task A')).toBeTruthy());
+    expect(screen.queryByText('未选择会话')).toBeTruthy();
+    expect(h.stores[0]!.chat.sessionId).toBeNull();
+  });
+});

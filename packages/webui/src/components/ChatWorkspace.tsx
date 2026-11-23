@@ -1009,6 +1009,12 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   /** agents 的即时镜像：自动打开需判断「上次会话的 agent 是否还存在」 */
   const agentsRef = useRef(agents);
   agentsRef.current = agents;
+  /**
+   * 抑制 sessions 事件的自动打开。
+   * 用于失败回滚：重拉旧 agent 的列表时会再派发一次 sessions 事件，
+   * 若用户切换前本就没有活动会话，自动打开会顺手开一个会话——那就不是「回到切换前」了。
+   */
+  const suppressAutoOpenRef = useRef(false);
   // §5d：错误卡进对话流（按时间交错）；self-heal 级走 toast/静默，不进卡
   const [flowErrors, setFlowErrors] = useState<Array<FlowErrorItem & { sessionId: string }>>([]);
   const pushFlowError = useCallback((e: Omit<FlowErrorItem, 'id' | 'at'>): void => {
@@ -1197,6 +1203,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       // 优先回到上次打开的会话（连同它的 agent），其次才退回「最近交互」。
       const storeChatId = storeRef.current?.getState().chat.sessionId;
       if (
+        !suppressAutoOpenRef.current &&
         !activeSessionIdRef.current &&
         !storeChatId &&
         list.length > 0
@@ -2161,14 +2168,23 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         setViewMode('history');
       }
     } catch (error) {
-      // M5：切换失败必须退到空态并回滚 agentId——否则 UI 显示新 agent 而 store.chat 仍指
-      // 旧会话，此时发送会静默串台（正是本 bug 的定义）
+      // 切换失败必须回到切换前的状态，否则 UI 显示新 agent 而 store.chat 仍指旧会话，
+      // 此时发送会静默串台（正是本 bug 的定义）。
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
       setActionError(t('chatWorkspace.actionFailed'));
-      store.closeCurrentSession();
-      clearActiveSessionUi();
-      setViewMode('history');
+      // 先还原 agent 选择，再重拉它的会话列表：失败那一步可能已把 sessions 换成新 agent 的，
+      // 只回滚 agentId 会让左栏按旧 agentId 过滤出新列表 → 显示「暂无历史会话」。
       setAgentId(prevAgentId);
+      suppressAutoOpenRef.current = true;
+      try {
+        await store.refreshSessions(prevAgentId);
+      } catch {
+        // 重拉也失败：保留切换前已有的列表（不动比清空更接近真实状态），错误已外显
+      } finally {
+        suppressAutoOpenRef.current = false;
+      }
+      // 不关闭、不清空活动会话：store.openSession 失败时 chat 仍指旧会话，
+      // 组件 activeSessionId 也只在成功后更新——用户原来停在哪就还在哪。
     } finally {
       setSwitchingAgent(false);
     }
