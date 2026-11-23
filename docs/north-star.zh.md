@@ -151,7 +151,7 @@ Scope 轴:
 | **E4** | Compact 键 = `(sessionId, agentId)`；不借用他人 compact 当缺省。 |
 | **E5** | Loop 保持无状态；唯一生产路径：`Agent.run` / `runAgentWithReliability` + **per-run context**。 |
 | **E6** | 角色有效权限 = `L0 底线 ∩ 角色 max ∩ Agent maxSessionRights ∩ 绑定覆盖`；非法授予在 grant 时拒绝。 |
-| **E7** | 单进程是 v1 部署假设；跨进程必须实现 **Session Lease**，禁止假装内存锁全局有效。 |
+| **E7** | 绝不假装内存锁全局有效。`OCTOPI_HOME` 被多个 gateway 进程共享、或部署跨主机时，必须运行在真正的 **Session Lease** 之上；单个 gateway 主机的多 run 进程不需要它。 |
 | **E8** | **易变上下文不得位于 system prompt 前缀，且不得靠改写历史来「丢掉」它。** system prompt 只含缓存稳定片段；每 run 的易变快照（Run 作用域 / query 相关择取）位于 `<turn_start id>` 用户消息内的 turn 作用域 `<turn_context>`，并 **全回放**（append-only）。每个 user turn 由 `<turn_start id>` … 对应 `<turn_end id/>` 界定。陈旧择取靠 turn 作用域与「以新为准」约束，不靠历史中部删除。装配必须保持请求前缀跨轮逐字节稳定，除非稳定源真的变了。可检验：(1) 易变输入变化时两次装配产出相同的 systemPrompt；(2) 上一请求的消息字节是下一请求的真前缀（除尾部 turn 闭标）。 |
 
 ---
@@ -344,6 +344,7 @@ Agent & Substrate（跨 Run 持久）:
 
 | 日期 | 内容 |
 |------|------|
+| 2026-11-23 | **仅 E7 措辞修订，语义未变。** 删去过时的部署事实"单进程是 v1 部署假设"（单 gateway 主机承载多个 run 进程已支持良久：`fleet.replicasPerVersion`）。改为直陈真正的约束：内存锁绝不全局有效，因此「多个 gateway 进程共享同一 `OCTOPI_HOME`」或任何跨主机部署必须运行在真正的 **Session Lease** 之上（实现即将落地；接口槽未变）。I1–I6 / E1–E6 / E8 未改。 |
 | 2026-11-04 | **词汇修订：Turn / Step 拆分**（治理一词双记）——`turn` 曾同时指「用户回合」与「模型轮」。强制分词：**Turn** = 一次话语回合（`<turn_start id>`…`<turn_end id/>`；Session 级；经其 Run 归属到 Agent）；**Step** = 一个模型轮（一次 LLM 调用 + 其产出）。映射：1 Run = 1..N Turn，1 Turn = 1..N Step，1 Step = 0..N ToolCall。代码**直改无别名**（loop 事件 `turn_start`/`turn_end` → `step_start`/`step_end`、`Turn` → `Step`）。schedule `notify` 便签：不开 Turn、不跑 Run，且 LLM 视图以机器信封（`<schedule_notice>`）包裹，机器内容绝不冒充人话。I1–I6 / E1–E8 未改。 |
 | 2026-10-20 | **E8 扩展 — turn 信封 + 全回放**（`<turn_start id>` / `<turn_end id/>`，槽位在 turn 作用域 `<turn_context>` 内；历史 append-only）。取消 last-only 槽位回放与历史中部剥槽（每 user 轮打穿前缀）。陈旧择取由 ephemeral turn 作用域 + 以新为准约束，而非删除。另：压缩注记禁止拼进 system prompt（请求头动态文本烧掉全缓存）。 |
 | 2026-10-18 | **新增 E8 — 缓存稳定的装配位置**（易变块从 system prompt 移至消息尾部）。八层类型轴不变（I4）；这是*装配位置*规则，不是新层。动因：前缀缓存命中同时决定 TTFT 与成本（实测：缓存失效请求 34–134s vs 命中 3–5s；未命中输入 token 全价计费）。 |

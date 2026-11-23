@@ -7,7 +7,7 @@
 
 - **Windows 上没有物理隔离兜底**：写入限制是 best-effort（ACL），且暂无 Job Object / 受限令牌 helper——不要把 `untrusted` / jail 配置当沙箱。
 - **工具输出评为 high/critical 直接拦、无确认路径**：输出扫描没有事前确认语义——即使调用本身已获批准，run 仍可能被工具输出打断。
-- **无分布式 Session Lease**：不要让多个网关进程指向同一个 `OCTOPI_HOME`——进程内锁不跨进程。
+- **暂无分布式 Session Lease**（实现即将落地）：在它发布前，不要让多个网关进程指向同一个 `OCTOPI_HOME`——进程内锁不跨进程。
 
 ## Knowledge 外源出站
 

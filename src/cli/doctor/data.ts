@@ -6,9 +6,10 @@
  * @module
  */
 
-import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, copyFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { getOctopiHome } from '@octopi-agent/engine/paths.js';
+import { resolveRegistryPaths } from '@octopi-agent/engine/harness/governance/registry/db.js';
 
 export interface DataFixResult {
   findings: Array<{
@@ -126,6 +127,150 @@ export function checkDeprecatedSessionStore(
   });
 
   return findings;
+}
+
+/**
+ * 检测 registry 播种状态（只读；不建库、不建表、不写盘）
+ *
+ * 背景：`isInitialized()` 只看 `octopi.json` 是否存在，而 registry 用户播种发生在
+ * onboarding 最后一步（seedDeploymentRegistry）。于是"配置文件已存在但 registry 无用户"
+ * 是一个真实可达的中间态——典型成因是部署早于 registry 播种逻辑上线。
+ * 落在这个状态下，`octopi agent new` 会以 create_agent_no_owner 失败。
+ *
+ * @param octopiHome - OCTOPI_HOME 绝对路径
+ * @returns findings（含可执行出路）
+ */
+export async function detectRegistrySeeding(
+  octopiHome: string,
+): Promise<DataFixResult['findings']> {
+  const findings: DataFixResult['findings'] = [];
+  const dbPath = resolveRegistryPaths(octopiHome).dbPath;
+
+  if (!existsSync(dbPath)) {
+    // 未播种不算缺陷：全新 personal 部署可能还没跑完向导
+    findings.push({
+      id: 'REG001',
+      domain: 'data',
+      severity: 'info',
+      message: 'registry.db not present yet (deployment not seeded)',
+      hint: 'run octopi init to create the deployment registry (agent new needs a user)',
+      fixable: false,
+    });
+    return findings;
+  }
+
+  let userCount = 0;
+  let tenantCount = 0;
+  try {
+    const { DatabaseSync } = await import('node:sqlite');
+    // readOnly 是关键：doctor 不得建表或迁移，只回答"里面有什么"
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const hasUsers = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        .get();
+      if (!hasUsers) {
+        findings.push({
+          id: 'REG002',
+          domain: 'data',
+          severity: 'warn',
+          message: 'registry.db exists but has no users table (incomplete schema)',
+          hint: 'run octopi init to seed the deployment registry',
+          fixable: false,
+        });
+        return findings;
+      }
+      userCount = (db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number }).c;
+      tenantCount = (db.prepare('SELECT COUNT(*) AS c FROM tenants').get() as { c: number }).c;
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    // 读不动就是读不动——不猜原因，也不静默当作"正常"
+    findings.push({
+      id: 'REG003',
+      domain: 'data',
+      severity: 'warn',
+      message: `registry.db unreadable: ${err instanceof Error ? err.message : String(err)}`,
+      hint: 'check permissions on OCTOPI_HOME/registry.db',
+      fixable: false,
+    });
+    return findings;
+  }
+
+  if (userCount === 0) {
+    // deploymentMode 缺失 = 向导从未跑过，此时认证面按 personal 工作
+    // （`requiresLogin()` 只在 organization/multi-organization 返回 true），
+    // 所以「缺省即个人」与运行时行为一致，不是替用户做决定。
+    const mode = readDeploymentMode(octopiHome);
+    // 缺失 deploymentMode ⇒ 向导从未跑过 ⇒ 认证面按 personal 工作，故缺省即 personal
+    const effectiveMode = mode ?? 'personal';
+    const seedable = effectiveMode === 'personal';
+    findings.push({
+      id: 'REG004',
+      domain: 'data',
+      severity: 'warn',
+      message: `registry.db has ${tenantCount} tenant(s) but 0 users — deployment is half-initialized`,
+      hint: seedable
+        ? `octopi.json exists but no user was ever seeded (effective deploymentMode=${effectiveMode}${mode ? '' : ', field unset'}); "octopi agent new" will fail with create_agent_no_owner. Run "octopi doctor --fix --yes" to seed it, or re-run octopi init.`
+        : `deploymentMode="${effectiveMode}" needs an admin password to seed, so doctor will not guess one. Re-run octopi init to seed the registry.`,
+      fixable: seedable,
+      group: seedable ? 'data' : undefined,
+    });
+    return findings;
+  }
+
+  findings.push({
+    id: 'REG005',
+    domain: 'data',
+    severity: 'ok',
+    message: `registry seeded: ${userCount} user(s) across ${tenantCount} tenant(s)`,
+    fixable: false,
+  });
+  return findings;
+}
+
+/**
+ * 读取 octopi.json 中的 deploymentMode（缺失/不可读 → null）
+ *
+ * @param octopiHome - OCTOPI_HOME 绝对路径
+ * @returns 部署模式；未配置返回 null
+ */
+function readDeploymentMode(octopiHome: string): string | null {
+  const configPath = join(octopiHome, 'octopi.json');
+  if (!existsSync(configPath)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(configPath, 'utf-8')) as { deploymentMode?: unknown };
+    return typeof raw.deploymentMode === 'string' ? raw.deploymentMode : null;
+  } catch {
+    // 配置不可读：不做猜测（调用方按「未配置」处理，等同 personal）
+    return null;
+  }
+}
+
+/**
+ * 补播种 registry（仅 personal / 未配置模式可自动执行）
+ *
+ * 复用权威实现 `seedDeploymentRegistry`，不复制一套播种逻辑。
+ * 组织模式需要 admin 密码，此处拒绝而非猜测。
+ *
+ * @param octopiHome - OCTOPI_HOME 绝对路径
+ * @returns 执行结果说明
+ * @throws 组织模式（需密码）或播种失败
+ */
+export async function seedRegistryIfPossible(octopiHome: string): Promise<string> {
+  const mode = readDeploymentMode(octopiHome) ?? 'personal';
+  if (mode !== 'personal') {
+    throw new Error(
+      `registry_seed_needs_password: deploymentMode="${mode}" requires an admin password; re-run octopi init`,
+    );
+  }
+  const { seedDeploymentRegistry } = await import(
+    '@octopi-agent/engine/config-admin/onboarding-apply.js'
+  );
+  // 明确传入 personal + 无密码：与「向导跳过密码」同一路径，不发明新语义
+  await seedDeploymentRegistry(octopiHome, { deploymentMode: 'personal' });
+  return 'registry seeded for personal deployment (tenant/user "default")';
 }
 
 /**
@@ -541,6 +686,17 @@ export async function applyDataLayerFixes(
     // A13 dry-run：如实预告将执行的 VACUUM（阈值判断同 --fix 路径）
     const vacuumable = (await detectKnowledgeStorageHealth()).find((f) => f.id === 'KN008');
     if (vacuumable) notes.push(`[dry-run] would VACUUM knowledge.db — ${vacuumable.message}`);
+    // registry 播种 dry-run：只在「可播种」时预告，组织模式明确说不会做
+    const regFinding = (await detectRegistrySeeding(getOctopiHome())).find(
+      (f) => f.id === 'REG004',
+    );
+    if (regFinding) {
+      notes.push(
+        regFinding.fixable
+          ? '[dry-run] would seed registry.db (personal: tenant/user "default")'
+          : `[dry-run] would NOT seed registry.db — ${regFinding.hint}`,
+      );
+    }
     for (const t of targets) {
       const dbPath = join(t.home, 'agent.db');
       notes.push(
@@ -633,7 +789,39 @@ export async function applyDataLayerFixes(
     });
   }
 
-  const failed = findings.filter((f) => f.id === 'DB003').length;
+  // registry 播种：只在「有库无用户 + 可播种」时执行；组织模式拒绝而非猜密码
+  const home = getOctopiHome();
+  const regFinding = (await detectRegistrySeeding(home)).find(
+    (f) => f.id === 'REG004' && f.fixable,
+  );
+  if (regFinding) {
+    try {
+      notes.push(await seedRegistryIfPossible(home));
+      findings.push({
+        id: 'REG006',
+        domain: 'data',
+        severity: 'ok',
+        message: notes[notes.length - 1]!,
+        hint: '"octopi agent new" can now resolve its owner',
+        fixable: false,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      notes.push(`registry seed failed: ${msg}`);
+      findings.push({
+        id: 'REG007',
+        domain: 'data',
+        severity: 'error',
+        message: `registry: seed failed: ${msg}`,
+        hint: msg.includes('registry_seed_needs_password')
+          ? 'organization modes need an admin password; re-run octopi init'
+          : 'no user was created; re-run octopi init to seed the deployment registry',
+        fixable: false,
+      });
+    }
+  }
+
+  const failed = findings.filter((f) => f.id === 'DB003' || f.id === 'REG007').length;
   findings.push({
     id: 'FIX002',
     domain: 'data',

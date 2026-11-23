@@ -8,7 +8,7 @@
 
 - **No physical isolation floor on Windows**: write confinement is best-effort (ACLs) and there is no Job Object / restricted-token helper yet — do not treat `untrusted` / jail settings as a sandbox there.
 - **Tool output rated high/critical is blocked with no confirm path**: the output scan has no pre-confirmation semantics — a run can be stopped by its tool output even after the call itself was approved.
-- **No distributed Session Lease**: never point multiple gateway processes at one `OCTOPI_HOME` — the in-process lock is not a cross-process guard.
+- **No distributed Session Lease yet** (implementation landing next): until it ships, never point multiple gateway processes at one `OCTOPI_HOME` — the in-process lock is not a cross-process guard.
 
 ## Knowledge external-source outbound
 

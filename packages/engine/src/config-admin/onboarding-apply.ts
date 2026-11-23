@@ -129,7 +129,12 @@ export function mergeConfigFragment(
  */
 export async function seedDeploymentRegistry(
   octopiHome: string,
-  choices: OnboardingChoices,
+  /**
+   * 只读取播种真正用到的三项（部署模式决定租户/用户形态，orgName 决定租户名，
+   * adminPassword 决定是否设密码）。收窄后 doctor 等非向导调用方可复用同一实现，
+   * 无需构造假的 provider/model 字段。
+   */
+  choices: Pick<OnboardingChoices, 'deploymentMode' | 'orgName' | 'adminPassword'>,
   opts?: { adminName?: string },
 ): Promise<void> {
   const { RegistryService } = await import('../harness/governance/registry/service.js');

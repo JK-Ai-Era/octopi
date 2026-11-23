@@ -51,45 +51,276 @@ Your product ── Principal / Intent / IAM ──► Octopi engine ──► M
 
 ---
 
+## Quick Start
+
+**Prerequisites**: Node.js ≥ 24.
+
+```bash
+npm install -g octopi-agent
+```
+
+### Three minutes to your first conversation
+
+```bash
+octopi init
+```
+
+On a fresh machine `octopi init` **is** the first-run experience: it scaffolds
+`OCTOPI_HOME` and then walks you through the setup wizard in your terminal. The
+state machine has nine steps; terminal mode auto-selects CLI, so you answer
+eight:
+
+```text
+language → deployment mode → model provider → API key → model
+         → connectivity probe → start services → first message
+```
+
+- **Deployment mode** is a real decision, not a formality: *personal* (just you
+  on this machine, no login), *organization* (one org, several users, shared
+  knowledge base), *multi-organization* (isolated orgs on one deployment). The
+  two org modes ask for an admin password — typed twice, stored hashed.
+- **API key** is never written into `octopi.json`: it lands in
+  `OCTOPI_HOME/.env` while the config keeps a `${VAR}` placeholder. The wizard
+  probes the provider before it commits, and every failure comes with a way out
+  (retry, re-enter the key, switch provider, save and exit).
+- **Config takes effect immediately** — the wizard writes before it starts
+  services, and the Web wizard hot-applies into the running gateway. If you
+  re-run `octopi init` against an already-running gateway, restart it (or change
+  config through the console) — the CLI wizard does not hot-apply.
+
+When the wizard finishes it offers to start services and to chat right away,
+and prints the console access key (the random `channels[type=http].apiKey`
+scaffolded for you). Local access needs nothing; for LAN or remote access paste
+that key into the WebUI login page's "Access key" field.
+
+```bash
+octopi serve start   # gateway + web console; the wizard can do this for you
+octopi chat          # TUI chat, same agent, same config
+octopi doctor        # diagnose deployment/config, no LLM needed
+octopi --version     # installed version (also: octopi version, or -v)
+```
+
+Bare `octopi` follows the same rule: uninitialized → the init wizard,
+initialized → TUI chat.
+
+**Prefer the browser?** `octopi init --web` starts the service for you if it is
+not running (`serve start`, itself idempotent), then opens the Web wizard at the
+printed setup link. On a fresh deployment that link is what `octopi serve start`
+prints:
+
+```text
+🧙 First-run setup wizard (Web): http://localhost:8180/?setup=<token>
+```
+
+(Port `8180` is the default; with `web.port` set, trust the printed link.) The
+link is valid for 30 minutes and revoked once the wizard completes. The setup
+endpoint requires that token from any source — loopback included — so nothing
+else on the machine can drive the wizard and rewrite the config; requests a
+browser sends from a non-local origin are refused. If no valid token exists
+(already configured, or expired), `--web` says so and points at the console
+instead of opening a page without a wizard. The CLI and Web wizards share one
+state machine and write the same config — pick either.
+
+**Non-interactive** (CI, dotfiles, scripted installs) — `--yes` skips the wizard
+and reads everything from flags plus env, so nothing is probed:
+
+```bash
+OCTOPI_API_KEY=sk-… octopi init --yes --provider deepseek --model deepseek-flash
+```
+
+`--yes` takes defaults plus env: `OCTOPI_API_KEY` (required by presets that need
+a key — omit it only for keyless `ollama`), `OCTOPI_DEPLOYMENT_MODE`,
+`OCTOPI_ADMIN_PASSWORD` (required by the org modes), `OCTOPI_ORG_NAME`,
+`OCTOPI_ADMIN_NAME`, `OCTOPI_LANG`. Defaults: provider `ollama`, deployment mode
+`personal`. `--web` hands off to the browser wizard; `--cli` forces the terminal
+one.
+
+**A second agent** is a wizard of its own — pick a type, name it and say how it
+should address you, get pointed at attaching material, then try it. It needs a
+deployment whose registry has a user:
+
+```bash
+octopi agent new
+```
+
+---
+
+## Build with it
+
+### Embed in code
+
+```typescript
+import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
+
+const { runner, runtime } = await new AgentBuilder()
+  .model(new OpenAIProvider({
+    apiKey: process.env.OPENAI_API_KEY!,
+    models: ['gpt-6.1-terra'],
+    defaultModel: 'gpt-6.1-terra',
+  }))
+  .persona('./my-agent')
+  .build();
+
+const userMessage = { role: 'user' as const, content: 'hello', timestamp: Date.now() };
+
+for await (const event of runner.handle('session-1', userMessage, {
+  systemPrompt: '', // let the runner resolve persona per run (hot-reload aware)
+  agentId: 'default',
+  sessionId: 'session-1',
+})) {
+  if (event.type === 'llm_stream_delta') {
+    process.stdout.write(String(event.data?.delta ?? ''));
+  }
+}
+
+runtime?.dispose(); // autonomous subsystems hold timers — dispose so the process can exit
+```
+
+`runner.handle()` is the session-aware entry: it owns the session lifecycle and
+write-back. Leaving `systemPrompt` empty lets the runner resolve persona per run
+(editing `AGENTS.md` takes effect on the next message); passing a string pins
+that prompt for the call. For a single agent with no host session store,
+`build({ mode: 'core' })` plus `agent.run()` is the library-level path. Hosts
+that already have a config file can skip the builder: `buildFromConfigFile()`
+returns a `Map` of `agentId → BuiltAgent` (`agent`, `runner`, `runtime`, …).
+
+### Files as configuration
+
+Persona and skills are plain Markdown — diffable, reviewable, versionable.
+Extension = add a file. Composition = overlay directories.
+
+```text
+my-agent/
+├── AGENTS.md           # main persona — loaded first
+├── persona/            # supplemental persona, alphabetical
+│   ├── 10-soul.md
+│   ├── 20-identity.md
+│   └── 30-user.md
+└── skills/
+    └── deploy/
+        └── SKILL.md    # two-stage loaded: metadata now, content on demand
+```
+
+The learning substrate (Memory / Cognition / Wisdom) lives in a per-agent
+SQLite store — it is *grown*, not hand-written. See [docs/memory.md](./docs/memory.md).
+
+### Mount MCP servers
+
+The MCP SDK client is an Integration adapter — import it from its subpath, not
+the package root:
+
+```typescript
+import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
+import { createSdkMcpClient } from '@octopi-agent/engine/integration';
+
+const { agent, runner, mcpManager, runtime } = await new AgentBuilder()
+  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY!, models: ['gpt-6.1-terra'], defaultModel: 'gpt-6.1-terra' }))
+  .persona('./my-agent')
+  .mcpClientFactory(createSdkMcpClient)
+  .mcp({
+    id: 'filesystem',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
+  })
+  .build();
+
+// same loop as above, now with the MCP server's tools in the tool set
+console.log(agent.context.tools?.map((t) => t.name));
+
+await mcpManager.disconnectAll(); // MCP servers keep child processes alive
+runtime?.dispose();
+```
+
+Tools arrive namespaced as `{serverId}__{toolName}` (separator `__`), so the
+server above registers its own tools under a `filesystem` prefix — two servers
+advertising the same tool name cannot collide.
+
+---
+
 ## The Constitution
 
-Most frameworks define classes. Octopi defines **law** — an ontology with
-exclusive definitions and enforceable invariants. A few of the laws of physics:
-
-| Object | What it is |
-|---|---|
-| **Session** | The first-class aggregate of continuity (`sessionId`) |
-| **Discourse** | The session's append-only authoritative log |
-| **Projection** | Any derived view (status / tasks / compact / index) — rebuildable, never authoritative |
-| **Agent** | A template: persona, tools, default model, substrate — never a bag of live state |
-| **Run / RunScope** | One episode; **all mutable context lives only inside a RunScope** and is discarded after write-back |
-| **Substrate** | What the agent has learned across sessions: Memory / Cognition / Wisdom |
-| **Principal / Intent** | Who drives, and a structured request (`run` / `consult` / `handoff`…) — auditable, never inferred from prose |
-
-And the invariants they imply:
-
-- **I1** — Mutable context exists only in a RunScope. Agents are templates; the same agent runs many sessions concurrently without cross-talk (the lease key is `sessionId` — from day one).
-- **I2** — Discourse is the single authority. Everything else is a projection that can be invalidated and rebuilt.
-- **I3** — Accountability ≠ Agency. Being able to act is not being responsible; switching executors is not a `handoff`.
-- **I5** — The effect plane is governed exactly like the cognition plane. Tools touch the world; their effects are policy, not trust.
-- **I6** — The engine consumes structured Intents and keeps every Principal in the audit log. "Understanding language" belongs to the host; enforcing the law belongs to the engine.
-
-### Constitution-driven development
+### What it is
 
 The constitution is not documentation decoration — **it is the development
 method, and it is this project's single largest source of reliability.**
 
 Every concept has exactly one authoritative definition. Every invariant is an
-enforceable law with a named implementation site and a verification test.
-Design decisions travel through change records and bilingual sync — never
-through tribal memory. When code and constitution disagree, the code moves.
+enforceable law with a named implementation site — the load-bearing ones also
+carry a test that fails when broken. Design decisions travel through change
+records and bilingual sync — never through tribal memory. When code and
+constitution disagree, the code moves.
 
-That is why the invariants above survive concurrency and growth: RunScope
-isolation, Discourse authority, and the permission lattice are not aspirations
-remembered by developers — they are **checked**: automated dependency
-boundary checks, catalog single-sources-of-truth, and tests that fail when the
-law is broken. New work is judged by one question first: *does it violate
-the constitution?*
+Most frameworks define classes. Octopi defines **law** — and a codebase that
+answers to it.
+
+### The ontology — one authoritative definition per concept
+
+Naming a thing once, and only once, is what makes the rest checkable. These are
+the objects the engine is built out of:
+
+| Object | What it is |
+|---|---|
+| **Host** | The embedding boundary: supplies the Principal, maps `conversationId ↔ sessionId`, owns human IAM |
+| **Principal / Intent** | Who drives, and a structured request (`run` / `preferred` / `consult` / `handoff`…) — auditable, never inferred from prose |
+| **Agent** | A template: persona, tools, default model, substrate — never a bag of live state |
+| **Substrate** | What the agent has learned across sessions: Memory / Cognition / Wisdom |
+| **Knowledge** | **Exogenous corpus** (source-anchored; indexes rebuildable) — scope is Global / Project / Session, never Agent-level |
+| **Session** | The first-class aggregate of continuity (`sessionId`) |
+| **Discourse** | The session's append-only authoritative log |
+| **Projection** | Any derived view (status / tasks / compact / index) — rebuildable, never authoritative |
+| **Run / RunScope** | One episode; **all mutable context lives only inside a RunScope** and is discarded after write-back |
+| **Turn / Step** | A Turn is one discourse exchange; a Step is one model round. Never the same word for both |
+
+Three distinctions this table exists to kill: **Substrate** (what the agent learned) ≠ **Knowledge** (what the world wrote down) ≠ **Discourse** (what happened). A derived view is a **Projection**, and a projection may be rebuilt from authority — never the other way round.
+
+### The invariants — laws that can be executed
+
+Constitutional (violation = bug):
+
+- **I1** — Mutable context exists only in a RunScope. Agents are templates; the same agent runs many sessions concurrently without cross-talk (the lease key is `sessionId` — from day one).
+- **I2** — Discourse is the single authority. Everything else is a projection that can be invalidated and rebuilt.
+- **I3** — Accountability ≠ Agency. Being able to act is not being responsible; switching executors is not a `handoff`.
+- **I4** — Context is a *type × Scope* cross product, not a layer count. Priority order is never a substitute for ownership.
+- **I5** — The effect plane is governed exactly like the cognition plane. Tools touch the world; their effects are policy, not trust.
+- **I6** — The engine consumes structured Intents and keeps every Principal in the audit log. "Understanding language" belongs to the host; enforcing the law belongs to the engine.
+
+Engineering (implementations must obey) — `I` answers *what must be true*; `E`
+answers *how the implementation is allowed to be built*: E1 runs on one
+`sessionId` are serialized while the same agent may run sessions concurrently;
+E2 the lock/lease key is `sessionId`; E3 substrates are written only by their
+own agent; E4 compact is keyed by `(sessionId, agentId)`; E5 the loop stays
+stateless and runs through `Agent.run` with per-run context; E6 effective rights
+are an intersection (`floor ∩ role ∩ agent ∩ binding`), illegal grants rejected
+at grant time; E7 an in-memory lock is never pretended to be globally valid —
+one gateway host may run several run processes, and a real Session Lease
+replaces the lock wherever the deployment outgrows that; E8 volatile context never enters the system prompt
+prefix and history is never rewritten to "drop" it.
+
+### How it does its job
+
+The invariants are not aspirations developers are trusted to remember. Enforcement
+is graded, and the grade is stated rather than implied:
+
+**Checked on every build — breaking them fails CI:**
+
+- **Dependency direction** is checked, not requested — `tests/architecture/boundaries.test.ts` fails on a core → harness import, and the rule is mirrored in lint (`no-restricted-imports`).
+- **Catalog single sources of truth** — the domain count comes from `docs/domains.yaml`, so docs drift from code is a red build (`tests/architecture/domains-catalog.test.ts`).
+- **Behavioural invariants get targeted tests** — RunScope isolation (I1), session projection (I2), session ACL and handoff (I3/E6), lease and revision (E2/E7), cache-stable assembly (E8) each have a test that fails when the law is broken.
+- **Structural drift is gated** — `arch/check-sync.sh` goes red when a path list or module map no longer matches the tree.
+
+**Held as contracts, with a named landing site:** every invariant has an
+implementation owner in the constitution's mapping table (I4 → context
+ownership, I5 → tool/effect policy, E3/E4 → substrate write paths and compact
+keys…). Those are enforced at the seam where the code is written, but not all of
+them yet fail a build on their own — saying otherwise would be the exact kind of
+untrue claim this document exists to prevent.
+
+**Rules change the slow way** — an invariant is amended in the constitution and
+its change log first; code follows. Never the other way round.
+
+That is why these laws survive concurrency and growth: the load-bearing ones are
+**checked**, and the rest are written down where they can be checked next.
 
 📖 **[Read the full constitution →](./docs/north-star.md)** (中文版：[docs/north-star.zh.md](./docs/north-star.zh.md))
 
@@ -278,189 +509,6 @@ dependencies — so the entire runtime above it is contracts you can swap:
 
 ---
 
-## Quick Start
-
-**Prerequisites**: Node.js ≥ 24.
-
-```bash
-npm install -g octopi-agent
-```
-
-### Three minutes to your first conversation
-
-```bash
-octopi init
-```
-
-On a fresh machine `octopi init` **is** the first-run experience: it scaffolds
-`OCTOPI_HOME` and then walks you through the setup wizard in your terminal. The
-state machine has nine steps; terminal mode auto-selects CLI, so you answer
-eight:
-
-```text
-language → deployment mode → model provider → API key → model
-         → connectivity probe → start services → first message
-```
-
-- **Deployment mode** is a real decision, not a formality: *personal* (just you
-  on this machine, no login), *organization* (one org, several users, shared
-  knowledge base), *multi-organization* (isolated orgs on one deployment). The
-  two org modes ask for an admin password — typed twice, stored hashed.
-- **API key** is never written into `octopi.json`: it lands in
-  `OCTOPI_HOME/.env` while the config keeps a `${VAR}` placeholder. The wizard
-  probes the provider before it commits, and every failure comes with a way out
-  (retry, re-enter the key, switch provider, save and exit).
-- **Config takes effect immediately** — the wizard writes before it starts
-  services, and the Web wizard hot-applies into the running gateway. If you
-  re-run `octopi init` against an already-running gateway, restart it (or change
-  config through the console) — the CLI wizard does not hot-apply.
-
-When the wizard finishes it offers to start services and to chat right away,
-and prints the console access key (the random `channels[type=http].apiKey`
-scaffolded for you). Local access needs nothing; for LAN or remote access paste
-that key into the WebUI login page's "Access key" field.
-
-```bash
-octopi serve start   # gateway + web console; the wizard can do this for you
-octopi chat          # TUI chat, same agent, same config
-octopi doctor        # diagnose deployment/config, no LLM needed
-octopi --version     # installed version (also: octopi version, or -v)
-```
-
-Bare `octopi` follows the same rule: uninitialized → the init wizard,
-initialized → TUI chat.
-
-**Prefer the browser?** `octopi init --web` starts the service for you if it is
-not running (`serve start`, itself idempotent), then opens the Web wizard at the
-printed setup link. On a fresh deployment that link is what `octopi serve start`
-prints:
-
-```text
-🧙 First-run setup wizard (Web): http://localhost:8180/?setup=<token>
-```
-
-(Port `8180` is the default; with `web.port` set, trust the printed link.) The
-link is valid for 30 minutes and revoked once the wizard completes. The setup
-endpoint requires that token from any source — loopback included — so nothing
-else on the machine can drive the wizard and rewrite the config; requests a
-browser sends from a non-local origin are refused. If no valid token exists
-(already configured, or expired), `--web` says so and points at the console
-instead of opening a page without a wizard. The CLI and Web wizards share one
-state machine and write the same config — pick either.
-
-**Non-interactive** (CI, dotfiles, scripted installs) — `--yes` skips the wizard
-and reads everything from flags plus env, so nothing is probed:
-
-```bash
-OCTOPI_API_KEY=sk-… octopi init --yes --provider deepseek --model deepseek-flash
-```
-
-`--yes` takes defaults plus env: `OCTOPI_API_KEY` (required by presets that need
-a key — omit it only for keyless `ollama`), `OCTOPI_DEPLOYMENT_MODE`,
-`OCTOPI_ADMIN_PASSWORD` (required by the org modes), `OCTOPI_ORG_NAME`,
-`OCTOPI_ADMIN_NAME`, `OCTOPI_LANG`. Defaults: provider `ollama`, deployment mode
-`personal`. `--web` hands off to the browser wizard; `--cli` forces the terminal
-one.
-
-**A second agent** (journey B) is a wizard of its own — pick a type, name it and
-say how it should address you, get pointed at attaching material, then try it.
-It needs an initialized deployment (the registry must have a user):
-
-```bash
-octopi agent new
-```
-
-### Embed in code
-
-```typescript
-import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
-
-const { runner, runtime } = await new AgentBuilder()
-  .model(new OpenAIProvider({
-    apiKey: process.env.OPENAI_API_KEY!,
-    models: ['gpt-6.1-terra'],
-    defaultModel: 'gpt-6.1-terra',
-  }))
-  .persona('./my-agent')
-  .build();
-
-const userMessage = { role: 'user' as const, content: 'hello', timestamp: Date.now() };
-
-for await (const event of runner.handle('session-1', userMessage, {
-  systemPrompt: '', // let the runner resolve persona per run (hot-reload aware)
-  agentId: 'default',
-  sessionId: 'session-1',
-})) {
-  if (event.type === 'llm_stream_delta') {
-    process.stdout.write(String(event.data?.delta ?? ''));
-  }
-}
-
-runtime?.dispose(); // autonomous subsystems hold timers — dispose so the process can exit
-```
-
-`runner.handle()` is the session-aware entry: it owns the session lifecycle and
-write-back. Leaving `systemPrompt` empty lets the runner resolve persona per run
-(editing `AGENTS.md` takes effect on the next message); passing a string pins
-that prompt for the call. For a single agent with no host session store,
-`build({ mode: 'core' })` plus `agent.run()` is the library-level path. Hosts
-that already have a config file can skip the builder: `buildFromConfigFile()`
-returns a `Map` of `agentId → BuiltAgent` (`agent`, `runner`, `runtime`, …).
-
-### Files as configuration
-
-Persona and skills are plain Markdown — diffable, reviewable, versionable.
-Extension = add a file. Composition = overlay directories.
-
-```text
-my-agent/
-├── AGENTS.md           # main persona — loaded first
-├── persona/            # supplemental persona, alphabetical
-│   ├── 10-soul.md
-│   ├── 20-identity.md
-│   └── 30-user.md
-└── skills/
-    └── deploy/
-        └── SKILL.md    # two-stage loaded: metadata now, content on demand
-```
-
-The learning substrate (Memory / Cognition / Wisdom) lives in a per-agent
-SQLite store — it is *grown*, not hand-written. See [docs/memory.md](./docs/memory.md).
-
-### Mount MCP servers
-
-The MCP SDK client is an Integration adapter — import it from its subpath, not
-the package root:
-
-```typescript
-import { AgentBuilder, OpenAIProvider } from 'octopi-agent';
-import { createSdkMcpClient } from '@octopi-agent/engine/integration';
-
-const { agent, runner, mcpManager, runtime } = await new AgentBuilder()
-  .model(new OpenAIProvider({ apiKey: process.env.OPENAI_API_KEY!, models: ['gpt-6.1-terra'], defaultModel: 'gpt-6.1-terra' }))
-  .persona('./my-agent')
-  .mcpClientFactory(createSdkMcpClient)
-  .mcp({
-    id: 'filesystem',
-    transport: 'stdio',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
-  })
-  .build();
-
-// same loop as above, now with the MCP server's tools in the tool set
-console.log(agent.context.tools?.map((t) => t.name));
-
-await mcpManager.disconnectAll(); // MCP servers keep child processes alive
-runtime?.dispose();
-```
-
-Tools arrive namespaced as `{serverId}__{toolName}` (separator `__`), so the
-server above registers its own tools under a `filesystem` prefix — two servers
-advertising the same tool name cannot collide.
-
----
-
 ## Capability tour
 
 | Capability | One-liner | Details |
@@ -515,8 +563,12 @@ theater; it is how the invariants stay invariant.
 
 Octopi is pre-1.0 and moving fast. Being honest about the edges:
 
-- **Deployment assumption**: single process is the v1 reality; cross-process
-  requires a distributed Session Lease (in-process lease exists today).
+- **Deployment assumption**: one gateway host running **multiple run
+  processes** is supported today — `fleet.replicasPerVersion` (up to 64) spawns
+  N run instances, sessions stay sticky to an instance, and a session gets at
+  most one live run (`lease_held` otherwise; the lease table lives in the
+  gateway, with `fleet.leaseTtlMs` as the TTL backstop). Quota, sessions, and
+  concurrency are scoped to that host.
 - **Collaboration domain** ships with `status: incomplete` — semantics are
   defined; some implementations are staged.
 - **Not for everyone**: if a single-vendor SDK's loop is enough, or you need a
@@ -528,9 +580,6 @@ Octopi is pre-1.0 and moving fast. Being honest about the edges:
     instead of shipping a native SQLite binding, because native bindings break
     on cross-platform installs and are awkward to combine with vector search.
     Node 22 and older will not install.
-  - **Multi-instance / horizontally-scaled deployments are not supported in v1.**
-    In-process Session Lease exists; cross-process lease does not. Quota, sessions,
-    and concurrency are single-process.
 
 Open items live in [docs/KNOWN-ISSUES.md](./docs/KNOWN-ISSUES.md).
 

@@ -132,6 +132,61 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.125.5 (2026-11-23)
+
+### docs(readme): Quick Start 前移 + 新增 Build with it 节；宪法章改为「先说是什么、再说怎么起作用」
+
+- **结构（中英同批）**：`## Quick Start` 从「宪法/五门科学」之后提到「What is Octopi」之后；原属 Quick Start 的三个集成小节（`Embed in code` / `Files as configuration` / `Mount MCP servers`）不再挂在 `## Architecture` 之下，改为独立 H2 `## Build with it`（中文「动手构建」）。动因：只搬 H2 会把三个 H3 的父节错挂到 Architecture，使架构章混入 91 行教程内容、GitHub 目录树显示为「Architecture › Embed in code」；同时引擎集成路径（本项目真正买家）的第一行库代码被推到第 368 行。
+- **宪法章重排**：原顺序是本体 → 不变量 → 「宪法驱动开发」，把「它是什么」压到最后。改为 `What it is` → `The ontology` → `The invariants` → `How it does its job`，开篇即给出「宪法不是文档装饰——它就是开发方法本身」的定位，再让本体与不变量作为其运作方式的证据。
+- **补回 agent new**：上一版把「第二个 agent」整段删掉后，`octopi agent new` 在全部公开文档中失去入口（`docs/` 0 命中，仅剩 `--help` 与 changelog）。改为压缩为两行 + 命令块，保留「registry 里必须有用户」这一前提。
+- **补 I4 与 E1–E8**：原不变量清单从 I1/I2/I3/I5/I6 跳到 I6，缺 I4（类型×Scope 叉乘）；工程级 E1–E8 完全未列。宪法章现同时给出 I 与 E 两轴，并说明 `I` 是「什么必须成立」、`E` 是「实现允许怎么建」。
+- **「凭什么起作用」一节的每条断言均已实跑核实**：`tests/architecture/boundaries.test.ts`（8 例，含 core→harness 禁止、同规则镜像 eslint `no-restricted-imports`）、`tests/architecture/domains-catalog.test.ts`（4 例，以 `docs/domains.yaml` 为清单权威）、`tests/harness/run-scope-isolation.test.ts`（文件头即标注「宪法 I1」）、`tests/session-projection.test.ts`、`tests/persona-hot-reload.test.ts`、`bash arch/check-sync.sh`。
+- **排版**：修掉英文版 `## Quick Start` 前多出的一行空行（中英已对齐）；清掉搬移残留的重复 `---`。两版最终结构对称：H2=14 / H3=13。
+
+### fix(doctor): 新增 REG001–REG005 registry 播种检查（只读）
+
+- **病灶**：`isInitialized()` 只判 `octopi.json` 是否存在（`src/init.ts:503`），而 registry 用户播种发生在 onboarding 最后一步（`seedDeploymentRegistry`，`onboarding-apply.ts:276`）。两者未绑定，因此"配置文件在、registry 无用户"是真实可达的中间态——多为部署早于播种逻辑上线的老实例。落在此态时 `octopi agent new` 以 `create_agent_no_owner` 失败（`src/cli/wizard/agent-new.ts:65` 找不到 `default`/`admin`），且此前**没有任何命令会提示这件事**（`src/cli/doctor/` 全目录无 registry 相关检查）。
+- **改法（方案 B，按用户拍板）**：新增 `detectRegistrySeeding()`（`src/cli/doctor/data.ts`），接入 `diagnoseConfigLayoutData`。判定 `REG001` 库不存在（info，不算缺陷）／`REG002` 无 `users` 表（warn）／`REG003` 不可读（warn，不猜原因）／`REG004` 有租户无用户（warn，`hint` 给出可执行出路：重跑 `octopi init`，并点名 `create_agent_no_owner`）／`REG005` 已播种（ok）。
+- **只读是硬约束**：`RegistryDatabase.create()` 会建库并建表，doctor 不得使用；改为 `node:sqlite` 的 `DatabaseSync(path, { readOnly: true })` 直接查询，与 `detectKnowledgeStorageHealth` 既有的只读做法一致。测试专门断言"库不存在时不得凭空创建"。
+- **不选方案 A 的理由**：让 `isInitialized()` 增加 registry 判据会把全部老部署一夜变成"未初始化"，冲击面远大于收益；`agent new` 的既有报错文案已指向 `octopi init`，够用。
+- **验证**：新增 `tests/cli-doctor-registry-seeding.test.ts`（4 例：未建库不创建／半初始态报 REG004 且含出路／已播种报 REG005／检查前后库状态不变）；`tests/doctor.test.ts` + `cli-doctor-knowledge-storage.test.ts` 32 例无回归；`tsc --noEmit` 干净。**实跑本机**：doctor 报出 `⚠ REG004 registry.db has 0 tenant(s) but 0 users — deployment is half-initialized`，与用户实际遇到的现象一致。
+
+### docs(readme): 宪法章对照 north-star 校正——补本体缺口、修正过度承诺
+
+- **补本体缺口**：原表缺 `Host`（宪法 §1.0 首个概念，也是"引擎不做人级 IAM"边界的持有者）、`Knowledge`（外生语料，Scope=Global/Project/Session 且**无 Agent 级**）、`Turn`/`Step`（2026-11-04 双记账修正后的强制词汇）。并补上宪法 §1.0 与 §6.1 点名的三组易混概念：Substrate（学到的）≠ Knowledge（世界写下的）≠ Discourse（发生过什么），以及 Projection 只能由权威重建、不能反向。此前 README 全文未出现过 Knowledge 的外生定位。
+- **修正过度承诺（重要）**：上一版写"每一条不变量都钉在破了就构建失败的位置"。核对宪法 §8 后不成立——该节的验收语只要求 I1/E1/E5 以及 I5 的"文档级策略与接口槽"，I4/E3/E4 等属"有归属实现、未必自有构建闸门"。改为如实分级：**每次构建都检查**（依赖边界 `boundaries.test.ts`、清单权威 `domains-catalog.test.ts`、行为类定向测试、`check-sync.sh`）与**作为契约持有、各有着名落点**（宪法 §8 映射表）。开头"每条都有验收测试"同步改为"承重的那几条还配有破即失败的测试"，消除自相矛盾。
+- **新增的测试引用均已实跑核实**：`session-acl.test.ts`（头注即 "constitution E6 / I3"）、`session-lease-revision.test.ts`（"Phase G (E2/E7)"）、`runtime-snapshot-replay.test.ts`（E8 全回放）——共 34 例通过。
+
+---
+
+### feat(doctor): REG004 可按 deploymentMode 自动补播种；修正 README 部署假设
+
+- **`--fix` 补 registry（按拍板：deploymentMode 缺省即 personal）**：`requiresLogin()` 只在 `organization`/`multi-organization` 返回 true（`packages/webui/src/runtime-config.ts:82`），故 `deploymentMode` 缺失时认证面本就按 personal 工作——缺省即 personal 与运行时行为一致，不是替用户做决定。实现：`detectRegistrySeeding` 按有效模式置 `fixable/group`，`seedRegistryIfPossible` 复用权威 `seedDeploymentRegistry`（不复制第二套播种逻辑）；`applyDataLayerFixes` 的 dry-run 与实跑分支均已接入。
+- **组织模式拒绝而非猜密码**：`organization`/`multi-organization` 播种必须 admin 密码，doctor 无从得知 → `fixable:false`，hint 指向 `octopi init`，`seedRegistryIfPossible` 抛 `registry_seed_needs_password`，且失败不留半截用户（测试断言）。
+- **为复用收窄签名**：`seedDeploymentRegistry` 的 `choices` 参数由 `OnboardingChoices` 收窄为 `Pick<…,'deploymentMode'|'orgName'|'adminPassword'>`——只声明它真正读取的字段，使 doctor 无需构造假的 provider/model。向导调用方不受影响。
+- **新增 finding**：`REG006`（播种成功 ok）／`REG007`（播种失败 error，失败计数并入 FIX002 汇总）。
+- **实测抓到并修正自身 bug**：首版 `mode === 'personal'` 在 `mode` 为 null 时判 false，与"缺省即 personal"相反；测试先行暴露后改为 `mode ?? 'personal'`。
+- **端到端验证（临时目录，不碰真实部署）**：造出「有 octopi.json、有 registry.db、0 用户」的半初始化态 → doctor 报 `REG004 [fixable:data]` → `--fix --yes` 后变 `REG005`，registry 实读到 `tenant=default` + `user=default(is_platform_admin=1)` → `agent new` 越过 owner 解析进入向导（此前即刻报 `create_agent_no_owner`）。真实 `~/.octopi` 全程保持 0 users 未被误改（gateway 正在运行且持有 registry.db，不做双写）。
+
+### docs(readme): 部署假设已过时——单机多 run 进程已支持，跨机仍未
+
+- **事实核对**：`fleet.replicasPerVersion`（schema 上限 64，公开配置项）在 gateway 启动时自举 N 个 run 进程（`packages/gateway/src/gateway/gateway.ts:1217`），多副本按最闲分配；同会话并发由 gateway 内 `FleetRunBackend` 租约拒为 `lease_held`（`fleet.leaseTtlMs` 缺省 12h 兜底）。本机实运行中即有两个 `run-serve-child` 进程。跨机仍缺：`DistributedSessionLease` 全仓**只有接口无实现**（仅 `InProcessSessionLock`），P2 状态为「设计稿，待拍板」且 blocked-by 多租户 MVP。
+- **改正两处**：`## Status & boundaries` 的 Deployment assumption 与 blockers 中「Multi-instance / horizontally-scaled deployments are not supported in v1」均已改写为「同机多进程已支持；跨机未支持」，并点明配额/会话/并发仍限单主机。
+- **消解文档内部矛盾**：README 宪法章的 E7 原文仍写 "single process is the v1 assumption"，与新部署假设冲突。改法：保留 E7 的约束内核（内存锁不得冒充全局有效），去掉过时的事实描述（"一个 gateway 主机可跑多个 run 进程，但租约是本地、跨机租约是接口不是承诺"）。**宪法 `docs/north-star.md:158` 的 E7 原文本身同样过时，但改不变量需单独拍板，本次未动。**
+- **补齐中英不对称**：中文版原缺失英文版最后一条 blockers（Node ≥ 24 / 多实例两条），本次一并补齐，两版仍为 H2=14 / H3=13。
+
+
+### docs(lease): 按拍板删除"跨机/Session Lease 未实现"的过时表述（README + 宪法 E7 + 架构/遗留项）
+
+- **动因（大哥拍板）**：`Session Lease` 即将实现，README 中"跨机部署尚不支持 / `DistributedSessionLease` 只有接口没有实现"这类表述可以直接删。
+- **README（中英同批）**：Deployment assumption 只保留"单 gateway + 多 run 进程已支持"及 `fleet.replicasPerVersion` / `lease_held` / `leaseTtlMs`；单主机范围改写为"配额、会话与并发以该主机为界"（原 bullet 删掉，真实限制不随之丢失）。blockers 中与新假设重复的那条整条删除，仅留 Node ≥ 24 硬约束。宪法章的 E7 转述改为"部署超出这一形态时由真正的 Session Lease 接管"，不再暗示跨机永远不发生。
+- **宪法（需拍板项，已获准）**：`docs/north-star.md:158` E7 由 "Single process is the v1 deployment assumption; cross-process requires a real Session Lease" 改为 **只陈述约束、不陈述过时的部署事实**——"绝不假装内存锁全局有效；`OCTOPI_HOME` 被多个 gateway 进程共享或部署跨主机时，必须运行在真正的 Session Lease 之上；单个 gateway 主机的多 run 进程不需要它"。语义未变，仍是禁令而非许可；`north-star.zh.md` 同步，两版 §10 变更记录各追加一条（2026-11-23）。
+- **`docs/architecture.md` / `.zh.md`**：Session 锁说明由"分布式部署必须替换实现"精确化为"多个 gateway 进程共享同一 `OCTOPI_HOME`、或跨主机时必须替换为分布式实现"——避免被读成"只要多进程就必须换"。
+- **`docs/KNOWN-ISSUES.md` / `.zh.md`（刻意保留禁令）**：`No distributed Session Lease` → `No distributed Session Lease yet (implementation landing next)`。**安全禁令本身保留**：在实现真正落地前，多开 gateway 共享同一 `OCTOPI_HOME` 仍是会踩的真实陷阱，提前删掉会让运维误以为可以这么做。只去掉"永久缺失"的暗示。
+- **核实**：全仓 grep 已无"single process is the v1 / 单进程是 v1 / cross-machine is not / 只有接口"的现行表述（仅宪法变更记录中引述旧原文一处，属历史记录保留）。
+
+---
+
 ## v0.125.4 (2026-11-23)
 
 ### ci: artifacts actions to node24 runtimes (upload@v7, download@v8)

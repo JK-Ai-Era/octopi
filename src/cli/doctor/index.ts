@@ -34,6 +34,7 @@ import {
   detectKnowledgeDb,
   detectKnowledgeSourcesAsync,
   detectKnowledgeStorageHealth,
+  detectRegistrySeeding,
   vacuumKnowledgeDatabaseIfWorthwhile,
   migrateKnowledgeDatabase,
   knowledgeDbPath,
@@ -469,6 +470,8 @@ async function diagnoseConfigLayoutData(
 
   const targets = resolveAgentDataTargets(home, rawUnexpanded);
   findings.push(...detectDataLayer(targets));
+  // registry 播种状态：配置文件在 ≠ 部署可用（agent new 依赖 registry 里有用户）
+  findings.push(...(await detectRegistrySeeding(home)));
   // knowledge 源注册健康（不自动删源）
   findings.push(...(await detectKnowledgeSourcesAsync()));
   findings.push(...(await detectKnowledgeStorageHealth()));
