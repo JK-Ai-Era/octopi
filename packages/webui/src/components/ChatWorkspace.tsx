@@ -638,8 +638,6 @@ const TASK_STATUS_ORDER: Record<SessionTaskView['status'], number> = {
 
 /** 空态快捷提示键（数组序即按钮顺序） */
 const QUICK_PROMPT_KEYS = [
-  'chatWorkspace.quickPromptEmail',
-  'chatWorkspace.quickPromptSummarize',
   'chatWorkspace.quickPromptCapabilities',
 ] as const;
 

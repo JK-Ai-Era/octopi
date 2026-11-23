@@ -136,6 +136,12 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.126.8 (2026-11-23)
+
+### fix(webui): 新会话空态快捷提示只保留「你能做什么？」
+
+- 按大哥要求删除空态两个快捷提示「帮我写一封邮件」「帮我总结这份资料」：`ChatWorkspace.tsx` 的 `QUICK_PROMPT_KEYS` 只留 `quickPromptCapabilities`，中英 i18n 键（`quickPromptEmail` / `quickPromptSummarize`）一并移除，全仓无其他引用。
+
 ## v0.126.7 (2026-11-23)
 
 ### docs(arch): 拍板 A 落地——四层编号重排为依赖深度（L0=Core(kernel) / L1=Loop）

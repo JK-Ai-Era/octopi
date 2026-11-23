@@ -147,8 +147,6 @@ export const zh = {
   'chatWorkspace.welcomeHintSuffix': '——首次发送会自动新建会话。',
   'chatWorkspace.sayHi': '打个招呼吧 👋',
   'chatWorkspace.sayHiHint': '输入第一句话开始；也可以直接试试下面的：',
-  'chatWorkspace.quickPromptEmail': '帮我写一封邮件',
-  'chatWorkspace.quickPromptSummarize': '帮我总结这份资料',
   'chatWorkspace.quickPromptCapabilities': '你能做什么？',
   // 等待 / 重试占位
   'chatWorkspace.retryNotice': '· 上游无响应，第 {attempt}/{max} 次重试',
@@ -339,8 +337,6 @@ export const en: Record<keyof typeof zh, string> = {
   'chatWorkspace.welcomeHintSuffix': ' — the first send creates a session for you.',
   'chatWorkspace.sayHi': 'Say hello 👋',
   'chatWorkspace.sayHiHint': 'Type your first message, or try one of these:',
-  'chatWorkspace.quickPromptEmail': 'Write an email for me',
-  'chatWorkspace.quickPromptSummarize': 'Summarize this material',
   'chatWorkspace.quickPromptCapabilities': 'What can you do?',
   'chatWorkspace.retryNotice': '· Upstream not responding — retry {attempt}/{max}',
   'chatWorkspace.retryDelay': ' (in {seconds}s)',
