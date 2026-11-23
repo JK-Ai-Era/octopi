@@ -137,6 +137,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.127.2 (2026-11-24)
+
+### feat(webui): 输入草稿 / 待发附件 / 上次会话按会话与 agent 本地持久化
+
+- **输入草稿按会话绑定**（`packages/webui/src/composer-draft.ts`）：每个 sessionId 一个独立 localStorage 键（未选中会话用 `new` 槽），空串即删键。切会话、刷新、新建会话、分支、删除会话都显式绑定草稿域；「空态 → 新建会话」把草稿随会话迁走（先写后删）。顺带修掉旧行为里输入框是全局单例、在 A 会话打的字会串到 B 会话的问题。
+- **待发附件按会话缓存**（`pending-attachments.ts`）：只存描述符（id/name/size/status），文件本体仍在服务端会话附件登记处；切回会话时与服务端 `listSessionAttachments` 核对，别处删掉的剔除并回写，核对失败保留本地列表不静默丢件。
+- **上次会话按 agent 分槽**（`last-session.ts`）：`{ [agentId]: { sessionId, at } }`，`at` 严格单调（同毫秒取 max+1）。刷新恢复 `at` 最大的槽（等价「最后点击的会话」）；切 agent 恢复该 agent 的槽；槽指向的会话已删 / 不属于该 agent 时退回最近交互。子会话下钻不记账。
+- **跨切换竞态**：发送在途或上传在途时用户切走会话，清理与 chip 回写只作用于发起会话，不污染当前会话的草稿与附件。
+- `ChatWorkspace.tsx` 所有输入写入收口到 `setComposerText`（onChange / 命令补全 / `/clear` / 发送成功 / 快捷提示 / Esc），待发附件收口到 `setPendingForScope`。
+- 测试：`composer-draft`(6) / `pending-attachments`(5) / `last-session`(7) 单测 + 组件回归 6 条（草稿跨切换与刷新、附件恢复与核对剔除、发送在途切会话、切 agent 各自恢复）。webui 全量 133 用例通过。
+
+---
+
 ## v0.127.1 (2026-11-24)
 
 ### chore(changelog): 归档 v0.126.x 段至 changelog/v0.126.md

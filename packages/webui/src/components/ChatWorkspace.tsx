@@ -33,6 +33,20 @@ import { createViewportAuthority, shouldApplyCompensation } from './viewport-aut
 import { buildTurnMarkers, historyTurnMarkers, markerKeyOf, type TurnMarker } from './turn-rail';
 import { TurnRail } from './TurnRail';
 import { ConversationAdapter } from '@octopi-agent/gateway/web/conversation/adapter';
+import {
+  moveComposerDraft,
+  readComposerDraft,
+  removeComposerDraft,
+  writeComposerDraft,
+  type ComposerDraftScope,
+} from '../composer-draft';
+import {
+  readPendingAttachments,
+  removePendingAttachments,
+  writePendingAttachments,
+  type PendingAttachment,
+} from '../pending-attachments';
+import { clearLastSessionIfMatches, readLastSession, readLastSessionForAgent, writeLastSession } from '../last-session';
 
 /** WebUI 会话级 clientInstanceId（同一标签页稳定） */
 function webuiClientInstanceId(): string {
@@ -989,6 +1003,12 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     effectModeSource?: 'agent' | 'global' | 'default';
   }>>([]);
   const [agentId, setAgentId] = useState('');
+  /** agentId 的即时镜像：事件订阅 effect（deps=[]）里不能用过期的闭包值 */
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
+  /** agents 的即时镜像：自动打开需判断「上次会话的 agent 是否还存在」 */
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
   // §5d：错误卡进对话流（按时间交错）；self-heal 级走 toast/静默，不进卡
   const [flowErrors, setFlowErrors] = useState<Array<FlowErrorItem & { sessionId: string }>>([]);
   const pushFlowError = useCallback((e: Omit<FlowErrorItem, 'id' | 'at'>): void => {
@@ -1045,10 +1065,53 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const [renderedWebViews, setRenderedWebViews] = useState<RenderedWebView[]>([]);
   const [deliveredFiles, setDeliveredFiles] = useState<Array<{ ref: FileRef; createdAt: number }>>([]);
   const [focusFileId, setFocusFileId] = useState<string | null>(null);
-  const [input, setInput] = useState('');
-  const [pendingAttachments, setPendingAttachments] = useState<
-    Array<{ id: string; name: string; sizeBytes: number; status: string }>
-  >([]);
+  const [input, setInput] = useState(() => readComposerDraft({ sessionId: null }));
+  /**
+   * 输入框草稿与会话绑定。
+   * state 是渲染源；inputRef 供切换会话时同步落盘（闭包里的 input 会过期）。
+   * draftScopeRef 只在切换点改写（openSession / 新建会话 / 分支 / 清空活动会话），
+   * 保证每一次输入都写进「用户以为自己在的那个会话」。
+   */
+  const inputRef = useRef(input);
+  inputRef.current = input;
+  const draftScopeRef = useRef<ComposerDraftScope>({ sessionId: null });
+  /** 统一输入写入：state + 当前绑定会话的草稿同步落盘（空串即删键） */
+  const setComposerText = useCallback((text: string) => {
+    inputRef.current = text;
+    setInput(text);
+    writeComposerDraft(draftScopeRef.current, text);
+  }, []);
+  /**
+   * 输入框切换绑定会话：先把旧会话的输入落盘，再载入目标会话草稿。
+   * carryDraft 仅用于「空态 → 新建会话」：用户刚输入的内容应随新会话走，而不是留在空态。
+   */
+  const bindComposerScope = useCallback(
+    (sessionId: string | null, opts?: { carryDraft?: boolean }) => {
+      const prev = draftScopeRef.current;
+      if (prev.sessionId === sessionId) return;
+      writeComposerDraft(prev, inputRef.current);
+      const next: ComposerDraftScope = { sessionId };
+      draftScopeRef.current = next;
+      const text = opts?.carryDraft ? moveComposerDraft(prev, next) : readComposerDraft(next);
+      inputRef.current = text;
+      setInput(text);
+    },
+    [],
+  );
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  /**
+   * 待发附件与会话绑定：state 是渲染源，pendingScopeRef 记录这份 state 属于哪个会话
+   * （切换会话时旧值落盘、新值载入，语义与输入框草稿一致）。
+   */
+  const pendingAttachmentsRef = useRef<PendingAttachment[]>([]);
+  pendingAttachmentsRef.current = pendingAttachments;
+  const pendingScopeRef = useRef<string | null>(null);
+  /** 统一待发附件写入：state + 归属会话落盘（空列表即删键） */
+  const setPendingForScope = useCallback((items: PendingAttachment[]) => {
+    pendingAttachmentsRef.current = items;
+    setPendingAttachments(items);
+    writePendingAttachments(pendingScopeRef.current, items);
+  }, []);
   const [uploading, setUploading] = useState(false);
   const [attachmentsReload, setAttachmentsReload] = useState(0);
   const [commands, setCommands] = useState<CommandCatalogItemDto[]>([]);
@@ -1126,19 +1189,36 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       }
     }) as EventListener);
     store.addEventListener('sessions', ((e: CustomEvent) => {
-      const list = (e.detail.sessions ?? []) as Array<{ id: string; lastInteractionAt?: number; spawnBy?: unknown }>;
+      const list = (e.detail.sessions ?? []) as Array<{ id: string; agentId?: string; lastInteractionAt?: number; spawnBy?: unknown }>;
       setSessions(e.detail.sessions);
-      // 刷新后自动打开最近会话，否则回放文件卡片无从恢复。
+      // 刷新/首连后自动打开会话，否则回放文件卡片无从恢复。
       // 若 store 已有活动会话（createSession 刚建完）或本组件已选中，禁止抢开旧会话。
       // 子会话（spawnBy）不参与自动打开：历史对用户隐藏，收进右栏"子会话"
+      // 优先回到上次打开的会话（连同它的 agent），其次才退回「最近交互」。
       const storeChatId = storeRef.current?.getState().chat.sessionId;
       if (
         !activeSessionIdRef.current &&
         !storeChatId &&
         list.length > 0
       ) {
-        const latest = [...list]
-          .filter((s) => !s.spawnBy)
+        const candidates = list.filter((s) => !s.spawnBy);
+        const remembered = readLastSession();
+        const restored = remembered
+          ? candidates.find((s) => s.id === remembered.sessionId)
+          : undefined;
+        // 归属 agent 以会话投影为准（记录可能陈旧）；该 agent 已删除时不恢复，退回最近交互
+        const ownerAgent = restored?.agentId || remembered?.agentId || '';
+        const agentAlive =
+          ownerAgent === '' ||
+          agentsRef.current.length === 0 ||
+          agentsRef.current.some((a) => a.id === ownerAgent);
+        if (restored && agentAlive) {
+          // 先对齐 agent 再打开：否则左栏过滤与当前会话分属两个 agent
+          if (ownerAgent && ownerAgent !== agentIdRef.current) setAgentId(ownerAgent);
+          void openSession(restored.id);
+          return;
+        }
+        const latest = [...candidates]
           .sort(
             (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
           )[0];
@@ -1498,9 +1578,42 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     [historyTurnItems, conversationItems],
   );
 
-  // 切换会话时清掉待发附件，避免 A 的文件挂到 B
+  // 切换会话：待发附件按会话载回（旧会话的值已随每次改动落盘，无需在此回写）。
+  // 与服务端登记核对：别处（附件面板 / 另一端）删掉的附件不应继续挂在输入区。
   useEffect(() => {
-    setPendingAttachments([]);
+    const sid = activeSessionId;
+    pendingScopeRef.current = sid;
+    if (!sid) {
+      pendingAttachmentsRef.current = [];
+      setPendingAttachments([]);
+      return;
+    }
+    const stored = readPendingAttachments(sid);
+    pendingAttachmentsRef.current = stored;
+    setPendingAttachments(stored);
+    const client = clientRef.current;
+    if (!client || stored.length === 0) return;
+    let cancelled = false;
+    client
+      .listSessionAttachments(sid)
+      .then((list) => {
+        // 期间又切了会话 / 用户已改动列表：本轮回填作废
+        if (cancelled || pendingScopeRef.current !== sid) return;
+        // 响应形状不可核对（非数组）：保留本地列表，不猜删除
+        if (!Array.isArray(list)) return;
+        const alive = new Set(list.map((a) => a.id));
+        const filtered = stored.filter((a) => alive.has(a.id));
+        if (filtered.length === stored.length) return;
+        pendingAttachmentsRef.current = filtered;
+        setPendingAttachments(filtered);
+        writePendingAttachments(sid, filtered);
+      })
+      .catch(() => {
+        // 核对失败保留本地列表：发送时服务端会给出真实错误，不静默丢弃用户已挂的附件
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [activeSessionId]);
 
   // 阻止浏览器把拖入的文件当导航打开
@@ -1637,8 +1750,16 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     enableStickToBottom();
     setActiveSessionId(sessionId);
     activeSessionIdRef.current = sessionId;
+    // 草稿随会话切换：旧会话输入留在旧会话，新会话载入自己的未发送内容
+    bindComposerScope(sessionId);
     // 点子会话下钻时左栏保持主会话选中（其余入口：高亮跟随打开的会话）
-    if (!opts?.keepSidebarSelection) setSidebarSessionId(sessionId);
+    if (!opts?.keepSidebarSelection) {
+      setSidebarSessionId(sessionId);
+      // 记住这次打开：刷新后回到这里。子会话下钻不记（刷新后不该落到已隐藏的子会话）
+      // 归属 agent 以 store 里会话的真实 agent 为准（事件订阅的旧闭包可能读到过期列表）
+      const owner = state.chat.agentId || agentIdRef.current;
+      writeLastSession({ sessionId, agentId: owner });
+    }
     // 从 store 恢复，不硬编码 idle —— 切回时可能仍有 running 工具或流式内容
     setRunStatus(state.chat.runStatus);
     setStream(state.chat.streamingContent ?? '');
@@ -1862,6 +1983,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     const clearedId = activeSessionIdRef.current;
     setActiveSessionId(null);
     activeSessionIdRef.current = null;
+    // 回到空态：输入框切回空态草稿（被清会话的草稿随后由 removeSession 删除）
+    bindComposerScope(null);
     // 左栏高亮仅在正指向被清会话时清除：查看子会话时它被删，主会话高亮保留
     setSidebarSessionId((prev) => (prev === clearedId ? null : prev));
     setChildSessions([]);
@@ -1877,7 +2000,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     setDeliveredFiles([]);
     setFocusFileId(null);
     setSessionModel(null);
-  }, []);
+    // 依赖 bindComposerScope（useCallback 稳定）：ESLint 要求显式列出
+  }, [bindComposerScope]);
 
   const removeSession = async (sessionId: string) => {
     const store = storeRef.current;
@@ -1899,8 +2023,14 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     try {
       await store.deleteSession(sessionId);
       if (activeSessionIdRef.current === sessionId) {
+        // 必须先切回空态再删草稿：bindComposerScope 会把输入落盘到被删会话，
+        // 顺序反了会把刚删掉的键又写回来
         clearActiveSessionUi();
       }
+      // 会话已删除：草稿与待发附件随之清理，避免孤儿键永久占用 localStorage
+      removeComposerDraft({ sessionId });
+      removePendingAttachments(sessionId);
+      clearLastSessionIfMatches(sessionId);
       if (sidebarSessionId === sessionId) setSidebarSessionId(null);
       setToast(t('chatWorkspace.toastSessionDeleted'));
     } catch (e) {
@@ -1917,7 +2047,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     enableStickToBottom();
     setActiveSessionId(created.id);
     activeSessionIdRef.current = created.id;
+    // 空态草稿随新建会话迁移；从别的会话点「新建」时，旧草稿留在旧会话，新会话从空开始
+    bindComposerScope(created.id, { carryDraft: draftScopeRef.current.sessionId === null });
     setSidebarSessionId(created.id);
+    // 新建即当前会话：刷新后应回到它
+    writeLastSession({ sessionId: created.id, agentId: agentIdRef.current });
     setRunStatus('idle');
     setStream('');
     setConversationItems(storeRef.current!.getState().chat.conversation ?? []);
@@ -1986,8 +2120,8 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
    * 切换 agent：会话列表 + 中部窗口 + 右栏 + store 活动会话全量联动。
    *
    * 只 setAgentId 会让左栏列表（客户端过滤）看似同步、而中部/右栏仍绑旧会话，
-   * 且 store.chat 仍指旧会话（此时发送会静默串台）。联动语义：打开该 agent
-   * 最近会话；无会话则退回「未选中」空态（新建会话起点）。
+   * 且 store.chat 仍指旧会话（此时发送会静默串台）。联动语义：优先打开该 agent
+   * 上次打开的会话；没有记录则退回它最近交互的会话；仍无则回到「未选中」空态。
    */
   const selectAgent = async (id: string) => {
     if (id === agentId || switchingAgent) return;
@@ -2002,18 +2136,24 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     try {
       const list = await store.refreshSessions(id);
       // 与 sessions 事件自动打开同口径：子会话（spawnBy）历史中彻底隐藏，不作打开候选
-      const latest = [...list]
-        .filter((s) => !s.spawnBy)
-        .sort(
+      const candidates = list.filter((s) => !s.spawnBy);
+      // 该 agent 上次打开的会话优先；已删除 / 不是它的会话时退回最近交互
+      const remembered = readLastSessionForAgent(id);
+      const restored = remembered
+        ? candidates.find((s) => s.id === remembered.sessionId)
+        : undefined;
+      const target =
+        restored ??
+        [...candidates].sort(
           (a, b) => (b.lastInteractionAt ?? 0) - (a.lastInteractionAt ?? 0),
         )[0];
       // 成功拉到该 agent 的会话列表后才切换 UI agentId
       setAgentId(id);
-      if (latest) {
+      if (target) {
         // S7：目标会话已打开则跳过（refreshSessions 的 sessions 事件监听器可能已自动打开）
-        if (store.getState().chat.sessionId !== latest.id) {
+        if (store.getState().chat.sessionId !== target.id) {
           enableStickToBottom();
-          await openSession(latest.id);
+          await openSession(target.id);
         }
       } else {
         store.closeCurrentSession();
@@ -2047,8 +2187,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       enableStickToBottom();
       setActiveSessionId(created.id);
       activeSessionIdRef.current = created.id;
+      // 新分支没有任何历史输入：载入它自己的（空）草稿，旧会话草稿留在旧会话
+      bindComposerScope(created.id);
       // 分支是用户选择的新会话：左栏高亮跟随（否则高亮停在旧会话上）
       setSidebarSessionId(created.id);
+      writeLastSession({ sessionId: created.id, agentId: agentIdRef.current });
       setRunStatus('idle');
       setStream('');
       setTasks(store.getTasks());
@@ -2135,7 +2278,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
 
     // Client-local：/clear
     if (text === '/clear') {
-      setInput('');
+      setComposerText('');
       setStream('');
       return;
     }
@@ -2158,12 +2301,20 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     // 用户主动发起新一轮：恢复粘底跟随
     enableStickToBottom();
     if (!interjecting) setRunStatus('waiting');
+    // 发送目标 = 此刻绑定的会话（空态已在上面建出会话并绑定）
+    const sendScope = draftScopeRef.current.sessionId;
     try {
       await store.sendMessage(text, {
         attachmentIds,
       });
-      setInput('');
-      setPendingAttachments([]);
+      // 发送期间用户可能切走：清空只作用于发起会话，不碰当前会话的草稿与待发附件
+      if (draftScopeRef.current.sessionId === sendScope) {
+        setComposerText('');
+        setPendingForScope([]);
+      } else {
+        writeComposerDraft({ sessionId: sendScope }, '');
+        writePendingAttachments(sendScope, []);
+      }
     } catch (error) {
       // 发送失败：store 已退出 waiting；保留输入便于重试
       pushFlowError(classifyFlowError(error instanceof Error ? error.message : String(error), 'app'));
@@ -2197,10 +2348,21 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         }),
       );
       const uploaded = await client.uploadSessionAttachments(activeSessionId, payload);
-      setPendingAttachments((prev) => [
-        ...prev,
-        ...uploaded.map((u) => ({ id: u.id, name: u.name, sizeBytes: u.sizeBytes, status: u.status })),
-      ]);
+      const uploadedItems = uploaded.map((u) => ({
+        id: u.id,
+        name: u.name,
+        sizeBytes: u.sizeBytes,
+        status: u.status,
+      }));
+      if (pendingScopeRef.current === activeSessionId) {
+        setPendingForScope([...pendingAttachmentsRef.current, ...uploadedItems]);
+      } else {
+        // 上传期间切走了会话：文件属于原会话，chip 落回原会话的待发列表，不挂到当前会话
+        writePendingAttachments(activeSessionId, [
+          ...readPendingAttachments(activeSessionId),
+          ...uploadedItems,
+        ]);
+      }
       setAttachmentsReload((n) => n + 1);
       setToast(t('chatWorkspace.toastUploaded', { count: uploaded.length }));
     } catch (err) {
@@ -2239,7 +2401,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const applyCommand = (name: string) => {
     const def = catalog.find((c) => c.name === name);
     const usage = def?.usage?.split(' ')[0] ?? `/${name}`;
-    setInput(`${usage} `);
+    setComposerText(`${usage} `);
     setCmdSuggestIndex(0);
   };
 
@@ -2271,7 +2433,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       }
       if (e.key === 'Escape') {
         e.preventDefault();
-        setInput('');
+        setComposerText('');
         return;
       }
     }
@@ -2679,7 +2841,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                         key={key}
                         className="btn-secondary small quick-prompt"
                         onClick={() => {
-                          setInput(prompt);
+                          setComposerText(prompt);
                           void sendMessage(prompt);
                         }}
                       >
@@ -2973,7 +3135,9 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                         className="btn-ghost small"
                         title={t('chatWorkspace.remove')}
                         onClick={() =>
-                          setPendingAttachments((prev) => prev.filter((x) => x.id !== a.id))
+                          setPendingForScope(
+                            pendingAttachmentsRef.current.filter((x) => x.id !== a.id),
+                          )
                         }
                       >
                         ×
@@ -3007,7 +3171,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               className="composer-textarea"
               value={input}
               onChange={e => {
-                setInput(e.target.value);
+                setComposerText(e.target.value);
                 setCmdSuggestIndex(0);
               }}
               onKeyDown={handleComposerKeyDown}
