@@ -52,7 +52,8 @@ function getAncestorPidSet(): Promise<Set<number>> {
  * pid 是否为当前进程或其祖先
  *
  * Windows `taskkill /T` 杀的是整棵进程树；若误把 CLI 的父进程（工具 shell）
- * 当成目标，会话会被连带干掉。杀进程前必须用本函数拦截。
+ * 当成目标，会话会被连带干掉。Unix 上杀父进程虽然不会立刻弄死本进程，但那是
+ * 在杀死自己赖以运行的那棵树——同一禁令，跨平台成立。
  *
  * @param pid - 目标 PID
  * @returns true = 拒杀（自身/祖先/非法 pid）
@@ -142,7 +143,8 @@ export async function killProcess(
 ): Promise<boolean> {
   const timeoutMs = options?.timeoutMs ?? 3000;
   if (!Number.isInteger(pid) || pid <= 0) return true;
-  // 绝不杀自己/祖先：taskkill /T 会把 agent shell 一并带走
+  // 绝不杀自己/祖先：taskkill /T 会把 agent shell 一并带走；Unix 上杀父进程
+  // 虽不会立刻弄死本进程，但那是在杀死自己赖以运行的那棵树——同样禁止。
   if (await isSelfOrAncestorPid(pid)) {
     console.warn(`⚠️  Refusing to kill PID ${pid} (self/ancestor of current CLI process)`);
     return false;
