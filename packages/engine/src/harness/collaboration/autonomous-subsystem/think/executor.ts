@@ -162,7 +162,7 @@ export class ThinkExecutor {
 
     const harness: ReliabilityHarness = {
       config: {
-        planningRetry: { maxAttempts: 0, steerInstruction: '' },
+        planningRetry: { maxAttempts: 0 },
         emptyResponseRetry: { maxAttempts: 0, steerInstruction: '' },
         noopThreshold: 3,
         loopDetection: { enabled: false },

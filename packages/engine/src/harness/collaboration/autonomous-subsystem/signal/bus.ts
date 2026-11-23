@@ -246,12 +246,16 @@ export class SignalBus {
       // suggest / alert → 注入为引擎提示（user 形态 + engineHint 标记，随历史保留）。
       // 不用 role:'system'：非托管 system 会被 provider 适配层拼进 system 字段，
       // 状态变化即前缀整段失效（context-size-accounting.md §1）。
+      // data.steer：信号自带注入文案（如 planning-judge 的固定 steer 文案）；缺省 `[action] reason`。
+      const steer = typeof signal.data?.steer === 'string'
+        ? signal.data.steer
+        : `[${signal.action}] ${signal.reason}`;
       this.contextQueue.push({
         subsystemId,
         messages: [
           {
             role: 'user',
-            content: `[${signal.action}] ${signal.reason}`,
+            content: steer,
             metadata: { source: 'engineHint' },
           },
         ],

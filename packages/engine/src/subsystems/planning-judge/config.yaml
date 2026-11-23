@@ -1,0 +1,42 @@
+id: planning-judge
+name: Planning Judge
+description: 对疑似「只说不做」的回复做语义裁决；启发式只做触发器，判据归 LLM（arch/semantic-adjudication.md 首个应用）
+
+sense:
+  source: eventBus
+  filter:
+    events: ['planning_only.suspected']
+  isolation: structured
+
+think:
+  implementation: llm
+  strategy: heuristic
+  model: mini
+  maxIterations: 1
+
+act:
+  mode: none
+
+signal:
+  severity: advisory
+  channel: [context, event]
+
+boundary:
+  visibility: structured
+  authority: suggest
+  # 第一方受审代码：显式声明 trusted（同 safety-guard 拍板 A，2026-10-25；缺省值仍 sandboxed）
+  security: trusted
+
+tools:
+  mode: none
+
+session:
+  mode: ephemeral
+  scope: session
+
+lifecycle:
+  maxDurationMs: 8000
+  maxConcurrent: 1
+  # 裁决超时/失败一律不注入（宁缺勿滥：误提醒会诱导主 Agent 编造工作）
+  degradeOn: timeout
+  onError: warn

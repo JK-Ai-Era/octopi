@@ -136,6 +136,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.127.0 (2026-11-24)
+
+### refactor(reliability): planning-only 判定收编语义裁决模式（启发式降级触发器）
+
+- **语义裁决模式落地**（`arch/semantic-adjudication.md`，OP-JUDGE-1 P1）：语义判断归 LLM、启发式只做触发器。run-agent 的 `isPlanningOnlyResponse` 正则**废除判定权**——命中只 emit `planning_only.suspected` 事件（`ReliabilityConfig.events` 事件桥，Runner 构造注入），不再直接注入 `[System: ...]` steer。
+- 新增内置子系统 `planning-judge`（llm 模式 + mini 模型）：语义裁决「是否只说不做」，输出 `{ action: 'suggest' | 'no-op', reason, confidence, data: { steer } }`（Signal 词表）；判 `suggest` 经 SignalBus context 通道注入 engineHint（`data.steer` 携带固定文案，旧注入形态 `[System: Continue with the task using available tools.]` 不变）。**误报成本重定价**：正则误报只花一次裁判调用，不再逼模型在无活可干时编造工作。
+- 裁决异步（EventBus fire-and-forget，判定期间主 session 多跑 1–2 轮可接受）；TTL 由架构天然语义覆盖（run 活跃步进点才消费 + dispose 清空）+ judge `maxDurationMs: 8s` / `degradeOn: timeout`（超时不注入，宁缺勿滥）/ `maxConcurrent: 1`。
+- **breaking**：`ReliabilityConfig.planningRetry` 收窄为 `{ maxAttempts }`（`steerInstruction` 移除，文案移交 judge 契约）。
+- `signal/bus.ts` `deliverToContext` 支持 `signal.data.steer` 自带注入文案（缺省 `[action] reason` 形态不变）。
+- 测试重写（9 用例）：2026-11-23 三次实证误伤文本（能力清单 / 问答收尾 / 引用讨论）转回归用例——无论触发与否绝不直接注入；触发/节流/无桥/工具调用/短响应/空响应各路径覆盖。全量 5785 用例零失败。
+- 伴随：`arch/invariants.md` §9/§10 修订（「Planning-only 必须有重试」→「判据必须语义裁决，启发式仅触发器」）；`arch/run-guard-refactor.md` hasProgress 判据措辞同步。
+
+---
+
 ## v0.126.10 (2026-11-24)
 
 ### docs(subsystem): README 新增 Think 三模式机制与选型小节

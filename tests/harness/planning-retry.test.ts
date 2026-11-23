@@ -1,19 +1,22 @@
 /**
- * Planning-only Retry 测试
+ * Planning-only 触发器与语义裁决接线测试
  *
- * 测试 runAgentWithReliability 的 planning-only 重试机制：
- * 1. 检测 planning-only 响应（只说不做）
- * 2. 自动注入 steer 指令并重试
- * 3. 重试次数限制
- * 4. 有 tool_calls 时不触发
- * 5. 短响应不触发
+ * 语义（arch/semantic-adjudication.md，2026-11-24 拍板）：
+ * - 启发式正则仅作**触发器**：命中 → emit `planning_only.suspected`（请 planning-judge 裁判）
+ * - **不再**直接注入 `[System: ...]` steer（判据归 planning-judge 子系统的 LLM 裁决）
+ * - 无 events 桥：仅计数不注入（裁判缺席宁缺勿滥）
+ *
+ * 回归用例（2026-11-23 三次实证误伤）：能力清单 / 问答收尾 / 引用讨论
+ * ——即便触发器命中，也绝不直接注入（误报只花一次裁判调用）。
  */
 
 import { describe, it, expect } from 'vitest';
 import { makeTokenUsage } from '@octopi-agent/core/types/step.js';
+import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
+import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { Agent } from '@octopi-agent/engine/harness/run/agent/agent.js';
 import { runAgentWithReliability } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
-import type { ReliabilityHarness } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
+import type { ReliabilityHarness, ReliabilityConfig } from '@octopi-agent/engine/harness/run/reliability/run-agent.js';
 import type { HarnessLoopEvent } from '@octopi-agent/engine/harness/run/reliability/harness-events.js';
 import type { ModelProvider, LLMRequest, LLMResponse, LLMStreamChunk } from '@octopi-agent/core/interfaces/model-provider.js';
 
@@ -56,10 +59,20 @@ function createAgentTools() {
   }];
 }
 
-function createHarness(overrides?: Partial<import('@octopi-agent/engine/harness/run/reliability/run-agent.js').ReliabilityConfig>): ReliabilityHarness {
+function assistantText(content: string): LLMResponse {
+  return {
+    content,
+    toolCalls: undefined,
+    usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
+    model: 'test',
+    finishReason: 'stop',
+  };
+}
+
+function createHarness(overrides?: Partial<ReliabilityConfig>): ReliabilityHarness {
   return {
     config: {
-      planningRetry: { maxAttempts: 2, steerInstruction: 'Continue with the task using available tools.' },
+      planningRetry: { maxAttempts: 2 },
       emptyResponseRetry: { maxAttempts: 0, steerInstruction: '' },
       noopThreshold: 3,
       loopDetection: { enabled: false },
@@ -76,103 +89,105 @@ async function collectEvents(agent: Agent, harness: ReliabilityHarness): Promise
   return events;
 }
 
+function findDirectSteer(messages: { role?: string; content?: unknown }[]): unknown {
+  return messages.find(
+    (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('[System:'),
+  );
+}
+
+/** 三次实证误伤文本（2026-11-23）：触发器可能命中，但绝不允许直接注入 */
+const MISFIRE_TEXTS: [name: string, content: string][] = [
+  [
+    '能力清单（bullet + 「我会…」）',
+    'I can do many things:\n- Full-stack development and debugging\n- Code review and refactoring\n- Testing and deployment\nFor complex work, I will first propose a plan before acting.',
+  ],
+  [
+    '问答收尾（「让我…」）',
+    'That covers everything you asked about my capabilities. Let me know if you want me to do anything else with these tools available here.',
+  ],
+  [
+    '引用讨论（mention≠use）',
+    'You asked why the engine injects reminders. The heuristic matches promise-style wording like "I will do X" or "let me check" even when such phrases are only being discussed.',
+  ],
+];
+
 // ── Tests ──
 
-describe('Planning-only Retry', () => {
-  it('should detect planning-only response and retry with tool execution', async () => {
+describe('Planning-only 触发器（语义裁决接线）', () => {
+  it('planning-only 响应只 emit planning_only.suspected 事件，不直接注入', async () => {
     const provider = createSequentialProvider([
-      // 第一次：planning-only（只说不做）
-      {
-        content: 'I will analyze the project structure. Let me first list the files.',
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
-      // 重试后：执行工具
-      {
-        content: '',
-        toolCalls: [{ id: 'call_1', name: 'file_list', arguments: { path: '.' } }],
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'tool_calls',
-      },
-      // 工具执行后：正常回复
-      {
-        content: 'Here is the project structure...',
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
+      assistantText('I will analyze the project structure. Let me first list the files.'),
+      assistantText('Here is the project structure...'),
     ]);
-
     const agent = new Agent({ model: provider, systemPrompt: 'You are helpful.', tools: createAgentTools() });
     agent.context.messages = [{ role: 'user', content: 'Analyze the project', timestamp: Date.now() }];
 
-    const harness = createHarness();
-    const events = await collectEvents(agent, harness);
+    const bus = new DefaultEventBus();
+    const emitted: AgentEvent[] = [];
+    bus.on('planning_only.suspected', (e) => { emitted.push(e); });
 
-    const types = events.map(e => e.type);
+    await collectEvents(agent, createHarness({ events: bus }));
 
-    // 应该有 turn_end（planning-only 回合）
-    expect(types).toContain('step_end');
+    // 触发器命中 → 请裁判（事件桥）
+    expect(emitted.length).toBeGreaterThanOrEqual(1);
+    expect(emitted[0].type).toBe('planning_only.suspected');
+    expect(String((emitted[0].data as { content?: string }).content)).toContain('I will analyze');
 
-    // 应该有 tool 执行（第二次调用执行了工具）
-    const turnEndsWithTools = events.filter(e => e.type === 'step_end' && (e as any).hasToolCalls);
-    expect(turnEndsWithTools.length).toBeGreaterThanOrEqual(1);
-
-    // 最终应该有正常回复
-    const assistantMsgs = events.filter(e => e.type === 'assistant_message');
-    expect(assistantMsgs.length).toBeGreaterThan(0);
-    const lastAssistant = assistantMsgs[assistantMsgs.length - 1];
-    expect((lastAssistant as any).message.content).toBe('Here is the project structure...');
-
-    // 消息历史中应该有 steer 指令
-    const steerInContext = agent.context.messages.find(
-      (m: any) => m.role === 'user' && m.content?.includes('[System:')
-    );
-    expect(steerInContext).toBeDefined();
+    // 判定权已移交裁判：reliability 不再直接注入 steer
+    expect(findDirectSteer(agent.context.messages)).toBeUndefined();
   });
 
-  it('should stop retrying after maxAttempts', async () => {
-    const provider = createSequentialProvider([
-      // 所有响应都是 planning-only
-      {
-        content: 'I will analyze the project. Let me check the files.',
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
-      {
-        content: 'I will now look at the code. Let me start by reading the main file.',
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
-    ]);
+  it.each(MISFIRE_TEXTS)('误伤回归（%s）：不直接注入 [System:] steer', async (_name, content) => {
+    const provider = createSequentialProvider([assistantText(content)]);
+    const agent = new Agent({ model: provider, systemPrompt: 'You are helpful.', tools: createAgentTools() });
+    agent.context.messages = [{ role: 'user', content: 'What can you do?', timestamp: Date.now() }];
 
+    const bus = new DefaultEventBus();
+    const emitted: AgentEvent[] = [];
+    bus.on('planning_only.suspected', (e) => { emitted.push(e); });
+
+    await collectEvents(agent, createHarness({ events: bus }));
+
+    // 无论触发器命中与否，误报的代价都只能是「多一次裁判调用」，绝不能是注入
+    expect(findDirectSteer(agent.context.messages)).toBeUndefined();
+  });
+
+  it('触发节流：超过 maxAttempts 不再 emit', async () => {
+    const provider = createSequentialProvider([
+      assistantText('I will analyze the project. Let me check the files.'),
+      assistantText('I will now look at the code. Let me start by reading the main file.'),
+    ]);
     const agent = new Agent({ model: provider, systemPrompt: 'You are helpful.', tools: createAgentTools() });
     agent.context.messages = [{ role: 'user', content: 'Analyze the project', timestamp: Date.now() }];
 
-    // maxAttempts: 1 → 只允许重试 1 次
-    const harness = createHarness({ planningRetry: { maxAttempts: 1, steerInstruction: 'Continue with the task using available tools.' } });
-    const events = await collectEvents(agent, harness);
+    const bus = new DefaultEventBus();
+    const emitted: AgentEvent[] = [];
+    bus.on('planning_only.suspected', (e) => { emitted.push(e); });
 
-    // 应该有 2 条 assistant_message（原始 + 1 次重试）
-    const assistantMsgs = events.filter(e => e.type === 'assistant_message');
-    expect(assistantMsgs.length).toBe(2);
+    await collectEvents(agent, createHarness({ events: bus, planningRetry: { maxAttempts: 1 } }));
 
-    // 应该有 agent_end（循环结束）
-    const agentEnd = events.find(e => e.type === 'agent_end');
+    expect(emitted.length).toBe(1);
+  });
+
+  it('无 events 桥：不 emit 也不注入（裁判缺席宁缺勿滥）', async () => {
+    const provider = createSequentialProvider([
+      assistantText('I will analyze the project. Let me check the files.'),
+    ]);
+    const agent = new Agent({ model: provider, systemPrompt: 'You are helpful.', tools: createAgentTools() });
+    agent.context.messages = [{ role: 'user', content: 'Analyze the project', timestamp: Date.now() }];
+
+    await collectEvents(agent, createHarness());
+
+    expect(findDirectSteer(agent.context.messages)).toBeUndefined();
+    const agentEnd = (await collectEvents(
+      new Agent({ model: provider, systemPrompt: 'x', tools: createAgentTools() }),
+      createHarness(),
+    )).find((e) => e.type === 'agent_end');
     expect(agentEnd).toBeDefined();
   });
 
-  it('should not retry if response has tool_calls', async () => {
+  it('有 tool_calls 的响应不触发', async () => {
     const provider = createSequentialProvider([
-      // 有 tool_calls → 不是 planning-only
       {
         content: '',
         toolCalls: [{ id: 'call_1', name: 'file_list', arguments: { path: '.' } }],
@@ -180,119 +195,48 @@ describe('Planning-only Retry', () => {
         model: 'test',
         finishReason: 'tool_calls',
       },
-      {
-        content: 'Here is the project structure...',
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
+      assistantText('Here is the project structure...'),
     ]);
-
     const agent = new Agent({ model: provider, systemPrompt: 'You are helpful.', tools: createAgentTools() });
     agent.context.messages = [{ role: 'user', content: 'List files', timestamp: Date.now() }];
 
-    const harness = createHarness();
-    const events = await collectEvents(agent, harness);
+    const bus = new DefaultEventBus();
+    const emitted: AgentEvent[] = [];
+    bus.on('planning_only.suspected', (e) => { emitted.push(e); });
 
-    // 不应该有 steer 指令（没有触发 planning-only 重试）
-    const steerInContext = agent.context.messages.find(
-      (m: any) => m.role === 'user' && m.content?.includes('[System:')
-    );
-    expect(steerInContext).toBeUndefined();
+    await collectEvents(agent, createHarness({ events: bus }));
+
+    expect(emitted.length).toBe(0);
+    expect(findDirectSteer(agent.context.messages)).toBeUndefined();
   });
 
-  it('should not retry if no tools available', async () => {
-    const provider = createSequentialProvider([
-      {
-        content: 'I will analyze the project. Let me check the files.',
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
-    ]);
-
-    // 没有工具
-    const agent = new Agent({ model: provider, systemPrompt: 'You are helpful.' });
-    agent.context.messages = [{ role: 'user', content: 'Analyze the project', timestamp: Date.now() }];
-
-    const harness = createHarness();
-    const events = await collectEvents(agent, harness);
-
-    // 不应该有 steer 指令（没有工具可用，不触发 planning-only 检测）
-    // 注意：新架构中 planning-only 检测仍然会触发，因为 isPlanningOnlyResponse 不检查工具可用性
-    // 但重试后模型仍返回 planning-only，最终循环结束
-    const agentEnd = events.find(e => e.type === 'agent_end');
-    expect(agentEnd).toBeDefined();
-  });
-
-  it('should not retry short responses', async () => {
-    const provider = createSequentialProvider([
-      {
-        content: 'OK',  // 太短，不是 planning-only
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 5 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
-    ]);
-
+  it('短响应不触发', async () => {
+    const provider = createSequentialProvider([assistantText('OK')]);
     const agent = new Agent({ model: provider, systemPrompt: 'You are helpful.', tools: createAgentTools() });
     agent.context.messages = [{ role: 'user', content: 'Hello', timestamp: Date.now() }];
 
-    const harness = createHarness();
-    const events = await collectEvents(agent, harness);
+    const bus = new DefaultEventBus();
+    const emitted: AgentEvent[] = [];
+    bus.on('planning_only.suspected', (e) => { emitted.push(e); });
 
-    // 不应该有 steer 指令
-    const steerInContext = agent.context.messages.find(
-      (m: any) => m.role === 'user' && m.content?.includes('[System:')
-    );
-    expect(steerInContext).toBeUndefined();
+    await collectEvents(agent, createHarness({ events: bus }));
 
-    // 应该只有 1 条 assistant_message
-    const assistantMsgs = events.filter(e => e.type === 'assistant_message');
-    expect(assistantMsgs.length).toBe(1);
-    expect((assistantMsgs[0] as any).message.content).toBe('OK');
+    expect(emitted.length).toBe(0);
+    expect(findDirectSteer(agent.context.messages)).toBeUndefined();
   });
 
-  it('should use custom steer instruction', async () => {
-    const customSteer = 'Please execute the tools now!';
-    const provider = createSequentialProvider([
-      {
-        content: 'I will analyze the project. Let me check the files.',
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
-      // 重试后执行工具
-      {
-        content: '',
-        toolCalls: [{ id: 'call_1', name: 'file_list', arguments: { path: '.' } }],
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'tool_calls',
-      },
-      {
-        content: 'Here are the files...',
-        toolCalls: undefined,
-        usage: makeTokenUsage({ promptTokens: 10, completionTokens: 20 }),
-        model: 'test',
-        finishReason: 'stop',
-      },
-    ]);
-
+  it('空响应 steer 不受影响（行为信号直判，保留原语义）', async () => {
+    const provider = createSequentialProvider([assistantText('')]);
     const agent = new Agent({ model: provider, systemPrompt: 'You are helpful.', tools: createAgentTools() });
-    agent.context.messages = [{ role: 'user', content: 'Analyze the project', timestamp: Date.now() }];
+    agent.context.messages = [{ role: 'user', content: 'Hello', timestamp: Date.now() }];
 
-    const harness = createHarness({ planningRetry: { maxAttempts: 2, steerInstruction: customSteer } });
-    await collectEvents(agent, harness);
+    await collectEvents(agent, createHarness({
+      emptyResponseRetry: { maxAttempts: 1, steerInstruction: 'You have not provided a response.' },
+    }));
 
-    // 消息历史中应该有自定义的 steer 指令
-    const steerInContext = agent.context.messages.find(
-      (m: any) => m.role === 'user' && m.content?.includes(customSteer)
+    const steer = agent.context.messages.find(
+      (m: any) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('You have not provided a response.'),
     );
-    expect(steerInContext).toBeDefined();
+    expect(steer).toBeDefined();
   });
 });

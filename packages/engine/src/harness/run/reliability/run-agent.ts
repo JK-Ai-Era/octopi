@@ -2,7 +2,7 @@
  * Harness 层可靠性包装
  *
  * 包装 agentLoop()，注入所有可靠性行为：
- * - Planning-only 检测与重试
+ * - Planning-only 疑似触发（启发式仅作触发器，语义裁决归 planning-judge 子系统）
  * - 空响应重试
  * - 工具循环检测
  * - No-op 检测
@@ -54,14 +54,20 @@ import { nominalTotalTokens } from '@octopi-agent/core/types/step.js';
 import { getRunScope } from '../run-scope.js';
 import { resolveHitlDecision } from '../../governance/human-in-the-loop/decision-cache.js';
 import { shouldAbortWithoutRetry } from '../../extension/plugin-ecosystem/hooks/policy-error.js';
+import type { EventBus } from '@octopi-agent/core/primitives/event-bus.js';
 
 // ── 可靠性配置 ──
 
 export interface ReliabilityConfig {
-  /** Planning-only 重试 */
+  /** 事件桥（可选，Runner 注入）：可靠性事件出口（planning_only.suspected 等） */
+  events?: EventBus;
+  /**
+   * Planning-only 触发节流。启发式仅作**触发器**（召回），不做判据——语义裁决归
+   * planning-judge 子系统（events 桥 → SignalBus 注入），见 arch/semantic-adjudication.md。
+   * maxAttempts：单 run 触发上限；无 events 桥时仅计数不注入（裁判缺席宁缺勿滥）。
+   */
   planningRetry: {
     maxAttempts: number;
-    steerInstruction: string;
   };
   /** 空响应重试 */
   emptyResponseRetry: {
@@ -112,7 +118,6 @@ export interface ReliabilityConfig {
 export const DEFAULT_RELIABILITY_CONFIG: ReliabilityConfig = {
   planningRetry: {
     maxAttempts: 2,
-    steerInstruction: 'Continue with the task using available tools.',
   },
   emptyResponseRetry: {
     maxAttempts: 2,
@@ -171,7 +176,6 @@ export interface ConcreteReliabilityHarness extends CoreReliabilityHarness {
 
 interface ReliabilityState {
   planningOnlyAttempts: number;
-  planningOnlySteerInjected: boolean;
   emptyResponseAttempts: number;
   emptyResponseSteerInjected: boolean;
   consecutiveNoops: number;
@@ -328,7 +332,6 @@ async function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<voi
 function createInitialState(checkpointInterval = 15): ReliabilityState {
   return {
     planningOnlyAttempts: 0,
-    planningOnlySteerInjected: false,
     emptyResponseAttempts: 0,
     emptyResponseSteerInjected: false,
     consecutiveNoops: 0,
@@ -353,7 +356,10 @@ function createInitialState(checkpointInterval = 15): ReliabilityState {
   };
 }
 
-// ── Planning-only 检测（从 engine.ts 提取） ──
+// ── Planning-only 疑似触发器（从 engine.ts 提取）──
+// 仅作触发器（召回），不做判据：句式启发式无法可靠承载语义判断（能力说明/问答收尾/
+// 引用讨论都会命中，mention≠use），语义裁决归 planning-judge 子系统（LLM）。
+// 见 arch/semantic-adjudication.md。
 
 const PLANNING_ONLY_PROMISE_RE = /\b(?:i(?:'ll| will)|let me|i(?:'m| am)\s+going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
 const PLANNING_ONLY_COMPLETION_RE = /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
@@ -879,23 +885,22 @@ export async function* runAgentWithReliability(
         }
       }
 
-      // 1. Planning-only 检测
+      // 1. Planning-only 疑似触发（启发式仅作触发器：正则误报的代价只是多一次裁判调用，
+      // 语义裁决与注入归 planning-judge 子系统，见 arch/semantic-adjudication.md）
       if (!hasToolCalls && isPlanningOnlyResponse(contentText, !!hasToolCallInMessage)) {
         if (state.planningOnlyAttempts < relConfig.planningRetry.maxAttempts) {
           state.planningOnlyAttempts++;
-          if (!state.planningOnlySteerInjected) {
-            pendingFollowUps.push({
-              role: 'user',
-              content: `[System: ${relConfig.planningRetry.steerInstruction}]`,
+          if (relConfig.events) {
+            relConfig.events.emit({
+              type: 'planning_only.suspected',
               timestamp: Date.now(),
-              metadata: { source: 'engineHint' },
+              data: { content: contentText },
             });
-            state.planningOnlySteerInjected = true;
           }
+          // 无事件桥（独立使用/裁判未接线）：仅计数不注入——裁判缺席时宁缺勿滥
         }
       } else {
         state.planningOnlyAttempts = 0;
-        state.planningOnlySteerInjected = false;
       }
 
       // 2. 空响应检测

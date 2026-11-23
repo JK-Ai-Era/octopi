@@ -727,6 +727,15 @@ export class SessionAwareRunner {
     this._observerHub = config?.observerHub;
     this.resolveModelOverride = config?.resolveModelOverride;
     this.defaultIntentProvider = config?.defaultIntentProvider;
+    // 可靠性事件桥：planning_only.suspected 等可靠性事件经 EventBus 出口
+    // （planning-judge 等子系统消费；arch/semantic-adjudication.md）。
+    // ReliabilityConfig.events 是可选端口；harness 无 config 面（纯 Core 接口）时跳过。
+    if (this._events && harness && typeof harness === 'object' && 'config' in harness) {
+      const relConfig = (harness as { config?: import('./reliability/run-agent.js').ReliabilityConfig }).config;
+      if (relConfig && typeof relConfig === 'object') {
+        relConfig.events = this._events;
+      }
+    }
   }
 
   /**
