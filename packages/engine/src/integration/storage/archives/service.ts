@@ -18,6 +18,7 @@ import { mkdir, rename, rm, writeFile, cp, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
+import { readTitleState } from '@octopi-agent/core/types/session.js';
 import { bundlePathFor, bundleRelativePath } from './read.js';
 import { sanitizeSessionDirName } from '../../providers/wire-dump.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
@@ -385,7 +386,14 @@ export class SessionArchiveService {
   ): Promise<SealSidecar> {
     const data = await this.opts.store.load(sessionId);
     if (!data) throw new Error(`archive: session not found for seal: ${sessionId}`);
-    const metaRaw = data.meta;
+    // 标题取「最后落定」值（会话期间标题多渠道可变）：metadata 三键权威（save/updateMetadata
+    // 按 titleUpdatedAt 仲裁、不回退），缺省退 meta 镜像（旧数据）。无标题如实空缺——
+    // 不再把 sessionId 烤进 title（否则列表以 id 当标题，恢复时无法辨认是哪个会话；
+    // 历史行 title==sessionId 由展示层视为无标题回退）
+    const settledTitle =
+      readTitleState(data.metadata).title ??
+      (typeof data.meta.title === 'string' && data.meta.title.trim() ? data.meta.title : undefined);
+    const metaRaw: SessionMeta = { ...data.meta, title: settledTitle };
     const base = this.base(sessionId);
     // 附件 manifest：可检索映射 + 附件计数（热库侧读，搬迁前）
     let knowledgeSources: Array<{ sourceId: string; attachmentFile?: string }> = [];
@@ -467,7 +475,7 @@ export class SessionArchiveService {
       sessionId,
       tenantId: sidecar.metaRaw.tenantId,
       agentId: String(sidecar.metaRaw.agentId ?? ''),
-      title: String(sidecar.metaRaw.title ?? sessionId),
+      title: sidecar.metaRaw.title ?? '',
       sealedAt: sidecar.sealedAt,
       sealedBy: sidecar.sealedBy,
       state: sidecar.state,

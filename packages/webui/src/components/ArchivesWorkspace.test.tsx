@@ -92,7 +92,7 @@ describe('ArchivesWorkspace', () => {
       entry({ sessionId: 's2', groupSealId: 's2', title: '单会话', sealedAt: Date.now() - 2 * 86400000 }),
     ];
     render(<ArchivesWorkspace onOpenSession={() => {}} />);
-    await screen.findByText('父会话');
+    await screen.findByText('父会话（p）');
     // 组徽标（含 1 个子会话）+ 自动归档徽标
     expect(screen.getByText('含 1 个子会话')).toBeTruthy();
     expect(screen.getByText(/自动归档/)).toBeTruthy();
@@ -100,9 +100,23 @@ describe('ArchivesWorkspace', () => {
     expect(screen.getByText(/手动归档/)).toBeTruthy();
     // 行内消息数/大小元信息
     expect(screen.getAllByText(/12 条消息/).length).toBeGreaterThan(0);
-    // 组徽标点击展开子会话
+    // 组徽标点击展开子会话（子行同为「原标题（sessionId）」标签）
     fireEvent.click(screen.getByText('含 1 个子会话'));
-    expect(screen.getByText('子会话一')).toBeTruthy();
+    expect(screen.getByText('子会话一（c1）')).toBeTruthy();
+  });
+
+  it('行标签=原标题（sessionId）；无标题/历史 id 烤录行回退「新会话（sessionId）」', async () => {
+    h.entries = [
+      entry({ sessionId: 'a1', groupSealId: 'a1', title: '部署脚本修复' }),
+      // 历史行：旧版把 sessionId 烤进 title（视为无标题）
+      entry({ sessionId: 'a2', groupSealId: 'a2', title: 'a2' }),
+      // 无标题（封存侧如实空缺）
+      entry({ sessionId: 'a3', groupSealId: 'a3', title: '' }),
+    ];
+    render(<ArchivesWorkspace onOpenSession={() => {}} />);
+    await screen.findByText('部署脚本修复（a1）');
+    expect(screen.getByText('新会话（a2）')).toBeTruthy();
+    expect(screen.getByText('新会话（a3）')).toBeTruthy();
   });
 
   it('回收站 Tab：剩余天数升序 + ≤7 天警示文案；空态', async () => {
@@ -126,7 +140,7 @@ describe('ArchivesWorkspace', () => {
     ];
     render(<ArchivesWorkspace onOpenSession={() => {}} />);
     fireEvent.click(screen.getByText('回收站'));
-    await screen.findByText('紧急会话');
+    await screen.findByText('紧急会话（s2）');
     // 警示文案（≤7 天）
     expect(screen.getByText(/即将自动清除/)).toBeTruthy();
     // 升序：紧急在前
@@ -147,7 +161,7 @@ describe('ArchivesWorkspace', () => {
       entry({ sessionId: 'c1', groupSealId: 'p', parentSessionId: 'p', title: '子会话一' }),
     ];
     render(<ArchivesWorkspace onOpenSession={() => {}} />);
-    await screen.findByText('父会话');
+    await screen.findByText('父会话（p）');
     fireEvent.click(screen.getAllByRole('button', { name: '永久删除' })[0]);
     const dialog = await screen.findByRole('dialog');
     // 影响面：2 个会话（含 1 个子会话）· 附件合计
@@ -176,7 +190,7 @@ describe('ArchivesWorkspace', () => {
     ];
     render(<ArchivesWorkspace onOpenSession={() => {}} />);
     fireEvent.click(screen.getByText('回收站'));
-    await screen.findByText('t1');
+    await screen.findByText('t1（s2）');
     fireEvent.click(screen.getByRole('button', { name: '清空回收站' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('2 个会话');
@@ -187,7 +201,7 @@ describe('ArchivesWorkspace', () => {
   it('移到回收站 + 撤销 toast：deleteSession 后点撤销 → restoreArchive', async () => {
     h.entries = [entry({ sessionId: 's1', groupSealId: 's1', title: '会话一' })];
     render(<ArchivesWorkspace onOpenSession={() => {}} />);
-    await screen.findByText('会话一');
+    await screen.findByText('会话一（s1）');
     fireEvent.click(screen.getByRole('button', { name: '移到回收站' }));
     await waitFor(() =>
       expect(h.calls.some((c) => c.kind === 'deleteSession' && c.arg === 's1')).toBe(true),
@@ -203,7 +217,7 @@ describe('ArchivesWorkspace', () => {
     const opened: string[] = [];
     h.entries = [entry({ sessionId: 's1', groupSealId: 's1', title: '会话一' })];
     render(<ArchivesWorkspace onOpenSession={(id) => opened.push(id)} />);
-    await screen.findByText('会话一');
+    await screen.findByText('会话一（s1）');
     fireEvent.click(screen.getByRole('button', { name: '恢复' }));
     await waitFor(() =>
       expect(h.calls.some((c) => c.kind === 'restoreArchive' && c.arg === 's1')).toBe(true),

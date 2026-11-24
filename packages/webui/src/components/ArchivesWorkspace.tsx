@@ -41,6 +41,13 @@ interface ArchiveGroup {
   messages: number;
 }
 
+/** 行标签：原标题（sessionId）——标题=封存侧落定的最后标题；无标题/历史 id 烤录行按「新会话」回退 */
+export function entryLabel(e: ArchiveEntryInfoDto, t: TFn): string {
+  const title = e.title?.trim();
+  const display = title && title !== e.sessionId ? title : t('chatWorkspace.newSession');
+  return `${display}（${e.sessionId}）`;
+}
+
 /** 字节人类可读（GB/MB/KB/B） */
 export function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
@@ -320,12 +327,12 @@ export function ArchivesWorkspace({
     return (
       <div className="archive-row" key={g.root.sessionId}>
         <div className="archive-row-title">
-          <span className="archive-title">{g.root.title || g.root.sessionId}</span>
+          <span className="archive-title">{entryLabel(g.root, t)}</span>
           {g.children.length > 0 && (
             <button
               type="button"
               className="archive-group-badge"
-              title={g.children.map((c) => c.title || c.sessionId).join('\n')}
+              title={g.children.map((c) => entryLabel(c, t)).join('\n')}
               onClick={() => toggleGroup(g.root.groupSealId)}
               aria-expanded={expanded.has(g.root.groupSealId)}
             >
@@ -354,7 +361,7 @@ export function ArchivesWorkspace({
           <div className="archive-group-children">
             {g.children.map((c) => (
               <div key={c.sessionId} className="small muted archive-child-row">
-                {c.title || c.sessionId}
+                {entryLabel(c, t)}
               </div>
             ))}
           </div>

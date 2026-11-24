@@ -186,6 +186,58 @@ describe('seal（trash）', () => {
     expect(rows[0]!.groupSealId).toBe(first.sealed[0]!.groupSealId);
   });
 
+  it('封存标题=会话最后落定的标题（metadata 三键权威 → meta 镜像兜底）；无标题不烤 id', async () => {
+    // 1) 三键权威：镜像再旧也取 metadata 终值（多渠道改题后的最后落定值）
+    await store.save('tl1', {
+      id: 'tl1',
+      agentId: 'a1',
+      messages: [{ role: 'user', content: 'hi' }],
+      meta: {
+        id: 'tl1', tenantId: 'default', agentId: 'a1', title: '旧镜像',
+        createdAt: 1, lastInteractionAt: FIXED_NOW, updatedAt: FIXED_NOW,
+      },
+      metadata: { title: '终值标题', titleSource: 'user', titleUpdatedAt: FIXED_NOW },
+      tasks: [],
+    } as unknown as SessionData);
+    await service.seal({ sessionId: 'tl1', state: 'archived', sealedBy: 'manual' });
+    expect(service.list().find((e) => e.sessionId === 'tl1')!.title).toBe('终值标题');
+
+    // 2) 旧数据兜底：三键缺席、索引 title 是旧代码写的镜像（save 新投影会抹掉，故直接补回索引模拟存量）
+    await store.save('tl2', {
+      id: 'tl2',
+      agentId: 'a1',
+      messages: [{ role: 'user', content: 'hi' }],
+      meta: {
+        id: 'tl2', tenantId: 'default', agentId: 'a1',
+        createdAt: 1, lastInteractionAt: FIXED_NOW, updatedAt: FIXED_NOW,
+      },
+      metadata: {},
+      tasks: [],
+    } as unknown as SessionData);
+    const metaPath = join(sessionsDir, 'sessions.json');
+    const idx = JSON.parse(await readFile(metaPath, 'utf-8')) as Record<string, { title?: string }>;
+    idx.tl2!.title = '旧标题';
+    await writeFile(metaPath, JSON.stringify(idx));
+    await service.seal({ sessionId: 'tl2', state: 'archived', sealedBy: 'manual' });
+    expect(service.list().find((e) => e.sessionId === 'tl2')!.title).toBe('旧标题');
+
+    // 3) 完全无标题 → 空串如实（不把 sessionId 烤进 title——历史 id 烤录行由展示层回退）
+    await store.save('tl3', {
+      id: 'tl3',
+      agentId: 'a1',
+      messages: [{ role: 'user', content: 'hi' }],
+      meta: {
+        id: 'tl3', tenantId: 'default', agentId: 'a1',
+        createdAt: 1, lastInteractionAt: FIXED_NOW, updatedAt: FIXED_NOW,
+      },
+      metadata: {},
+      tasks: [],
+    } as unknown as SessionData);
+    await service.seal({ sessionId: 'tl3', state: 'archived', sealedBy: 'manual' });
+    const e3 = service.list().find((e) => e.sessionId === 'tl3')!;
+    expect(e3.title).toBe('');
+  });
+
   it('purgeAt 派生：trash=+30d / manual=null / auto=+180d', async () => {
     await makeSession('a', { withDump: false });
     await makeSession('b', { withDump: false });

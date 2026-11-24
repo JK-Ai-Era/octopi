@@ -34,11 +34,18 @@ function metaFromRecord(rec: ArchiveRecord): SessionMeta {
   } catch {
     // swallow: 只影响 meta 细节字段（如 participantAgentIds）；行级列兜底见下
   }
+  // 会话最后落定的标题；title==sessionId 是旧版把 id 烤进 title 的遗留（视为无标题），
+  // 无标题返回 undefined——列表/检索侧回退展示，不冒充标题
+  const rawTitle = metaRaw?.title ?? rec.title;
+  const title =
+    typeof rawTitle === 'string' && rawTitle.trim() && rawTitle !== rec.sessionId
+      ? rawTitle
+      : undefined;
   return {
     ...(metaRaw ?? {}),
     id: rec.sessionId,
     agentId: metaRaw?.agentId ?? rec.agentId,
-    title: metaRaw?.title ?? rec.title,
+    title,
     tenantId: metaRaw?.tenantId ?? rec.tenantId,
     createdAt: metaRaw?.createdAt ?? rec.createdAt ?? rec.sealedAt,
     updatedAt: metaRaw?.updatedAt ?? rec.endedAt ?? rec.sealedAt,

@@ -140,6 +140,14 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.130.3 (2026-11-24)
+
+### fix(webui,storage): 归档/回收站行标签改「原标题（sessionId）」，标题取最后落定值
+
+- **标签格式**：归档/回收站列表（组头/子会话/tooltip）统一「原标题（sessionId）」；无标题会话按侧栏同款「新会话（sessionId）」回退，历史行 `title==sessionId`（旧版把 id 烤进 title 的遗留）同样按无标题回退——恢复时可直接辨认 + 对 id。
+- **标题采集**：封存标题改取「会话最后落定的标题」——`metadata` 三键权威（save/updateMetadata 按 titleUpdatedAt 仲裁、不回退）优先，缺省退 meta 镜像（存量旧数据）；无标题如实存空串，不再把 sessionId 烤进 title。冷备检索 `metaFromRecord` 同步（id 烤录行不冒充标题）。
+- 测试：标签格式专项（标题/无标题/历史烤录三形态）+ service 采集三形态回归（三键权威胜旧镜像 / 旧镜像兜底 / 无标题不烤 id）；全量 5895 passed / 9 skipped（一次 `escalation-p4` 负载偶发经隔离+复跑定性为 flake，与本改动无关）。
+
 ## v0.130.2 (2026-11-24)
 
 ### docs(context): context-layer-contracts 双语同步 as-built（装配算法/配额/E8 双组）
