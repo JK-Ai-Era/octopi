@@ -140,6 +140,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.130.2 (2026-11-24)
+
+### docs(context): context-layer-contracts 双语同步 as-built（装配算法/配额/E8 双组）
+
+- **装配算法（§4）重写**：补预算推导（`systemBudgetTokens` 绝对值优先 → `systemBudgetRatio`×窗口，默认 0.22 下限 2000；窗口未知 `skippedBudget` 不硬裁）；`contentBudget = systemBudget − structureReserve − preambleTokens`（宪法 preamble 预扣此前漏写）；priority 并列按 `order`；droppable 截断有 ~40 token 最小地板；非 droppable 超预算保留并标 `system budget exhausted but kept`；`layerOverflowRatio` 硬顶系数；并行 assemble；指纹缓存（键 `layerId#system|snapshot`，FIFO 256，当前仅观测）；固定协议块（Turn 规则 + tool purpose + 降级标记禁令）归属 `createDefaultSystemPromptAssembler`。
+- **E8 双组装配**：snapshot 组（Memory/Cognition/Wisdom + 易变 Runtime）独立预算 `snapshotBudgetTokens`、产出 `runtimeSnapshot` 走 `<turn_context>`；manifest 记 `usedSnapshotTokens` / 逐条 `placement`；§6 生产路径流程图改双组口径（原单组层清单已过时）。
+- **配额/预算（§6）**：补 `DefaultBudgetAllocator` 细节——`maxOutputTokens` 硬预留、比例回退（`outputRatio` 20% 夹 2k–8k）仅限输出上限未知、请求信封 500、历史装不下报 `infeasible` fail-loud；`compactTargetTokens` 软目标模式（消息下限兜底 1000）；决策读数经 `ContextSizeLedger` 按 model 校准（≥2 入账样本）。
+- **层与观测**：§5 新增 `PluginRuntimeSnapshotLayer`；Wisdom trial 轮转 + S1 applied 入账、Cognition 语义种子、Memory 置信过滤同步；manifest 观测三键（`includeLayerPreview` / `layerPreviewChars` / `includeLayerContent`）与 `budgetTokens` / `shares` 语义写明；§3 `defaultShare` 注释修正（不再归一化）；§8 相关文件补 budget-allocator / turn-envelope / tool-result-aging / layer-snapshot + layer-health / context-size-ledger。中英双语同改。另修模块 README 同族过时措辞（「份额归一化」已不存在、装配早已不止 persona + runtime）。
+
 ## v0.130.1 (2026-11-24)
 
 ### feat(cli): doctor 归档/删除残留扫描（ARC001–ARC007）+ 归档包导出下载

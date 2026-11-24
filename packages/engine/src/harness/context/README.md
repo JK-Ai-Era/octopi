@@ -15,9 +15,9 @@
 
 ### 内容契约（七层）
 - `layer-types.ts` — ContextLayer / AssembleManifest 契约
-- `assembler.ts` — DefaultContextAssembler（份额归一化 + priority 纳入）
+- `assembler.ts` — DefaultContextAssembler（总预算 + priority 竞争；仅 `layerShares` 显式配置的层有硬顶）
 - `layers.ts` — 薄适配层（persona/skill/knowledge/memory/cognition/wisdom/runtime）
-- `system-prompt-assembler.ts` — Runner 每轮 system 装配（persona + runtime，已接线）
+- `system-prompt-assembler.ts` — Runner 每轮 system 装配（E8 双组：system + snapshot；依赖齐备时全层已接线）
 - `summarize.ts` — 摘要 provider 挑选（`models.level.mini` → standard → 主模型）；Builder/config 自动挂 `createProviderSummarize`
 
 ### 窗口管理

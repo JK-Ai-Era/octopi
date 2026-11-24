@@ -2,7 +2,7 @@
 
 > Status: contracts landed (`packages/engine/src/harness/context/layer-types.ts` / `assembler.ts` / `layers.ts`)
 > Scope: **contracts and the minimal assembly closed loop only**; business implementations of each layer are filled in one by one later.
-> Date: contracts finalized in v0.26; kept current with implementation (reviewed 2026-10-12)
+> Date: contracts finalized in v0.26; kept current with implementation (last synced 2026-11-24 against v0.130.1)
 
 ---
 
@@ -42,13 +42,13 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 
 | id | order (position) | priority (retain order) | share | droppable | Current provider source |
 |----|---------------|------------------|---------------|-----------|-------------------|
-| wisdom | 10 | 70 | 0.12 | yes | `WisdomStore.selectForInjection` (core+scenario) |
+| wisdom | 10 | 70 | 0.12 | yes | `WisdomStore.selectForInjection` (core+scenario+trial rotation) |
 | persona | 20 | **100** | 0.35 | **no** | `PersonaSource` / Runner resolve |
 | skill | 30 | 60 | 0.15 | yes | `SkillManager.formatForPrompt()` |
 | knowledge | 40 | 40 | 0.12 | yes | `KnowledgeCatalogProvider` (Tier 0 catalog) |
-| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate` |
+| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate` (+ query-vector semantic seeds) |
 | memory | 60 | 30 | 0.10 | yes | `MemoryStore.retrieve` |
-| runtime | 70 | 80 | 0.10 | yes | session tasks + injectedContext |
+| runtime | 70 | 80 | 0.10 | yes | session tasks / guidance (`volatileContext`; `injectedContext` is the legacy merged form) |
 
 Notes:
 
@@ -65,7 +65,7 @@ Notes:
 interface ContextLayer {
   id: ContextLayerId;
   priority: number;      // budget competition; higher is retained first
-  defaultShare: number;  // share normalized across enabled layers
+  defaultShare: number;  // historical reference only — does not drive Assembler quotas
   droppable: boolean;    // can the whole layer be dropped when over budget (persona=false)
   order: number;         // position in the system prompt
   placement?: 'system' | 'snapshot';  // E8: 'snapshot' → per-turn <turn_context> inside <turn_start> user message, never system prompt
@@ -88,14 +88,23 @@ Design invariants:
 
 ## 4. Assembly algorithm (DefaultContextAssembler)
 
-**Budget semantics:**
+**Budget derivation (per turn, `createDefaultSystemPromptAssembler`):**
 
-1. **By default only the total budget is controlled**: `systemBudget` (minus `structureReserve` → `contentBudget`)
-2. Each layer `assemble`s its actual content; **no** global quota based on `defaultShare`
-3. Consume the total budget from **highest priority down**; if it does not fit, droppable layers are truncated to the remainder or dropped
-4. **Optional hard cap**: only if `layerShares[id]` is configured — `maxTokens = floor(contentBudget × share)`; overflow is first truncated to the hard cap, then competes for the total; unconfigured layers have no per-layer cap
-5. Concatenate by `order` with `\n\n---\n\n`
+- **systemBudget**: `context.contextAssembler.systemBudgetTokens` (absolute, wins) → else `systemBudgetRatio` (default `0.22`, schema range 0.05–0.5) × `contextWindow` with a floor of 2000. Window unknown and no absolute budget → `skippedBudget: true`: layers still assemble but are **not** token-trimmed (an unknown window never justifies dropping the system prompt).
+- **Snapshot group (E8)**: `placement: 'snapshot'` layers are assembled as a **second group** with their own budget `context.contextAssembler.snapshotBudgetTokens` (default: unlimited), returned as `runtimeSnapshot` and delivered in the per-turn `<turn_context>`; the manifest records `usedSnapshotTokens` and per-entry `placement`.
+
+**Budget semantics (system group, `DefaultContextAssembler`):**
+
+1. **By default only the total budget is controlled**: `contentBudget = systemBudget − structureReserve − preambleTokens` — the constitution preamble is pre-charged and never competes with layers
+2. Each layer `assemble`s its actual content **in parallel** (layers are independent); **no** global quota based on `defaultShare`
+3. Consume the total budget from **highest priority down** (ties by `order`); a droppable layer that does not fit is truncated to the remainder — but only down to a minimum useful floor (~40 tokens; below it the layer is dropped whole) — or dropped; a **non-droppable** layer (persona) is **kept even over budget**, flagged in the manifest (`system budget exhausted but kept`)
+4. **Optional hard cap**: only if `layerShares[id]` is configured — `maxTokens = floor(contentBudget × share)` (a programmatic `layerOverflowRatio`, default `1.0`, may scale the cap); overflow is first truncated to the hard cap, then competes for the total; unconfigured layers have no per-layer cap
+5. Concatenate by `order` with `\n\n---\n\n`, each body wrapped in `<layer name="…">`
 6. Return `{ systemPrompt, manifest }`
+
+**Fixed protocol blocks (always in front, `createDefaultSystemPromptAssembler`):** the delivered system prompt is `Turn semantics + tool-purpose note + degradation-marker note + assembled body`. These blocks are cache-stable constants, not layer content; with no layers at all they are still returned.
+
+**Fingerprint cache:** the Assembler keeps a per-session fingerprint map (key `layerId#system|snapshot` so the dual Runtime instances never share a key space; FIFO 256 sessions; `clearSession` on session close) and exposes it via `getFingerprint` for debug/tests. It is **observability only** today — `assemble` still runs every turn (layers may depend on the query); cached reuse is deferred to later layer implementations.
 
 **Hosted systemPrompt and session persistence:**
 
@@ -106,7 +115,8 @@ Design invariants:
 
 **Observability channels:**
 
-- The Assembler may write layer bodies into `manifest.layers[].content` (local cache / REST on selection)
+- Manifest knobs (`context.contextAssembler.*`): `includeLayerPreview` (default on — truncated body) with `layerPreviewChars` (default 400), and `includeLayerContent` (default on — full body in `manifest.layers[].content` for the Web context inspector; **never model input**)
+- Per-entry `budgetTokens` is written only for layers with a configured `layerShares` hard cap (absent = no per-layer quota); `manifest.shares` likewise records only explicitly configured shares
 - **WS broadcast of `context.layers.assembled` strips `content`** (preview is kept); when the UI selects a layer it fetches the full text via `GET /sessions/:id/context/layers`
 - Gateway `lastContextLayers` FIFO cap is 256 sessions
 
@@ -118,11 +128,12 @@ Design invariants:
 |----|--------|----------|
 | `PersonaLayer` | Wraps the already-loaded persona text | File watching (still on PersonaSource) |
 | `SkillLayer` | Wraps `formatForPrompt()` | Task-matched full-text loading |
-| `RuntimeLayer` | Wraps per-turn dynamic injection | — |
+| `RuntimeLayer` | Wraps per-turn dynamic injection (dual instance: anchors `'system'` / volatile `'snapshot'`) | — |
+| `PluginRuntimeSnapshotLayer` | Plugin Collect contributions as a budgeted Runtime snapshot (`<plugin-contribution>`, XML-escaped so a plugin cannot forge sibling tags) | systemPrompt override — contributions never patch the system prompt |
 | `KnowledgeLayer` | `KnowledgeCatalogProvider` → Tier 0 catalog formatting | Content retrieval / embedding (Knowledge service) |
-| `MemoryLayer` | `retrieve({text, limit})` | Tuning decay policy (curve in `memory/decay-policy.ts`, executed by govern) |
-| `CognitionLayer` | `spreadingActivate` + strong/weak edge formatting (strong edges `A —[rel]→ B` / weak edges collapsed as "related: …") | Co-occurrence promotion, fake-causal writes (cognition-gates) |
-| `WisdomLayer` | Small core + keyword scenario match + maxim layout | embedding/llm matching (later) |
+| `MemoryLayer` | `retrieve({text, limit, minSimilarity})` + confidence inject filter (shadow/deleted excluded) | Tuning decay policy (curve in `memory/decay-policy.ts`, executed by govern) |
+| `CognitionLayer` | `spreadingActivate` + strong/weak edge formatting (strong edges `A —[rel]→ B` / weak edges collapsed as "related: …"); semantic seeds from query-vector neighbors (`semanticSeedCount`, degrades to lexical when no vectors) | Co-occurrence promotion, fake-causal writes (cognition-gates) |
+| `WisdomLayer` | Small core + scenario match + trial rotation (`trialMaxItems` / `includeTrial`) + maxim layout; `onInjected` → `touchApplied` books S1 applied (core/scenario picks only, never trial) | embedding/llm matching (later) |
 | `createDefaultLayers` | Registers only layers whose dependencies exist | Auto-discovery |
 
 When upgrading any layer later: **replace only the `assemble` implementation or the class; do not change the contract.**
@@ -137,10 +148,12 @@ When upgrading any layer later: **replace only the `assemble` implementation or 
 Runner.handle
   → persona resolve (PersonaSource hot reload, unchanged)
   → session compact seeding (E4 key = sessionId × agentId)
-  → session tasks / guidance → injectedContext
-  → createDefaultSystemPromptAssembler
-       system contract layers: Persona + Skill + Knowledge + Memory + Cognition + Wisdom + Runtime
-  → runContext.systemPrompt (written into RunScope; never written back to the shared Agent)
+  → session tasks / guidance → volatileContext (E8; `injectedContext` is the legacy merged form)
+  → createDefaultSystemPromptAssembler (E8 dual group)
+       system group:   fixed protocol blocks + constitution preamble + Persona + Skill + Knowledge + Runtime(anchors)
+       snapshot group: Memory + Cognition + Wisdom + Runtime(volatile: datetime/tasks/guidance) → runtimeSnapshot
+  → runContext.systemPrompt (written into RunScope; never written back to the shared Agent);
+    runtimeSnapshot rides the `<turn_context>` of this turn's user message (never the system prompt)
   → convertToLlm → DefaultContextEngine (**Information**: message window + proactive summary)
   → AssembleResult.compactState → Agent.setSessionCompactState(sessionId, agentId)
   → Runner writeSessionCompact before save → SessionData.contextCompacts[agentId]
@@ -168,7 +181,10 @@ Runner.handle
 - Path-A trigger keeps **both** lines and takes their `min` (do not drop either; intentionally not named "legacy"):
   - **target line** `targetTokens × compactFallbackRatio` (defaults `200000` / `3`) — decoupled from the window so long sessions still compact (a 1M window × ratio alone never fired)
   - **window ratio line** `messagesBudget × proactiveCompactRatio` (default `0.6`) — so small/known windows (256k etc.) still compact before hard overflow
-- **Budget invariant** (single hard constraint): `input_tokens + max_tokens ≤ contextWindow`. The allocator reserves `maxOutputTokens` first, then fixed overhead (system + tools + request envelope), leaving `messagesLimit` as the hard ceiling for history; `messagesBudget` is a soft policy hint. Enforcement points (message selection, overflow target) use `messagesLimit`, never the soft value
+- **Budget invariant** (single hard constraint): `input_tokens + max_tokens ≤ contextWindow`. The allocator (`DefaultBudgetAllocator`) reserves `maxOutputTokens` first, then fixed overhead (system + tools + request envelope), leaving `messagesLimit` as the hard ceiling for history; `messagesBudget` is a soft policy hint. Enforcement points (message selection, overflow target) use `messagesLimit`, never the soft value
+  - The `maxOutputTokens` reserve is hard; the ratio fallback (`contextEngine.outputRatio` / `minOutputReserve` / `maxOutputReserve`, default 20% clamped 2k–8k) applies only when the model's output cap is unknown. The request-envelope reserve is 500 tokens. If nothing remains for history the allocator reports `infeasible` — the caller fails loud instead of sending a hollow request
+  - **`contextAssembler.compactTargetTokens`** supplies a policy target when the physical window is unknown (manual / structural compact budget); in that mode the allocator treats it as a soft target (message limit floored at 1000), never as a physical boundary
+  - Decision readings (trigger lines, overflow fit tests) are **calibrated** against provider-reported usage by the per-model `ContextSizeLedger` (EMA ratio, deviation-gated samples, escape re-anchor); before ≥2 booked samples they fall back to actual-anchored or raw estimates
 - `targetTokens: 0` uses only the window ratio line. The trigger measures the **aged request payload** (a conservative upper bound of what is sent), so B2's steady state never trips it (double-mechanism guard, unit-locked). Re-compression additionally requires material token growth since the last compaction (occasional fallback, not periodic re-compression)
 - **The assembly layer never degrades messages.** Sticky rebuild only re-assembles (`head + summary + verbatim post-cover increments + tail`); degradation is owned solely by the compact capability. A rebuild boundary slides every request, so degrading there rewrites history once per request and destroys the prefix cache (measured: hit rate 98% → 29%, 31.3M uncached input tokens in 1.5h)
 - `DefaultContextEngine.proactiveCompactRatio` (default `0.6`) scales the window ratio line. **`0` forbids starting new path-A compression (not only LLM) — it does not discard an existing sticky compact view** (`previousSummary` / `lastProactiveMessageCount` still rebuild `head + summary + post-cover increments + tail`). Mid-turn (tool activity after the last genuine user) may start LLM summaries too (方案 E revised 2026-11-07: the old whole-turn ban disabled the target line for hours-long agent turns); active work records are protected by an expanded tail window instead — `contextEngine.midTurnProtectLastN` (default `50`, `max(protectLastN, midTurnProtectLastN)`), so the in-flight tool steps/evidence/reasoning never enter the compression selection
@@ -251,7 +267,7 @@ process-wide sink serves every session that shares a provider.
 - Builder can inject `wisdomStore` / `cognitionStore`; **`wireAgentBuilder` (shared by config-bridge / Gateway / createAgent)** mounts Memory/Wisdom/Cognition on the agent-home `AgentDatabase` and discovers `skills/` (sole discover entry); Gateway layers Knowledge catalog / tools on top
 - Gateway sets `builder.agentHome(home)` + `builder.agentId(id)` for the agent; Memory SQLite (agent.db) hangs on the agent home; **no** extract-to-disk directory
 - Default `createDefaultSystemPromptAssembler` registers Wisdom / Cognition layers when their dependencies exist
-- `octopi.json` → `context.contextAssembler.includeLayerPreview` can write layer previews into the manifest (Web context panel)
+- `octopi.json` → `context.contextAssembler.includeLayerPreview` / `layerPreviewChars` / `includeLayerContent` control what the manifest carries for the Web context panel (previews and full bodies; see §4 observability)
 - `GET /api/v1/agents/:id/context/health` exposes store counts (data-plane health)
 - Knowledge no longer uses an in-process proposition store; catalog / indexes / grounding see `docs/knowledge.md`
 
@@ -271,7 +287,12 @@ process-wide sink serves every session that shares a provider.
 | `packages/engine/src/harness/context/layer-types.ts` | Contract + default order/priority/share |
 | `packages/engine/src/harness/context/assembler.ts` | `DefaultContextAssembler` |
 | `packages/engine/src/harness/context/layers.ts` | Thin adapter layers + `createDefaultLayers` |
-| `packages/engine/src/harness/context/system-prompt-assembler.ts` | Per-turn system assembly port for the Runner |
+| `packages/engine/src/harness/context/system-prompt-assembler.ts` | Per-turn system assembly port for the Runner (budget derivation, E8 dual group, fixed protocol blocks) |
+| `packages/engine/src/harness/context/budget-allocator.ts` | `DefaultBudgetAllocator` — the single hard budget invariant (`input_tokens + max_tokens ≤ contextWindow`) |
+| `packages/engine/src/harness/context/turn-envelope.ts` | E8 turn envelope (`<turn_start>` / `<turn_context>` / `<turn_end>`) |
+| `packages/engine/src/harness/context/tool-result-aging.ts` | B2 history-aging plan (view-level degradation, batch-frozen, write-once) |
+| `packages/engine/src/harness/context/layer-snapshot.ts` / `layer-health.ts` | Web DTO (`AssembleManifest` → UI snapshot) / data-plane health probe |
+| `packages/engine/src/harness/context/context-size-ledger.ts` | Calibrated decision readings (per-model ratio vs provider usage) |
 | `packages/engine/src/harness/context/summarize.ts` | `createProviderSummarize` (family-A session-model closure) + `pickSummarizeProvider` (family-B bypass selection: mini→standard→primary) |
 | `packages/engine/src/harness/context/capabilities/**` | Shared capabilities SummaryPort / CompactEngine |
 | `tests/harness/context-layer-contracts.test.ts` | Contract behavior tests |

@@ -2,7 +2,7 @@
 
 > 状态：契约已落地（`packages/engine/src/harness/context/layer-types.ts` / `assembler.ts` / `layers.ts`）  
 > 范围：**只定契约与最小装配闭环**；各层业务实现后续逐个打磨。  
-> 日期：契约定稿于 v0.26；随实现持续更新（校对 2026-10-12）  
+> 日期：契约定稿于 v0.26；随实现持续更新（最近同步 2026-11-24，对齐 v0.130.1）  
 > **语言说明**：英文版见 [context-layer-contracts.md](./context-layer-contracts.md)。本文为中文对译，变更须双语同步。
 
 ---
@@ -43,13 +43,13 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 
 | id | order（位置） | priority（保序） | share（份额） | droppable | 当前 provider 来源 |
 |----|---------------|------------------|---------------|-----------|-------------------|
-| wisdom | 10 | 70 | 0.12 | yes | `WisdomStore.selectForInjection`（core+scenario） |
+| wisdom | 10 | 70 | 0.12 | yes | `WisdomStore.selectForInjection`（core+scenario+trial 轮转） |
 | persona | 20 | **100** | 0.35 | **no** | `PersonaSource` / Runner resolve |
 | skill | 30 | 60 | 0.15 | yes | `SkillManager.formatForPrompt()` |
 | knowledge | 40 | 40 | 0.12 | yes | `KnowledgeCatalogProvider`（Tier 0 catalog） |
-| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate` |
+| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate`（+ query 向量语义种子） |
 | memory | 60 | 30 | 0.10 | yes | `MemoryStore.retrieve` |
-| runtime | 70 | 80 | 0.10 | yes | session tasks + injectedContext |
+| runtime | 70 | 80 | 0.10 | yes | session tasks / guidance（`volatileContext`；`injectedContext` 为旧合并形态） |
 
 说明：
 
@@ -66,7 +66,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 interface ContextLayer {
   id: ContextLayerId;
   priority: number;      // 预算竞争，越大越先保留
-  defaultShare: number;  // 启用层之间归一化后的份额
+  defaultShare: number;  // 历史参考值——不再驱动 Assembler 配额
   droppable: boolean;    // 超预算能否整层丢弃（persona=false）
   order: number;         // system prompt 位置
   placement?: 'system' | 'snapshot';  // E8：'snapshot' → <turn_start> 用户消息内 turn_context，绝不进 system prompt
@@ -89,14 +89,23 @@ interface ContextLayer {
 
 ## 4. 装配算法（DefaultContextAssembler）
 
-**预算语义：**
+**预算推导（每轮，`createDefaultSystemPromptAssembler`）：**
 
-1. **默认只控总预算**：`systemBudget`（扣 `structureReserve` → `contentBudget`）
-2. 各层按实际内容 `assemble`；**不**按 `defaultShare` 做全局配额
-3. 按 **priority 从高到低**占用总预算；装不下则 droppable 截到剩余或丢弃
-4. **可选硬顶**：`layerShares[id]` 配置了才生效 —— `maxTokens = floor(contentBudget × share)`，超出先截到硬顶再竞争总量；未配置层无单层上限
-5. 按 `order` 用 `\n\n---\n\n` 拼接
+- **systemBudget**：`context.contextAssembler.systemBudgetTokens`（绝对值，优先）→ 否则 `systemBudgetRatio`（默认 `0.22`，schema 范围 0.05–0.5）× `contextWindow`，下限 2000。窗口未知且无绝对预算 → `skippedBudget: true`：层照常装配但**不做** token 硬裁（窗口未知从不构成丢 system prompt 的理由）。
+- **快照组（E8）**：`placement: 'snapshot'` 的层作为**第二组**单独装配，独立预算 `context.contextAssembler.snapshotBudgetTokens`（默认不限），产出 `runtimeSnapshot` 送入本轮 `<turn_context>`；manifest 记录 `usedSnapshotTokens` 与逐条 `placement`。
+
+**预算语义（system 组，`DefaultContextAssembler`）：**
+
+1. **默认只控总预算**：`contentBudget = systemBudget − structureReserve − preambleTokens`——宪法 preamble 预扣，不参与层竞争
+2. 各层按实际内容**并行** `assemble`（层间独立）；**不**按 `defaultShare` 做全局配额
+3. 按 **priority 从高到低**占用总预算（同级按 `order`）；droppable 层装不下则截到剩余——但有最小可用地板（约 40 token，低于则整层丢弃）——或直接丢弃；**非 droppable** 层（persona）**超预算也保留**，manifest 标注 `system budget exhausted but kept`
+4. **可选硬顶**：`layerShares[id]` 配置了才生效 —— `maxTokens = floor(contentBudget × share)`（程序化 `layerOverflowRatio`，默认 `1.0`，可放宽硬顶）；超出先截到硬顶再竞争总量；未配置层无单层上限
+5. 按 `order` 用 `\n\n---\n\n` 拼接，每层正文包 `<layer name="…">`
 6. 返回 `{ systemPrompt, manifest }`
+
+**固定协议块（永远在最前，`createDefaultSystemPromptAssembler`）：** 交付的 system prompt = `Turn 阅读规则 + tool purpose 说明 + 降级标记禁令 + 装配正文`。这些块是缓存稳定常量、不是层内容；无任何层时照样返回。
+
+**指纹缓存：** Assembler 维护按 session 的指纹表（键 `layerId#system|snapshot`，双 Runtime 实例不共用键空间；FIFO 256 session；会话关闭 `clearSession`），经 `getFingerprint` 供调试/测试读取。当前**仅作观测**——`assemble` 仍每轮执行（层可能依赖 query），缓存复用留给后续层实现。
 
 **托管 systemPrompt 与会话落盘：**
 
@@ -107,7 +116,8 @@ interface ContextLayer {
 
 **可观测通道：**
 
-- Assembler 可将层正文写入 `manifest.layers[].content`（本地缓存 / REST 点选用）
+- manifest 旋钮（`context.contextAssembler.*`）：`includeLayerPreview`（默认开——截断预览）配 `layerPreviewChars`（默认 400），以及 `includeLayerContent`（默认开——`manifest.layers[].content` 存全文，供 Web 上下文检查器；**绝不进模型输入**）
+- 逐条 `budgetTokens` 只在该层配置了 `layerShares` 硬顶时写入（缺省 = 无单层配额）；`manifest.shares` 同样只记显式配置的比例
 - **WS 广播 `context.layers.assembled` 会剥离 `content`**（preview 保留）；UI 点选层时经 `GET /sessions/:id/context/layers` 拉取全文
 - Gateway `lastContextLayers` FIFO 上限 256 session
 
@@ -119,11 +129,12 @@ interface ContextLayer {
 |----|--------|----------|
 | `PersonaLayer` | 包装已加载人格文本 | 文件监听（仍归 PersonaSource） |
 | `SkillLayer` | 包装 `formatForPrompt()` | 按任务匹配加载全文 |
-| `RuntimeLayer` | 包装每轮动态注入 | — |
+| `RuntimeLayer` | 包装每轮动态注入（双实例：锚点 `'system'` / 易变 `'snapshot'`） | — |
+| `PluginRuntimeSnapshotLayer` | Plugin Collect 贡献作为预算内 Runtime 快照（`<plugin-contribution>`，XML 转义防伪造成兄弟标签） | systemPrompt 覆写——贡献绝不打补丁进 system prompt |
 | `KnowledgeLayer` | `KnowledgeCatalogProvider` → Tier 0 catalog 格式化 | 内容检索 / embedding（归 Knowledge 服务） |
-| `MemoryLayer` | `retrieve({text, limit})` | 衰减策略调参（曲线在 `memory/decay-policy.ts`，由 govern 执行） |
-| `CognitionLayer` | `spreadingActivate` + 强弱边格式化（强边 `A —[rel]→ B` / 弱边折叠「相关：…」） | 共现升格、假因果写入（归 cognition-gates） |
-| `WisdomLayer` | 小核心 + 关键词场景匹配 + maxim 排版 | embedding/llm 匹配（归后续） |
+| `MemoryLayer` | `retrieve({text, limit, minSimilarity})` + 置信注入过滤（shadow/deleted 排除） | 衰减策略调参（曲线在 `memory/decay-policy.ts`，由 govern 执行） |
+| `CognitionLayer` | `spreadingActivate` + 强弱边格式化（强边 `A —[rel]→ B` / 弱边折叠「相关：…」）；query 向量近邻语义种子（`semanticSeedCount`，无向量时退化纯词面） | 共现升格、假因果写入（归 cognition-gates） |
+| `WisdomLayer` | 小核心 + 场景匹配 + trial 轮转（`trialMaxItems` / `includeTrial`）+ maxim 排版；`onInjected` → `touchApplied` 记 S1 applied（只记 core/scenario 命中，trial 不入账） | embedding/llm 匹配（归后续） |
 | `createDefaultLayers` | 只注册有依赖的层 | 自动发现 |
 
 后续打磨任一层时：**只换 `assemble` 实现或替换类，不改契约。**
@@ -138,10 +149,12 @@ interface ContextLayer {
 Runner.handle
   → persona resolve（PersonaSource 热更新，不变）
   → session compact 播种（E4 键 = sessionId × agentId）
-  → session tasks / guidance → injectedContext
-  → createDefaultSystemPromptAssembler
-       system 契约层: Persona + Skill + Knowledge + Memory + Cognition + Wisdom + Runtime
-  → runContext.systemPrompt（写入 RunScope，不回写共享 Agent）
+  → session tasks / guidance → volatileContext（E8；`injectedContext` 为旧合并形态）
+  → createDefaultSystemPromptAssembler（E8 双组）
+       system 组:   固定协议块 + 宪法 preamble + Persona + Skill + Knowledge + Runtime(锚点)
+       snapshot 组: Memory + Cognition + Wisdom + Runtime(易变: datetime/tasks/guidance) → runtimeSnapshot
+  → runContext.systemPrompt（写入 RunScope，不回写共享 Agent）；
+    runtimeSnapshot 搭本轮用户消息的 `<turn_context>` 送达（绝不进 system prompt）
   → convertToLlm → DefaultContextEngine（**Information**：消息窗口 + 主动摘要）
   → AssembleResult.compactState → Agent.setSessionCompactState(sessionId, agentId)
   → Runner save 前 writeSessionCompact → SessionData.contextCompacts[agentId]
@@ -169,7 +182,10 @@ Runner.handle
 - 路径 A 触发线**两条都保留**并取 `min`（刻意不用 legacy 命名，防被当成死代码清掉）：
   - **目标线** `targetTokens × compactFallbackRatio`（默认 `200000` / `3`）——与窗口解耦，防长会话失忆（只挂窗口比例时 1M 窗口永不触发）
   - **窗口比例线** `messagesBudget × proactiveCompactRatio`（默认 `0.6`）——防小窗口/已知窗口（如 256k）在硬溢出前仍未触发
-- **预算不变量**（唯一硬约束）：`input_tokens + max_tokens ≤ contextWindow`。分配器先扣 `maxOutputTokens`，再扣固定开销（system + tools + 请求信封），剩余为 `messagesLimit`（历史硬上限）；`messagesBudget` 是软策略提示。强制点（消息选择、溢出压缩目标）一律用 `messagesLimit`，不得使用软值
+- **预算不变量**（唯一硬约束）：`input_tokens + max_tokens ≤ contextWindow`。分配器（`DefaultBudgetAllocator`）先扣 `maxOutputTokens`，再扣固定开销（system + tools + 请求信封），剩余为 `messagesLimit`（历史硬上限）；`messagesBudget` 是软策略提示。强制点（消息选择、溢出压缩目标）一律用 `messagesLimit`，不得使用软值
+  - `maxOutputTokens` 预留是硬的；比例回退（`contextEngine.outputRatio` / `minOutputReserve` / `maxOutputReserve`，默认 20% 夹 2k–8k）只在模型输出上限未知时生效。请求信封预留 500 token。历史一点都装不下时分配器报 `infeasible`——调用方 fail-loud，不发空壳请求
+  - **`contextAssembler.compactTargetTokens`** 在物理窗口未知时提供策略目标（手动/结构压缩预算）；该模式下分配器按软目标处理（消息下限兜底 1000），绝不当物理边界
+  - 决策读数（触发线、溢出装得下判据）经**校准**：按 model 分 key 的 `ContextSizeLedger` 用 provider 实测 usage 学习 EMA 比率（偏离门 + 逃逸重锚）；入账样本不足 2 个时回落实测锚定或裸估算
 - `targetTokens: 0` 只挂窗口比例线。触发判据量**老化请求体量**（实际发送内容的保守上界），B2 稳态不会误触发（防双机制打架，单测锁死）。再压缩还要求自上次压缩以来 token 实质增长（偶发兜底，不是周期性重压）
 - **装配层永不降级消息**。粘滞重建只做重组（`head + 摘要 + 覆盖点之后增量原文 + tail`），降级动作单源归 compact 能力。重建边界每次请求都滑动，在那里降级等于每请求改写一次历史、摧毁前缀缓存（实测命中率 98% → 29%，1.5 小时 31.3M 未命中输入 token）
 - `DefaultContextEngine.proactiveCompactRatio`（默认 `0.6`）是窗口比例线系数。**`0` 禁止发起新的路径 A 压缩（不只禁 LLM），不丢弃已有粘滞压缩视图**（`previousSummary` / `lastProactiveMessageCount` 仍重建 `head + 摘要 + 覆盖点之后增量 + tail`）。turn 内（最近真实 user 之后已有工具活动）同样可以发起 LLM 摘要（方案 E 修订 2026-11-07：整 turn 禁令让 agent 长 turn 全程目标线失效）；活动工作记录改由活跃窗口保护——`contextEngine.midTurnProtectLastN`（默认 `50`，取 `max(protectLastN, midTurnProtectLastN)`），进行中的工具步骤/证据/推理链不进压缩选段
@@ -247,7 +263,7 @@ dump **默认关闭**（写盘量 ≈ 请求字节 × 每轮调用次数）；`m
 - Builder 可注入 `wisdomStore` / `cognitionStore`；**`wireAgentBuilder`（config-bridge / Gateway / createAgent 共用）**在 agent home 的 `AgentDatabase` 上挂 Memory/Wisdom/Cognition，并 discover `skills/`（唯一 discover 出口）；Gateway 叠加 Knowledge catalog / tools
 - Gateway 为 agent 设置 `builder.agentHome(home)` + `builder.agentId(id)`，Memory SQLite（agent.db）挂在 agent home；**无** extract 落盘目录
 - 默认 `createDefaultSystemPromptAssembler` 在依赖存在时注册 Wisdom / Cognition 层
-- `octopi.json` → `context.contextAssembler.includeLayerPreview` 可在 manifest 写入层 preview（Web 上下文面板）
+- `octopi.json` → `context.contextAssembler.includeLayerPreview` / `layerPreviewChars` / `includeLayerContent` 控制 manifest 携带的 Web 上下文面板内容（预览与全文；见 §4 可观测通道）
 - `GET /api/v1/agents/:id/context/health` 暴露 store 计数（数据面健康）
 - Knowledge 不再使用进程内命题 Store；catalog / 索引 / grounding 见 `docs/knowledge.md`
 
@@ -267,7 +283,12 @@ dump **默认关闭**（写盘量 ≈ 请求字节 × 每轮调用次数）；`m
 | `packages/engine/src/harness/context/layer-types.ts` | 契约 + 默认 order/priority/share |
 | `packages/engine/src/harness/context/assembler.ts` | `DefaultContextAssembler` |
 | `packages/engine/src/harness/context/layers.ts` | 薄适配层 + `createDefaultLayers` |
-| `packages/engine/src/harness/context/system-prompt-assembler.ts` | Runner 每轮 system 装配端口 |
+| `packages/engine/src/harness/context/system-prompt-assembler.ts` | Runner 每轮 system 装配端口（预算推导、E8 双组、固定协议块） |
+| `packages/engine/src/harness/context/budget-allocator.ts` | `DefaultBudgetAllocator`——唯一硬预算不变量（`input_tokens + max_tokens ≤ contextWindow`） |
+| `packages/engine/src/harness/context/turn-envelope.ts` | E8 turn 信封（`<turn_start>` / `<turn_context>` / `<turn_end>`） |
+| `packages/engine/src/harness/context/tool-result-aging.ts` | B2 历史老化计划（视图级降级、批量冻结、write-once） |
+| `packages/engine/src/harness/context/layer-snapshot.ts` / `layer-health.ts` | Web DTO（`AssembleManifest` → UI 快照）/ 数据面健康探针 |
+| `packages/engine/src/harness/context/context-size-ledger.ts` | 决策读数校准（按 model 的比率 vs provider 实测） |
 | `packages/engine/src/harness/context/summarize.ts` | `createProviderSummarize`（族 A 会话模型执行闭包）+ `pickSummarizeProvider`（族 B 旁路挑选：mini→standard→primary） |
 | `packages/engine/src/harness/context/capabilities/**` | SummaryPort / CompactEngine 公用能力 |
 | `tests/harness/context-layer-contracts.test.ts` | 契约行为测试 |
