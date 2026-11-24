@@ -120,12 +120,14 @@ function prep(version) {
   console.log('  2. Commit code + version files (incl. package-lock.json) + CHANGELOG together');
   console.log('     (stage the intended paths explicitly; avoid `git add -A`)');
   console.log('  3. Tag the commit right away: `git tag v' + version + '` (tagging belongs to the commit flow)');
-  console.log('     (publish is user-driven: `node scripts/release.mjs print`)');
+  console.log('     (publish happens on tag push: CI runs `node scripts/publish.mjs`; local preview: `node scripts/publish.mjs --dry-run`)');
 }
 
 function printPublishOrder() {
   const version = readPkg('package.json').version;
   console.log(`Publish order for v${version} (lockstep):\n`);
+  console.log('  CI publishes this order on a `v' + version + '` tag push (scripts/publish.mjs).');
+  console.log('  The commands below are the manual fallback (needs an OTP-capable terminal):\n');
   console.log(`  npm publish -w packages/core --access public --otp=...`);
   console.log(`  npm publish -w packages/engine --access public --otp=...`);
   console.log(`  npm publish -w packages/gateway --access public --otp=...`);

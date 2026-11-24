@@ -260,11 +260,14 @@ Version format is `X.Y.Z` (semantic versioning), updated as follows:
 4. Commit code + version files + CHANGELOG together.
 5. Tag the commit right away: `git tag v<X.Y.Z>` (if not already tagged). **Tagging belongs to the commit flow, not the release flow** — every version leaves a tag anchor whether or not it is ever published.
 
-**Tag push** (batch, or when the user asks): `git push --tags` (or `git push --follow-tags` with the normal push). Tags are local until pushed; push them so GitHub Releases, other machines, and `git checkout vX.Y.Z` see the same anchors.
+**Tag push** (batch, or when the user asks): `git push --tags` (or `git push --follow-tags` with the normal push). Tags are local until pushed; push them so GitHub Releases, other machines, and `git checkout vX.Y.Z` see the same anchors. **A pushed `v*` tag is now also a release action**: it triggers the publish workflow below, so push the single tag you intend to release rather than a batch.
 
-**Publish is separate and user-driven** (only when the user asks or when cutting a release):
+**Publish is tag-driven**: pushing a `v<X.Y.Z>` tag runs the full CI suite (build → test → lint), then the `publish` job publishes in dependency order (`core` → `engine` → `gateway` → `webui` → `octopi-agent`) via `node scripts/publish.mjs`. Branch pushes never publish — every content commit bumps the patch version, so main-driven publishing would ship five packages per merge.
 
-- Publish in dependency order (`node scripts/release.mjs print`): `core` → `engine` → `gateway` → `webui` → `octopi-agent`
+- **Tag must name the version**: the workflow aborts when the tag (`v0.130.5`) differs from the five packages' version.
+- **Credentials**: repo secret `NPM_TOKEN` — an npm Automation token, or a granular token with 2FA bypass plus read/write on the `@octopi-agent` scope and `octopi-agent`. A 2FA-protected ordinary token publishes as `EOTP`.
+- **Publish-if-absent**: a version already on the registry is skipped, so re-running a failed release resumes after the last successful package instead of dying on `EPUBLISHCONFLICT`. It never republishes different bytes under an existing version.
+- **Local dry run**: `npm run build` first, then `node scripts/publish.mjs --dry-run` (packs and reports, uploads nothing).
 
 ### Changelog Discipline
 

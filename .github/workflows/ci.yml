@@ -9,6 +9,11 @@
 #                              但这条纪律完全靠人记得。
 #   3. npm run lint           → eslint + tests 类型基线 + webui tsc。
 #
+# 另外：push `v<X.Y.Z>` tag 时，build/test/lint 全绿之后由 `publish` job
+# 发布五个包（依赖序 + 幂等规则见 scripts/publish.mjs）。发布不可逆，所以
+# 触发条件刻意只认 tag —— 每个 content commit 都会 bump patch，若挂在 main
+# 上就成了「每 merge 发五个包」。
+#
 # ⚠️ 三条实证约束（第一次运行全红后查明的，不是推测）：
 #
 #   (a) 全部三个检查都依赖构建产物，不只是测试。各 package 的 package.json
@@ -35,12 +40,20 @@ name: CI
 on:
   push:
     branches: [main]
+    # Tag push 是发布按钮：同样的检查跑绿后，`publish` job 才发 npm。
+    tags: ['v*']
   pull_request:
 
 # 同一分支的旧运行自动取消：省额度，也避免把过期结果当现行结论。
+# tag（发布）run 例外：发布跑到一半被后来的 tag run 取消会留下部分发布的包，
+# 脚本虽然能续发，但没必要制造这种状态。
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+# 最小权限：CI 只读仓库；npm 凭证走 secret，不依赖 GitHub token。
+permissions:
+  contents: read
 
 env:
   # 测试不需要真实模型 key；显式置空，防止将来有人误加 secret 后测试悄悄
@@ -132,3 +145,59 @@ jobs:
 
       - name: Lint, test types, webui types
         run: npm run lint
+
+  # 发布（仅 tag）：打 `v<X.Y.Z>` 才跑，且必须 build/test/lint 全绿。
+  #
+  # 凭证：repo secret `NPM_TOKEN`，必须能在无 OTP 的情况下发布（npm Automation
+  # token，或 granular token 勾了 2FA bypass + 该 scope 的 read/write）。账号开
+  # 2FA 而 token 不是这两类时 npm 会以 EOTP 失败——下面这步只挡「secret 没配」。
+  #
+  # 不加 --provenance：它要求公开仓库 + id-token: write，仓库可见性一旦变化就会
+  # 卡在不可回滚的那一步上。要启用时两者一起加。
+  publish:
+    needs: [build, test, lint]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          # 写 .npmrc 的 //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+          registry-url: https://registry.npmjs.org
+
+      # 用 build job 产出并上传的 dist（约束 a）：发布必须用同一份跑绿的产物，
+      # 不在 publish job 里重新构建。也不需要 npm ci —— 打包只读 package.json
+      # 和 files 清单，没有 prepack/prepare 脚本。
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+
+      # tag 与包版本不一致时拒绝发布：npm 上版本号一旦上传就收不回，
+      # 发错版本只能靠再发一版覆盖 latest。
+      - name: Tag names the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not name package version ${version}"
+            exit 1
+          fi
+
+      - name: npm token is configured
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::repo secret NPM_TOKEN is missing — add an npm Automation token (or a granular token with 2FA bypass)"
+            exit 1
+          fi
+
+      # 依赖序 + 已存在则跳过（可重试）：规则与取舍写在脚本头部注释里。
+      - name: Publish in dependency order
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/publish.mjs

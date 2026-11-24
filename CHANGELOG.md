@@ -140,6 +140,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.130.5 (2026-11-24)
+
+### ci(release): npm 发布改为 tag 驱动（push `v<X.Y.Z>` → CI 全绿后按依赖序发五个包）
+
+- **触发条件**：`.github/workflows/ci.yml` 增加 `push.tags: ['v*']` 与 `publish` job（`needs: [build, test, lint]`，仅 tag ref）。发布不可逆，所以不挂 main——每个 content commit 都 bump patch，主线自动发等于每 merge 发五个包。tag 与五包版本不一致直接失败；`NPM_TOKEN` secret 缺失以明确错误退出，而不是让 npm 自己抛 E401/EOTP。发布复用 build job 上传的 `dist`，不重复构建。
+- **`scripts/publish.mjs`（新）**：按 `core → engine → gateway → webui → octopi-agent` 顺序发布。发布前校验五包同版本、各包 `dist` 非空（缺产物会发空包，而版本号收不回）；registry 上已存在的版本跳过，部分失败后重跑从断点续发，而不是第一个包就撞 `EPUBLISHCONFLICT`；`npm view` 的 E404 之外任何失败都中止，鉴权/网络故障不会被误判成「还没发」。`--dry-run` 供本地预演。
+- **凭证**：repo secret `NPM_TOKEN`，需为 npm Automation token，或勾了 2FA bypass 的 granular token（对 `@octopi-agent` scope 与 `octopi-agent` 有 read/write）。provenance 暂不启用：它要求公开仓库 + `id-token: write`，仓库可见性一旦变化会让发布卡在不可回滚的那一步。
+- **文档**：`AGENTS.md` 的 Publish 段落改为 tag 驱动，并标明 `git push --tags` 现在是发布动作（一次推多个 tag 会触发多次发布）；`docs/CONTRIBUTING.md` / `.zh.md` 双语同步；`scripts/release.mjs` 的下一步提示与发布顺序输出改指新流程（手动 `npm publish --otp` 降为 fallback）。
+- **验证**：`node scripts/publish.mjs --dry-run` 五包打包预演通过（顺序、体积、文件数正常，未上传）；tag 不匹配守护与 registry 存在性判定（存在 → exit 0，缺失 → E404 → 判为 absent）实测符合预期；`npx eslint scripts/publish.mjs` 通过。真实发布未执行（等 tag push 与 secret 配置）。
+
+---
+
 ## v0.130.4 (2026-11-24)
 
 ### fix(knowledge,webui): 源 location 写入口归一化/校验 + 本地根路径不可达显式报错；修复挂载复选框挤压标签

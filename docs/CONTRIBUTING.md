@@ -197,11 +197,12 @@ Notes: the manifest is the installation-time declaration authority (`entry`, `en
 Since **v0.56.0**, `octopi-agent` and `@octopi-agent/{core,engine,gateway,webui}` **always share one version number**, with internal dependencies pinned to that exact version (not `^`).
 
 ```sh
-npm run release:prep -- 0.56.0   # same version on all five packages + pin deps
-npm run release:print            # print publish order
+npm run release:prep -- 0.56.0      # same version on all five packages + pin deps
+npm run release:print               # print publish order
+node scripts/publish.mjs --dry-run   # pack and report what would publish
 ```
 
-Version bumps happen on **every content commit** (see above); publishing is a separate, maintainer-driven step in dependency order `core → engine → gateway → webui → octopi-agent`. Full discipline: `AGENTS.md` → Version Numbering Rules / Changelog Discipline.
+Version bumps happen on **every content commit** (see above); publishing is **tag-driven**: pushing a `v<X.Y.Z>` tag runs the full CI suite, then publishes the five packages in dependency order `core → engine → gateway → webui → octopi-agent` (`node scripts/publish.mjs`, repo secret `NPM_TOKEN`; versions already on the registry are skipped, so a failed release resumes where it stopped). Branch pushes never publish. Full discipline: `AGENTS.md` → Version Numbering Rules / Changelog Discipline.
 
 ## License and Contribution Grant
 

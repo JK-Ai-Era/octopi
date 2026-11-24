@@ -196,11 +196,12 @@ my-plugin/
 自 **v0.56.0** 起，`octopi-agent` 与 `@octopi-agent/{core,engine,gateway,webui}` **始终同一版本号**，内部依赖钉死为该版本（非 `^`）。
 
 ```sh
-npm run release:prep -- 0.56.0   # 五包同号 + 依赖钉版
-npm run release:print            # 打印发布顺序
+npm run release:prep -- 0.56.0      # 五包同号 + 依赖钉版
+npm run release:print               # 打印发布顺序
+node scripts/publish.mjs --dry-run   # 打包预演，不上传
 ```
 
-版本 bump 落在**每个 content commit**（见上文）；发布是维护者独立步骤，按 `core → engine → gateway → webui → octopi-agent` 依赖序执行。完整纪律见 `AGENTS.md` → Version Numbering Rules / Changelog Discipline。
+版本 bump 落在**每个 content commit**（见上文）；发布由 **tag 驱动**：push 一个 `v<X.Y.Z>` tag 会先跑完整 CI，再按 `core → engine → gateway → webui → octopi-agent` 依赖序发布五个包（`node scripts/publish.mjs`，凭证为 repo secret `NPM_TOKEN`；已在 registry 上的版本自动跳过，失败重跑从断点续发），分支 push 不发布。完整纪律见 `AGENTS.md` → Version Numbering Rules / Changelog Discipline。
 
 ## 许可证与贡献授权
 
