@@ -2138,6 +2138,26 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: result });
       }
 
+      // 向量模型（models.embedding）：目标是「独立填写」，不引用 provider——
+      // 引用会把 embedding 绑到 provider 的接入方式上，切到 plan 端点时静默失效。
+      if (relativePath === '/config/models/embedding' && method === 'PUT') {
+        const body = await this.readBody(req);
+        if (!body?.embedding || typeof body.embedding !== 'object') {
+          return this.json(res, 400, { ok: false, error: 'embedding object is required' });
+        }
+        const result = await apply.updateEmbedding(
+          body.embedding as Record<string, unknown>,
+          typeof body?.hash === 'string' ? body.hash : '',
+        );
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
+      if (relativePath === '/config/models/embedding' && method === 'DELETE') {
+        const hash = url.searchParams.get('hash') ?? '';
+        const result = await apply.clearEmbedding(hash);
+        return this.json(res, 200, { ok: true, data: result });
+      }
+
       // 浏览器引擎（arch/browser-capability.md §3.9；WebUI 设置页联动热生效）
       if (relativePath === '/config/browser' && method === 'GET') {
         return this.json(res, 200, { ok: true, data: apply.getBrowserView() });

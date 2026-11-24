@@ -220,6 +220,7 @@ export class KnowledgeDatabase {
         dimensions    INTEGER NOT NULL,
         embedding     BLOB NOT NULL,
         bucket        INTEGER NOT NULL DEFAULT -1,
+        signature     TEXT,
         created_at    INTEGER NOT NULL
       );
 
@@ -509,10 +510,10 @@ export class KnowledgeDatabase {
   }
 
   /**
-   * 保证 embeddings 表含 `bucket` 列并建索引。
+   * 保证 embeddings 表含 `bucket` / `signature` 列并建索引。
    *
-   * 必须在任何 `INSERT … bucket` / `WHERE bucket` **之前**调用；
-   * 且不得与 `CREATE INDEX … (bucket)` 同批执行（旧表无该列时会先炸索引）。
+   * 必须在任何 `INSERT … signature` / `WHERE signature` **之前**调用；
+   * 且不得与 `CREATE INDEX … (signature)` 同批执行（旧表无该列时会先炸索引）。
    */
   ensureEmbeddingSchema(): void {
     const cols = this.db
@@ -524,9 +525,18 @@ export class KnowledgeDatabase {
         `ALTER TABLE knowledge_chunk_embeddings ADD COLUMN bucket INTEGER NOT NULL DEFAULT -1`,
       );
     }
+    // 向量空间签名（见 embeddingSignature）：换模型/端点/维度后旧向量不再可比，
+    // 该列让「哪些向量需要重嵌」成为可判定的。NULL = 该行产自签名出现之前的版本。
+    if (!names.has('signature')) {
+      this.db.exec(`ALTER TABLE knowledge_chunk_embeddings ADD COLUMN signature TEXT`);
+    }
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_embeddings_bucket
        ON knowledge_chunk_embeddings(bucket)`,
+    );
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_embeddings_signature
+       ON knowledge_chunk_embeddings(signature)`,
     );
   }
 
@@ -619,6 +629,7 @@ export class KnowledgeDatabase {
           dimensions    INTEGER NOT NULL,
           embedding     BLOB NOT NULL,
           bucket        INTEGER NOT NULL DEFAULT -1,
+          signature     TEXT,
           created_at    INTEGER NOT NULL
         );
       `);

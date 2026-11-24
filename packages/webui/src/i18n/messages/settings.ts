@@ -40,6 +40,33 @@ export const zh = {
   'modelSettings.levelNamePlaceholder': 'level 名（如 standard）',
   'modelSettings.addLevel': '+ 添加 level',
   'modelSettings.saveLevels': '保存 level（立即生效）',
+
+  // 向量模型分区（models.embedding）
+  'modelSettings.embeddingTitle': '向量模型（models.embedding）',
+  'modelSettings.embeddingHint':
+    '供 memory 语义检索与知识库向量化共用；未配置时两处都退回关键词检索。独立填写，不继承 provider——provider 换接入方式时会静默换端点。',
+  'modelSettings.embeddingRebuildWarning':
+    '⚠ 变更模型、端点或维度后，已有向量与新向量不在同一空间、无法比对：这些条目需要全量重建（memory 会在检索时逐批重嵌，知识库需重新索引对应来源）。',
+  'modelSettings.embeddingNotConfigured': '当前未配置：两处检索均走关键词。',
+  'modelSettings.embeddingEnabled': '启用',
+  'modelSettings.embeddingType': '协议',
+  'modelSettings.embeddingModel': '模型名',
+  'modelSettings.embeddingBaseUrlHint': '不含 path；留空则按协议用默认端点（openai=api.openai.com/v1，ollama=localhost:11434）。',
+  'modelSettings.embeddingKeyPlaceholder': '已配置，留空保留；也可填 ${ENV_VAR}',
+  'modelSettings.embeddingDimensions': '向量维度（可选）',
+  'modelSettings.embeddingDimensionsHint':
+    '留空则交给服务端决定（百炼默认 1024，勿假定 1536）。写入后会作为请求参数下发。',
+  'modelSettings.embeddingMaxBatchPlaceholder': '批量上限（如 20）',
+  'modelSettings.embeddingTimeoutPlaceholder': '超时 ms（如 30000）',
+  'modelSettings.embeddingVectorEngine': '检索引擎',
+  'modelSettings.embeddingVectorEngineHint':
+    'auto=优先 sqlite-vec、不可用退回 JS 余弦；sqlite-vec=建表失败即报错，不静默降级。',
+  'modelSettings.saveAndRestart': '保存（需重启生效）',
+  'modelSettings.embeddingSavedRestart':
+    '已保存。向量模型在 gateway 与 Knowledge Service 启动时装配，请重启后生效。',
+  'modelSettings.embeddingClearedRestart': '已移除向量模型配置，重启后退回关键词检索。',
+  'modelSettings.embeddingClear': '移除向量模型配置',
+  'modelSettings.embeddingModelRequired': '向量模型名不能为空',
   'modelSettings.appliedHot': '立即生效',
   'modelSettings.savedAffected': '已保存，新会话生效（影响 {agents}）',
   'modelSettings.saved': '已保存，新会话生效',
@@ -201,6 +228,35 @@ export const en: Record<keyof typeof zh, string> = {
   'modelSettings.levelNamePlaceholder': 'level name (e.g. standard)',
   'modelSettings.addLevel': '+ Add level',
   'modelSettings.saveLevels': 'Save levels (apply immediately)',
+
+  // Embedding model section (models.embedding)
+  'modelSettings.embeddingTitle': 'Embedding model (models.embedding)',
+  'modelSettings.embeddingHint':
+    'Shared by memory semantic retrieval and knowledge vectorization; when unset, both fall back to keyword search. Entered independently — it does not inherit a provider, which would silently follow that provider into a plan endpoint that has no /embeddings route.',
+  'modelSettings.embeddingRebuildWarning':
+    '⚠ After changing the model, endpoint or dimensions, existing vectors no longer share a space with new query vectors and cannot be compared: those entries need a full rebuild (memory re-embeds in batches during retrieval; knowledge sources must be re-indexed).',
+  'modelSettings.embeddingNotConfigured': 'Not configured: both retrieval paths use keywords only.',
+  'modelSettings.embeddingEnabled': 'Enabled',
+  'modelSettings.embeddingType': 'Protocol',
+  'modelSettings.embeddingModel': 'Model name',
+  'modelSettings.embeddingBaseUrlHint':
+    'Without a path; leave empty to use the protocol default (openai=api.openai.com/v1, ollama=localhost:11434).',
+  'modelSettings.embeddingKeyPlaceholder': 'Configured; leave empty to keep — or use ${ENV_VAR}',
+  'modelSettings.embeddingDimensions': 'Dimensions (optional)',
+  'modelSettings.embeddingDimensionsHint':
+    'Leave empty to let the server decide (DashScope defaults to 1024, never assume 1536). When set, it is sent as the request dimensions parameter.',
+  'modelSettings.embeddingMaxBatchPlaceholder': 'Batch limit (e.g. 20)',
+  'modelSettings.embeddingTimeoutPlaceholder': 'Timeout ms (e.g. 30000)',
+  'modelSettings.embeddingVectorEngine': 'Vector engine',
+  'modelSettings.embeddingVectorEngineHint':
+    'auto=prefer sqlite-vec, fall back to JS cosine; sqlite-vec=fail loudly when the table cannot be created instead of degrading silently.',
+  'modelSettings.saveAndRestart': 'Save (restart required)',
+  'modelSettings.embeddingSavedRestart':
+    'Saved. The embedding provider is assembled when the gateway and the Knowledge Service start — restart to apply.',
+  'modelSettings.embeddingClearedRestart':
+    'Embedding configuration removed; restart to fall back to keyword retrieval.',
+  'modelSettings.embeddingClear': 'Remove embedding configuration',
+  'modelSettings.embeddingModelRequired': 'Embedding model name cannot be empty',
   'modelSettings.appliedHot': 'Applied immediately',
   'modelSettings.savedAffected': 'Saved; applies to new sessions (affects {agents})',
   'modelSettings.saved': 'Saved; applies to new sessions',

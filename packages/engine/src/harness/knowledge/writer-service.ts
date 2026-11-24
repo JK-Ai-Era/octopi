@@ -198,7 +198,10 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
 
   constructor(private readonly deps: LocalWriteDeps) {
     this.sources = new KnowledgeSourceStore(deps.db);
-    this.index = new KnowledgeIndexStore(deps.db);
+    this.index = new KnowledgeIndexStore(deps.db, {
+      // 签名由 provider 自证（同一份配置 → 同一个签名），不额外抄一份配置
+      embeddingProvider: deps.embed?.enabled === false ? null : (deps.embeddingProvider ?? null),
+    });
     this.memberships = new MembershipStore(deps.db);
     const embed = deps.embed ?? null;
     this.ingest = new KnowledgeIngest({

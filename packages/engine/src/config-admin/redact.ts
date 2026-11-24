@@ -30,6 +30,40 @@ export interface RedactedProvider {
   options?: Record<string, unknown>;
 }
 
+/** 脱敏后的 embedding 视图（WebUI 向量模型分区回显） */
+export interface RedactedEmbedding {
+  /** 只回显是否配置 + 引用形态，绝不回显明文 */
+  apiKey: RedactedSecret;
+  enabled?: boolean;
+  type?: string;
+  model?: string;
+  baseUrl?: string;
+  dimensions?: number;
+  maxBatchSize?: number;
+  timeoutMs?: number;
+  supportsBatch?: boolean;
+  path?: string;
+  apiKeyHeader?: string;
+  apiKeyPrefix?: string;
+  vectorEngine?: string;
+  /** 兜底：未在 DTO 显式列出的键原样透传（防保存丢数据） */
+  [extra: string]: unknown;
+}
+
+/**
+ * 脱敏 models.embedding（与 provider 同一套 apiKey 语义）
+ *
+ * @param cfg - 原始 embedding 配置段
+ * @returns 副本视图，apiKey 替换为 RedactedSecret
+ */
+export function redactEmbedding(cfg: Record<string, unknown>): RedactedEmbedding {
+  const { apiKey, ...rest } = cfg;
+  return {
+    ...rest,
+    apiKey: redactSecret(typeof apiKey === 'string' ? apiKey : undefined),
+  };
+}
+
 const ENV_REF_PATTERN = /^\$\{(\w+)(?::-.*?)?\}$/;
 
 /**

@@ -121,6 +121,8 @@ export class AgentDatabase {
       ['deleted_by', 'TEXT'],
       ['deleted_reason', 'TEXT'],
       ['deleted_meta', 'TEXT'],
+      // 向量空间签名（见 embeddingSignature）；NULL = 产自签名出现之前的版本
+      ['embedding_signature', 'TEXT'],
     ] as const;
     for (const [name, ddl] of cols) {
       try {
@@ -231,7 +233,8 @@ export class AgentDatabase {
         deleted_at      INTEGER,
         deleted_by      TEXT,
         deleted_reason  TEXT,
-        deleted_meta    TEXT
+        deleted_meta    TEXT,
+        embedding_signature TEXT
       );
     `);
 

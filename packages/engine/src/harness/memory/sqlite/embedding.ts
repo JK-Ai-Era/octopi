@@ -18,6 +18,14 @@ export interface EmbeddingProvider {
   readonly name: string;
   /** 向量维度 */
   readonly dimensions: number;
+  /**
+   * 向量空间签名（见 {@link embeddingSignature}）。
+   *
+   * 只有签名相同的向量才可比。缺省表示「空间未知」：该 provider 由第三方
+   * 实现提供、无法自证身份，存储侧据此跳过签名过滤（保持旧行为）。
+   * 内置 provider（openai/ollama/http）总是带签名。
+   */
+  readonly signature?: string;
   /** 生成 embedding；输入超模型上下文时由实现做截断回退 */
   embed(text: string): Promise<number[]>;
   /**
@@ -145,6 +153,32 @@ function defaultPath(type: EmbeddingConfig['type'], custom?: string): string {
 }
 
 /**
+ * 向量空间签名 — 判断两组向量是否可比的唯一依据。
+ *
+ * 同一个「模型名」在不同端点/不同的 dimensions 请求参数下产出的向量并不一定
+ * 同空间：有的服务端按请求 `dimensions` 截断，有的按模型版本变化。因此签名取
+ * 全部影响向量取值的输入（协议 + 端点 + 模型 + 维度），任一项变化都视为换空间。
+ *
+ * 幂等性要求：同一份配置必须得到同一个签名。只做保守规范化（去尾部斜杠、
+ * 小写 host），不做会被服务端语义差异影响的改写。
+ *
+ * @param parts - 参与签名的配置项（未配置的项不参与，避免「省略=默认」漂移）
+ * @returns 稳定字符串签名（形如 `openai|https://api.x.com/v1|text-embedding-3-small|1536`）
+ */
+export function embeddingSignature(parts: {
+  type: string;
+  endpoint?: string;
+  model: string;
+  dimensions: number;
+}): string {
+  const endpoint = (parts.endpoint ?? '')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]+)/, (m) => m.toLowerCase());
+  return [parts.type, endpoint, parts.model, String(parts.dimensions)].join('|');
+}
+
+/**
  * 创建 embedding provider
  *
  * 返回 null 表示未配置，退化为关键词检索。
@@ -173,6 +207,9 @@ export function createEmbeddingProvider(config?: EmbeddingConfig): EmbeddingProv
     url: joinUrl(base, path),
     model,
     dimensions,
+    // 签名取「base（不含 path）+ 协议 + 模型 + 维度」：path 只决定走哪个路由，
+    // 不改变向量取值；端点/模型/维度任一变化都意味着换空间。
+    signature: embeddingSignature({ type, endpoint: base, model, dimensions }),
     sendDimensions: config.dimensions != null,
     apiKey: config.apiKey ?? '',
     apiKeyHeader: config.apiKeyHeader,
@@ -221,6 +258,8 @@ interface HttpEmbeddingOptions {
   url: string;
   model: string;
   dimensions: number;
+  /** 向量空间签名（见 embeddingSignature）；用于判定已存向量是否可比 */
+  signature: string;
   /** 仅用户显式配置时才把 dimensions 写入请求体 */
   sendDimensions: boolean;
   apiKey: string;
@@ -239,12 +278,16 @@ interface HttpEmbeddingOptions {
 class HttpEmbeddingProvider implements EmbeddingProvider {
   readonly name: string;
   readonly dimensions: number;
+  readonly signature: string;
   private readonly opts: HttpEmbeddingOptions;
 
   constructor(opts: HttpEmbeddingOptions) {
     this.opts = opts;
     this.name = opts.name;
     this.dimensions = opts.dimensions;
+    // 端点用请求 URL 去掉 path 前的 base；opts.url 已是 joinUrl(base,path)，
+    // 这里用 name/url 无法还原 base，因此由 createEmbeddingProvider 传入。
+    this.signature = opts.signature;
   }
 
   private buildHeaders(): Record<string, string> {

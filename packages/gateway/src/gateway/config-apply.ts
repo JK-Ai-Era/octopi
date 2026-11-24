@@ -34,7 +34,8 @@ import {
 import { expandEnvPlaceholders, expandEnvValues } from '@octopi-agent/engine/config-admin/env.js';
 import { assertSafeConfigName, assertSafePersonaFileName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { expandHomePath } from '@octopi-agent/engine/paths.js';
-import { redactProvider, resolveEchoPlaceholders } from '@octopi-agent/engine/config-admin/redact.js';
+import { redactProvider, redactEmbedding, isRedactedSecret, resolveEchoPlaceholders } from '@octopi-agent/engine/config-admin/redact.js';
+import type { RedactedEmbedding } from '@octopi-agent/engine/config-admin/redact.js';
 import {
   discoverProviderModels,
   type DiscoverModelsResult,
@@ -304,16 +305,18 @@ export class ConfigApplyService {
   /**
    * 模型配置视图（apiKey 脱敏）+ 当前 hash
    *
-   * @returns providers（脱敏）+ level + hash
+   * @returns providers（脱敏）+ level + embedding（脱敏）+ hash
    */
   getModelsView(): {
     providers: Array<ReturnType<typeof redactProvider>>;
     level: Record<string, unknown>;
+    embedding: RedactedEmbedding | null;
     hash: string;
   } {
     const { raw, hash } = this.deps.configAdmin.read();
     const models = (raw.models ?? {}) as Record<string, unknown>;
     const providers = (models.providers ?? {}) as Record<string, Record<string, unknown>>;
+    const embeddingRaw = models.embedding as Record<string, unknown> | undefined;
     return {
       providers: Object.entries(providers).map(([name, pc]) =>
         redactProvider(
@@ -325,7 +328,88 @@ export class ConfigApplyService {
         ),
       ),
       level: (models.level ?? {}) as Record<string, unknown>,
+      // embedding 与 provider 走同一套脱敏：apiKey 只回显「是否配置 + 引用形态」
+      embedding: embeddingRaw ? redactEmbedding(embeddingRaw) : null,
       hash,
+    };
+  }
+
+  /**
+   * 写入 models.embedding（整段替换）。
+   *
+   * 生效边界是 restart-required：knowledge 是独立子进程，embedding provider 只在
+   * 子进程启动时注入；报 hot/next-run 都是谎报。
+   *
+   * @param embedding - embedding 配置片段（apiKey 可为 `${VAR}` 形态；占位符=未改动）
+   * @param expectedHash - 乐观锁
+   * @returns 热应用结果（applied 恒为 restart-required）
+   */
+  async updateEmbedding(
+    embedding: Record<string, unknown>,
+    expectedHash: string,
+  ): Promise<ConfigApplyResult> {
+    if (!embedding || typeof embedding !== 'object' || Array.isArray(embedding)) {
+      throw new Error('embedding must be an object');
+    }
+    if (typeof embedding.model !== 'string' || !embedding.model.trim()) {
+      throw new Error('embedding.model is required');
+    }
+    const before = this.deps.configAdmin.read();
+    const stored = getJsonPath(before.raw, ['models', 'embedding']) as
+      | Record<string, unknown>
+      | undefined;
+    // apiKey 未提供 = 保留现有值（与 provider「留空保留」同一语义）；
+    // RedactedSecret 回显占位符同样还原，绝不把 {configured,ref} 写盘。
+    const applied =
+      embedding.apiKey === undefined && typeof stored?.apiKey === 'string'
+        ? { ...embedding, apiKey: stored.apiKey }
+        : embedding;
+    const finalConfig = isRedactedSecret(applied.apiKey)
+      ? (() => {
+          const { apiKey: _placeholder, ...rest } = applied;
+          return typeof stored?.apiKey === 'string' ? { ...rest, apiKey: stored.apiKey } : rest;
+        })()
+      : applied;
+
+    const written = await this.deps.configAdmin.write((raw) => {
+      setJsonPath(raw, ['models', 'embedding'], finalConfig);
+    }, expectedHash);
+    this.audit('embedding.update', `更新向量模型配置（${String(finalConfig.model)}）`, {
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
+    return {
+      hash: written.hash,
+      // knowledge 子进程 + memory 存储都在启动时装配 embedding → 必须重启
+      applied: 'restart-required',
+      affectedAgents: [],
+      backupPath: written.backupPath,
+      warnings: written.warnings,
+    };
+  }
+
+  /**
+   * 移除 models.embedding（回到纯关键词检索）。
+   *
+   * @param expectedHash - 乐观锁
+   * @returns 热应用结果（restart-required）
+   */
+  async clearEmbedding(expectedHash: string): Promise<ConfigApplyResult> {
+    const written = await this.deps.configAdmin.write((raw) => {
+      deleteJsonPath(raw, ['models', 'embedding']);
+    }, expectedHash);
+    this.audit('embedding.clear', '移除向量模型配置（退回关键词检索）', {
+      hashBefore: expectedHash,
+      hashAfter: written.hash,
+      backupPath: written.backupPath,
+    });
+    return {
+      hash: written.hash,
+      applied: 'restart-required',
+      affectedAgents: [],
+      backupPath: written.backupPath,
+      warnings: written.warnings,
     };
   }
 

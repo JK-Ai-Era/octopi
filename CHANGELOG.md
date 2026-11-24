@@ -140,6 +140,79 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.131.0 (2026-11-25)
+
+### feat(engine,gateway,webui): 向量模型可在设置页配置，并修正换模型后向量失配
+
+- **背景**（大哥提出的缺口）：「向量模型没地方配置」。能力本身早就存在（`models.embedding`
+  支持 openai/ollama/http 三种协议、dimensions、maxBatchSize、vectorEngine 等），
+  但 `GET /config/models` 不带出 embedding、没有任何写入端点、设置页也不渲染它——
+  用户只能手改 `~/.octopi/octopi.json`。
+- **大哥四项拍板**：① 独立填写，不继承 provider；② 记 provenance（签名）并在页面提示
+  「变更模型或参数可能导致已有向量无法匹配，需全量重建」；③ 提示重启生效；
+  ④ UI 落「模型设置页新增向量模型分区」。
+
+- **进入设置页的形态**：模型设置 tab 下新增「向量模型（models.embedding）」分区，
+  与 provider 列表并列而非塞进 provider 表单——语义上是 memory 与 knowledge
+  **共用**的能力，不是某个 provider 的附属。
+- **为何要求独立填写**：`embedding.provider` 继承在实现上可行，但会导致「provider 换了
+  接入方式（如 coding-plan），embedding 静默跟着换端点」。plan 端点通常没有
+  `/embeddings`，且阿里/火山/腾讯的订阅额度明确禁止后端脚本调用——误用会封 key。
+  独立填写把这个耦合直接切断。
+- **生效边界如实标注**：`updateEmbedding` 恒返回 `restart-required`。embedding provider 在
+  Knowledge Service 子进程启动时注入、memory 存储在 agent 构建时装配，报「hot」是谎报。
+
+#### 根因修复：换模型后新旧向量被放进同一次余弦比较
+
+在此之前没有任何机制记录「这些向量是哪个模型产的」：
+
+- `ensureMemoryVecTable` 维度冲突时**静默返回 false**，检索退回 JS cosine；而
+  `cosineSimilarity` 遇到长度不同**直接抛错**，`searchTopK` 调用处无 catch →
+  **换模型后 memory 检索每次抛异常**（是崩溃，不是降级）。
+- knowledge 侧 `listChunksMissingEmbedding` 只看 `e.chunk_id IS NULL`，**不看 dimensions** →
+  旧 chunk 仍算「有向量」→ 永不重嵌 → 新旧向量混在同一索引里，检索结果失真。
+- 两张 embeddings 表都**不记录模型身份**，无法判断「哪些向量需要重建」。
+
+修法（三层，逐层落到单一实现点）：
+
+1. **向量空间签名**（`embeddingSignature`，`embedding.ts`）：取「协议 + 端点(base，不含 path)
+   + 模型 + 维度」——这四项决定向量取值；path 只决定路由，同一空间的不同 path 不换签名。
+   内置 provider 总是带签名；第三方 stub 可缺省，缺省时存储层保持旧行为（不误判）。
+2. **provenance 落盘**：`memories.embedding_signature` 与
+   `knowledge_chunk_embeddings.signature` 增列（ALTER 幂等），写入时记当前签名。
+3. **不匹配即视为待重嵌**：memory 检索按签名过滤并把不符的行纳入回填；knowledge
+   把签名不符计入「缺向量」（ANN 路径 join 回表过滤，否则旧向量仍会命中），
+   覆盖率只统计同签名向量。`embeddingSignature` 未启用时全部保持旧行为。
+
+**vec 表维度变化改为重建**：vec0 的 `float[N]` 建表即固定，旧表留着只会让新向量写入
+全部失败。现在 DROP+CREATE 后由 `backfillVecFromEmbeddings` 重灌——丢掉的只是 ANN 副本，
+权威数据仍在 embeddings 表里。「要不要重建」抽成纯函数 `vecTableNeedsRebuild`，
+不依赖 sqlite-vec 扩展即可测试。
+
+**墓碑不会被重试**：`dimensions = 0` 的 secret-skip 墓碑同样记签名，换模型后不会变成
+「缺向量」而反复重嵌——那正是墓碑要避免的。
+
+#### 同批修正
+
+- **`ensureEmbeddingSchema` 补索引**：`bucket` 索引外新增 `signature` 索引；旧库重建路径
+  （`rebuildLegacyProjectTables`）的表定义同步加列，避免「老库重建后缺列」。
+- **设置页破坏性提示**：新增 `.set-warn` 样式（介于 muted 与 error 之间），常驻显示
+  「换模型/端点/维度 → 已有向量不可比 → 需全量重建」，不等用户点保存才提示。
+- **apiKey 脱敏复用同一实现**：`redactEmbedding` 与 `redactProvider` 共用 `redactSecret`；
+  回显占位符（`{configured,ref}`）在保存时还原为存储值，绝不把占位符写盘。
+- **`pendingEmbeddingCount()`**：把「还有多少条要重嵌」变成可展示的事实（条件与
+  回填谓词同源），而不是让用户对着 UI 猜。
+
+#### 测试
+
+`tests/embedding-signature.test.ts`（13 例）：签名幂等/敏感性、path 不参与签名、
+带签名写入、换签名后旧向量检索不到、待重嵌计数与回填生效、vec 表重建判断
+（含「DDL 无法识别维度时不贸然 DROP」）、旧库重复打开迁移幂等。
+
+全量 579 文件 / 5929 用例通过；`npm run lint` 通过；`arch/check-sync.sh` 全绿。
+
+---
+
 ## v0.130.7 (2026-11-25)
 
 ### feat(engine,gateway,webui): provider 预设支持「接入方式」——同一厂商的订阅网关/协议变体可切换

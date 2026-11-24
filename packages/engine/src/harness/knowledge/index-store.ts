@@ -118,9 +118,47 @@ export class KnowledgeIndexStore {
   /** 大库 COUNT 短 TTL：UI 轮询 / jobControl 不必每请求全表 JOIN */
   private readonly statsCache = new Map<string, { at: number; value: unknown }>();
   private static readonly STATS_TTL_MS = 1_000;
+  /**
+   * 当前向量空间签名（见 embeddingSignature）；null = 不启用签名过滤。
+   *
+   * 写入时记入 `signature` 列；检索只认同签名；签名不符的 chunk 被视为
+   * 「缺向量」进入重嵌队列——换模型/端点/维度后必须重算，否则新旧向量会被
+   * 放在同一次余弦比较里，检索结果失真。
+   */
+  private readonly embeddingSignature: string | null;
 
-  constructor(private readonly db: KnowledgeDatabase) {
+  constructor(
+    private readonly db: KnowledgeDatabase,
+    options?: {
+      /** 当前向量空间签名；缺省取 embeddingProvider.signature */
+      embeddingSignature?: string | null;
+      /** 仅用于推导签名（索引本身不调 provider） */
+      embeddingProvider?: import('../memory/sqlite/embedding.js').EmbeddingProvider | null;
+    },
+  ) {
     this.fts = new KnowledgeFts(db);
+    this.embeddingSignature =
+      options?.embeddingSignature !== undefined
+        ? options.embeddingSignature
+        : (options?.embeddingProvider?.signature ?? null);
+  }
+
+  /** 设置一次签名过滤开关（Worker 侧按 boot 配置注入） */
+  get signature(): string | null {
+    return this.embeddingSignature;
+  }
+
+  /**
+   * 签名过滤片段（作用于 `knowledge_chunk_embeddings e` 的列）。
+   *
+   * @returns ` AND e.signature = ?`，签名未启用时为空串
+   */
+  private signatureFilterSql(): string {
+    return this.embeddingSignature ? ' AND e.signature = ?' : '';
+  }
+
+  private signatureFilterParams(): unknown[] {
+    return this.embeddingSignature ? [this.embeddingSignature] : [];
   }
 
   private cached<T>(key: string, compute: () => T): T {
@@ -132,7 +170,7 @@ export class KnowledgeIndexStore {
     return value;
   }
 
-  /** 写路径后立刻让统计可见（收尾 force 也可走此绕过 TTL） */
+  /** 统计缓存显式失效（签名切换后必须调用，否则 UI 仍显示旧覆盖） */
   invalidateStatsCache(): void {
     this.statsCache.clear();
   }
@@ -1371,6 +1409,12 @@ export class KnowledgeIndexStore {
         const ph = Buffer.from(emb.buffer, emb.byteOffset, emb.byteLength);
         // 先 ANN 过采，再按 Membership 裁剪，最后截断
         const k = Math.min(Math.max(limit * 4, 64), 1024);
+        // knowledge_vec 只存向量本身，签名在 knowledge_chunk_embeddings 里：
+        // 必须 join 回表过滤，否则换模型后旧向量仍会通过 ANN 命中并被当作有效结果。
+        const sigJoin = this.embeddingSignature
+          ? 'JOIN knowledge_chunk_embeddings e ON e.chunk_id = v.chunk_id'
+          : '';
+        const sigWhere = this.embeddingSignature ? ' AND e.signature = ?' : '';
         const knn = this.db.raw
           .prepare(
             `SELECT c.id AS id, v.distance AS dist
@@ -1378,10 +1422,13 @@ export class KnowledgeIndexStore {
                SELECT chunk_id, distance FROM knowledge_vec
                WHERE embedding MATCH ? AND k = ?
              ) v
-             ${joinChunks.replace('%s', 'v.chunk_id')} ${where}
+             ${joinChunks.replace('%s', 'v.chunk_id')} ${sigJoin} ${where}${sigWhere}
              ORDER BY v.distance LIMIT ?`,
           )
-          .all(ph, k, ...sourceIds, limit) as Array<{ id: string; dist: number }>;
+          .all(...([ph, k, ...sourceIds, ...this.signatureFilterParams(), limit] as never[])) as Array<{
+          id: string;
+          dist: number;
+        }>;
         // ANN 完成即权威结果（含 0 命中）；不再退 JS 全表
         const scores = new Map(knn.map((r) => [r.id, 1 - Number(r.dist ?? 1)]));
         return load(knn.map((r) => r.id), scores);
@@ -1395,10 +1442,10 @@ export class KnowledgeIndexStore {
       .prepare(
         `SELECT e.chunk_id AS chunk_id, e.embedding AS embedding
          FROM knowledge_chunk_embeddings e
-         ${joinChunks.replace('%s', 'e.chunk_id')} ${where}
+         ${joinChunks.replace('%s', 'e.chunk_id')} ${where}${this.signatureFilterSql()}
          LIMIT 2000`,
       )
-      .all(...sourceIds) as Array<{
+      .all(...([...sourceIds, ...this.signatureFilterParams()] as never[])) as Array<{
       chunk_id: string;
       embedding: ArrayBuffer | Uint8Array;
     }>;
@@ -1441,16 +1488,19 @@ export class KnowledgeIndexStore {
          JOIN knowledge_files f ON f.id = c.file_id
          JOIN knowledge_memberships m ON m.file_id = c.file_id
          LEFT JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
-         WHERE m.source_id = ? AND e.chunk_id IS NULL AND ${EMBEDDABLE_WHERE}
+         WHERE m.source_id = ? AND (${this.missingEmbeddingPredicate()}) AND ${EMBEDDABLE_WHERE}
          LIMIT ?`,
       )
-      .all(String(sourceId), limit) as Array<{ id: string; text: string }>;
+      .all(...([String(sourceId), ...this.signatureFilterParams(), limit] as never[])) as Array<{
+      id: string;
+      text: string;
+    }>;
     return rows.map((r) => ({ chunkId: r.id, text: r.text }));
   }
 
   /** 是否仍有缺向量 chunk（EXISTS，不拉正文） */
   hasChunksMissingEmbedding(sourceId: KnowledgeSourceId | string): boolean {
-    return this.cached(`emb-miss:${sourceId}`, () => {
+    return this.cached(`emb-miss:${sourceId}:${this.embeddingSignature ?? ''}`, () => {
       const row = this.db.raw
         .prepare(
           `SELECT 1 AS ok
@@ -1458,12 +1508,31 @@ export class KnowledgeIndexStore {
            JOIN knowledge_files f ON f.id = c.file_id
            JOIN knowledge_memberships m ON m.file_id = c.file_id
            LEFT JOIN knowledge_chunk_embeddings e ON e.chunk_id = c.id
-           WHERE m.source_id = ? AND e.chunk_id IS NULL AND ${EMBEDDABLE_WHERE}
+           WHERE m.source_id = ? AND (${this.missingEmbeddingPredicate()}) AND ${EMBEDDABLE_WHERE}
            LIMIT 1`,
         )
-        .get(String(sourceId)) as { ok?: number } | undefined;
+        .get(...([String(sourceId), ...this.signatureFilterParams()] as never[])) as
+        | { ok?: number }
+        | undefined;
       return Boolean(row);
     });
+  }
+
+  /**
+   * 「缺向量」判定：没有向量，或向量产自另一个空间。
+   *
+   * `dimensions = 0` 是 secret-skip 墓碑（永不重试），用 `dimensions > 0`
+   * 把它排除在待重嵌之外；墓碑自身也带签名，换模型后不会变成「缺失」。
+   *
+   * 签名启用时显式判 `signature IS NULL`：旧版本写入的向量没有签名，
+   * 而 SQL 三值逻辑下 `NULL <> 'x'` 得 NULL（不计入），必须单独列出，
+   * 否则这些最该重嵌的行反而永远选不到。
+   *
+   * @returns SQL 布尔表达式（作用于别名为 `e` 的 embeddings 表）
+   */
+  private missingEmbeddingPredicate(): string {
+    if (!this.embeddingSignature) return 'e.chunk_id IS NULL';
+    return `(e.chunk_id IS NULL OR (e.dimensions > 0 AND (e.signature IS NULL OR e.signature <> ?)))`;
   }
 
   /**
@@ -1474,12 +1543,13 @@ export class KnowledgeIndexStore {
     this.db.ensureEmbeddingSchema();
     const now = Date.now();
     const insert = this.db.raw.prepare(
-      `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding, bucket, created_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO knowledge_chunk_embeddings (chunk_id, dimensions, embedding, bucket, signature, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(chunk_id) DO UPDATE SET
          dimensions = excluded.dimensions,
          embedding = excluded.embedding,
-         bucket = excluded.bucket`,
+         bucket = excluded.bucket,
+         signature = excluded.signature`,
     );
     this.db.raw.exec('BEGIN');
     try {
@@ -1487,7 +1557,16 @@ export class KnowledgeIndexStore {
         const vec = Float32Array.from(embedding ?? []);
         const dims = vec.length;
         const buf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
-        insert.run(chunkId, dims, buf, dims > 0 ? vectorBucket(Array.from(vec)) : -1, now);
+        // 空向量 = secret-skip 墓碑（dimensions=0）；墓碑也记签名，
+        // 否则换模型后墓碑会被当成「缺向量」反复重试——那正是墓碑要避免的。
+        insert.run(
+          chunkId,
+          dims,
+          buf,
+          dims > 0 ? vectorBucket(Array.from(vec)) : -1,
+          this.embeddingSignature,
+          now,
+        );
         this.writeKnowledgeVec(chunkId, embedding ?? []);
       }
       this.db.raw.exec('COMMIT');
@@ -1511,12 +1590,7 @@ export class KnowledgeIndexStore {
     try {
       const dims = embedding.length;
       if (!this.vecTableReady) {
-        this.db.raw.exec(`
-          CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(
-            chunk_id TEXT PRIMARY KEY,
-            embedding float[${dims}] distance_metric=cosine
-          );
-        `);
+        this.ensureKnowledgeVecTable(dims);
         this.vecTableReady = true;
       }
       this.db.raw.prepare('DELETE FROM knowledge_vec WHERE chunk_id = ?').run(chunkId);
@@ -1524,14 +1598,45 @@ export class KnowledgeIndexStore {
         .prepare('INSERT INTO knowledge_vec (chunk_id, embedding) VALUES (?, ?)')
         .run(chunkId, toVecBlob(embedding));
     } catch {
-      // 无 sqlite-vec 时忽略
+      // 无 sqlite-vec / 维度不符时忽略：写入失败不得影响 BLOB 落库（权威在表中）
     }
   }
 
-  embeddingCoverage(sourceId?: KnowledgeSourceId | string): number {
-    return this.cached(`emb-cov:${sourceId ?? 'global'}`, () => this.computeEmbeddingCoverage(sourceId));
+  /**
+   * 建/校验 knowledge_vec：维度变化时重建。
+   *
+   * vec0 的 `float[N]` 建表即固定，旧维度的表会让新向量写入静默失败。
+   * 重建丢掉的只是 ANN 副本，权威数据仍在 knowledge_chunk_embeddings，
+   * 由 backfillVecFromEmbeddings 重灌。
+   *
+   * @param dims - 当前向量维度
+   */
+  private ensureKnowledgeVecTable(dims: number): void {
+    const row = this.db.raw
+      .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='knowledge_vec'`)
+      .get() as { sql?: string } | undefined;
+    if (row?.sql) {
+      const m = /float\[(\d+)\]/i.exec(row.sql);
+      if (m && Number(m[1]) === dims) return;
+      this.db.raw.exec('DROP TABLE knowledge_vec');
+    }
+    this.db.raw.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_vec USING vec0(
+        chunk_id TEXT PRIMARY KEY,
+        embedding float[${dims}] distance_metric=cosine
+      );
+    `);
   }
 
+  embeddingCoverage(sourceId?: KnowledgeSourceId | string): number {
+    return this.cached(
+      // 签名进缓存键：换模型后旧覆盖率不再代表当前空间
+      `emb-cov:${sourceId ?? 'global'}:${this.embeddingSignature ?? ''}`,
+      () => this.computeEmbeddingCoverage(sourceId),
+    );
+  }
+
+  /** 覆盖率只统计「当前签名」的向量：旧空间的向量不算已覆盖 */
   private computeEmbeddingCoverage(sourceId?: KnowledgeSourceId | string): number {
     if (sourceId) {
       const t = (
@@ -1551,9 +1656,9 @@ export class KnowledgeIndexStore {
             `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings e
              JOIN knowledge_chunks c ON c.id = e.chunk_id
              JOIN knowledge_memberships m ON m.file_id = c.file_id
-             WHERE m.source_id = ?`,
+             WHERE m.source_id = ? AND e.dimensions > 0${this.signatureFilterSql()}`,
           )
-          .get(String(sourceId)) as { n: number }
+          .get(...([String(sourceId), ...this.signatureFilterParams()] as never[])) as { n: number }
       ).n;
       return Math.min(1, e / t);
     }
@@ -1568,8 +1673,11 @@ export class KnowledgeIndexStore {
     if (t === 0) return 1;
     const e = (
       this.db.raw
-        .prepare('SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings')
-        .get() as { n: number }
+        .prepare(
+          `SELECT COUNT(*) AS n FROM knowledge_chunk_embeddings e
+           WHERE e.dimensions > 0${this.signatureFilterSql()}`,
+        )
+        .get(...(this.signatureFilterParams() as never[])) as { n: number }
     ).n;
     return Math.min(1, e / t);
   }
@@ -1578,10 +1686,10 @@ export class KnowledgeIndexStore {
     if (!this.db.sqliteVecEnabled) return 0;
     const rows = this.db.raw
       .prepare(
-        `SELECT chunk_id, embedding, dimensions FROM knowledge_chunk_embeddings
-         WHERE dimensions > 0 LIMIT ?`,
+        `SELECT chunk_id, embedding, dimensions FROM knowledge_chunk_embeddings e
+         WHERE dimensions > 0${this.signatureFilterSql()} LIMIT ?`,
       )
-      .all(batch) as Array<{
+      .all(...([...this.signatureFilterParams(), batch] as never[])) as Array<{
       chunk_id: string;
       embedding: ArrayBuffer | Uint8Array;
       dimensions: number;

@@ -58,6 +58,14 @@ export interface SqliteMemoryStoreOptions {
   similarityWeight?: number;
   /** 关键词路径默认最低命中分 */
   minKeywordScore?: number;
+  /**
+   * 当前向量空间签名（缺省取 `embeddingProvider.signature`）。
+   *
+   * 写入时记入 `memories.embedding_signature`；检索时只认同签名的向量，
+   * 签名不符的行视为「待重嵌」并进入回填队列。
+   * null/undefined = 不启用签名过滤（第三方 provider 无法自证时的旧行为）。
+   */
+  embeddingSignature?: string | null;
 }
 
 function emptyTypes(): Record<MemoryType, number> {
@@ -86,6 +94,8 @@ export class SqliteMemoryStore implements MemoryStore {
   private readonly defaultMinKeywordScore: number;
   private vecReady = false;
   private embeddingBackfillScheduled = false;
+  /** 当前向量空间签名；null = 不启用签名过滤 */
+  private readonly embeddingSignature: string | null;
 
   constructor(db: AgentDatabase, options?: SqliteMemoryStoreOptions) {
     this.db = db;
@@ -95,6 +105,10 @@ export class SqliteMemoryStore implements MemoryStore {
     this.defaultMinSimilarity = options?.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
     this.similarityWeight = options?.similarityWeight ?? DEFAULT_SIMILARITY_WEIGHT;
     this.defaultMinKeywordScore = options?.minKeywordScore ?? DEFAULT_MIN_KEYWORD_SCORE;
+    this.embeddingSignature =
+      options?.embeddingSignature !== undefined
+        ? options.embeddingSignature
+        : (this.embedding?.signature ?? null);
 
     if (this.embedding && this.vectorEngine !== 'js') {
       const dims = this.embedding.dimensions;
@@ -151,8 +165,8 @@ export class SqliteMemoryStore implements MemoryStore {
       INSERT INTO memories (
         id, type, content, source, confidence, importance,
         access_count, last_accessed_at, created_at, decay_factor, tags, embedding,
-        status, channel, future_use, anchors, evidence, deleted, as_of
-      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 1.0, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        status, channel, future_use, anchors, evidence, deleted, as_of, embedding_signature
+      ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 1.0, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
     `).run(
       id,
       mapLegacyType(entry.type),
@@ -170,6 +184,8 @@ export class SqliteMemoryStore implements MemoryStore {
       JSON.stringify(entry.anchors ?? []),
       entry.evidence ?? null,
       entry.asOf ?? null,
+      // 只有真正拿到向量才记签名；embedding 失败时两者一并留空（该行走关键词路径）
+      embeddingStr ? this.embeddingSignature : null,
     );
 
     if (embeddingStr && this.vecReady) {
@@ -245,6 +261,22 @@ export class SqliteMemoryStore implements MemoryStore {
     return { sql, params };
   }
 
+  /**
+   * 检索侧的签名过滤（SQL 片段，作用于 `memories` 列）。
+   *
+   * 签名不符的向量与当前查询向量不在同一空间，余弦相似度没有意义——必须排除，
+   * 否则会出现「换模型后每次检索都报 Vector dimensions must match」这类崩溃。
+   *
+   * @returns ` AND …` 片段（签名未启用时为空串）
+   */
+  private signatureFilterSql(): string {
+    return this.embeddingSignature ? ' AND embedding_signature = ?' : '';
+  }
+
+  private signatureFilterParams(): unknown[] {
+    return this.embeddingSignature ? [this.embeddingSignature] : [];
+  }
+
   /** sqlite-vec KNN 检索（需先 embed 查询文本）；过相关性地板后按混合分排序 */
   private async vecRetrieveAsync(query: MemoryQuery): Promise<MemoryEntry[]> {
     if (!this.embedding || !this.vecReady) return [];
@@ -258,7 +290,14 @@ export class SqliteMemoryStore implements MemoryStore {
     const vis = this.visibilityWhere(query);
     const k = Math.max(query.limit ?? 10, 20);
     const minSim = query.minSimilarity ?? this.defaultMinSimilarity;
-    const hits = searchMemoryVectors(this.db.raw, queryVec, k * 3, vis.sql, vis.params);
+    const hits = searchMemoryVectors(
+      this.db.raw,
+      queryVec,
+      k * 3,
+      // vec 表本身不存签名；签名过滤落在 JOIN 的 memories 侧
+      `${vis.sql}${this.signatureFilterSql()}`,
+      [...vis.params, ...this.signatureFilterParams()],
+    );
     if (hits.length === 0) return [];
 
     const scored: Array<{ e: MemoryEntry; similarity: number }> = [];
@@ -298,8 +337,8 @@ export class SqliteMemoryStore implements MemoryStore {
     const minSim = query.minSimilarity ?? this.defaultMinSimilarity;
 
     let sql = `SELECT id, type, content, source, confidence, importance, access_count, last_accessed_at, created_at, decay_factor, tags, embedding, status, channel, future_use, anchors, evidence, deleted, deleted_at, deleted_by, deleted_reason, deleted_meta, reinforced_at, as_of
-       FROM memories WHERE embedding IS NOT NULL${vis.sql}`;
-    const params: unknown[] = [...vis.params];
+       FROM memories WHERE embedding IS NOT NULL${vis.sql}${this.signatureFilterSql()}`;
+    const params: unknown[] = [...vis.params, ...this.signatureFilterParams()];
 
     if (query.type) {
       const types = Array.isArray(query.type) ? query.type : [query.type];
@@ -510,10 +549,10 @@ export class SqliteMemoryStore implements MemoryStore {
     const rows = this.db.raw.prepare(`
       SELECT id, type, content, tags, future_use, anchors, evidence, embedding
       FROM memories
-      WHERE deleted = 0 AND (embedding IS NULL OR embedding = '')
+      WHERE deleted = 0 AND (${this.backfillPredicate()})
       ORDER BY last_accessed_at DESC
       LIMIT ?
-    `).all(limit) as any[];
+    `).all(...(this.backfillParams(limit) as never[])) as any[];
 
     let ok = 0;
     for (const row of rows) {
@@ -528,7 +567,11 @@ export class SqliteMemoryStore implements MemoryStore {
         });
         const vec = await this.embedding.embed(text);
         const serialized = serializeEmbedding(vec);
-        this.db.raw.prepare('UPDATE memories SET embedding = ? WHERE id = ?').run(serialized, row.id);
+        this.db.raw.prepare('UPDATE memories SET embedding = ?, embedding_signature = ? WHERE id = ?').run(
+          serialized,
+          this.embeddingSignature,
+          row.id,
+        );
         if (this.vecReady) upsertMemoryVector(this.db.raw, row.id, vec);
         ok++;
       } catch {
@@ -536,6 +579,25 @@ export class SqliteMemoryStore implements MemoryStore {
       }
     }
     return ok;
+  }
+
+  /**
+   * 回填选择条件：缺向量，或向量产自另一个空间（换模型/端点/维度）。
+   *
+   * 签名未启用（null）时只选缺向量的行——无法判定空间时保持旧行为，
+   * 宁可少重建也不把仍然可比的向量当垃圾重算。
+   */
+  private backfillPredicate(): string {
+    const base = "embedding IS NULL OR embedding = ''";
+    if (!this.embeddingSignature) return base;
+    return `${base} OR embedding_signature IS NULL OR embedding_signature <> ?`;
+  }
+
+  /**
+   * 回填参数：签名启用时补一个占位符（作用于 backfillPredicate 的 `<> ?`）。
+   */
+  private backfillParams(limit: number): unknown[] {
+    return this.embeddingSignature ? [this.embeddingSignature, limit] : [limit];
   }
 
   private async maybeBackfillEmbeddings(): Promise<void> {
@@ -546,6 +608,21 @@ export class SqliteMemoryStore implements MemoryStore {
     } catch {
       // 回填失败不影响本次检索
     }
+  }
+
+  /**
+   * 待重嵌条数（签名不符或缺向量）。
+   *
+   * 换模型后 UI 需要告诉用户「有多少条目要重建」——这是可展示的事实，
+   * 不是内部估算：条件与 backfillPredicate 同源。
+   */
+  pendingEmbeddingCount(): number {
+    if (!this.embedding) return 0;
+    const params = this.embeddingSignature ? [this.embeddingSignature] : [];
+    const row = this.db.raw
+      .prepare(`SELECT COUNT(*) AS n FROM memories WHERE deleted = 0 AND (${this.backfillPredicate()})`)
+      .get(...(params as never[])) as { n?: number } | undefined;
+    return Number(row?.n ?? 0);
   }
 
   async get(id: string): Promise<MemoryEntry | null> {

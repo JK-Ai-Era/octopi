@@ -22,6 +22,11 @@ export interface ResolvedEmbeddingRuntime {
   dimensions?: number;
   model: string;
   type: NonNullable<EmbeddingModelConfig['type']>;
+  /**
+   * 向量空间签名；null 表示无法自证（provider 未带签名）。
+   * 存储层用它决定「已存向量是否可比」。
+   */
+  signature: string | null;
 }
 
 function inferType(
@@ -95,13 +100,17 @@ export function resolveEmbeddingRuntime(models?: ModelsConfig | null): ResolvedE
     dimensions: emb.dimensions,
   };
 
+  // 先创建再返回：签名随 provider 一起产出，避免两处各自重算导致漂移
+  const provider = createEmbeddingProvider(config);
+
   return {
-    provider: createEmbeddingProvider(config),
+    provider,
     vectorEngine: emb.vectorEngine ?? 'auto',
     sqliteVecExtensionPath: emb.sqliteVecExtensionPath,
     dimensions: localDimensions,
     model: emb.model,
     type,
+    signature: provider?.signature ?? null,
   };
 }
 

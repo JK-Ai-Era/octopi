@@ -49,9 +49,43 @@ export async function tryLoadSqliteVec(db: any, extensionPath?: string): Promise
 }
 
 /**
+ * 从 vec 虚拟表 DDL 里读出声明的维度。
+ *
+ * @param sql - `sqlite_master.sql` 原文
+ * @returns 维度；无法识别时 null
+ */
+export function vecTableDimensions(sql: string | undefined): number | null {
+  const m = /float\[(\d+)\]/i.exec(sql ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * 现有 vec 表是否必须重建才能满足目标维度。
+ *
+ * vec0 的 `float[N]` 建表即固定，维度不同就只能 DROP+CREATE。把「要不要重建」
+ * 与「怎么重建」分开，前者是纯判断，无需扩展即可测试。
+ *
+ * @param existingSql - 现有表的 `sqlite_master.sql`（表不存在时为 undefined）
+ * @param dimensions - 目标维度
+ * @returns true = 必须重建
+ */
+export function vecTableNeedsRebuild(
+  existingSql: string | undefined,
+  dimensions: number,
+): boolean {
+  const current = vecTableDimensions(existingSql);
+  return current !== null && current !== dimensions;
+}
+
+/**
  * 确保记忆向量虚拟表存在且维度匹配。
  *
- * @returns 是否可用（维度冲突或建表失败时 false）
+ * 维度变化（换向量模型）时 **重建** 该表：vec0 的 `float[N]` 是建表时固定的，
+ * 旧表留着只会让新维度的写入全部失败。重建丢弃旧向量是正确代价——它们与新的
+ * 查询向量本就不可比，`memories.embedding` 里的 JSON 文本仍然保留，由
+ * backfillEmbeddings 按新签名重算。
+ *
+ * @returns 是否可用（建表/重建失败时 false，调用方据此决定降级或 fail-loud）
  */
 export function ensureMemoryVecTable(db: any, dimensions: number): boolean {
   if (!db || !Number.isInteger(dimensions) || dimensions <= 0) return false;
@@ -60,11 +94,9 @@ export function ensureMemoryVecTable(db: any, dimensions: number): boolean {
       .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
       .get(MEMORY_VEC_TABLE) as { sql?: string } | undefined;
 
-    if (row?.sql) {
-      const m = /float\[(\d+)\]/i.exec(row.sql);
-      if (m && Number(m[1]) !== dimensions) {
-        return false;
-      }
+    if (row?.sql && vecTableNeedsRebuild(row.sql, dimensions)) {
+      db.exec(`DROP TABLE ${MEMORY_VEC_TABLE}`);
+    } else if (row?.sql) {
       return true;
     }
 

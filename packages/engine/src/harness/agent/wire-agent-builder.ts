@@ -534,6 +534,8 @@ async function wireContextStores(
 
     const memoryStore = new SqliteMemoryStore(db, {
       embeddingProvider: embRuntime?.provider ?? null,
+      // 换模型/端点/维度后旧向量不再可比：检索按签名过滤、回填按签名重建
+      embeddingSignature: embRuntime?.signature ?? null,
       vectorEngine: embRuntime?.vectorEngine ?? 'auto',
       minSimilarity: input.memoryConfig?.retrieval?.minSimilarity,
       similarityWeight: input.memoryConfig?.retrieval?.similarityWeight,

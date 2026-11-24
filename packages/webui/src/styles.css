@@ -1979,6 +1979,16 @@ button.ctx-band {
   font-size: 15px;
 }
 
+/* 破坏性变更提示（如换向量模型后需全量重建）：比 muted 更醒目，但不是 error */
+.set-warn {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--color-warn);
+  background: color-mix(in srgb, var(--color-warn) 8%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* ═══════════════ UI 打磨批（八项） ═══════════════ */
 
 /* ── ① 左栏连接条（精简版：状态 + 操作 + 设置入口） ── */
@@ -2242,6 +2252,19 @@ button.ctx-band {
 .corpus-toast-action {
   color: var(--color-info);
   text-decoration: underline;
+}
+/* 左栏归档入口：标签与计数徽标各占一行（窄栏不再挤成折断的徽标） */
+.sidebar-archives-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+.sidebar-archives-entry-label { white-space: nowrap; }
+.sidebar-archives-entry .archive-count-badge {
+  margin-left: 0;
+  white-space: nowrap;
 }
 .archive-count-badge {
   margin-left: 6px;

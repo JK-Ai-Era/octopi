@@ -157,7 +157,7 @@ async function main(): Promise<void> {
   }
 
   const sources = new KnowledgeSourceStore(db);
-  const index = new KnowledgeIndexStore(db);
+  const index = new KnowledgeIndexStore(db, { embeddingProvider: embeddingProvider as never });
   const retriever = new KnowledgeRetriever({
     sourceStore: sources,
     indexStore: index,

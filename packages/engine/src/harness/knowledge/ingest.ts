@@ -242,7 +242,11 @@ export class KnowledgeIngest extends EventEmitter {
         });
       },
     });
-    this.index = options.indexStore ?? new KnowledgeIndexStore(options.sourceStore.database);
+    this.index =
+      options.indexStore ??
+      new KnowledgeIndexStore(options.sourceStore.database, {
+        embeddingProvider: options.embeddingProvider ?? null,
+      });
     this.adapters = options.adapterRegistry ?? new FormatAdapterRegistry();
     this.parseConcurrency = options.parseConcurrency ?? 8;
     this.documentParseConcurrency = options.documentParseConcurrency ?? 2;

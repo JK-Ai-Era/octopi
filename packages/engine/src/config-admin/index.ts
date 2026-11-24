@@ -38,8 +38,8 @@ export {
 } from './model-presets.js';
 export type { ModelPresetModel, ProviderPreset, ProviderAccessMode } from './model-presets.js';
 
-export { redactSecret, redactProvider } from './redact.js';
-export type { RedactedSecret, RedactedProvider } from './redact.js';
+export { redactSecret, redactProvider, redactEmbedding } from './redact.js';
+export type { RedactedSecret, RedactedProvider, RedactedEmbedding } from './redact.js';
 
 export {
   computeConfigHash,

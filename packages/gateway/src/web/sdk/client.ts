@@ -858,10 +858,31 @@ export interface RedactedProviderDto {
   options?: Record<string, unknown>;
 }
 
+/** 脱敏后的 embedding 视图（向量模型分区回显；apiKey 只回显形态） */
+export interface RedactedEmbeddingDto {
+  enabled?: boolean;
+  type?: string;
+  model?: string;
+  baseUrl?: string;
+  dimensions?: number;
+  maxBatchSize?: number;
+  timeoutMs?: number;
+  supportsBatch?: boolean;
+  path?: string;
+  apiKeyHeader?: string;
+  apiKeyPrefix?: string;
+  vectorEngine?: string;
+  apiKey: RedactedSecretDto;
+  /** 兜底透传（防保存丢数据） */
+  [extra: string]: unknown;
+}
+
 /** 模型配置视图 */
 export interface ConfigModelsViewDto {
   providers: RedactedProviderDto[];
   level: Record<string, unknown>;
+  /** 未配置时 null（检索走纯关键词） */
+  embedding: RedactedEmbeddingDto | null;
   hash: string;
 }
 
@@ -2692,6 +2713,34 @@ export class OctopiClient {
     const res = await this.putJson<{ ok: boolean; data: ConfigApplyResultDto }>(
       '/config/models/levels',
       { level, hash },
+    );
+    return res.data;
+  }
+
+  /**
+   * 写入向量模型配置（models.embedding，整段替换）
+   *
+   * 生效边界是 restart-required：embedding provider 在 knowledge 子进程与
+   * memory 存储启动时装配，热改不会生效。
+   *
+   * @param embedding - embedding 配置（apiKey 可为 `${VAR}`；缺省=保留现有值）
+   * @param hash - 乐观锁 hash
+   */
+  async updateModelEmbedding(
+    embedding: Record<string, unknown>,
+    hash: string,
+  ): Promise<ConfigApplyResultDto> {
+    const res = await this.putJson<{ ok: boolean; data: ConfigApplyResultDto }>(
+      '/config/models/embedding',
+      { embedding, hash },
+    );
+    return res.data;
+  }
+
+  /** 移除向量模型配置（退回纯关键词检索；需重启生效） */
+  async clearModelEmbedding(hash: string): Promise<ConfigApplyResultDto> {
+    const res = await this.deleteJson<{ ok: boolean; data: ConfigApplyResultDto }>(
+      `/config/models/embedding?hash=${encodeURIComponent(hash)}`,
     );
     return res.data;
   }

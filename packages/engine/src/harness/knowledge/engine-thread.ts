@@ -204,7 +204,7 @@ async function main(): Promise<void> {
       autoDescribe: boot.autoDescribe,
     });
     const sources = new KnowledgeSourceStore(writeDb);
-    const index = new KnowledgeIndexStore(writeDb);
+    const index = new KnowledgeIndexStore(writeDb, { embeddingProvider: embeddingProvider as never });
     const retriever = new KnowledgeRetriever({
       sourceStore: sources,
       indexStore: index,
@@ -240,7 +240,7 @@ async function main(): Promise<void> {
       sqliteVec: boot.sqliteVec ?? true,
     });
     const sources = new KnowledgeSourceStore(readDb);
-    const index = new KnowledgeIndexStore(readDb);
+    const index = new KnowledgeIndexStore(readDb, { embeddingProvider: embeddingProvider as never });
     const retriever = new KnowledgeRetriever({
       sourceStore: sources,
       indexStore: index,

@@ -135,6 +135,92 @@ function formToProviderConfig(form: ProviderForm): Record<string, unknown> {
   return cfg;
 }
 
+/**
+ * 向量模型表单（models.embedding）— 独立填写，不引用 provider。
+ *
+ * 引用 provider 的隐患：provider 一换接入方式（如 coding-plan），embedding
+ * 会静默跟着换端点，而 plan 端点通常没有 /embeddings，且多数订阅额度
+ * 明确禁止后端脚本调用。因此这里要求独立的 baseUrl / apiKey。
+ *
+ * 签名字段只用于「是否换了向量空间」的判断，变更时提示全量重建。
+ */
+interface EmbeddingForm {
+  enabled: boolean;
+  type: 'openai' | 'ollama' | 'http';
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  dimensions: string;
+  maxBatchSize: string;
+  timeoutMs: string;
+  path: string;
+  apiKeyHeader: string;
+  apiKeyPrefix: string;
+  vectorEngine: 'auto' | 'js' | 'sqlite-vec';
+  supportsBatch: boolean;
+}
+
+const EMPTY_EMBEDDING_FORM: EmbeddingForm = {
+  enabled: true,
+  type: 'openai',
+  model: '',
+  baseUrl: '',
+  apiKey: '',
+  dimensions: '',
+  maxBatchSize: '',
+  timeoutMs: '',
+  path: '',
+  apiKeyHeader: '',
+  apiKeyPrefix: '',
+  vectorEngine: 'auto',
+  supportsBatch: true,
+};
+
+/** 视图 DTO → 表单（apiKey 不回显明文，留空=保留现有） */
+function embeddingFormFromView(view: ConfigModelsViewDto['embedding']): EmbeddingForm {
+  if (!view) return EMPTY_EMBEDDING_FORM;
+  return {
+    enabled: view.enabled !== false,
+    type:
+      view.type === 'ollama' ? 'ollama' : view.type === 'http' || view.type === 'custom' ? 'http' : 'openai',
+    model: String(view.model ?? ''),
+    baseUrl: String(view.baseUrl ?? ''),
+    apiKey: '',
+    dimensions: view.dimensions != null ? String(view.dimensions) : '',
+    maxBatchSize: view.maxBatchSize != null ? String(view.maxBatchSize) : '',
+    timeoutMs: view.timeoutMs != null ? String(view.timeoutMs) : '',
+    path: String(view.path ?? ''),
+    apiKeyHeader: String(view.apiKeyHeader ?? ''),
+    apiKeyPrefix: String(view.apiKeyPrefix ?? ''),
+    vectorEngine:
+      view.vectorEngine === 'js' ? 'js' : view.vectorEngine === 'sqlite-vec' ? 'sqlite-vec' : 'auto',
+    supportsBatch: view.supportsBatch !== false,
+  };
+}
+
+/** 表单 → 配置片段（空可选字段不落盘；apiKey 留空则整个键不写＝保留现有） */
+function embeddingFormToConfig(form: EmbeddingForm): Record<string, unknown> {
+  const cfg: Record<string, unknown> = {
+    type: form.type,
+    model: form.model.trim(),
+  };
+  if (!form.enabled) cfg.enabled = false;
+  if (form.baseUrl.trim()) cfg.baseUrl = form.baseUrl.trim();
+  if (form.apiKey.trim()) cfg.apiKey = form.apiKey.trim();
+  const dimensions = parseNumberField(form.dimensions, 'dimensions');
+  if (dimensions != null) cfg.dimensions = dimensions;
+  const maxBatchSize = parseNumberField(form.maxBatchSize, 'maxBatchSize');
+  if (maxBatchSize != null) cfg.maxBatchSize = maxBatchSize;
+  const timeoutMs = parseNumberField(form.timeoutMs, 'timeoutMs');
+  if (timeoutMs != null) cfg.timeoutMs = timeoutMs;
+  if (form.path.trim()) cfg.path = form.path.trim();
+  if (form.apiKeyHeader.trim()) cfg.apiKeyHeader = form.apiKeyHeader.trim();
+  if (form.apiKeyPrefix.trim()) cfg.apiKeyPrefix = form.apiKeyPrefix.trim();
+  if (form.vectorEngine !== 'auto') cfg.vectorEngine = form.vectorEngine;
+  if (!form.supportsBatch) cfg.supportsBatch = false;
+  return cfg;
+}
+
 /** 409 冲突（乐观锁）：文件被外部修改 → 提示并重载（#7 冲突可恢复） */
 function isConflictError(err: unknown): boolean {
   return err instanceof Error && /HTTP 409/.test(err.message);
@@ -157,6 +243,8 @@ export function ModelSettingsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [embedding, setEmbedding] = useState<EmbeddingForm>(EMPTY_EMBEDDING_FORM);
+  const [embeddingConfigured, setEmbeddingConfigured] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -166,6 +254,9 @@ export function ModelSettingsPanel() {
       ]);
       setView(modelsView);
       setPresets(presetList);
+      // 向量模型：视图为 null 表示未配置（检索走纯关键词）
+      setEmbedding(embeddingFormFromView(modelsView.embedding));
+      setEmbeddingConfigured(modelsView.embedding !== null);
       setLevels(
         Object.entries(modelsView.level ?? {}).map(([name, lv]) => {
           const v = lv as { primary?: string; fallback?: string[] };
@@ -181,7 +272,6 @@ export function ModelSettingsPanel() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [client]);
-
   useEffect(() => {
     void reload();
   }, [reload]);
@@ -384,6 +474,44 @@ export function ModelSettingsPanel() {
       models: prev.models.map((m, i) => (i === index ? { ...m, ...patch } : m)),
     }));
   };
+
+  const saveEmbedding = async () => {
+    if (!embedding.model.trim()) {
+      setError(t('modelSettings.embeddingModelRequired'));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await client.updateModelEmbedding(embeddingFormToConfig(embedding), view?.hash ?? '');
+      // 该接口恒返回 restart-required：不谎报已生效
+      setNotice(t('modelSettings.embeddingSavedRestart'));
+      await reload();
+    } catch (err) {
+      await handleWriteError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearEmbedding = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await client.clearModelEmbedding(view?.hash ?? '');
+      setNotice(t('modelSettings.embeddingClearedRestart'));
+      await reload();
+    } catch (err) {
+      await handleWriteError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** embedding 字段更新（受控表单） */
+  const setEmb = (patch: Partial<EmbeddingForm>) => setEmbedding((p) => ({ ...p, ...patch }));
 
   return (
     <div className="set-panel">
@@ -690,6 +818,133 @@ export function ModelSettingsPanel() {
           <button type="button" className="btn-secondary" onClick={saveLevels} disabled={busy}>
             {t('modelSettings.saveLevels')}
           </button>
+        </div>
+      </div>
+
+      {/*
+        向量模型（models.embedding）：与 provider 列表并列而非塞进 provider 表单。
+        语义边界是「共享能力」而非「某个 provider 的附属」——memory 与 knowledge
+        共用这一份配置，且要求独立填写（引用 provider 会随接入方式切换而静默失效）。
+      */}
+      <div className="set-levels">
+        <h3>{t('modelSettings.embeddingTitle')}</h3>
+        <div className="small muted">
+          {t('modelSettings.embeddingHint')}
+        </div>
+        {/* 用户明确要求：变更模型或参数可能导致已有向量不可比，需全量重建 */}
+        <div className="set-warn">{t('modelSettings.embeddingRebuildWarning')}</div>
+        {!embeddingConfigured && (
+          <div className="small muted">{t('modelSettings.embeddingNotConfigured')}</div>
+        )}
+
+        <div className="set-level-row">
+          <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={embedding.enabled}
+              onChange={(e) => setEmb({ enabled: e.target.checked })}
+            />
+            {t('modelSettings.embeddingEnabled')}
+          </label>
+          <label className="small" style={{ display: 'grid', gap: 4 }}>
+            {t('modelSettings.embeddingType')}
+            <select
+              className="set-input"
+              value={embedding.type}
+              onChange={(e) => setEmb({ type: e.target.value as EmbeddingForm['type'] })}
+            >
+              <option value="openai">openai</option>
+              <option value="ollama">ollama</option>
+              <option value="http">http</option>
+            </select>
+          </label>
+        </div>
+
+        <label className="set-field">
+          <span>{t('modelSettings.embeddingModel')}</span>
+          <input
+            className="set-input mono"
+            value={embedding.model}
+            onChange={(e) => setEmb({ model: e.target.value })}
+            placeholder="text-embedding-3-small / bge-m3 / qwen3.7-text-embedding"
+          />
+        </label>
+        <label className="set-field">
+          <span>Base URL</span>
+          <input
+            className="set-input mono"
+            value={embedding.baseUrl}
+            onChange={(e) => setEmb({ baseUrl: e.target.value })}
+            placeholder="https://api.openai.com/v1"
+          />
+          <span className="small muted">{t('modelSettings.embeddingBaseUrlHint')}</span>
+        </label>
+        <label className="set-field">
+          <span>API Key</span>
+          <input
+            className="set-input mono"
+            value={embedding.apiKey}
+            onChange={(e) => setEmb({ apiKey: e.target.value })}
+            placeholder={
+              embeddingConfigured
+                ? t('modelSettings.embeddingKeyPlaceholder')
+                : t('modelSettings.apiKeyNewPlaceholder')
+            }
+          />
+        </label>
+        <label className="set-field">
+          <span>{t('modelSettings.embeddingDimensions')}</span>
+          <input
+            className="set-input"
+            value={embedding.dimensions}
+            onChange={(e) => setEmb({ dimensions: e.target.value })}
+            placeholder="1536"
+          />
+          <span className="small muted">{t('modelSettings.embeddingDimensionsHint')}</span>
+        </label>
+        <div className="set-level-row">
+          <input
+            className="set-input"
+            value={embedding.maxBatchSize}
+            onChange={(e) => setEmb({ maxBatchSize: e.target.value })}
+            placeholder={t('modelSettings.embeddingMaxBatchPlaceholder')}
+          />
+          <input
+            className="set-input"
+            value={embedding.timeoutMs}
+            onChange={(e) => setEmb({ timeoutMs: e.target.value })}
+            placeholder={t('modelSettings.embeddingTimeoutPlaceholder')}
+          />
+          <input
+            className="set-input mono"
+            value={embedding.path}
+            onChange={(e) => setEmb({ path: e.target.value })}
+            placeholder="/embeddings"
+          />
+        </div>
+        <label className="set-field">
+          <span>{t('modelSettings.embeddingVectorEngine')}</span>
+          <select
+            className="set-input"
+            value={embedding.vectorEngine}
+            onChange={(e) => setEmb({ vectorEngine: e.target.value as EmbeddingForm['vectorEngine'] })}
+          >
+            <option value="auto">auto</option>
+            <option value="sqlite-vec">sqlite-vec</option>
+            <option value="js">js</option>
+          </select>
+          <span className="small muted">{t('modelSettings.embeddingVectorEngineHint')}</span>
+        </label>
+
+        <div className="set-actions">
+          <button type="button" className="btn-secondary" onClick={saveEmbedding} disabled={busy}>
+            {busy ? t('modelSettings.saving') : t('modelSettings.saveAndRestart')}
+          </button>
+          {embeddingConfigured && (
+            <button type="button" className="btn-ghost" onClick={clearEmbedding} disabled={busy}>
+              {t('modelSettings.embeddingClear')}
+            </button>
+          )}
         </div>
       </div>
     </div>
