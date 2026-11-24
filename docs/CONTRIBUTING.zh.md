@@ -187,7 +187,7 @@ my-plugin/
 ## 提交与 Pull Request 规范
 
 - **Commit 格式**：[Conventional Commits](https://www.conventionalcommits.org/)——`<type>(<scope>): <description>`；type 取 `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`。`<description>` 必须用**英文**。每个 commit 单一职责。
-- **每个 content commit 在同一 commit 内完成发行杂务**：按分段规则选版本号（major=用户显式要求；minor=重大功能或架构变更；patch=其余），运行 `npm run release:prep -- <X.Y.Z>`，向 `CHANGELOG.md` 顶部插入 `## v<X.Y.Z> (YYYY-MM-DD)` 条目，代码 + 版本文件 + `CHANGELOG.md` 一并提交，并立即打 tag（`git tag v<X.Y.Z>`）。
+- **每个 content commit 在同一 commit 内完成发行杂务**：按分段规则选版本号（major=用户显式要求；minor=重大功能或架构变更；patch=其余），运行 `npm run release:prep -- <X.Y.Z>`，向 `CHANGELOG.md` 顶部插入 `## v<X.Y.Z> (YYYY-MM-DD)` 条目，代码 + 版本文件 + `CHANGELOG.md` 一并提交。**此处不打 tag**——tag 标记的是发布，不是版本 bump（见下文）。
 - **公共文档双语同步**：`docs/*`、`README.md`、`CONTRIBUTING.md` 的任何改动必须在**同一 commit** 内同时落到英文文件与其 `*.zh.md` 对译；英文版为准。
 - **开 PR 前**：本地 `npm run lint` 与 `npm test` 通过；按[文档同步规范](#文档同步规范)更新文档；变更不违反[架构宪法](./north-star.zh.md)不变量。
 
@@ -198,10 +198,13 @@ my-plugin/
 ```sh
 npm run release:prep -- 0.56.0      # 五包同号 + 依赖钉版
 npm run release:print               # 打印发布顺序
-node scripts/publish.mjs --dry-run   # 打包预演，不上传
+npm run publish:dry                 # 打包 + 检查 tarball + 问 registry，不上传
+
+# 发布（tag 就是发布按钮，且必须打在已推送的 main 上）：
+git push origin main && git tag v0.56.0 && git push origin v0.56.0
 ```
 
-版本 bump 落在**每个 content commit**（见上文）；发布由 **tag 驱动**：push 一个 `v<X.Y.Z>` tag 会先跑完整 CI，再按 `core → engine → gateway → webui → octopi-agent` 依赖序发布五个包（`node scripts/publish.mjs`，凭证为 repo secret `NPM_TOKEN`；已在 registry 上的版本自动跳过，失败重跑从断点续发），分支 push 不发布。完整纪律见 `AGENTS.md` → Version Numbering Rules / Changelog Discipline。
+版本 bump 落在**每个 content commit**（见上文）；发布由 **tag 驱动**，且 **tag 只在发布时打**：发布 = 打一个 `v<X.Y.Z>` tag 并推送（**一次只推一个，绝不 `git push --tags`**——每个 tag 都是一次独立发布），随后跑完整 CI，再按 `core → engine → gateway → webui → octopi-agent` 依赖序发布五个包（`node scripts/publish.mjs`，凭证为 repo secret `NPM_TOKEN`；已在 registry 上的版本自动跳过，失败重跑从断点续发），分支 push 不发布。tag 必须等于五包版本号、且其提交必须在 `main` 上；比 registry 上 `latest` 更旧的版本会被拒发。完整纪律见 `AGENTS.md` → Version Numbering Rules / Changelog Discipline。
 
 ## 许可证与贡献授权
 

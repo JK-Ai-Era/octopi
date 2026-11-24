@@ -258,16 +258,28 @@ Version format is `X.Y.Z` (semantic versioning), updated as follows:
 2. Run `npm run release:prep -- <X.Y.Z>` (skip only if that version is already set on all five packages).
 3. Prepend a `## v<X.Y.Z> (YYYY-MM-DD)` section to `CHANGELOG.md` per **Changelog Discipline** (directly below the index table).
 4. Commit code + version files + CHANGELOG together.
-5. Tag the commit right away: `git tag v<X.Y.Z>` (if not already tagged). **Tagging belongs to the commit flow, not the release flow** — every version leaves a tag anchor whether or not it is ever published.
 
-**Tag push** (batch, or when the user asks): `git push --tags` (or `git push --follow-tags` with the normal push). Tags are local until pushed; push them so GitHub Releases, other machines, and `git checkout vX.Y.Z` see the same anchors. **A pushed `v*` tag is now also a release action**: it triggers the publish workflow below, so push the single tag you intend to release rather than a batch.
+**No tag here.** Version numbers advance on every content commit; **a tag marks a release**, so only a release gets one.
 
-**Publish is tag-driven**: pushing a `v<X.Y.Z>` tag runs the full CI suite (build → test → lint), then the `publish` job publishes in dependency order (`core` → `engine` → `gateway` → `webui` → `octopi-agent`) via `node scripts/publish.mjs`. Branch pushes never publish — every content commit bumps the patch version, so main-driven publishing would ship five packages per merge.
+### Release (tag-driven publish)
 
-- **Tag must name the version**: the workflow aborts when the tag (`v0.130.5`) differs from the five packages' version.
+A pushed tag *is* the release: it runs the full CI suite (build → test → lint), then the `publish` job ships the five packages in dependency order (`core` → `engine` → `gateway` → `webui` → `octopi-agent`) via `node scripts/publish.mjs`.
+
+```sh
+git push origin main          # the tagged commit must already be on main
+git tag v<X.Y.Z>              # must name the version currently on main
+git push origin v<X.Y.Z>      # ← the release action
+```
+
+- **One tag at a time.** Never `git push --tags` / `--follow-tags`: every tag is a separate publish run, and a batch races several versions onto the registry, where the last writer wins the `latest` dist-tag.
+- **Tag must name the version and sit on `main`** — enforced twice (workflow step + `scripts/publish.mjs`). A tag on an unmerged branch publishes nothing.
+- **Never move backwards.** If a higher version is already published the release is refused, so a stray re-push of an old tag cannot regress `latest`.
+- **Unreleased versions carry no tag.** Reach them by commit sha (`git log`, `CHANGELOG.md`); `git checkout vX.Y.Z` exists only for released versions. Per-commit tags from before this rule stay as-is — never delete or rewrite them.
 - **Credentials**: repo secret `NPM_TOKEN` — an npm Automation token, or a granular token with 2FA bypass plus read/write on the `@octopi-agent` scope and `octopi-agent`. A 2FA-protected ordinary token publishes as `EOTP`.
 - **Publish-if-absent**: a version already on the registry is skipped, so re-running a failed release resumes after the last successful package instead of dying on `EPUBLISHCONFLICT`. It never republishes different bytes under an existing version.
-- **Local dry run**: `npm run build` first, then `node scripts/publish.mjs --dry-run` (packs and reports, uploads nothing).
+- **Local dry run**: `npm run build` first, then `npm run publish:dry` (packs, checks the tarball for residue, reports what would ship; uploads nothing).
+
+*Why tags stopped being per-commit:* they existed because tags kept going missing while tagging lived in a manual release bucket; the release path is mechanical now (the publish job refuses to run without a tag naming the version), while a per-commit tag combined with tag-driven publishing means a batch push releases dozens of versions. Derivation: `CHANGELOG` v0.130.6.
 
 ### Changelog Discipline
 

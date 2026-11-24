@@ -188,7 +188,7 @@ Notes: the manifest is the installation-time declaration authority (`entry`, `en
 ## Commit & Pull Request Conventions
 
 - **Commit format**: [Conventional Commits](https://www.conventionalcommits.org/) — `<type>(<scope>): <description>`; types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `ci`. The `<description>` must be written in **English**. Each commit has a single responsibility.
-- **Every content commit carries its release chores in the same commit**: pick the version segment (major = explicit user request; minor = major feature or architecture change; patch = everything else), run `npm run release:prep -- <X.Y.Z>`, prepend the `## v<X.Y.Z> (YYYY-MM-DD)` entry to `CHANGELOG.md`, commit code + version files + `CHANGELOG.md` together, and tag the commit right away (`git tag v<X.Y.Z>`).
+- **Every content commit carries its release chores in the same commit**: pick the version segment (major = explicit user request; minor = major feature or architecture change; patch = everything else), run `npm run release:prep -- <X.Y.Z>`, prepend the `## v<X.Y.Z> (YYYY-MM-DD)` entry to `CHANGELOG.md`, and commit code + version files + `CHANGELOG.md` together. **No tag here** — a tag marks a release, not a version bump (see below).
 - **Public docs are bilingual**: any change to `docs/*`, `README.md`, or `CONTRIBUTING.md` lands in both the English file and its `*.zh.md` translation **in the same commit**; English is authoritative.
 - **Before opening a PR**: `npm run lint` and `npm test` pass locally; documentation is synced per [Documentation Sync](#documentation-sync); the change does not violate the [Architecture Constitution](./north-star.md) invariants.
 
@@ -199,10 +199,13 @@ Since **v0.56.0**, `octopi-agent` and `@octopi-agent/{core,engine,gateway,webui}
 ```sh
 npm run release:prep -- 0.56.0      # same version on all five packages + pin deps
 npm run release:print               # print publish order
-node scripts/publish.mjs --dry-run   # pack and report what would publish
+npm run publish:dry                 # pack, check tarball, ask registry — uploads nothing
+
+# release (a tag is the release button, on an already-pushed main):
+git push origin main && git tag v0.56.0 && git push origin v0.56.0
 ```
 
-Version bumps happen on **every content commit** (see above); publishing is **tag-driven**: pushing a `v<X.Y.Z>` tag runs the full CI suite, then publishes the five packages in dependency order `core → engine → gateway → webui → octopi-agent` (`node scripts/publish.mjs`, repo secret `NPM_TOKEN`; versions already on the registry are skipped, so a failed release resumes where it stopped). Branch pushes never publish. Full discipline: `AGENTS.md` → Version Numbering Rules / Changelog Discipline.
+Version bumps happen on **every content commit** (see above); publishing is **tag-driven at release time**: **tags are release milestones** (one per release, never `git push --tags` — each tag is a separate publish). A pushed `v<X.Y.Z>` tag runs the full CI suite, then publishes the five packages in dependency order `core → engine → gateway → webui → octopi-agent` (`node scripts/publish.mjs`, repo secret `NPM_TOKEN`; versions already on the registry are skipped, so a failed release resumes where it stopped). Branch pushes never publish. The tag must name the version and its commit must be on `main`; a release older than the published `latest` is refused. Full discipline: `AGENTS.md` → Version Numbering Rules / Changelog Discipline.
 
 ## License and Contribution Grant
 

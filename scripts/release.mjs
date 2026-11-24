@@ -119,8 +119,9 @@ function prep(version) {
   console.log('  1. Prepend "## v' + version + ' (YYYY-MM-DD)" to CHANGELOG.md below the index (AGENTS.md → Changelog Discipline)');
   console.log('  2. Commit code + version files (incl. package-lock.json) + CHANGELOG together');
   console.log('     (stage the intended paths explicitly; avoid `git add -A`)');
-  console.log('  3. Tag the commit right away: `git tag v' + version + '` (tagging belongs to the commit flow)');
-  console.log('     (publish happens on tag push: CI runs `node scripts/publish.mjs`; local preview: `node scripts/publish.mjs --dry-run`)');
+  console.log('  3. Commit. No tag: a tag marks a release, not a version bump (AGENTS.md → Release)');
+  console.log('     release when ready: `git push origin main && git tag v' + version + ' && git push origin v' + version + '`');
+  console.log('     local preview: `npm run publish:dry`');
 }
 
 function printPublishOrder() {

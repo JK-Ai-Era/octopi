@@ -160,7 +160,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      # 全历史：下面的「tag 必须在 main 上」判断需要真实祖先链（浅克隆会让
+      # merge-base 直接判否）。
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -176,14 +180,13 @@ jobs:
         with:
           name: dist
 
-      # tag 与包版本不一致时拒绝发布：npm 上版本号一旦上传就收不回，
-      # 发错版本只能靠再发一版覆盖 latest。
-      - name: Tag names the package version
+      # 只发已合并的代码：tag 打在特性分支上时拒绝发布。npm 上的版本无法撤回，
+      # 发出去的未合并代码只能靠再发一版覆盖。
+      - name: Tag is on main
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          version="$(node -p "require('./package.json').version")"
-          if [ "$tag" != "$version" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not name package version ${version}"
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} does not point at a commit on main — refusing to publish unmerged code"
             exit 1
           fi
 
@@ -197,6 +200,7 @@ jobs:
           fi
 
       # 依赖序 + 已存在则跳过（可重试）：规则与取舍写在脚本头部注释里。
+      # 版本/tag 一致性、tarball 残渣、版本回退等守卫都在脚本内（本地可复用）。
       - name: Publish in dependency order
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

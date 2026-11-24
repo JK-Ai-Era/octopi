@@ -140,6 +140,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.130.6 (2026-11-24)
+
+### fix(release): tarball 不再夹带 Python 残渣；发布钉住 registry 并加三道守卫；tag 改为发布里程碑
+
+- **tarball 残渣（真实缺陷）**：root 包 `files: ["skills"]` 是白名单，npm 会把该目录整棵打包，而仓库 `.gitignore` 对白名单目录**内部不生效**——本地跑过 skill 的 Python 脚本后，27 个 `__pycache__/*.pyc` 进了 232 条目的 tarball（CI 全新检出不复现，本地发布必带）。新增 `skills/.npmignore`（tarball 侧的对应物）：实测 232 → 205 条目、pyc 归零。
+- **发布目标 registry 显式化**：本机 `~/.npmrc` 指向镜像时 `npm publish` 会发到镜像上。`scripts/publish.mjs` 现在把 `--registry` 显式传给 `npm view` / `npm publish`（默认 `https://registry.npmjs.org`，仅测试用 `OCTOPI_PUBLISH_REGISTRY` 覆盖），首行打印目标 registry；`release.mjs` 的手动 fallback 命令同步补 `--registry`。
+- **新增守卫，每条对应一个不可回滚的失败态**：① 按 `npm pack --dry-run --json` 的真实文件清单查残渣（`__pycache__` / `*.pyc` / `.DS_Store` / `node_modules`），不信任 ignore 规则；② registry 已存在更高版本时拒发——重推旧 tag 会把 `latest` 往回拖；③ publish job 改 `fetch-depth: 0` 并新增「tag 的提交必须在 `main` 上」，防止未合并代码上 npm。原先重复的 tag==版本 步骤从 workflow 移除，唯一实现留在脚本内（本地可复用）。
+- **tag 规范改为发布里程碑**：每个 content commit 仍 bump 版本号并写 CHANGELOG，但**不再逐提交打 tag**；tag 只在发布时打，一次只推一个（`git push --tags` 现在是批量发布，禁止）。理由链条：v0.90 把 tag 移进提交流程是为了解决 tag 断档，而断档根因是打 tag 挂在**手动**发布桶里；现在发布链路是机械的（tag 缺了 publish job 直接拒绝运行），断档不可能再发生；反之逐提交 tag 一旦叠加「推 tag 即发布」，就变成批量误发。历史 tag（每版本一个）保持原样，不改写不删除。
+- **文档**：`AGENTS.md`（提交清单删去第 5 步、新增 Release 小节并写明 main 须先推）、`docs/CONTRIBUTING.md` / `.zh.md` 双语同步；`release:prep` 提示改为「此处不打 tag」；新增 `npm run publish:dry`。
+- **验证**：`npm run publish:dry` 五包通过（registry=npmjs.org，残渣 0）；两项负向测试通过——移除 `skills/.npmignore` 后守卫报 27 个残渣并 exit 1；用 npm shim 伪造 registry `latest=0.140.0` 时守卫拒发并 exit 1。另实测 `v0.130.5` 当前不是 `origin/main` 祖先（提交尚未推送），印证「先推 main 再打 tag」这一顺序要求。
+
+---
+
 ## v0.130.5 (2026-11-24)
 
 ### ci(release): npm 发布改为 tag 驱动（push `v<X.Y.Z>` → CI 全绿后按依赖序发五个包）

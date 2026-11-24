@@ -1,0 +1,7 @@
+# skills/ is shipped wholesale via package.json `files: ["skills"]`, and an
+# allowlisted directory is packed by walking it — a repository .gitignore does
+# NOT prune inside it. Python bytecode from running the skill scripts locally
+# therefore reached the tarball (27 `__pycache__/*.pyc` files in the v0.130.5
+# dry-run). This file is the tarball-side counterpart of the root .gitignore.
+__pycache__/
+*.pyc
