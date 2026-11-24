@@ -140,6 +140,46 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.131.1 (2026-11-25)
+
+### fix(engine,webui): 向量重建不再停在首批，且 Agent 加载即开始；提示改为如实承诺
+
+大哥拍板两点：① 先修 bug；② 采用「构造即排一次 + 分批续跑」，提示写为
+「重启后 Agent 加载时将会自动进行向量重建」。
+
+- **修复「只重建前 100 条」**：`maybeBackfillEmbeddings` 跑完一批就把
+  `embeddingBackfillScheduled` 置 false 且不再续排，超过单批上限（100）的库
+  换模型后其余条目**永不合格**。现在只要仍存在积压，每次检索继续推进下一批，
+  直到清空；单次检索仍只跑一批，不把会话拖成长的批量调用。
+- **新增 `startBackgroundBackfill()`**：构造器在存在待重嵌条目时自动起后台重建
+  （`autoBackfill?: boolean` 默认 true）。这正是「Agent 加载时自动重建」——memory
+  store 随 agent 首次装配创建，所以该承诺以「Agent 加载」而非「进程重启」为条件，
+  UI 文案据此措辞。
+- **后台批次有上限**（`MAX_BATCHES_BG = 5`）：不做无限循环，剩余交给后续检索续跑，
+  避免启动期长时间占用网络与 CPU。
+- **并发保护**：`backfillRunning` 防止检索路径与后台批次同时重算同一批行；
+  `whenBackfillSettled()` 供测试与优雅停机等待在途批次。
+- **无进展即停**：单批成功 0 条（如端点全失败）立刻退出循环，避免
+  「remaining > 0 → 热循环」。
+- **knowledge 侧无需改动**：`reconcileJobs`（15s）本就以 `hasChunksMissingEmbedding`
+  为条件，而该判定已把「签名不符」计入缺失 → 重启后**已建过索引的源**会自动
+  检测并重建不合格向量，未索引的源不会被动。
+
+#### 提示文案（中英同步）
+
+- 常驻警告结尾加：`重启后 Agent 加载时将会自动进行向量重建；已建过索引的知识源会自动检测并重建不合格的向量。`
+- 保存成功提示同步：`请重启后生效；重启后 Agent 加载时将自动进行向量重建。`
+
+#### 测试
+
+`tests/embedding-signature.test.ts` 增至 16 例，新增：120 条积压（> 单批 100）
+多次检索后清空；仅构造即触发重建（不显式调用任何方法）；**重建失败时跨空间向量
+不参与比较**（检索不崩）；重建成功后同一行恢复可命中。
+
+全量 579 文件 / 5932 用例通过；`npm run lint` 通过。
+
+---
+
 ## v0.131.0 (2026-11-25)
 
 ### feat(engine,gateway,webui): 向量模型可在设置页配置，并修正换模型后向量失配

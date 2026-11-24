@@ -46,6 +46,17 @@ import {
   resolveRetrievalKnobs,
 } from '../retrieval-rank.js';
 
+/**
+ * 向量重建批次参数。
+ *
+ * BATCH_SIZE 单批推进的行数；MAX_BATCHES_BG 是 agent 加载时一次推进的批数上限
+ * ——不做无限循环，剩余交给后续检索续跑（避免启动期长时间占用 CPU/网络）。
+ */
+const MemoryBackfill = {
+  BATCH_SIZE: 100,
+  MAX_BATCHES_BG: 5,
+} as const;
+
 export interface SqliteMemoryStoreOptions {
   embeddingProvider?: EmbeddingProvider | null;
   /** 向量检索 SQL 候选上限（默认 500） */
@@ -58,6 +69,13 @@ export interface SqliteMemoryStoreOptions {
   similarityWeight?: number;
   /** 关键词路径默认最低命中分 */
   minKeywordScore?: number;
+  /**
+   * 构造时是否自动开始推进向量重建（默认 true）。
+   *
+   * 生产行为是「Agent 加载即重建」；仅在需要确定性时（测试、或宿主自行编排
+   * 重建时机）置 false，改为由调用方显式触发 {@link startBackgroundBackfill}。
+   */
+  autoBackfill?: boolean;
   /**
    * 当前向量空间签名（缺省取 `embeddingProvider.signature`）。
    *
@@ -94,6 +112,8 @@ export class SqliteMemoryStore implements MemoryStore {
   private readonly defaultMinKeywordScore: number;
   private vecReady = false;
   private embeddingBackfillScheduled = false;
+  /** 回填是否在途（防止检索与后台批次并发重算同一批行） */
+  private backfillRunning = false;
   /** 当前向量空间签名；null = 不启用签名过滤 */
   private readonly embeddingSignature: string | null;
 
@@ -124,6 +144,12 @@ export class SqliteMemoryStore implements MemoryStore {
           }
         }
       }
+    }
+
+    // Agent 加载即推进向量重建（换模型后重启不依赖「第一次检索」）。
+    // 只有确实存在待重嵌条目时才起后台任务，常规启动零成本。
+    if (options?.autoBackfill !== false && this.embedding && this.pendingEmbeddingCount() > 0) {
+      this.startBackgroundBackfill();
     }
   }
 
@@ -600,13 +626,67 @@ export class SqliteMemoryStore implements MemoryStore {
     return this.embeddingSignature ? [this.embeddingSignature, limit] : [limit];
   }
 
-  private async maybeBackfillEmbeddings(): Promise<void> {
-    if (!this.embedding || !this.embeddingBackfillScheduled) return;
-    this.embeddingBackfillScheduled = false;
+  /**
+   * 推进向量重建（分批，过程中让出事件循环）。
+   *
+   * 换模型后待重嵌条目可能远多于单批上限；只有「跑一批就收工」会让超出部分
+   * 永远不合格（旧实现正是如此：置 false 后不再续排）。这里跑完一批继续下一批，
+   * 直到无进展（全部失败时立刻停，避免热循环）或达到本次批次上限。
+   *
+   * @param maxBatches - 本次最多推进几批（检索路径取 1 以免拖慢会话）
+   * @returns 实际成功回填条数
+   */
+  private async runBackfillLoop(maxBatches: number): Promise<number> {
+    if (!this.embedding || this.backfillRunning) return 0;
+    this.backfillRunning = true;
+    let total = 0;
     try {
-      await this.backfillEmbeddings(100);
+      for (let i = 0; i < maxBatches; i++) {
+        const filled = await this.backfillEmbeddings(MemoryBackfill.BATCH_SIZE);
+        total += filled;
+        // 无进展（例如全部失败）立即停：否则 remaining>0 会变成死循环
+        if (filled === 0) break;
+      }
+      // 还有缺口就留给下一次（检索续排 / 下次加载），不在这里无限跑
+      this.embeddingBackfillScheduled = this.pendingEmbeddingCount() > 0;
     } catch {
-      // 回填失败不影响本次检索
+      // 回填失败不影响主流程；保留 scheduled 以便下次续排
+      this.embeddingBackfillScheduled = true;
+    } finally {
+      this.backfillRunning = false;
+    }
+    return total;
+  }
+
+  /** 检索路径：只推进一批，避免把一次会话拖成长时间的 embedding 批量调用 */
+  private async maybeBackfillEmbeddings(): Promise<void> {
+    if (!this.embedding) return;
+    // 不只看一次性标志位：只要仍有积压，每次检索都继续推进下一批，
+    // 否则超过单批上限的条目会永远停在第 100 条之后。
+    if (!this.embeddingBackfillScheduled && this.pendingEmbeddingCount() === 0) return;
+    await this.runBackfillLoop(1);
+  }
+
+  /**
+   * Agent 加载即开始重建（不阻塞加载）。
+   *
+   * 由构造器调用：换模型后重启，agent 一被装配就推进，不必等第一次检索。
+   * 后台批次上限高于检索路径，因为它不占会话时延。
+   */
+  startBackgroundBackfill(): void {
+    if (!this.embedding) return;
+    this.embeddingBackfillScheduled = true;
+    void this.runBackfillLoop(MemoryBackfill.MAX_BATCHES_BG);
+  }
+
+  /**
+   * 等待在途回填结束（测试与优雅停机用）。
+   *
+   * 没有任何回填在跑时立即 resolve。
+   */
+  async whenBackfillSettled(): Promise<void> {
+    while (this.backfillRunning) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
     }
   }
 

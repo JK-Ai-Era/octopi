@@ -46,7 +46,7 @@ export const zh = {
   'modelSettings.embeddingHint':
     '供 memory 语义检索与知识库向量化共用；未配置时两处都退回关键词检索。独立填写，不继承 provider——provider 换接入方式时会静默换端点。',
   'modelSettings.embeddingRebuildWarning':
-    '⚠ 变更模型、端点或维度后，已有向量与新向量不在同一空间、无法比对：这些条目需要全量重建（memory 会在检索时逐批重嵌，知识库需重新索引对应来源）。',
+    '⚠ 变更模型、端点或维度后，已有向量与新向量不在同一空间、无法比对，需全量重建。重启后 Agent 加载时将会自动进行向量重建；已建过索引的知识源会自动检测并重建不合格的向量。',
   'modelSettings.embeddingNotConfigured': '当前未配置：两处检索均走关键词。',
   'modelSettings.embeddingEnabled': '启用',
   'modelSettings.embeddingType': '协议',
@@ -63,7 +63,7 @@ export const zh = {
     'auto=优先 sqlite-vec、不可用退回 JS 余弦；sqlite-vec=建表失败即报错，不静默降级。',
   'modelSettings.saveAndRestart': '保存（需重启生效）',
   'modelSettings.embeddingSavedRestart':
-    '已保存。向量模型在 gateway 与 Knowledge Service 启动时装配，请重启后生效。',
+    '已保存。请重启后生效；重启后 Agent 加载时将自动进行向量重建。',
   'modelSettings.embeddingClearedRestart': '已移除向量模型配置，重启后退回关键词检索。',
   'modelSettings.embeddingClear': '移除向量模型配置',
   'modelSettings.embeddingModelRequired': '向量模型名不能为空',
@@ -234,7 +234,7 @@ export const en: Record<keyof typeof zh, string> = {
   'modelSettings.embeddingHint':
     'Shared by memory semantic retrieval and knowledge vectorization; when unset, both fall back to keyword search. Entered independently — it does not inherit a provider, which would silently follow that provider into a plan endpoint that has no /embeddings route.',
   'modelSettings.embeddingRebuildWarning':
-    '⚠ After changing the model, endpoint or dimensions, existing vectors no longer share a space with new query vectors and cannot be compared: those entries need a full rebuild (memory re-embeds in batches during retrieval; knowledge sources must be re-indexed).',
+    '⚠ After changing the model, endpoint or dimensions, existing vectors no longer share a space with new query vectors and must be rebuilt. Once restarted, the rebuild starts automatically when an agent is loaded; indexed knowledge sources detect and rebuild their invalid vectors automatically.',
   'modelSettings.embeddingNotConfigured': 'Not configured: both retrieval paths use keywords only.',
   'modelSettings.embeddingEnabled': 'Enabled',
   'modelSettings.embeddingType': 'Protocol',
@@ -252,7 +252,7 @@ export const en: Record<keyof typeof zh, string> = {
     'auto=prefer sqlite-vec, fall back to JS cosine; sqlite-vec=fail loudly when the table cannot be created instead of degrading silently.',
   'modelSettings.saveAndRestart': 'Save (restart required)',
   'modelSettings.embeddingSavedRestart':
-    'Saved. The embedding provider is assembled when the gateway and the Knowledge Service start — restart to apply.',
+    'Saved. Restart to apply; the vector rebuild starts automatically when agents are loaded after the restart.',
   'modelSettings.embeddingClearedRestart':
     'Embedding configuration removed; restart to fall back to keyword retrieval.',
   'modelSettings.embeddingClear': 'Remove embedding configuration',

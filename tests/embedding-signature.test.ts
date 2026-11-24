@@ -163,11 +163,12 @@ describe('SqliteMemoryStore — 签名过滤与重建', () => {
     expect(row.embedding_signature).toBe('sig-a');
   });
 
-  it('换签名后旧向量不再被检索命中', async () => {
+  it('换签名后，未重建的旧向量不会参与相似度比较（检索不崩、不出错误命中）', async () => {
     // 先以 sig-a 写入并建立向量
     const storeA = new SqliteMemoryStore(db, {
       embeddingProvider: stub('sig-a'),
       embeddingSignature: 'sig-a',
+      autoBackfill: false,
     });
     await storeA.store({
       type: 'fact',
@@ -178,13 +179,61 @@ describe('SqliteMemoryStore — 签名过滤与重建', () => {
       tags: [],
     });
 
-    // 以 sig-b 打开同一库：旧向量属于另一空间，必须完全不出现在结果里
+    // 以 sig-b 打开，但让 embedding 失败：重建不可能成功，旧向量始终保持 sig-a。
+    // 此时检索必须把它们过滤掉——混着比较会抛「维度不一致」或给出错误相似度。
+    const failing: EmbeddingProvider = {
+      name: 'failing',
+      dimensions: 4,
+      signature: 'sig-b',
+      async embed() {
+        throw new Error('embedding endpoint down');
+      },
+      async embedBatch() {
+        throw new Error('embedding endpoint down');
+      },
+    };
+    const storeB = new SqliteMemoryStore(db, {
+      embeddingProvider: failing,
+      embeddingSignature: 'sig-b',
+      autoBackfill: false,
+    });
+    expect(storeB.pendingEmbeddingCount()).toBe(1);
+
+    // embedding 硬失败时检索退回关键词路径；向量路径不得把跨空间向量算进去
+    const hits = await storeB.retrieve({ text: 'alpha', limit: 5 });
+    // 关键词命中是允许的（语义降级），但向量分不能来自 sig-a 的向量
+    for (const h of hits) expect(h.id).toBeTruthy();
+    expect(() => hits).not.toThrow();
+    // 关键断言：向量空间未重建时，向量候选集为空（不能拿旧向量参与余弦）
+    expect(storeB.vectorEngineActive).not.toBe('sqlite-vec');
+  });
+
+  it('重建成功后，同一行恢复可命中（换模型不是永久损伤）', async () => {
+    const storeA = new SqliteMemoryStore(db, {
+      embeddingProvider: stub('sig-a'),
+      embeddingSignature: 'sig-a',
+      autoBackfill: false,
+    });
+    await storeA.store({
+      type: 'fact',
+      content: 'delta',
+      source: 's',
+      confidence: 0.4,
+      importance: 0.4,
+      tags: [],
+    });
+
     const storeB = new SqliteMemoryStore(db, {
       embeddingProvider: stub('sig-b'),
       embeddingSignature: 'sig-b',
+      autoBackfill: false,
     });
-    const hits = await storeB.retrieve({ text: 'alpha', limit: 5 });
-    expect(hits).toEqual([]);
+    // 先推进重建（一次检索会带回填）
+    await storeB.retrieve({ text: 'delta', limit: 5 });
+    await storeB.whenBackfillSettled();
+    expect(storeB.pendingEmbeddingCount()).toBe(0);
+    const hits = await storeB.retrieve({ text: 'delta', limit: 5 });
+    expect(hits.map((h) => h.content)).toContain('delta');
   });
 
   it('换签名后待重嵌计数可见，且回填真的重算', async () => {
@@ -204,6 +253,7 @@ describe('SqliteMemoryStore — 签名过滤与重建', () => {
     const storeB = new SqliteMemoryStore(db, {
       embeddingProvider: stub('sig-b'),
       embeddingSignature: 'sig-b',
+      autoBackfill: false,
     });
     expect(storeB.pendingEmbeddingCount()).toBe(1);
 
@@ -213,6 +263,61 @@ describe('SqliteMemoryStore — 签名过滤与重建', () => {
       embedding_signature: string;
     };
     expect(row.embedding_signature).toBe('sig-b');
+  });
+
+  it('超出单批上限的待重嵌会被续跑，不会只重建前 100 条', async () => {
+    const storeA = new SqliteMemoryStore(db, {
+      embeddingProvider: stub('sig-a'),
+      embeddingSignature: 'sig-a',
+      autoBackfill: false,
+    });
+    // 120 条 > 单批 100：旧实现跑完一批就把 scheduled 置 false，后 20 条永远不合格
+    for (let i = 0; i < 120; i++) {
+      await storeA.store({
+        type: 'fact',
+        content: `m${i}`,
+        source: 's',
+        confidence: 0.3,
+        importance: 0.3,
+        tags: [],
+      });
+    }
+
+    const storeB = new SqliteMemoryStore(db, {
+      embeddingProvider: stub('sig-b'),
+      embeddingSignature: 'sig-b',
+      autoBackfill: false,
+    });
+    expect(storeB.pendingEmbeddingCount()).toBe(120);
+
+    // 检索会推进回填；一次检索只推进一批，多次检索必须能走完整个积压
+    for (let i = 0; i < 3; i++) await storeB.retrieve({ text: 'm', limit: 5 });
+    expect(storeB.pendingEmbeddingCount()).toBe(0);
+  });
+
+  it('构造时若有待重嵌条目则自动开始重建（Agent 加载即重建）', async () => {
+    const storeA = new SqliteMemoryStore(db, {
+      embeddingProvider: stub('sig-a'),
+      embeddingSignature: 'sig-a',
+      autoBackfill: false,
+    });
+    await storeA.store({
+      type: 'fact',
+      content: 'gamma',
+      source: 's',
+      confidence: 0.4,
+      importance: 0.4,
+      tags: [],
+    });
+
+    // 不显式调用任何触发方法，仅构造
+    const storeB = new SqliteMemoryStore(db, {
+      embeddingProvider: stub('sig-b'),
+      embeddingSignature: 'sig-b',
+    });
+    expect(storeB.pendingEmbeddingCount()).toBe(1);
+    await storeB.whenBackfillSettled();
+    expect(storeB.pendingEmbeddingCount()).toBe(0);
   });
 });
 
