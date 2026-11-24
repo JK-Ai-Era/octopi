@@ -219,7 +219,7 @@ export const zh = {
   'gitStatus.configuredRootsGroup': '配置中的根',
   'gitStatus.temporaryRootsGroup': '会话临时根',
   'gitStatus.rootsLoadFailed': '目录加载失败：{error}',
-  'gitStatus.noRootsHint': '当前 agent 无可选目录。可在「目录」页签为本会话追加临时根。',
+  'gitStatus.noRootsHint': '当前 agent 无可选目录。可在「工作目录」页签为本会话追加临时根。',
   'gitStatus.refreshFailed': '刷新失败：{error}',
   'gitStatus.staleResultNote': '（下方为上次成功结果）',
   'gitStatus.loading': '加载中…',
@@ -262,11 +262,13 @@ export const zh = {
   'sessionEffectRoots.hintLead': '临时追加可写/可撤销根（absolute path）。不放宽安全模式',
   'sessionEffectRoots.hintMode': '（当前 mode={mode}）',
   'sessionEffectRoots.hintTail': '；会话结束后失效。',
+  'sessionEffectRoots.cacheHint':
+    '在会话过程中添加/移除临时目录有可能导致缓存失效，增加本轮会话响应时间和成本。',
   'sessionEffectRoots.add': '添加',
   'sessionEffectRoots.temporarySection': '会话临时（可移除）',
   'sessionEffectRoots.none': '（无）',
   'sessionEffectRoots.remove': '移除',
-  'sessionEffectRoots.configuredSection': '配置中的根（只读）',
+  'sessionEffectRoots.configuredSection': '配置中的根',
   'sessionEffectRoots.configuredEmpty': '（未配置 workspace / transactionRoots）',
 } as const;
 
@@ -503,7 +505,7 @@ export const en: Record<keyof typeof zh, string> = {
   'gitStatus.temporaryRootsGroup': 'Session temporary roots',
   'gitStatus.rootsLoadFailed': 'Failed to load directories: {error}',
   'gitStatus.noRootsHint':
-    'No selectable directory for this agent. Add a temporary root for this session in the "Directories" tab.',
+    'No selectable directory for this agent. Add a temporary root for this session in the "Working directories" tab.',
   'gitStatus.refreshFailed': 'Refresh failed: {error}',
   'gitStatus.staleResultNote': ' (showing the last successful result below)',
   'gitStatus.loading': 'Loading…',
@@ -552,10 +554,12 @@ export const en: Record<keyof typeof zh, string> = {
     'Temporarily add writable/revocable roots (absolute path). Does not relax the security mode',
   'sessionEffectRoots.hintMode': ' (current mode={mode})',
   'sessionEffectRoots.hintTail': '; expires when the session ends.',
+  'sessionEffectRoots.cacheHint':
+    'Adding or removing temporary directories during a session can invalidate the prompt cache, increasing response time and cost for this session.',
   'sessionEffectRoots.add': 'Add',
   'sessionEffectRoots.temporarySection': 'Session temporary (removable)',
   'sessionEffectRoots.none': '(none)',
   'sessionEffectRoots.remove': 'Remove',
-  'sessionEffectRoots.configuredSection': 'Configured roots (read-only)',
+  'sessionEffectRoots.configuredSection': 'Configured roots',
   'sessionEffectRoots.configuredEmpty': '(no workspace / transactionRoots configured)',
 };

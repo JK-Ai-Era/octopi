@@ -140,6 +140,27 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.131.2 (2026-11-25)
+
+### fix(webui): 左栏归档入口补齐 TSX 半（v0.131.0 误带入 CSS）；右栏「目录」改为「工作目录」
+
+- **补齐 `d5fe7e2d` 只提交了一半的 UI 改动**：该提交误将 `.sidebar-archives-entry`
+  的 CSS（标签与计数徽标各占一行、居中）带进仓库，但 `ChatWorkspace.tsx` 的内联
+  `textAlign: 'center'` 与 `<span className="sidebar-archives-entry-label">` 留在
+  工作区。结果 HEAD 里出现「CSS 已改变布局、内联仍取 left、label 规则是死代码」的
+  半生效状态。本次把 TSX 半一并提交，改动完整生效（大哥拍板选 A）。
+- **右栏页签「目录」→「工作目录」**（en: `Directories` → `Working directories`），
+  并同步修正两处跨引用文案（`gitStatus.noRootsHint` 中英）。
+- **「配置中的根（只读）」去掉「（只读）」**（en 同步去 `(read-only)`）：该分组
+  确实只读展示，但标题后缀让用户误以为需要额外操作；只读性由界面无编辑控件表达即可。
+- **新增缓存代价提示**：说明文案下方加一行
+  「在会话过程中添加/移除临时目录有可能导致缓存失效，增加本轮会话响应时间和成本」。
+  临时根会改变请求前缀，跨过一轮就可能让提示缓存失效——把代价写在用户即将操作的位置。
+
+全量 webui 构建通过；`npm run lint` 通过。
+
+---
+
 ## v0.131.1 (2026-11-25)
 
 ### fix(engine,webui): 向量重建不再停在首批，且 Agent 加载即开始；提示改为如实承诺

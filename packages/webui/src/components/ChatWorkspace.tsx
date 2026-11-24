@@ -2878,10 +2878,10 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange, onOp
             )}
             <button
               className="btn-ghost small sidebar-archives-entry"
-              style={{ marginTop: 6, textAlign: 'left', width: '100%' }}
+              style={{ marginTop: 6, textAlign: 'center', width: '100%' }}
               onClick={() => onOpenArchives?.()}
             >
-              {t('archives.sidebarEntry')}
+              <span className="sidebar-archives-entry-label">{t('archives.sidebarEntry')}</span>
               {archiveCounts && archiveCounts.archived + archiveCounts.trashed > 0 && (
                 <span
                   className={archiveCounts.urgent ? 'archive-count-badge archive-count-urgent' : 'archive-count-badge'}

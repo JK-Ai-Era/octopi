@@ -100,6 +100,10 @@ export function SessionEffectRootsPanel({
         {mode ? t('sessionEffectRoots.hintMode', { mode }) : ''}
         {t('sessionEffectRoots.hintTail')}
       </div>
+      {/* 缓存代价提示：临时根会改变前缀，跨过一轮就可能让提示缓存失效 */}
+      <div className="small muted" style={{ margin: '0 0 10px' }}>
+        {t('sessionEffectRoots.cacheHint')}
+      </div>
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
         <input
