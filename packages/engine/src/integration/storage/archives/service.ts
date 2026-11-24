@@ -18,6 +18,7 @@ import { mkdir, rename, rm, writeFile, cp, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { toSessionFileName } from '@octopi-agent/core/session-filename.js';
+import { bundlePathFor, bundleRelativePath } from './read.js';
 import { sanitizeSessionDirName } from '../../providers/wire-dump.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import type { SessionMeta } from '@octopi-agent/core/types.js';
@@ -241,11 +242,11 @@ export class SessionArchiveService {
   }
 
   private bundleRel(sessionId: string): string {
-    return `sessions/${this.base(sessionId)}.tar.gz`;
+    return bundleRelativePath(sessionId);
   }
 
   private bundlePath(sessionId: string): string {
-    return join(this.opts.archivesDir, this.bundleRel(sessionId));
+    return bundlePathFor(this.opts.archivesDir, sessionId);
   }
 
   private stagingDir(sessionId: string): string {
@@ -342,7 +343,14 @@ export class SessionArchiveService {
     sealedAt: number;
   }): Promise<ArchiveEntryInfo> {
     const { sessionId } = rec;
-    // 0. 意图先落账（崩溃矩阵依据）
+    // 0a. 已在册行绝不覆盖：重复封存/已在册 id 显式拒绝——意图行覆盖会把就绪行踩成
+    // 幻影 sealing 行并改写组 id（P2 自动冷归档重复提名实测出的破坏路径）
+    if (this.registry.get(sessionId)) {
+      throw new Error(
+        `entry_exists: "${sessionId}" already sealed (archived/trashed); refusing to re-seal`,
+      );
+    }
+    // 0b. 意图先落账（崩溃矩阵依据）
     this.registry.upsert({
       sessionId,
       groupSealId: rec.groupSealId,

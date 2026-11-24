@@ -5,8 +5,19 @@
  * 只读，不写 Session / Memory。
  */
 
-import type { Message, MessageRole } from '@octopi-agent/core/types.js';
+import type { Message, MessageRole, SessionMeta } from '@octopi-agent/core/types.js';
 import type { SessionData } from '../types.js';
+
+/**
+ * 冷备查询面（Harness 定义、Integration 实现——Harness 不 import Integration）。
+ * includeArchived 检索走此端口：候选清单来自注册表投影（不解包），正文按需解包（只解候选包）。
+ */
+export interface HistoryArchiveSource {
+  /** 冷备候选清单（不解包）：meta 投影（id/agentId/时间/参与 agent 等，供候选过滤） */
+  listEntries(): Promise<Array<{ sessionId: string; meta: SessionMeta }>>;
+  /** 按需读回单会话正文（只解候选包；包缺失/损坏的降级由实现侧显式处理） */
+  loadSessionData(sessionId: string): Promise<SessionData | null>;
+}
 
 /** 检索模式 */
 export type SessionHistoryQueryMode = 'keyword' | 'phrase' | 'regex';

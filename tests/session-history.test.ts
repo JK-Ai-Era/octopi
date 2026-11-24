@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
+import { SessionArchiveService } from '@octopi-agent/engine/integration/storage/archives/service.js';
+import { createArchiveHistorySource } from '@octopi-agent/engine/integration/storage/archives/history-source.js';
 import { createSessionHistoryPort, parseHistoryRef } from '@octopi-agent/engine/harness/session/history/index.js';
 import { createSessionHistoryTools } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/session-history.js';
 import { SessionAclService } from '@octopi-agent/engine/harness/governance/session-acl/service.js';
@@ -175,16 +177,24 @@ describe('SessionHistoryPort', () => {
   });
 
   it('include_archived can find cold session', async () => {
-    const archiveDir = join(tempDir, 'archives');
-    await mkdir(archiveDir, { recursive: true });
+    const archivesDir = join(tempDir, 'archives');
+    // 冷备 = 封存 bundle（P2：注册表过滤候选 + 按需解包；旧月度 gz 不留双读路径）
     const cold = session('cold-1', 'agent-a', [
       { role: 'user', content: 'archived needle phrase', timestamp: 1 },
     ]);
-    cold.lifecycle = { lifecycle: 'archived', archivedAt: Date.now() };
-    const line = JSON.stringify({ sessionId: 'cold-1', data: cold, archivedAt: Date.now() }) + '\n';
-    await writeFile(join(archiveDir, '2026-09.sessions.jsonl.gz'), await gzipAsync(Buffer.from(line)));
+    await store.save('cold-1', cold);
+    const svc = new SessionArchiveService({
+      sessionsDir: join(tempDir, 'sessions'),
+      archivesDir,
+      store,
+    });
+    await svc.seal({ sessionId: 'cold-1', state: 'archived', sealedBy: 'manual' });
+    svc.close();
 
-    const history = createSessionHistoryPort({ store, archiveDir });
+    const history = createSessionHistoryPort({
+      store,
+      archiveSource: createArchiveHistorySource({ archivesDir }),
+    });
     const miss = await history.search({ query: 'needle', agentId: 'agent-a' });
     expect(miss.sessions).toHaveLength(0);
 

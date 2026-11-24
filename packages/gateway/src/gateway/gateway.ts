@@ -1288,8 +1288,24 @@ export class Gateway {
       probeOptions: () => ({ securityIntegrityConfigured: this.config.securityIntegrity !== undefined }),
     });
 
-    // 封存保留任务：启动对账（补崩溃矩阵遗留）+ 到期清除/自动冷归档（每日幂等）
-    this.startArchiveRetention();
+    // 旧月度冷备一次性迁移（§8）先走：转完的 bundle 才进注册表/检索面；
+    // 迁移与 retention 各自幂等、都进服务串行队列，无顺序死锁
+    void this.migrateLegacyMonthlyArchives()
+      .then((r) => {
+        for (const w of r.warnings) console.warn(`[Gateway] ${w}`);
+        if (r.converted.length > 0 || r.filesRemoved.length > 0) {
+          console.log(
+            `[Gateway] legacy archive migration: converted=${r.converted.length} skipped=${r.skipped.length} filesRemoved=${r.filesRemoved.length}`,
+          );
+        }
+      })
+      .catch((err: unknown) =>
+        console.warn(
+          `[Gateway] legacy archive migration failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      )
+      // 封存保留任务：启动对账（补崩溃矩阵遗留）+ 到期清除/自动冷归档（每日幂等）
+      .finally(() => this.startArchiveRetention());
 
     // P0c A′ 脉搏单源：run 实例的周期任务由 gateway 调度器单发驱动（实例零 self-arm 定时器，
     // arch/service-topology-p0c.md §3）。key 为实例自述的 opaque 键；归属决策在调度器、
@@ -2155,6 +2171,21 @@ export class Gateway {
       // 其他已订阅端同步移除卡片，避免点开已删会话才报错
       this.broadcastSessionEvent('session.removed', meta.id, {}, meta.agentId);
     }
+    // 归档观测（P4 契约，tests/plugin-hook-session-archive.test.ts）：导出+热库清空后
+    // 才发 session_end(reason=archived)；trashed=删除≠归档不发
+    if (opts.state === 'archived') {
+      for (const entry of result.sealed) {
+        try {
+          await this.pluginManager.getHookPort().observe('session_end', {
+            sessionId: entry.sessionId,
+            agentId: entry.agentId,
+            reason: 'archived',
+          });
+        } catch {
+          // swallow: 观测失败不能撤销已完成的封存（hook adapter 自留失败记录）
+        }
+      }
+    }
     return result;
   }
 
@@ -2296,6 +2327,111 @@ export class Gateway {
     return this.archiveSvc;
   }
 
+  /**
+   * 旧月度冷备 → bundle 一次性迁移（§8；幂等：已在册/热库同 id 跳过，全转后删旧文件）。
+   * 两阶段：先整批落热库（spawnBy 组关系自然恢复），再逐条走 sealSessionGroup
+   * （关账 + spawnBy 级联 + 广播，与自动冷归档同一条组级通道）。旧文件任何一条
+   * 未转成（坏行/热库撞 id/封存失败）都保留原文件，交 doctor 收尾——删源只发生在
+   * 「该文件全部条目已入册」之后。
+   */
+  async migrateLegacyMonthlyArchives(): Promise<{
+    converted: string[];
+    skipped: string[];
+    filesRemoved: string[];
+    warnings: string[];
+  }> {
+    const { findLegacyMonthlyFiles, readLegacyMonthlyEntries } = await import(
+      '@octopi-agent/engine/integration/storage/archives/migration.js'
+    );
+    const archivesDir = join(getOctopiHome(), 'archives');
+    const files = await findLegacyMonthlyFiles(archivesDir);
+    const converted: string[] = [];
+    const skipped: string[] = [];
+    const filesRemoved: string[] = [];
+    const warnings: string[] = [];
+    if (files.length === 0) return { converted, skipped, filesRemoved, warnings };
+    await this.ensureStore();
+    const svc = this.getArchiveService();
+    if (!svc) {
+      warnings.push('archive: legacy migration skipped (session store lacks relocate support)');
+      return { converted, skipped, filesRemoved, warnings };
+    }
+    const already = new Set(svc.list().map((e) => e.sessionId));
+
+    // 阶段 1：整批落热库（热库撞 id 绝不覆盖——MAJ-6 同源原则；坏行计数随文件记账）
+    const pending: string[] = [];
+    const perFile: Array<{ file: string; ids: string[]; unreadable: number; failed: boolean }> = [];
+    for (const file of files) {
+      const record = { file, ids: [] as string[], unreadable: 0, failed: false };
+      perFile.push(record);
+      let parsed;
+      try {
+        parsed = await readLegacyMonthlyEntries(file);
+      } catch (err) {
+        warnings.push(
+          `archive: legacy file ${file} unreadable, kept: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        record.failed = true;
+        continue;
+      }
+      record.unreadable = parsed.unreadable;
+      if (parsed.unreadable > 0) {
+        // 坏行只存在于源文件：显式告警 + 不删源（删了即丢）
+        warnings.push(
+          `archive: legacy file ${file} has ${parsed.unreadable} unreadable line(s); source kept`,
+        );
+      }
+      for (const entry of parsed.entries) {
+        record.ids.push(entry.sessionId);
+        if (already.has(entry.sessionId)) {
+          skipped.push(entry.sessionId);
+          continue;
+        }
+        try {
+          const hot = await this.store.load(entry.sessionId);
+          if (hot) {
+            warnings.push(`archive: legacy entry ${entry.sessionId} skipped (hot session with same id exists)`);
+            record.failed = true;
+            continue;
+          }
+          await this.store.save(entry.sessionId, entry.data);
+          pending.push(entry.sessionId);
+        } catch (err) {
+          warnings.push(
+            `archive: legacy entry ${entry.sessionId} conversion failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          record.failed = true;
+        }
+      }
+    }
+
+    // 阶段 2：逐条组级封存（组内成员随组入册，already 记账防重复）
+    for (const id of pending) {
+      if (already.has(id)) continue;
+      try {
+        const result = await this.sealSessionGroup(id, { state: 'archived', sealedBy: 'auto' });
+        for (const s of result.sealed) {
+          already.add(s.sessionId);
+          converted.push(s.sessionId);
+        }
+      } catch (err) {
+        warnings.push(
+          `archive: legacy entry ${id} seal failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // 阶段 3：删源判定（全部条目入册 且 无坏行 且 无失败）
+    for (const record of perFile) {
+      const allSealed = record.ids.every((id) => already.has(id));
+      if (!record.failed && record.unreadable === 0 && allSealed) {
+        await rm(record.file, { force: true });
+        filesRemoved.push(record.file);
+      }
+    }
+    return { converted, skipped, filesRemoved, warnings };
+  }
+
   /** 封存保留任务：启动对账 + 槽位触发的到期清除/自动冷归档（每日 04:30 本地，幂等可补跑） */
   private startArchiveRetention(): void {
     if (this.archiveRetentionTimer) return;
@@ -2352,18 +2488,25 @@ export class Gateway {
     this.archiveRetentionTimer.unref?.();
   }
 
-  /** 跑一轮保留任务（到期 purge + 自动冷归档；在跑 run 的会话跳过自动封存） */
-  private async runArchiveRetention(): Promise<void> {
+  /**
+   * 跑一轮保留任务（到期 purge + 自动冷归档；在跑 run 的会话跳过自动封存）。
+   * 幂等可补跑；正常由 04:30 槽位调度驱动，公开供运维/测试直调。
+   */
+  async runArchiveRetention(): Promise<void> {
     try {
+      await this.ensureStore();
       const svc = this.getArchiveService();
       if (!svc) return;
       const report = await svc.runRetention(undefined, (id) =>
         this.runtime.hasActiveRunForSession(id),
       );
       // 自动冷归档走组级封存（关账 + spawnBy 级联 + 广播）；服务只提名候选（评审 major-3）
+      const sealed = new Set<string>(svc.list().map((e) => e.sessionId));
       for (const id of report.autoArchiveCandidates) {
+        if (sealed.has(id)) continue; // 已在册 / 已随组封存（级联组成员整组记账）
         try {
-          await this.sealSessionGroup(id, { state: 'archived', sealedBy: 'auto' });
+          const result = await this.sealSessionGroup(id, { state: 'archived', sealedBy: 'auto' });
+          for (const s of result.sealed) sealed.add(s.sessionId);
         } catch (err) {
           console.warn(
             `[Gateway] auto-archive ${id} skipped: ${err instanceof Error ? err.message : String(err)}`,
@@ -3955,19 +4098,6 @@ export class Gateway {
     for (const adapter of this.streamingAdapters) {
       adapter.broadcastEvent(sessionId, event, agentId);
     }
-  }
-
-  /** Create a real archive manager with Host observation; no background schedule is invented. */
-  async createSessionArchiveManager(
-    options: Omit<import('@octopi-agent/engine/integration/storage/archive-manager.js').ArchiveManagerOptions, 'onSessionArchived'>,
-  ): Promise<import('@octopi-agent/engine/integration/storage/archive-manager.js').SessionArchiveManager> {
-    const { SessionArchiveManager } = await import('@octopi-agent/engine/integration/storage/archive-manager.js');
-    return new SessionArchiveManager(this.store, {
-      ...options,
-      onSessionArchived: ({ sessionId, agentId }) => this.pluginManager.getHookPort().observe('session_end', {
-        sessionId, agentId, reason: 'archived',
-      }),
-    });
   }
 
   async createSession(options: {

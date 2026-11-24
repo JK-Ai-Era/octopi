@@ -174,6 +174,18 @@ describe('seal（trash）', () => {
     expect(knowledge.purgeSessionSources).toHaveBeenCalledWith('s1', ['src-1'], 'a1');
   });
 
+  it('已在册 id 拒绝重封（entry_exists）：不踩就绪行、不改写组 id', async () => {
+    await makeSession('s1');
+    const first = await service.seal({ sessionId: 's1', state: 'archived', sealedBy: 'manual' });
+    await expect(
+      service.seal({ sessionId: 's1', state: 'archived', sealedBy: 'auto' }),
+    ).rejects.toThrow(/entry_exists/);
+    const rows = service.list('archived');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.phase).toBe('ready');
+    expect(rows[0]!.groupSealId).toBe(first.sealed[0]!.groupSealId);
+  });
+
   it('purgeAt 派生：trash=+30d / manual=null / auto=+180d', async () => {
     await makeSession('a', { withDump: false });
     await makeSession('b', { withDump: false });

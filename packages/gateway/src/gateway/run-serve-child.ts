@@ -25,6 +25,7 @@ import {
   loadUserCommandDefs,
 } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/commands/index.js';
 import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
+import { createArchiveHistorySource } from '@octopi-agent/engine/integration/storage/archives/history-source.js';
 import { InProcessSessionLock } from '@octopi-agent/engine/harness/run/concurrency/session-lease.js';
 import { RunHost } from '@octopi-agent/engine/harness/run/run-host.js';
 import type { SessionAwareRunner } from '@octopi-agent/engine/harness/run/runner.js';
@@ -357,7 +358,7 @@ async function main(): Promise<void> {
     sessionHistory: {
       store,
       sessionAcl,
-      archiveDir: join(boot.octopiHome, 'archives'),
+      archiveSource: createArchiveHistorySource({ archivesDir: join(boot.octopiHome, 'archives') }),
       historyScope: 'participated',
       ...(sessionIndexReader === undefined ? {} : { index: sessionIndexReader }),
       resolveAgentMax: () => undefined,

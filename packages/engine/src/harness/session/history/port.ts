@@ -5,11 +5,6 @@
  * archive 仅 includeArchived 时扫描（冷备，默认关）。
  */
 
-import { readdir, readFile } from 'node:fs/promises';
-import { gunzip } from 'node:zlib';
-import { promisify } from 'node:util';
-import { join } from 'node:path';
-
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 import type { Message, SessionMeta } from '@octopi-agent/core/types.js';
 import type { SessionData } from '../types.js';
@@ -20,6 +15,7 @@ import { computeEffectiveRights } from '../../governance/session-acl/rights.js';
 import { sessionMatchesAgent } from '@octopi-agent/core/types/session.js';
 
 import type {
+  HistoryArchiveSource,
   SessionHistoryBrief,
   SessionHistoryListFilter,
   SessionHistoryOpenRequest,
@@ -42,14 +38,12 @@ import {
   sessionScore,
 } from './score.js';
 
-const gunzipAsync = promisify(gunzip);
-
 export interface SessionHistoryOptions {
   store: SessionStore<SessionData>;
   /** 注入后按 E6 filterHistory 裁剪；未注入则 participated 可读全量 */
   sessionAcl?: SessionAclService;
-  /** 归档目录；供 includeArchived 冷备扫描 */
-  archiveDir?: string;
+  /** 冷备数据面（HistoryArchiveSource）；缺省=无冷备（includeArchived 只搜热库）。P2 起替代旧 archiveDir gz 扫描 */
+  archiveSource?: HistoryArchiveSource;
   /** 宿主策略：默认 participated；all 仅管理面（不进模型参数） */
   historyScope?: 'participated' | 'all';
   /**
@@ -395,57 +389,44 @@ class DefaultSessionHistoryPort implements SessionHistoryPort {
     query: { query: string; sessionIds?: string[]; since?: number; until?: number },
     agentId: string,
   ): Promise<Array<{ meta: SessionMeta; source: 'archive' }>> {
-    const dir = this.options.archiveDir;
-    if (!dir) return [];
+    const source = this.options.archiveSource;
+    if (!source) return [];
     const out: Array<{ meta: SessionMeta; source: 'archive' }> = [];
     const scope = this.options.historyScope ?? 'participated';
 
-    let files: string[];
+    // 注册表过滤（不解包）→ 候选清单；正文只在 loadSession 对候选解包（§8 迁移目标形态）
+    let entries: Array<{ sessionId: string; meta: SessionMeta }>;
     try {
-      files = (await readdir(dir)).filter((e) => e.endsWith('.sessions.jsonl.gz'));
+      entries = await source.listEntries();
     } catch {
+      // swallow: 冷备是增强面（默认关）；数据面异常只损失冷备召回，热库检索照常
       return [];
     }
 
-    for (const file of files.sort()) {
-      let entries: Array<{ sessionId: string; data: SessionData }>;
-      try {
-        const buf = await gunzipAsync(await readFile(join(dir, file)));
-        entries = buf
-          .toString('utf-8')
-          .split('\n')
-          .filter((l) => l.trim())
-          .map((l) => JSON.parse(l) as { sessionId: string; data: SessionData });
-      } catch {
-        continue;
+    for (const entry of entries) {
+      const meta = entry.meta;
+      if (query.sessionIds?.length && !query.sessionIds.includes(entry.sessionId)) continue;
+      if (query.since != null && (meta?.updatedAt ?? 0) < query.since) continue;
+      if (query.until != null && (meta?.updatedAt ?? 0) > query.until) continue;
+      if (scope === 'participated') {
+        const pick = {
+          agentId: meta.agentId,
+          primaryAgentId: meta.primaryAgentId,
+          preferredAgentId: meta.preferredAgentId,
+          participantAgentIds: meta.participantAgentIds ?? [],
+        };
+        if (!sessionMatchesAgent(pick, agentId)) continue;
       }
-      for (const entry of entries) {
-        if (query.sessionIds?.length && !query.sessionIds.includes(entry.sessionId)) continue;
-        const meta = entry.data.meta;
-        if (query.since != null && (meta?.updatedAt ?? 0) < query.since) continue;
-        if (query.until != null && (meta?.updatedAt ?? 0) > query.until) continue;
-        if (scope === 'participated') {
-          const pick = {
-            agentId: entry.data.agentId ?? meta?.agentId,
-            primaryAgentId: entry.data.primaryAgentId ?? meta?.primaryAgentId,
-            preferredAgentId: entry.data.preferredAgentId ?? meta?.preferredAgentId,
-            participantAgentIds:
-              meta?.participantAgentIds ??
-              (entry.data.participants ?? []).map((p) => p.agentId),
-          };
-          if (!sessionMatchesAgent(pick, agentId)) continue;
-        }
-        out.push({
-          meta: {
-            ...meta,
-            id: entry.sessionId,
-            agentId: entry.data.agentId ?? meta?.agentId ?? 'default',
-            lifecycle: entry.data.lifecycle?.lifecycle ?? meta?.lifecycle ?? 'archived',
-            updatedAt: meta?.updatedAt ?? entry.data.lifecycle?.archivedAt ?? 0,
-          },
-          source: 'archive',
-        });
-      }
+      out.push({
+        meta: {
+          ...meta,
+          id: entry.sessionId,
+          agentId: meta.agentId ?? 'default',
+          lifecycle: meta.lifecycle ?? 'archived',
+          updatedAt: meta.updatedAt ?? 0,
+        },
+        source: 'archive',
+      });
     }
     return out;
   }
@@ -569,27 +550,17 @@ class DefaultSessionHistoryPort implements SessionHistoryPort {
   }
 
   private async loadFromArchive(sessionId: string): Promise<SessionData | null> {
-    const dir = this.options.archiveDir;
-    if (!dir) return null;
-    let files: string[];
+    const source = this.options.archiveSource;
+    if (!source) return null;
     try {
-      files = (await readdir(dir)).filter((e) => e.endsWith('.sessions.jsonl.gz'));
-    } catch {
+      return await source.loadSessionData(sessionId);
+    } catch (err) {
+      // swallow: 单包损坏/缺失只损失该候选（显式告警），不拖垮整次检索
+      console.warn(
+        `[SessionHistory] load archived session ${sessionId} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return null;
     }
-    for (const file of files.sort()) {
-      try {
-        const buf = await gunzipAsync(await readFile(join(dir, file)));
-        for (const line of buf.toString('utf-8').split('\n')) {
-          if (!line.trim()) continue;
-          const entry = JSON.parse(line) as { sessionId: string; data: SessionData };
-          if (entry.sessionId === sessionId) return entry.data;
-        }
-      } catch {
-        // 跳过损坏归档文件
-      }
-    }
-    return null;
   }
 }
 

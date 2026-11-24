@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { JsonlSessionStore } from '@octopi-agent/engine/integration/storage/jsonl.js';
 import { SessionArchiveManager } from '@octopi-agent/engine/integration/storage/archive-manager.js';
+import { SessionArchiveService } from '@octopi-agent/engine/integration/storage/archives/service.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -88,75 +89,74 @@ describe('JsonlSessionStore lifecycle projection', () => {
   });
 });
 
-// ── SessionArchiveManager（SessionStore 底座） ──
+// ── SessionArchiveManager（冷备读取门面：注册表 + bundle；月度写路径已删） ──
 
 describe('SessionArchiveManager', () => {
   let store: JsonlSessionStore;
+  let service: SessionArchiveService;
   let archiveManager: SessionArchiveManager;
   let tempDir: string;
+  let archivesDir: string;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'octopi-archive-test-'));
     store = new JsonlSessionStore({ sessionsDir: join(tempDir, 'sessions') });
-    archiveManager = new SessionArchiveManager(store, {
-      archiveDir: join(tempDir, 'archives'),
-      recentRetentionDays: 0, // 立即过期，方便测试
-      archiveRetentionDays: 180,
-      forceArchiveDays: 90,
+    archivesDir = join(tempDir, 'archives');
+    service = new SessionArchiveService({
+      sessionsDir: join(tempDir, 'sessions'),
+      archivesDir,
+      store,
     });
+    archiveManager = new SessionArchiveManager({ archivesDir });
   });
 
   afterEach(async () => {
+    service.close();
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('should archive ended sessions past retention', async () => {
+  it('queryArchive：封存后可读回（消息保真），热库已清空', async () => {
     await store.save('s1', markEnded(store, createTestSession('s1')));
+    await service.seal({ sessionId: 's1', state: 'archived', sealedBy: 'manual' });
+    expect(await store.load('s1')).toBeNull();
 
-    const archived = await archiveManager.runArchive();
-    expect(archived).toBe(1);
-
-    // session 应该从热库删除
-    const loaded = await store.load('s1');
-    expect(loaded).toBeNull();
-
-    // 应该可以从归档中查询到
     const archivedSession = await archiveManager.queryArchive('s1');
     expect(archivedSession).toBeTruthy();
     expect(archivedSession!.id).toBe('s1');
+    expect(archivedSession!.messages.length).toBe(createTestSession('s1').messages.length);
   });
 
-  it('should force archive sessions past forceArchiveDays', async () => {
-    const oldEnded = Date.now() - 100 * 24 * 60 * 60 * 1000;
-    await store.save('s1', markEnded(store, createTestSession('s1'), oldEnded));
-
-    const manager2 = new SessionArchiveManager(store, {
-      archiveDir: join(tempDir, 'archives'),
-      recentRetentionDays: 30,
-      forceArchiveDays: 90,
-    });
-    const archived = await manager2.runArchive();
-    expect(archived).toBe(1);
-  });
-
-  it('should not archive sessions still in retention', async () => {
-    const manager2 = new SessionArchiveManager(store, {
-      archiveDir: join(tempDir, 'archives'),
-      recentRetentionDays: 30,
-      forceArchiveDays: 90,
-    });
-
+  it('queryArchive 租户收口：越域视为不存在', async () => {
     await store.save('s1', markEnded(store, createTestSession('s1')));
-
-    const archived = await manager2.runArchive();
-    expect(archived).toBe(0);
-    expect(await store.load('s1')).toBeTruthy();
+    await service.seal({ sessionId: 's1', state: 'archived', sealedBy: 'manual' });
+    expect(await archiveManager.queryArchive('s1', { tenantId: 'other' })).toBeNull();
+    expect(await archiveManager.queryArchive('s1', { tenantId: 'default' })).toBeTruthy();
   });
 
-  it('should not archive active sessions', async () => {
-    await store.save('s1', createTestSession('s1'));
-    const archived = await archiveManager.runArchive();
-    expect(archived).toBe(0);
+  it('trashed（回收站）不在读取面：queryArchive/listArchived 均不可见', async () => {
+    await store.save('s1', markEnded(store, createTestSession('s1')));
+    await service.seal({ sessionId: 's1', state: 'trashed', sealedBy: 'trash' });
+    expect(await archiveManager.queryArchive('s1')).toBeNull();
+    expect(await archiveManager.listArchived()).toEqual([]);
+  });
+
+  it('listArchived：全量 / agent 过滤 / string 签名兼容 / 租户过滤', async () => {
+    await store.save('s1', markEnded(store, createTestSession('s1', 'agent-1')));
+    await store.save('s2', markEnded(store, createTestSession('s2', 'agent-2')));
+    await service.seal({ sessionId: 's1', state: 'archived', sealedBy: 'manual' });
+    await service.seal({ sessionId: 's2', state: 'archived', sealedBy: 'manual' });
+
+    const all = await archiveManager.listArchived();
+    expect(all.length).toBe(2);
+
+    const agent1 = await archiveManager.listArchived({ agentId: 'agent-1' });
+    expect(agent1.map((e) => e.sessionId)).toEqual(['s1']);
+    // 旧 string 签名 = agentId（绝不静默放宽语义）
+    const agent2 = await archiveManager.listArchived('agent-2');
+    expect(agent2.map((e) => e.sessionId)).toEqual(['s2']);
+
+    expect((await archiveManager.listArchived({ tenantId: 'default' })).length).toBe(2);
+    expect(await archiveManager.listArchived({ tenantId: 'other' })).toEqual([]);
   });
 
   it('refuses to overwrite corrupt sessions.json on save', async () => {
@@ -165,29 +165,5 @@ describe('SessionArchiveManager', () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'sessions.json'), '{not json', 'utf-8');
     await expect(store.save('s9', createTestSession('s9'))).rejects.toThrow(/corrupt sessions\.json/);
-  });
-
-  it('should not archive sessions without endedAt', async () => {
-    const noEnded = createTestSession('s1');
-    noEnded.lifecycle = { lifecycle: 'recent' };
-    await store.save('s1', noEnded);
-
-    const archived = await archiveManager.runArchive();
-    expect(archived).toBe(0);
-    expect(await store.load('s1')).toBeTruthy();
-  });
-
-  it('should list archived sessions', async () => {
-    await store.save('s1', markEnded(store, createTestSession('s1', 'agent-1')));
-    await store.save('s2', markEnded(store, createTestSession('s2', 'agent-2')));
-
-    await archiveManager.runArchive();
-
-    const all = await archiveManager.listArchived();
-    expect(all.length).toBe(2);
-
-    const agent1 = await archiveManager.listArchived({ agentId: 'agent-1' });
-    expect(agent1.length).toBe(1);
-    expect(agent1[0].sessionId).toBe('s1');
   });
 });

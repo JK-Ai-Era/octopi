@@ -21,6 +21,7 @@ import { setupWizardUrl, readSetupToken } from './helpers.js';
 import { loadConfig, toGatewayConfig, resolveConfigFilePath } from '../config.js';
 import { resolveListenConfig } from './listen-config.js';
 import { assembleGlobalTools } from '@octopi-agent/engine/integration/tools/assemble.js';
+import { createArchiveHistorySource } from '@octopi-agent/engine/integration/storage/archives/history-source.js';
 import { createProviderFromConfig, createWireDumpSinkFromConfig } from '@octopi-agent/engine/config.js';
 import { createWsIdentityHooks, agentTenantReader } from '../ws-identity-hooks.js';
 import type {
@@ -1118,7 +1119,7 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
     sessionHistory: {
       store: gatewayStoreForHistory,
       sessionAcl: new SessionAclService(gatewayConfig.sessionAcl),
-      archiveDir: joinPath(home, 'archives'),
+      archiveSource: createArchiveHistorySource({ archivesDir: joinPath(home, 'archives') }),
       historyScope: 'participated',
       index: sessionIndex,
       // E6 agent.max：与 Runner agentMaxSessionRights 同源（宿主可按 agent 收紧）
