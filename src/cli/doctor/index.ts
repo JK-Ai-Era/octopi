@@ -43,6 +43,12 @@ import {
 } from './data.js';
 import type { AgentDataTarget } from './data.js';
 import {
+  applyArchiveResidueFixes,
+  collectArchiveResidue,
+  collectLiveSessionRoster,
+  detectArchiveResidue,
+} from './archive-residue.js';
+import {
   latestConfigBackup,
   listConfigBackups,
   restoreConfigFromBackup,
@@ -475,6 +481,8 @@ async function diagnoseConfigLayoutData(
   // knowledge 源注册健康（不自动删源）
   findings.push(...(await detectKnowledgeSourcesAsync()));
   findings.push(...(await detectKnowledgeStorageHealth()));
+  // 归档/删除残留（ARC001–ARC007；--fix 清孤儿 dump/会话目录/knowledge session 残留）
+  findings.push(...(await detectArchiveResidue()));
   if (configPath) {
     findings.push(...checkDeprecatedSessionStore(rawUnexpanded, targets, dirname(resolve(configPath))));
   }
@@ -635,6 +643,8 @@ export async function runDoctor(
     if (applyData) {
       const dataResult = await applyDataLayerFixes(diagnosis.targets, { dryRun: false });
       fixFindings.push(...dataResult.findings);
+      const residueResult = await applyArchiveResidueFixes({ dryRun: false });
+      fixFindings.push(...residueResult.findings);
     }
 
     diagnosis = await diagnoseConfigLayoutData(
@@ -648,6 +658,7 @@ export async function runDoctor(
     const probe = diagnosis.raw ? structuredClone(diagnosis.raw) : null;
     const applied = probe ? applyConfigMigrations(probe) : { notes: [] as string[] };
     const dataDry = await applyDataLayerFixes(diagnosis.targets, { dryRun: true });
+    const residueDry = await applyArchiveResidueFixes({ dryRun: true });
     fixFindings.push({
       id: 'FIX000',
       domain: 'config',
@@ -657,6 +668,7 @@ export async function runDoctor(
       fixable: true,
     });
     fixFindings.push(...dataDry.findings);
+    fixFindings.push(...residueDry.findings);
   }
 
   const filtered = diagnosis.findings
@@ -933,4 +945,8 @@ export {
   knowledgeDbPath,
   listKnowledgeSources,
   removeKnowledgeSource,
+  detectArchiveResidue,
+  applyArchiveResidueFixes,
+  collectArchiveResidue,
+  collectLiveSessionRoster,
 };

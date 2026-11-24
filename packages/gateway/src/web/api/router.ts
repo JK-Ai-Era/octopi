@@ -758,6 +758,53 @@ export class WebApiRouter {
         }
       }
 
+      const archiveExportMatch = relativePath.match(/^\/archives\/([^/]+)\/export$/);
+      if (archiveExportMatch && method === 'GET') {
+        // 归档包导出（P3）：原始 .tar.gz 下载；含回收站条目（TTL 前抢救）
+        const identity = this.resolveRequestUser(req);
+        if (identity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        try {
+          const record = await this.gateway.getArchiveExport(
+            decodeURIComponent(archiveExportMatch[1]!),
+          );
+          if (!record) {
+            return this.json(res, 404, { ok: false, error: 'archive entry not found' });
+          }
+          // 租户闸：非宿主/平台管理员仅本租户；越域与不存在同形（不泄漏存在性）
+          if (
+            identity !== 'host' &&
+            !identity.isPlatformAdmin &&
+            (record.entry.tenantId ?? 'default') !== identity.tenantId
+          ) {
+            return this.json(res, 404, { ok: false, error: 'archive entry not found' });
+          }
+          const downloadName = `${record.entry.sessionId}.tar.gz`;
+          const asciiName = downloadName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/gzip');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
+          );
+          const { createReadStream } = await import('node:fs');
+          const stream = createReadStream(record.bundlePath);
+          stream.on('error', () => {
+            res.destroy();
+          });
+          stream.pipe(res);
+          return true;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return this.json(res, msg.includes('entry_not_ready') ? 409 : 500, {
+            ok: false,
+            error: msg,
+          });
+        }
+      }
+
       const archiveRestoreMatch = relativePath.match(/^\/archives\/([^/]+)\/restore$/);
       if (archiveRestoreMatch && method === 'POST') {
         const identity = this.resolveRequestUser(req);

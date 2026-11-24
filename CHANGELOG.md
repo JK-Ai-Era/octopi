@@ -140,6 +140,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.130.1 (2026-11-24)
+
+### feat(cli): doctor 归档/删除残留扫描（ARC001–ARC007）+ 归档包导出下载
+
+- **doctor 残留扫描/清除**：`octopi doctor` 新增 ARC001–ARC007——孤儿 wire dump 目录、`_unscoped`、孤儿 `sessions/<sid>/` 目录（含 derived/ 残留）、失去会话的 session knowledge 源、`knowledge_session_visibility`/`knowledge_hits` 残留行、迁移保留的旧月度 gz、`archives/.staging` 尾巴。`--fix` 清前五类（`--fix --dry-run` 预告）；旧月度 gz 与 `.staging` 只报告不动手（唯一正文可能只在源文件 / reconcile 有收尾语义）。判定名册 = 元索引 ∪ 文件名双源，拿不准不报孤儿（偏安全，绝不误删在世会话）。
+- **归档包导出**：`GET /archives/:id/export` + SDK `exportArchive()`——原始 .tar.gz 下载（含回收站条目，TTL 前抢救面）；租户闸越域与不存在同形（404 不泄漏存在性）；非 ready 行显式 409（包不可信不流坏字节）。
+- **测试卫生**：`tests/session-archive-gateway.test.ts` 补 `knowledge.service.manageLocal: false`——此前缺省会真起本地知识服务（撞 18280 端口 + 重启计时器泄漏进套件）。
+- 测试 +5：污染夹具七面全命中 / live 面不动 / dry-run 不动盘 / 修复幂等 / 导出面；全量 5893 passed / 9 skipped。
+
 ## v0.130.0 (2026-11-24)
 
 ### refactor(storage): 冷备数据面收编注册表+bundle（月度 gz 机制删除，P2 迁移）

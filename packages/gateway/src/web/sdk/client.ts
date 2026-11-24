@@ -1321,6 +1321,25 @@ export class OctopiClient {
     return data?.data as { purged: string[]; bytes: number; warnings: string[] };
   }
 
+  /** 导出封存包（原始 .tar.gz 字节；含回收站条目——TTL 前抢救用） */
+  async exportArchive(sessionId: string): Promise<Uint8Array> {
+    const response = await fetch(
+      `${this.restBase}/archives/${encodeURIComponent(sessionId)}/export`,
+      { headers: this.buildHeaders() },
+    );
+    if (!response.ok) {
+      let message = `export archive failed: HTTP ${response.status}`;
+      try {
+        const body = (await response.json()) as { error?: string };
+        if (body?.error) message = body.error;
+      } catch {
+        // 非 JSON 错误体：保留状态码信息
+      }
+      throw new Error(message);
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
   /** Session temporary effect roots (append-only, session lifetime) */
   async getSessionEffectRoots(sessionId: string): Promise<{
     sessionId: string;

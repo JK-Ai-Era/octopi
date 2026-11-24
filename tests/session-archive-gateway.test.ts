@@ -24,6 +24,8 @@ function makeGateway(): Gateway {
   return new Gateway(
     {
       agents: [{ id: 'a1', model: { provider: 'mock', model: 'm' } }],
+      // 不拉起本地 Knowledge 服务（默认 manageLocal=true 会真起服务撞端口 + 留重启计时器）
+      knowledge: { service: { manageLocal: false } },
     } as unknown as GatewayConfig,
     store,
   );
@@ -268,5 +270,26 @@ describe('自动冷归档全链路（retention 提名 → 组级封存）', () =
     await gateway.runArchiveRetention();
     expect(await store.load('fresh')).not.toBeNull();
     expect(await gateway.listArchives('archived')).toEqual([]);
+  });
+});
+
+describe('归档包导出（getArchiveExport，P3）', () => {
+  it('ready 行返回条目+包路径（含 trashed 抢救面）；缺失 null；非 ready 显式拒绝', async () => {
+    await makeSession('x');
+    expect(await gateway.getArchiveExport('x')).toBeNull(); // 热库会话无封存行
+    await gateway.deleteSession('x');
+    const rec = await gateway.getArchiveExport('x');
+    expect(rec!.entry.sessionId).toBe('x');
+    expect(rec!.entry.state).toBe('trashed'); // 回收站条目可导出（TTL 前抢救）
+    expect(existsSync(rec!.bundlePath)).toBe(true);
+    // 非 ready（包不可信）显式拒绝，不流坏字节
+    const { ArchiveRegistry } = await import(
+      '@octopi-agent/engine/integration/storage/archives/registry.js'
+    );
+    const reg = new ArchiveRegistry(join(home, 'archives', 'archives.db'));
+    reg.setPhase('x', 'sealing');
+    reg.close();
+    await expect(gateway.getArchiveExport('x')).rejects.toThrow(/entry_not_ready/);
+    expect(await gateway.getArchiveExport('nope')).toBeNull();
   });
 });

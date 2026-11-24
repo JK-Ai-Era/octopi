@@ -33,6 +33,7 @@ import {
   nextRetentionRunAt,
   shouldRunRetention,
 } from '@octopi-agent/engine/integration/storage/archives/retention-job.js';
+import { bundlePathFor } from '@octopi-agent/engine/integration/storage/archives/read.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
 import type { HookContext } from '@octopi-agent/engine/harness/shared/types/hook-context.js';
@@ -2116,6 +2117,27 @@ export class Gateway {
     const bytesById = new Map(entries.map((e) => [e.sessionId, e.bytes]));
     const bytes = purged.reduce((sum, id) => sum + (bytesById.get(id) ?? 0), 0);
     return { purged, bytes, warnings };
+  }
+
+  /**
+   * 归档包导出（P3 bundle 下载）：注册表行 + bundle 路径。
+   * 任何状态可见（含回收站——TTL 前抢救）；非 ready 行包不可信，显式拒绝。
+   *
+   * @param sessionId - 会话 id
+   * @returns 条目 + 包路径；无此条目返回 null
+   */
+  async getArchiveExport(
+    sessionId: string,
+  ): Promise<{ entry: ArchiveEntryInfo; bundlePath: string } | null> {
+    await this.ensureStore();
+    const svc = this.getArchiveService();
+    if (!svc) return null;
+    const entry = svc.list().find((e) => e.sessionId === sessionId);
+    if (!entry) return null;
+    if (entry.phase !== 'ready') {
+      throw new Error(`entry_not_ready: "${sessionId}" is ${entry.phase}`);
+    }
+    return { entry, bundlePath: bundlePathFor(join(getOctopiHome(), 'archives'), sessionId) };
   }
 
   /**
