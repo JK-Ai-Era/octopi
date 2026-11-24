@@ -18,6 +18,7 @@ import {
   textAdapter,
   type KnowledgeChunkDraft,
 } from './adapters.js';
+import { KNOWLEDGE_SOURCE_KINDS } from './location.js';
 import { looksLikeHtml } from './html.js';
 import { hashContent, KnowledgeIndexStore } from './index-store.js';
 import {
@@ -457,13 +458,7 @@ export class KnowledgeIngest extends EventEmitter {
     if (!source || source.status === 'removed') {
       throw new Error(`knowledge source not found: ${sourceId}`);
     }
-    if (
-      source.kind !== 'directory' &&
-      source.kind !== 'file' &&
-      source.kind !== 'workspace' &&
-      source.kind !== 'url' &&
-      source.kind !== 'connector'
-    ) {
+    if (!KNOWLEDGE_SOURCE_KINDS.includes(source.kind)) {
       this.sources.update(sourceId, {
         status: 'error',
         errors: [
@@ -496,7 +491,27 @@ export class KnowledgeIngest extends EventEmitter {
       // watch 策略索引同时挂上 fs 监听（幂等；否则后续变更静默丢失）
       this.startWatch(sourceId);
 
-      const localDiscovery = await this.localFetcher.discover(source);
+      let localDiscovery: DiscoverResult;
+      try {
+        localDiscovery = await this.localFetcher.discover(source);
+      } catch (err) {
+        // 中止与根不可达同时发生时，保留中止语义，不把中止态改写成错误
+        if (this.isAborted(sourceId)) return;
+        // 本地根路径不可达：与 ingestRemoteSource 的 discover_failed 对称——
+        // 写成源级 error 并上报，绝不落成「0 文件 = 成功」。
+        const msg = err instanceof Error ? err.message : String(err);
+        this.sources.update(sourceId, {
+          status: 'error',
+          errors: [...(source.errors ?? []), { message: msg, at: Date.now() }].slice(-5),
+        });
+        this.emitProgress({
+          type: 'error',
+          sourceId,
+          status: 'discover_failed',
+          detail: msg,
+        });
+        return;
+      }
       const files = localDiscovery.docs;
       this.discoveredFiles.set(sourceId, files.length);
       // 中止后不 prune、不入队（半截 keep 会误删）
@@ -508,7 +523,8 @@ export class KnowledgeIngest extends EventEmitter {
         await this.index.pruneMissingAsync(sourceId, localKeep, { allowEmptyKeep: true });
       }
 
-      this.sources.update(sourceId, { status: 'partial', coverage: 0 });
+      // discover 成功 = 上一次失败已解除；残留 errors 会让详情面板永远显示旧错误
+      this.sources.update(sourceId, { status: 'partial', coverage: 0, errors: [] });
       this.emitProgress({
         type: 'source',
         sourceId,
@@ -590,7 +606,8 @@ export class KnowledgeIngest extends EventEmitter {
       };
     });
     this.discoveredFiles.set(source.id, enriched.length);
-    this.sources.update(source.id, { status: 'partial', coverage: 0 });
+    // discover 成功 = 上一次失败已解除（与本地源同口径）
+    this.sources.update(source.id, { status: 'partial', coverage: 0, errors: [] });
     this.emitProgress({
       type: 'source',
       sourceId: source.id,
@@ -1199,6 +1216,8 @@ export class KnowledgeIngest extends EventEmitter {
     try {
       found = await this.localFetcher.discover(source);
     } catch {
+      // 吞掉根不可达（location_unreachable）与其它 discover 失败：本函数只补 parse 缺口，
+      // 失败上报是 ingestSource 的职责（源级 error + 进度事件），这里重复报会刷屏。
       return 0;
     }
     const byPath = new Map(
@@ -1278,7 +1297,10 @@ export class KnowledgeIngest extends EventEmitter {
           // walk 完整：即使空目录也可清空（与逐文件 stat 语义一致）
           removed = await this.index.pruneMissingAsync(sourceId, keep, { allowEmptyKeep: true });
         }
-      } catch {
+      } catch (err) {
+        // 根不可达 ≠ walk 残缺：逐文件 stat 会把每个已索引文件判成「已删除」并清空整源索引
+        // （盘掉线一次 = 白丢索引 + 全量重解析）。保持索引与 error 状态，等根恢复后重新对账。
+        if ((err as { code?: string }).code === 'location_unreachable') return 0;
         removed = await this.pruneByStatScan(sourceId);
       }
     } else {
@@ -1778,6 +1800,14 @@ export class KnowledgeIngest extends EventEmitter {
         if (this.isAborted(job.source_id)) {
           throw new Error('aborted');
         }
+        // discover 失败时 ingestSource 已把源置 error 并上报；作业不得冒充 done
+        // （源是 error、作业却 done = 两套口径打架）
+        const afterWalk = this.sources.get(job.source_id);
+        if (afterWalk?.status === 'error') {
+          throw new Error(
+            afterWalk.errors?.[afterWalk.errors.length - 1]?.message ?? 'discover_failed',
+          );
+        }
       } else if (job.kind === 'embed_source') {
         if (!this.embedding) {
           const stillMissing = this.index.listChunksMissingEmbedding(job.source_id, 1).length > 0;
@@ -2263,11 +2293,17 @@ export class KnowledgeIngest extends EventEmitter {
       )
       .get(sourceId) as { n: number };
     const busy = (stillQueued?.n ?? 0) > 0 || (stillRunning?.n ?? 0) > 0;
-    const status = busy
-      ? 'partial'
-      : stats.chunks > 0 || stats.files > 0
-        ? 'ready'
-        : source.status;
+    // error 是「配置级/环境级」结论（根不可达、凭证失败），只能由下一次 discover 成功清掉。
+    // 若按统计口径改写，曾经索引过的源在盘掉线/目录改名后会 15s 内变回 ready，
+    // 错误从 UI 消失——正是「静默 0 文件」的另一半。
+    const status =
+      source.status === 'error'
+        ? 'error'
+        : busy
+          ? 'partial'
+          : stats.chunks > 0 || stats.files > 0
+            ? 'ready'
+            : source.status;
     this.sources.update(sourceId, {
       status: status as KnowledgeSource['status'],
       coverage: blended,

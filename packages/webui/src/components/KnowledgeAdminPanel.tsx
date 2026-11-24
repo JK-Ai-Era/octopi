@@ -133,6 +133,12 @@ function SourceRow({
           ) : null}
         </div>
         <div className="small mono muted">{source.location}</div>
+        {source.status === 'error' && source.errors && source.errors.length > 0 ? (
+          <div className="small status-error kn-source-error">
+            {t('knowledgeAdminPanel.sourceErrorPrefix')}
+            {source.errors[source.errors.length - 1]!.message}
+          </div>
+        ) : null}
         <div className="kn-source-desc">
           <div className="kn-source-desc-row">
             <input

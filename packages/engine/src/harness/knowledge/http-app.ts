@@ -116,6 +116,10 @@ function mapWriteError(res: ServerResponse, e: unknown): boolean {
     err(res, 404, 'source_not_found', msg);
     return true;
   }
+  if (code === 'location_invalid') {
+    err(res, 400, 'location_invalid', msg);
+    return true;
+  }
   if (code === 'project_not_empty' || /not empty|non-empty|仍有/i.test(msg)) {
     err(res, 409, 'project_not_empty', msg);
     return true;

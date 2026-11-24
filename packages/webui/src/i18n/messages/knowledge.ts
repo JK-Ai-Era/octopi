@@ -9,6 +9,7 @@ export const zh = {
   // KnowledgeAdminPanel · 源行（SourceRow）
   'knowledgeAdminPanel.coverageScanning': '覆盖 扫描中…',
   'knowledgeAdminPanel.coveragePercent': '覆盖 {percent}%',
+  'knowledgeAdminPanel.sourceErrorPrefix': '错误：',
   'knowledgeAdminPanel.descPlaceholder':
     '用途/何时搜（权威，覆盖自动描述）：例如「架构与协议设计决策，含 docs/ 与 arch/」',
   'knowledgeAdminPanel.saving': '保存中…',
@@ -220,6 +221,7 @@ export const en: Record<keyof typeof zh, string> = {
   // KnowledgeAdminPanel · source row (SourceRow)
   'knowledgeAdminPanel.coverageScanning': 'Coverage scanning…',
   'knowledgeAdminPanel.coveragePercent': 'Coverage {percent}%',
+  'knowledgeAdminPanel.sourceErrorPrefix': 'Error: ',
   'knowledgeAdminPanel.descPlaceholder':
     'Purpose / when to search (authoritative, overrides the auto description): e.g. "architecture and protocol design decisions, including docs/ and arch/"',
   'knowledgeAdminPanel.saving': 'Saving…',

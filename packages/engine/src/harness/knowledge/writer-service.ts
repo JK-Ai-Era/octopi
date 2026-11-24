@@ -18,7 +18,8 @@ import {
 } from './describe.js';
 import { assembleDescribeSample, DESCRIBE_SAMPLE_MAX_CHARS } from './describe-sample.js';
 import { scanSecretShapes } from './secret-scan.js';
-import type { KnowledgeSource, KnowledgeSourceInput } from './types.js';
+import { normalizeSourceLocation } from './location.js';
+import type { KnowledgeSource, KnowledgeSourceInput, KnowledgeSourceKind } from './types.js';
 import type { KnowledgeJobControlState } from './job-control-state.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
 import type {
@@ -385,6 +386,12 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     delete input.registered_by;
     delete input.tenantId;
     delete input.tenant_id;
+    // location 归一化 + 词法校验（写入口唯一真相）：去包裹引号/空白，本地源必须绝对路径。
+    // 不在此 stat：盘上是否存在由 ingest 负责，缺失要落成源级 error 而不是拒绝登记。
+    input.location = normalizeSourceLocation(
+      input.kind as KnowledgeSourceKind,
+      typeof input.location === 'string' ? input.location : '',
+    );
     // 归属打标（arch/multi-tenancy.md §6，评审 MAJ-1 修配套）：
     // - claim 在场 = 显式归属（含显式 claim 'platform' = 公共库）
     // - platform token 无 claim = 受信 broker 的未声明建档 → 降级 default 域（存量语义，
@@ -428,7 +435,20 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     const row = this.db.raw
       .prepare('SELECT registered_by, tenant_id FROM knowledge_sources WHERE id = ?')
       .get(sourceId) as { registered_by?: string; tenant_id?: string } | undefined;
+    // 源不存在：先走 404，别让 location 归一化把「没这个源」报成 400
+    if (!row) return null;
     this.assertSourceWritable(identity, row, sourceId);
+    // location 变更同样过写入口归一化（与 registerSource 同一契约）
+    if (typeof patch.location === 'string') {
+      const existing = this.sources.get(sourceId);
+      patch = {
+        ...patch,
+        location: normalizeSourceLocation(
+          (existing?.kind ?? 'directory') as KnowledgeSourceKind,
+          patch.location as string,
+        ),
+      };
+    }
     const updated = this.sources.update(sourceId, patch as never);
     if (!updated) return null;
     if (typeof patch.visibility === 'string') {

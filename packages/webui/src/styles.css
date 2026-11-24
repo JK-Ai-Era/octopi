@@ -151,7 +151,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-selected { background: var(--color-accent); border-color: var(--color-accent-border); }
 
 /* ── Inputs ── */
-input, textarea { border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); padding: 8px 10px; color: var(--color-text); background: var(--color-surface); width: 100%; }
+/* 文本类输入默认撑满容器；checkbox/radio 不是文本框，撑满会把同一 flex 行里的 label 挤到最右 */
+input:not([type='checkbox']):not([type='radio']), textarea { border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); padding: 8px 10px; color: var(--color-text); background: var(--color-surface); width: 100%; }
+input[type='checkbox'], input[type='radio'] { width: auto; flex: 0 0 auto; padding: 0; }
 textarea { resize: vertical; }
 pre { font-family: var(--font-mono); font-size: 13px; }
 
@@ -1586,6 +1588,7 @@ button.ctx-band {
 .kn-source-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .kn-source-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
 .kn-coverage { min-width: 7.5em; white-space: nowrap; }
+.kn-source-error { overflow-wrap: anywhere; }
 .kn-source-actions { display: flex; flex-direction: column; gap: 6px; }
 .kn-projects-layout { display: grid; grid-template-columns: 280px 1fr; gap: 12px; align-items: start; }
 .kn-project-item {

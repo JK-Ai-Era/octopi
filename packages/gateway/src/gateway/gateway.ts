@@ -28,6 +28,7 @@ import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent
 import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
 import type { EffectPolicyConfig, ProcessIsolationProfile } from '@octopi-agent/engine';
 import { expandHomePath } from '@octopi-agent/engine/paths.js';
+import { KNOWLEDGE_SOURCE_KINDS } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { SessionArchiveService, type ArchiveEntryInfo } from '@octopi-agent/engine/integration/storage/archives/service.js';
 import {
   nextRetentionRunAt,
@@ -5114,7 +5115,7 @@ export class Gateway {
   async createKnowledgeSource(
     input: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSourceInput,
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource> {
-    const allowedKinds = new Set(['workspace', 'directory', 'file', 'url', 'connector']);
+    const allowedKinds = new Set(KNOWLEDGE_SOURCE_KINDS);
     const allowedLevels = new Set(['global', 'project', 'session']);
     if (!allowedKinds.has(input.kind)) {
       throw new Error(`invalid kind: ${input.kind}`);

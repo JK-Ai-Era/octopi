@@ -11,6 +11,7 @@ import type { ConfigApplyService } from '../../gateway/config-apply.js';
 import { ConfigConflictError } from '@octopi-agent/engine/config-admin/port.js';
 import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
 import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
+import { KNOWLEDGE_SOURCE_KINDS } from '@octopi-agent/engine/harness/knowledge/location.js';
 import type { AgentId, BindingId, SessionPolicy, User } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
 import { OnboardingService, OnboardingStepInvalidError } from './onboarding.js';
@@ -1414,7 +1415,7 @@ export class WebApiRouter {
         const body = await this.readBody(req);
         const kind = body?.kind as string | undefined;
         const level = body?.scopeRef?.level as string | undefined;
-        const allowedKinds = new Set(['workspace', 'directory', 'file', 'url', 'connector']);
+        const allowedKinds = new Set<string>(KNOWLEDGE_SOURCE_KINDS);
         const allowedLevels = new Set(['global', 'project', 'session']);
         if (!kind || !allowedKinds.has(kind) || !body?.location || !level || !allowedLevels.has(level) || !body?.scopeRef?.key) {
           return this.json(res, 400, {

@@ -140,6 +140,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.130.4 (2026-11-24)
+
+### fix(knowledge,webui): 源 location 写入口归一化/校验 + 本地根路径不可达显式报错；修复挂载复选框挤压标签
+
+- **location 写入口归一化**（`harness/knowledge/location.ts`，`writer-service.registerSource/updateSource` 接入）：落库前去两端空白与成对包裹引号（`"C:\…"` / `'…'` / `“…”` / 反引号，可多层），本地类（`workspace`/`directory`/`file`）必须是绝对路径、`url` 必须 `http(s)`、`connector` 必须是可解析 JSON 或 `http(s)` list URL；不合法直接 400（`code: location_invalid`）带原因，不再把 `"C:\Users\…"` 这类粘贴值写进库。存量带引号行需重新保存才会归一化。
+- **本地根路径不可达不再静默**：`LocalFsFetcher.discover` 根 `stat` 失败改为抛 `location_unreachable`（原实现 `catch → 空 docs/complete=false`，被上游读成「索引成功但 0 文件」，用户只看到永久「覆盖 0%」且点「重建索引」无反应）；`ingestSource` 捕获后把源置 `status=error`、原因写 `errors[]` 并发出 `discover_failed` 进度，与远端源 `discover_failed` 语义对称。
+- **`error` 必须活下来**（评审 H1/H2）：`refreshCoverage` 不再按统计口径把 `error` 改写回 `ready`（否则曾经索引过、后来盘掉线的源 15s 内错误消失）；`pruneMissingOnDisk` 区分「根不可达」与「walk 残缺」，根不可达时**不清库**（原逻辑退回逐文件 stat，会把每个已索引文件判成已删，盘掉线一次 = 白丢整源索引 + 全量重索引）。discover 成功时清空历史 `errors[]`。
+- **单一真相**：源类型集合收敛到 `KNOWLEDGE_SOURCE_KINDS`（`Record<KnowledgeSourceKind, true>` 穷举，新增 kind 不同步即编译失败），Gateway / Web API / ingest 三处校验统一引用；`walk_source` 作业在源置 `error` 时标 `failed` 而非 `done`（源与作业两套口径不再打架）。
+- **WebUI**：源行在 `status=error` 时内联显示最后一条错误（原先只有展开详情才可见）；基础输入样式不再把 `checkbox`/`radio` 拉成 `width:100%`（「挂载给 Agent」勾选框占满整行、标签被挤到最右的根因）。
+- 测试：新增 `knowledge-location.test.ts`（引号剥离/相对路径/URL/connector/幂等 + **写入口接线**：register 落库去引号、update 同归一化、404 优先于 400）；`knowledge-ingest` 增「根路径不可达 → 源级 error」与「error 不被覆盖 + 索引不误清」回归（两条均已用「退回修复即变红」验证有效）；`knowledge-review-fixes` 的缺失根语义改为显式失败。文档中英同步（`docs/knowledge.md` / `.zh.md`）。
+
 ## v0.130.3 (2026-11-24)
 
 ### fix(webui,storage): 归档/回收站行标签改「原标题（sessionId）」，标题取最后落定值

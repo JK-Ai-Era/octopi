@@ -223,6 +223,54 @@ describe('KnowledgeIngest', () => {
     expect(files.some((f) => f.path.includes('node_modules'))).toBe(false);
   });
 
+  it('本地源根路径不可达 → 源级 error + 上报，绝不静默 0 文件', async () => {
+    ctx = await makeWorkspace();
+    const src = ctx.store.register({
+      kind: 'directory',
+      location: join(ctx.root, 'missing-dir'),
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'missing',
+    });
+
+    await ctx.ingest.ingestSource(src.id, { full: true });
+
+    const after = ctx.store.get(src.id)!;
+    expect(after.status).toBe('error');
+    expect(after.errors?.some((e) => /location_unreachable/.test(e.message))).toBe(true);
+    expect(ctx.ingest.indexStore.sourceStats(src.id).files).toBe(0);
+  });
+
+  it('根路径不可达后：error 不被统计口径覆盖回 ready，且不误清已索引文件', async () => {
+    ctx = await makeWorkspace();
+    const docs = join(ctx.root, 'gone');
+    await mkdir(docs, { recursive: true });
+    await writeFile(join(docs, 'a.md'), '# A\n\nalpha content here\n', 'utf8');
+    await writeFile(join(docs, 'b.md'), '# B\n\nbeta content here\n', 'utf8');
+
+    const src = ctx.store.register({
+      kind: 'directory',
+      location: docs,
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'gone',
+    });
+    await ctx.ingest.ingestSource(src.id, { full: true });
+    await ctx.ingest.idle();
+    expect(ctx.ingest.indexStore.sourceStats(src.id).files).toBe(2);
+
+    // 盘掉线 / 目录改名：根不可达
+    await rm(docs, { recursive: true, force: true });
+    await ctx.ingest.ingestSource(src.id, { full: true });
+    expect(ctx.store.get(src.id)!.status).toBe('error');
+
+    // 对账轮（15s reconciler：refreshCoverage + ensureParseCoverage + pruneMissingOnDisk）
+    await ctx.ingest.reconcileJobs();
+
+    // error 必须活下来（否则 UI 内联错误 15s 后消失）
+    expect(ctx.store.get(src.id)!.status).toBe('error');
+    // 根不可达 ≠ 文件全删：不得把整源索引清空
+    expect(ctx.ingest.indexStore.sourceStats(src.id).files).toBe(2);
+  });
+
   it('content-hash 未变则跳过重解析；变更后可搜到新内容', async () => {
     ctx = await makeWorkspace();
     const dir = join(ctx.root, 'd');

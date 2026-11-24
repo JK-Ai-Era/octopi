@@ -27,8 +27,11 @@ export interface DiscoveredDocRef {
 export interface DiscoverResult {
   docs: DiscoveredDocRef[];
   /**
-   * 是否为全量结果。false = 被 maxPages/maxBytes 截断或 walk 出错——
+   * 是否为全量结果。false = 被 maxPages/maxBytes 截断或子树 walk 出错——
    * 此时**禁止** prune，否则会把仍存在的文档误删。
+   *
+   * 契约不对称是刻意的：**根级**失败（根不存在/不可读）不返回空结果，而是
+   * throw `code='location_unreachable'`——空结果会被上游读成「成功但 0 文件」。
    */
   complete: boolean;
 }
@@ -102,8 +105,18 @@ export class LocalFsFetcher implements SourceFetcher {
       }
     };
 
-    const st = await stat(root).catch(() => null);
-    if (!st) return { docs: out, complete: false };
+    let st;
+    try {
+      st = await stat(root);
+    } catch (err) {
+      // 根路径不可达 = 配置错误（粘贴引号/盘符未挂载/拼错）。必须显式失败：
+      // 返回空 docs 会被上游读成「索引成功但 0 文件」，用户只能看到永久的
+      // partial/覆盖 0%，点「重建索引」也没有任何反应或报错。
+      const reason = (err as NodeJS.ErrnoException).code ?? 'unknown';
+      throw Object.assign(new Error(`location_unreachable: ${root} (${reason})`), {
+        code: 'location_unreachable',
+      });
+    }
     if (st.isFile()) {
       return {
         docs: [{ path: root, size: st.size, mtime: Math.floor(st.mtimeMs) }],

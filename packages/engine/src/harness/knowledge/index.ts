@@ -207,6 +207,11 @@ export type {
 } from './describe.js';
 export { scanSecretShapes, redactSecretShapes } from './secret-scan.js';
 export type { RedactResult } from './secret-scan.js';
+export {
+  normalizeSourceLocation,
+  stripLocationWrapping,
+  KNOWLEDGE_SOURCE_KINDS,
+} from './location.js';
 export type {
   KnowledgeSource,
   KnowledgeSourceInput,

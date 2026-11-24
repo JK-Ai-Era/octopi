@@ -291,19 +291,21 @@ describe('credential leak guards', async () => {
       '@octopi-agent/engine/harness/knowledge/fetchers.js'
     );
     const fetcher = new LocalFsFetcher(() => false);
-    // 不存在的根 → complete=false
-    const res = await fetcher.discover({
-      id: src.id,
-      kind: 'directory',
-      location: '/definitely/missing/kn-root',
-      scopeRef: { level: 'global', key: 'global' },
-      sync: { strategy: 'manual', enabled: true },
-      status: 'pending',
-      displayName: 'missing',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    } as never);
-    expect(res.complete).toBe(false);
+    // 不存在的根 = 配置错误：必须显式失败，绝不返回「0 文件」空结果
+    // （空结果会被上游误读为索引成功，UI 只剩永久 partial/覆盖 0%）
+    await expect(
+      fetcher.discover({
+        id: src.id,
+        kind: 'directory',
+        location: '/definitely/missing/kn-root',
+        scopeRef: { level: 'global', key: 'global' },
+        sync: { strategy: 'manual', enabled: true },
+        status: 'pending',
+        displayName: 'missing',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as never),
+    ).rejects.toThrow(/location_unreachable/);
     sources.database.close();
   });
 
