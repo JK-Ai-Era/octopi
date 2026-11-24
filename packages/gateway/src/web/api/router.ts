@@ -10,7 +10,7 @@ import type { Gateway } from '../../gateway/gateway.js';
 import type { ConfigApplyService } from '../../gateway/config-apply.js';
 import { ConfigConflictError } from '@octopi-agent/engine/config-admin/port.js';
 import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-guard.js';
-import { listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
+import { listProviderAccessModes, listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
 import { KNOWLEDGE_SOURCE_KINDS } from '@octopi-agent/engine/harness/knowledge/location.js';
 import type { AgentId, BindingId, SessionPolicy, User } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
@@ -2120,7 +2120,13 @@ export class WebApiRouter {
       }
 
       if (relativePath === '/config/presets/models' && method === 'GET') {
-        return this.json(res, 200, { ok: true, data: listProviderPresets() });
+        // 服务端在此处展开接入方式：标准 API 恒为第一项，UI 无需自己合成，
+        // 避免「前端缺省值」与「服务端生成器」两套回落规则。
+        const data = listProviderPresets().map((preset) => ({
+          ...preset,
+          accessModes: listProviderAccessModes(preset),
+        }));
+        return this.json(res, 200, { ok: true, data });
       }
 
       if (relativePath === '/config/models/levels' && method === 'PUT') {

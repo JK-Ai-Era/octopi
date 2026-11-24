@@ -931,9 +931,12 @@ export interface DiscoverModelsResultDto {
 }
 
 /** provider 预设条目（生成器/表单默认值） */
+/** provider 预设条目（生成器/表单默认值） */
 export interface ModelPresetDto {
   id: string;
   label: string;
+  /** 展示名本地化（缺省回落 label） */
+  labels?: Record<string, string>;
   api: 'openai-completions' | 'anthropic-messages';
   baseUrl: string;
   apiKeyEnvHint: string;
@@ -945,6 +948,29 @@ export interface ModelPresetDto {
     input?: Array<'text' | 'image' | 'audio' | 'video'>;
     contextWindow?: number;
     maxTokens?: number;
+  }>;
+  /**
+   * 额外接入方式（标准 API 恒为第一项 `standard`，由服务端合成）。
+   * 选中一条即以该条的 baseUrl/api/models 覆盖表单；未给字段回落 standard。
+   */
+  accessModes?: Array<{
+    id: string;
+    label: string;
+    labels?: Record<string, string>;
+    api: 'openai-completions' | 'anthropic-messages';
+    baseUrl: string;
+    apiKeyEnvHint?: string;
+    keyHints?: Record<string, string>;
+    notes?: Record<string, string>;
+    docsUrl?: string;
+    models?: Array<{
+      id: string;
+      name: string;
+      reasoning?: boolean;
+      input?: Array<'text' | 'image' | 'audio' | 'video'>;
+      contextWindow?: number;
+      maxTokens?: number;
+    }>;
   }>;
   custom?: boolean;
 }

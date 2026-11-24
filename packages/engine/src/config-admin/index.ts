@@ -31,9 +31,12 @@ export {
   BUILTIN_MODEL_PRESETS,
   getProviderPreset,
   listProviderPresets,
+  listProviderAccessModes,
+  getProviderAccessMode,
+  resolvePresetMode,
   expandProviderPreset,
 } from './model-presets.js';
-export type { ModelPresetModel, ProviderPreset } from './model-presets.js';
+export type { ModelPresetModel, ProviderPreset, ProviderAccessMode } from './model-presets.js';
 
 export { redactSecret, redactProvider } from './redact.js';
 export type { RedactedSecret, RedactedProvider } from './redact.js';

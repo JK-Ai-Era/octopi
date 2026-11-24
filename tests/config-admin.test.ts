@@ -6,6 +6,9 @@ import {
   BUILTIN_MODEL_PRESETS,
   BUILTIN_AGENT_ROLE_PRESETS,
   getProviderPreset,
+  getProviderAccessMode,
+  listProviderAccessModes,
+  resolvePresetMode,
   getAgentRolePreset,
   renderAgentRole,
   renderRolePreset,
@@ -18,8 +21,123 @@ import {
   deleteJsonPath,
   findProviderReferences,
 } from '../packages/engine/src/config-admin/index.js';
+import { ModelProviderConfigSchemaExport } from '../packages/engine/src/config-schema/models.js';
 
 describe('model presets', () => {
+  it('接入方式：标准 API 恒为第一项，且与顶层字段一致', () => {
+    for (const preset of BUILTIN_MODEL_PRESETS) {
+      const modes = listProviderAccessModes(preset);
+      expect(modes[0]!.id).toBe('standard');
+      expect(modes[0]!.baseUrl).toBe(preset.baseUrl);
+      expect(modes[0]!.api).toBe(preset.api);
+      // id 唯一：UI 的下拉依赖它作为 React key 与选择值
+      expect(new Set(modes.map((m) => m.id)).size).toBe(modes.length);
+    }
+  });
+
+  it('接入方式：未给字段回落标准 API（models / apiKeyEnvHint / docsUrl）', () => {
+    const preset = getProviderPreset('mimo')!;
+    // token-plan 没写 models → 用顶层清单，不复制一份
+    const resolved = resolvePresetMode(preset, 'token-plan');
+    expect(resolved.models).toBe(preset.models);
+    expect(resolved.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/v1');
+    // 套餐 key 与按量 key 不通用 → 该条自带 apiKeyEnvHint；未自带的条目才回落
+    expect(resolved.apiKeyEnvHint).toBe('MIMO_TOKEN_PLAN_API_KEY');
+
+    const standard = resolvePresetMode(preset);
+    expect(standard.apiKeyEnvHint).toBe('MIMO_API_KEY');
+    expect(standard.models).toBe(preset.models);
+  });
+
+  it('接入方式：认准每个已登记端点的协议与 baseUrl', () => {
+    expect(getProviderAccessMode('doubao', 'agent-plan')).toMatchObject({
+      api: 'anthropic-messages',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/plan',
+    });
+    expect(getProviderAccessMode('doubao', 'coding-plan')).toMatchObject({
+      api: 'anthropic-messages',
+      baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+    });
+    // Coding Plan 的 key 与按量通用 → 不另设 env 变量（回落标准 key）
+    expect(getProviderAccessMode('doubao', 'coding-plan')?.apiKeyEnvHint).toBeUndefined();
+    // Agent Plan 的 key 是专属的
+    expect(getProviderAccessMode('doubao', 'agent-plan')?.apiKeyEnvHint).toBe('ARK_AGENT_PLAN_API_KEY');
+    // Step Plan 的 Anthropic baseUrl 刻意不带 /v1（客户端自拼 /v1/messages）
+    expect(getProviderAccessMode('stepfun', 'step-plan-anthropic')?.baseUrl).toBe(
+      'https://api.stepfun.com/step_plan',
+    );
+    expect(getProviderAccessMode('qwen', 'coding-plan')).toMatchObject({
+      api: 'openai-completions',
+      baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
+    });
+    expect(getProviderAccessMode('mimo', 'token-plan-anthropic')).toMatchObject({
+      api: 'anthropic-messages',
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+    });
+  });
+
+  it('接入方式：订阅型条目都带计费/限制说明（防用户拿套餐端点做自动化）', () => {
+    for (const preset of BUILTIN_MODEL_PRESETS) {
+      for (const mode of preset.modes ?? []) {
+        const isSubscription = /plan|token-plan|coding/i.test(mode.id)
+          && mode.apiKeyEnvHint !== undefined
+          && mode.apiKeyEnvHint !== preset.apiKeyEnvHint;
+        if (isSubscription) {
+          expect(mode.notes, `${preset.id}/${mode.id} 缺 notes`).toBeDefined();
+        }
+      }
+    }
+  });
+
+  it('接入方式：未知 modeId fail-loud，不静默回落标准 API', () => {
+    const preset = getProviderPreset('mimo')!;
+    expect(() => resolvePresetMode(preset, 'nope')).toThrow(/unknown access mode/);
+    expect(() => getProviderAccessMode('mimo', 'nope')).toThrow(/unknown access mode/);
+  });
+
+  it('接入方式：expandProviderPreset 按 mode 产出 baseUrl/api/models', () => {
+    const cfg = expandProviderPreset('doubao', undefined, { modeId: 'agent-plan' });
+    expect(cfg.baseUrl).toBe('https://ark.cn-beijing.volces.com/api/plan');
+    expect(cfg.api).toBe('anthropic-messages');
+    expect(cfg.models.length).toBe(getProviderPreset('doubao')!.models.length);
+
+    // 不传 modeId 时与改造前完全一致（向后兼容）
+    const standard = expandProviderPreset('doubao');
+    expect(standard.baseUrl).toBe('https://ark.cn-beijing.volces.com/api/v3');
+    expect(standard.api).toBe('openai-completions');
+  });
+
+  it('接入方式：每条的 baseUrl 非空且协议合法（防登记半截条目）', () => {
+    for (const preset of BUILTIN_MODEL_PRESETS) {
+      for (const mode of preset.modes ?? []) {
+        expect(mode.baseUrl.length, `${preset.id}/${mode.id}`).toBeGreaterThan(0);
+        expect(['openai-completions', 'anthropic-messages']).toContain(mode.api);
+        expect(mode.label.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('接入方式：每种接入方式展开后都能过 config-schema（防「写得出但落盘失败」）', () => {
+    // 用与运行时同一份 schema：预设条目只要有一条通不过，用户选它就会在保存时失败
+    for (const preset of BUILTIN_MODEL_PRESETS) {
+      for (const mode of listProviderAccessModes(preset)) {
+        const cfg = expandProviderPreset(preset.id, undefined, { modeId: mode.id });
+        // custom 是唯一已知例外：它是空模板（baseUrl/model 由用户填），
+        // 两个消费方（向导 / 设置面板）保存前都会拦空值。
+        if (preset.custom) {
+          expect(cfg.baseUrl).toBe('');
+          expect(cfg.models).toEqual([]);
+          continue;
+        }
+        const result = ModelProviderConfigSchemaExport.safeParse(cfg);
+        expect(
+          result.success,
+          `${preset.id}/${mode.id}: ${result.success ? '' : result.error.issues.map((i) => i.message).join('; ')}`,
+        ).toBe(true);
+      }
+    }
+  });
+
   it('内置清单含必需条目且结构完整', () => {
     const ids = BUILTIN_MODEL_PRESETS.map((p) => p.id);
     for (const required of ['openai', 'anthropic', 'deepseek', 'ollama', 'custom']) {

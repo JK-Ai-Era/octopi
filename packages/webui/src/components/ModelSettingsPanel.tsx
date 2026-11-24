@@ -13,7 +13,7 @@ import {
 } from '@octopi-agent/gateway/web/sdk/client';
 import { resolveDefaultBase } from '../gateway-base';
 import { getConsoleKey, getRegistryToken } from '../console-key';
-import { useT } from '../i18n/react';
+import { useT, useLang } from '../i18n/react';
 import { t as tStatic } from '../i18n/core';
 
 interface ModelRow {
@@ -39,6 +39,8 @@ interface ProviderForm {
   apiKey: string;
   timeoutSeconds: string;
   models: ModelRow[];
+  /** 当前选中的接入方式（仅新建态有意义：换方式＝重新加载预设默认值） */
+  accessModeId?: string;
 }
 
 interface LevelRow {
@@ -80,6 +82,16 @@ function modelRowFromUnknown(m: Record<string, unknown>): ModelRow {
       ? [...(m.input as Array<'text' | 'image' | 'audio' | 'video'>)]
       : undefined,
   };
+}
+
+/** 接入方式的本地化展示名（缺省回落 label；品牌名常两语同形） */
+function modeLabel(
+  lang: string,
+  labels: Record<string, string> | undefined,
+  fallback: string,
+): string {
+  if (!labels) return fallback;
+  return labels[lang] ?? labels.zh ?? fallback;
 }
 
 /** 数字字段解析：空串→undefined；非数字抛错（防 NaN 落盘） */
@@ -130,6 +142,7 @@ function isConflictError(err: unknown): boolean {
 
 export function ModelSettingsPanel() {
   const t = useT();
+  const [lang] = useLang();
   const client = useMemo(
     () => new OctopiClient({ baseUrl: resolveDefaultBase(), apiKey: getConsoleKey() || undefined, registryToken: getRegistryToken() || undefined }),
     [],
@@ -173,6 +186,12 @@ export function ModelSettingsPanel() {
     void reload();
   }, [reload]);
 
+  const activePreset = useMemo(
+    () => (selected === '__new__' ? presets.find((p) => p.id === form.name) : undefined),
+    [selected, presets, form.name],
+  );
+  const activeMode = activePreset?.accessModes?.find((m) => m.id === (form.accessModeId ?? 'standard'));
+
   const selectProvider = (name: string | null) => {
     setSelected(name);
     setTestResult(null);
@@ -200,15 +219,28 @@ export function ModelSettingsPanel() {
     });
   };
 
-  const applyPreset = (preset: ModelPresetDto) => {
-    setForm({
+  /** 按接入方式加载预设默认值（未给字段回落 standard，规则与服务端同源） */
+  const applyPresetMode = (preset: ModelPresetDto, modeId: string) => {
+    const modes = preset.accessModes ?? [];
+    const mode = modes.find((m) => m.id === modeId) ?? modes[0];
+    const models = mode?.models ?? preset.models;
+    setForm((prev) => ({
+      ...prev,
       name: preset.id,
-      baseUrl: preset.baseUrl,
-      api: preset.api,
-      apiKey: preset.apiKeyEnvHint ? `\${${preset.apiKeyEnvHint}}` : '',
+      baseUrl: mode?.baseUrl ?? preset.baseUrl,
+      api: mode?.api ?? preset.api,
+      apiKey: (mode?.apiKeyEnvHint ?? preset.apiKeyEnvHint)
+        ? `\${${mode?.apiKeyEnvHint ?? preset.apiKeyEnvHint}}`
+        : '',
       timeoutSeconds: '',
-      models: preset.models.map(modelRowFromPreset),
-    });
+      models: models.map(modelRowFromPreset),
+      accessModeId: mode?.id ?? 'standard',
+    }));
+  };
+
+  const applyPreset = (preset: ModelPresetDto) => {
+    const first = preset.accessModes?.[0];
+    applyPresetMode(preset, first?.id ?? 'standard');
   };
 
   const noticeForApply = (result: ConfigApplyResultDto): string => {
@@ -415,6 +447,26 @@ export function ModelSettingsPanel() {
 
           {selected && (
             <>
+              {selected === '__new__' && activePreset && (activePreset.accessModes?.length ?? 0) > 1 && (
+                // 接入方式：仅在确实有多种接入方式的预设上出现（单方式不占版面）
+                <label className="set-field">
+                  <span>{t('modelSettings.fieldAccessMode')}</span>
+                  <select
+                    className="set-input"
+                    value={form.accessModeId ?? 'standard'}
+                    onChange={(e) => applyPresetMode(activePreset, e.target.value)}
+                  >
+                    {activePreset.accessModes!.map((mode) => (
+                      <option key={mode.id} value={mode.id}>
+                        {modeLabel(lang, mode.labels, mode.label)}
+                      </option>
+                    ))}
+                  </select>
+                  {activeMode?.notes && (
+                    <span className="small muted">{modeLabel(lang, activeMode.notes, '')}</span>
+                  )}
+                </label>
+              )}
               <label className="set-field">
                 <span>{t('modelSettings.fieldName')}</span>
                 <input

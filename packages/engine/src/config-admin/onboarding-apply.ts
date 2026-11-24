@@ -189,7 +189,7 @@ export async function seedDeploymentRegistry(
  * @returns 'ok' 或错误归并（ProbeErrorKind 七类码）
  */
 export async function probeProvider(choices: OnboardingChoices): Promise<'ok' | ProbeErrorKind> {
-  const envVar = apiKeyEnvVar(choices.providerId);
+  const envVar = apiKeyEnvVar(choices.providerId, choices.accessModeId);
   const prevEnv = envVar ? process.env[envVar] : undefined;
   try {
     if (envVar && choices.apiKey) process.env[envVar] = choices.apiKey.trim();

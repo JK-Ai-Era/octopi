@@ -140,6 +140,29 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.130.7 (2026-11-25)
+
+### feat(engine,gateway,webui): provider 预设支持「接入方式」——同一厂商的订阅网关/协议变体可切换
+
+- **背景**（大哥指出的缺口）：现有预设每家只有一条标准按量 `baseUrl`。实际不少厂商另提供订阅制专用网关（阿里 Token Plan / Coding Plan、火山 Agent Plan / Coding Plan、小米 Token Plan、腾讯 Token Plan / Coding Plan、百度 Token Plan、阶跃 Step Plan），以及同厂商的协议变体（DeepSeek / Kimi / GLM / MiniMax / 硅基流动的 Anthropic 兼容面、xAI 美国区域端点、星火按代次分路径）。用户只能手填 baseUrl，且很容易踩「用标准端点跑套餐额度」的坑。
+- **数据模型**（不造第二真相源）：`ProviderPreset` 新增可选 `modes: ProviderAccessMode[]`，**只放额外接入方式**；provider 顶层 `api`/`baseUrl`/`apiKeyEnvHint`/`models` 仍是该厂商标准 API 的单一真相源。未在 mode 里给出的字段回落顶层（`models` 尤其如此，不为每条 plan 复制一份模型清单）。
+- **单一解析点**：新增 `listProviderAccessModes`（标准 API 恒为第一项 `standard`）、`getProviderAccessMode`、`resolvePresetMode`；`expandProviderPreset` 增加 `options.modeId`（保持原二参签名，向后兼容）。服务端 `/config/presets/models` 直接返回带 `accessModes` 的条目，UI 不再自行合成缺省值；向导的 `apiKeyEnvVar` / `assembleOnboarding` 走同一解析点。
+- **UI**（大哥的方案）：设置页在选中 provider 后，配置项**首行**新增「接入方式」下拉（仅当该厂商确实有多种方式时出现）；选择即按该条加载 baseUrl / 协议 / key 变量 / 模型清单，并在下方显示该方式的计费与限制说明。向导同步：多方式厂商点卡片后停在本步选方式，单方式维持原「点即下一步」。
+- **落表的 14 家 / 30 条接入方式**（均来自官方文档；口径与数值取证见 `provider-presets-research/access-modes.md`；条数由构建产物枚举核对）：
+  - 阿里百炼：Coding Plan（`/v1` + `/apps/anthropic`）、Token Plan（独立 host + `/apps/anthropic`），专属 `sk-sp-` key。
+  - 火山方舟：Agent Plan（专属 key，`/api/plan` + `/api/plan/v3`）、Coding Plan（**key 与按量通用，但必须用 `/api/coding`**，误用 `/api/v3` 会按量计费）。
+  - 小米 MiMo：Token Plan（`tp-`/`ttp-` 独立 key，`/v1` + `/anthropic`；另有 sgp/ams 集群按订阅页核对）。
+  - 腾讯混元：旧平台 Anthropic、Token Plan（`/plan/v3` + `/plan/anthropic`）、Coding Plan（专属 `sk-sp-`，`/coding/v3` + `/coding/anthropic`）。
+  - 百度千帆：Token Plan 个人版（`/v2/tokenplan/personal` + `/anthropic/tokenplan/personal`）；Coding Plan 官方已停售，不列。
+  - 智谱 GLM：Anthropic 端点**标准与套餐共用同一 URL**（扣哪类额度由 key 类型决定），Coding Plan 仅 OpenAI Chat 换路径——不复制成重复条目。
+  - 阶跃星辰：Step Plan（`/step_plan/v1` + `/step_plan`，Anthropic 那条 baseUrl **刻意不带 `/v1`**，客户端自拼 `/v1/messages`）。
+  - 协议变体：DeepSeek / Kimi（Anthropic 面，同 key）、MiniMax（官方推荐的 `/anthropic` + M Plan 标注「同端点换 key」）、硅基流动（`/v1/messages` 实测 401 存在、`/messages` 404，故 baseUrl 取 host）、xAI 美国区域（同 key，仅 grok-4.7/4.6）、星火 X1.5 与老域、Mistral 原生格式。
+- **未落入预设表的部分**（刻意留给 `custom`）：Anthropic 的 Bedrock/Vertex/AWS（SigV4/ADC 鉴权，不是 `apiKey` 能覆盖的）、Cerebras Dedicated（每客户专属 host）、各类预留/私有化实例；BaseUrl 与标准完全相同、只有 key 类型不同的（Gemini 订阅 credits、Mistral 订阅额度）。
+- **安全/合规提示内置**：所有订阅型条目在 `notes` 里写明官方限制——阿里、火山、腾讯三家均限「仅交互式编程/Agent 工具，禁止脚本与后端调用」，误用会封 key 或停订阅。
+- **测试**：新增 7 个接入方式用例（标准项恒为首且与顶层一致、缺省回落、关键端点值与协议、订阅条目必带 notes、未知 modeId fail-loud、`expandProviderPreset` 按 mode 产出、**每种接入方式展开后都必须通过运行时 `ModelProviderConfigSchema`**——防「写得出但落盘失败」）。`tests/config-admin.test.ts` 21 → 29 例。
+- **验证**：全量 `npm test` 577 文件 / 5916 用例通过；`npm run lint`（含 tests typecheck + webui tsc）通过。
+- **遗留**：Web 设置页与向导的接入方式下拉在英文界面用 `labels.en`，但预设卡片标题仍渲染 `preset.label`（既有缺口，未在本提交扩大范围）。
+
 ## v0.130.6 (2026-11-24)
 
 ### fix(release): tarball 不再夹带 Python 残渣；发布钉住 registry 并加三道守卫；tag 改为发布里程碑

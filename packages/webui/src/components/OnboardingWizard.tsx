@@ -23,6 +23,7 @@ interface WizardRender {
     deploymentMode?: string;
     orgName?: string;
     providerId?: string;
+    accessModeId?: string;
     modelId?: string;
     hasApiKey?: boolean;
     hasAdminPassword?: boolean;
@@ -42,7 +43,20 @@ interface WizardRender {
   options: {
     languages: Array<{ id: string; label: string }>;
     deploymentModes: Array<{ id: string; label: string; description: string }>;
-    providers: Array<{ id: string; label: string; keyHint: string; api: string; defaultBaseUrl: string }>;
+    providers: Array<{
+      id: string;
+      label: string;
+      keyHint: string;
+      api: string;
+      defaultBaseUrl: string;
+      accessModes?: Array<{
+        id: string;
+        label: string;
+        api: string;
+        baseUrl: string;
+        notes?: string;
+      }>;
+    }>;
     models: Array<{ id: string; label: string; contextWindow?: number }>;
   };
 }
@@ -356,7 +370,16 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
         );
       }
       case 'provider': {
-        const isCustom = draft.providerId === 'custom' || render.choices.providerId === 'custom';
+        const currentProvider = draft.providerId ?? render.choices.providerId;
+        const isCustom = currentProvider === 'custom';
+        const activeProvider = render.options.providers.find((o) => o.id === currentProvider);
+        const modes = activeProvider?.accessModes ?? [];
+        // 多接入方式时，点卡片先停在当前步（不立刻 next），让用户先挑方式
+        const showModePicker = !isCustom && modes.length > 1;
+        // draft 是 Record<string, unknown>（服务端白名单合并），取值要过类型守卫
+        const draftModeId = typeof draft.accessModeId === 'string' ? draft.accessModeId : undefined;
+        const selectedModeId = draftModeId ?? render.choices.accessModeId ?? modes[0]?.id ?? 'standard';
+        const selectedMode = modes.find((m) => m.id === selectedModeId);
         return (
           <div className="wizard-step">
             <h2>{t('onboardingWizard.providerTitle')}</h2>
@@ -364,11 +387,14 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
               {render.options.providers.map((o) => (
                 <button
                   key={o.id}
-                  className={(draft.providerId ?? render.choices.providerId) === o.id ? 'btn-primary wizard-card' : 'btn-secondary wizard-card'}
+                  className={currentProvider === o.id ? 'btn-primary wizard-card' : 'btn-secondary wizard-card'}
                   onClick={() => {
                     if (o.id === 'custom') {
                       // M-5：custom 还要 Base URL——先选中，填好 URL 再下一步（此前直接 next 必 400，死路）
                       setDraft((d) => ({ ...d, providerId: 'custom' }));
+                    } else if ((o.accessModes?.length ?? 0) > 1) {
+                      // 多接入方式：先落选 provider 与默认方式，让用户在下拉里改，再点下一步
+                      setDraft((d) => ({ ...d, providerId: o.id, accessModeId: o.accessModes![0]!.id }));
                     } else {
                       void submit({ kind: 'next' }, { providerId: o.id });
                     }
@@ -378,6 +404,40 @@ export function OnboardingWizard({ onDone }: { onDone: () => void }): JSX.Elemen
                 </button>
               ))}
             </div>
+            {showModePicker && (
+              <div className="small">
+                <span>{t('onboardingWizard.accessModeLabel')}</span>
+                <select
+                  value={selectedModeId}
+                  onChange={(e) => setDraft((d) => ({ ...d, accessModeId: e.target.value }))}
+                >
+                  {modes.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                {selectedMode?.notes ? <span className="small muted">{selectedMode.notes}</span> : null}
+              </div>
+            )}
+            {showModePicker && (
+              <button
+                className="btn-primary"
+                onClick={() =>
+                  void submit(
+                    { kind: 'next' },
+                    {
+                      providerId: currentProvider,
+                      accessModeId: selectedModeId,
+                      // baseUrl 由服务端按接入方式解析；这里不传 overrides，避免压死端点
+                      providerOverrides: {},
+                    },
+                  )
+                }
+              >
+                {t('onboardingWizard.next')}
+              </button>
+            )}
             {isCustom && (
               <>
                 <label className="small">

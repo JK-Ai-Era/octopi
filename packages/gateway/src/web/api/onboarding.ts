@@ -27,7 +27,10 @@ import {
   type OnboardingStepId,
 } from '@octopi-agent/engine/config-admin/onboarding.js';
 import { pickLocalized } from '@octopi-agent/engine/config-admin/i18n.js';
-import { getProviderPreset } from '@octopi-agent/engine/config-admin/model-presets.js';
+import {
+  getProviderPreset,
+  listProviderAccessModes,
+} from '@octopi-agent/engine/config-admin/model-presets.js';
 import { requiresAdminPassword } from '@octopi-agent/engine/config-admin/onboarding-apply.js';
 import {
   readConsoleAccessKey,
@@ -343,6 +346,14 @@ export class OnboardingService {
         keyHint: pickLocalized(pr.keyHints, pr.apiKeyEnvHint, lang),
         api: pr.api,
         defaultBaseUrl: pr.baseUrl,
+        // 接入方式（含标准 API）：渲染器据此渲染下拉；缺省/单条时不必展示
+        accessModes: listProviderAccessModes(pr).map((mode) => ({
+          id: mode.id,
+          label: pickLocalized(mode.labels, mode.label, lang),
+          api: mode.api,
+          baseUrl: mode.baseUrl,
+          ...(mode.notes ? { notes: pickLocalized(mode.notes, '', lang) } : {}),
+        })),
       })),
       // 模型预设跟随「当前所选 provider」（会话已选 → 草稿尚未落盘的 provider 也覆盖不到，
       // 故用已保存值；provider 一旦提交就会刷新）。手填仍允许：预设只是候选。

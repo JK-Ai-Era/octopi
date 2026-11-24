@@ -7,7 +7,12 @@
  * @module
  */
 
-import { expandProviderPreset, getProviderPreset, listProviderPresets } from './model-presets.js';
+import {
+  expandProviderPreset,
+  getProviderPreset,
+  listProviderPresets,
+  resolvePresetMode,
+} from './model-presets.js';
 import { MIN_ADMIN_PASSWORD_LENGTH, checkAdminPassword } from './password-policy.js';
 import type { ProductLang, LocalizedText } from './i18n.js';
 import { pickLocalized } from './i18n.js';
@@ -88,6 +93,11 @@ export interface OnboardingChoices {
   /** 模式③的首个组织名（tenant 名） */
   orgName?: string;
   providerId: string;
+  /**
+   * 接入方式 id（缺省 `standard` = 标准按量计费 API）。
+   * 订阅制端点（token-plan / coding-plan / agent-plan）靠它切换 baseUrl 与协议。
+   */
+  accessModeId?: string;
   /** 表单覆盖（baseUrl 等；apiKey 单独走 apiKey 字段） */
   providerOverrides?: Record<string, unknown>;
   /** LLM key 明文（写 .env 用，不进 octopi.json） */
@@ -130,10 +140,10 @@ export function pickLang(map: LocalizedText, fallback: string, lang: ProductLang
  * @returns 环境变量名；无需 key 的预设（ollama 等）返回 ''
  * @throws 未知 providerId（fail-loud）
  */
-export function apiKeyEnvVar(providerId: string): string {
+export function apiKeyEnvVar(providerId: string, accessModeId?: string): string {
   const preset = getProviderPreset(providerId);
   if (!preset) throw new Error(`unknown provider preset: ${providerId}`);
-  return preset.apiKeyEnvHint || '';
+  return resolvePresetMode(preset, accessModeId).apiKeyEnvHint || '';
 }
 
 /**
@@ -175,6 +185,15 @@ export function validateStep(step: OnboardingStepId, choices: OnboardingChoices)
     }
     case 'provider': {
       if (!getProviderPreset(choices.providerId)) return zh ? '请选择一个模型服务' : 'Pick a model provider';
+      // 接入方式必须对该 provider 真实存在：未知 id 会让落盘时静默回落标准端点，
+      // 用户以为切到了订阅网关却按标准额度计费——这里显式拦住。
+      if (choices.accessModeId !== undefined) {
+        try {
+          resolvePresetMode(getProviderPreset(choices.providerId)!, choices.accessModeId);
+        } catch {
+          return zh ? '所选接入方式不可用，请重新选择' : 'That access mode is not available; pick another';
+        }
+      }
       // custom（OpenAI 兼容）必须给 baseUrl（schema: min(1)；空值产出非法配置）
       if (choices.providerId === 'custom' && !String(choices.providerOverrides?.baseUrl ?? '').trim()) {
         return zh ? '请填写服务的 Base URL（OpenAI 兼容接口地址）' : 'Enter the service base URL (OpenAI-compatible endpoint)';
@@ -182,7 +201,7 @@ export function validateStep(step: OnboardingStepId, choices: OnboardingChoices)
       return '';
     }
     case 'api-key': {
-      const envVar = apiKeyEnvVar(choices.providerId);
+      const envVar = apiKeyEnvVar(choices.providerId, choices.accessModeId);
       if (!envVar) return ''; // 无需 key 的预设跳过
       return choices.apiKey?.trim()
         ? ''
@@ -210,7 +229,7 @@ export function assembleOnboarding(choices: OnboardingChoices): OnboardingOutput
   const preset = getProviderPreset(choices.providerId);
   if (!preset) throw new Error(`unknown provider preset: ${choices.providerId}`);
 
-  const envVar = apiKeyEnvVar(choices.providerId);
+  const envVar = apiKeyEnvVar(choices.providerId, choices.accessModeId);
   if (envVar && !choices.apiKey?.trim()) {
     // fail-loud，不产「KEY=」空值配置（运行时静默 401 比向导报错难查得多）
     throw new Error(`missing api key for provider preset: ${choices.providerId}`);
@@ -224,13 +243,19 @@ export function assembleOnboarding(choices: OnboardingChoices): OnboardingOutput
   // 模型目录全量落配置（生成器语义）：预设模型全进目录（参考参数随行），
   // 用户「用哪个模型？」只接线 default agent 与 level 三档；手填清单外 id 追加进目录
   const baseModels =
-    Array.isArray(overrides.models) && overrides.models.length > 0 ? overrides.models : preset.models.map((m) => ({ ...m }));
+    Array.isArray(overrides.models) && overrides.models.length > 0
+      ? overrides.models
+      : resolvePresetMode(preset, choices.accessModeId).models.map((m) => ({ ...m }));
   const models = baseModels.some((m) => m?.id === modelId) ? [...baseModels] : [...baseModels, { id: modelId }];
-  const providerConfig = expandProviderPreset(choices.providerId, {
-    ...overrides,
-    ...(envVar ? { apiKey: `\${${envVar}}` } : {}),
-    models,
-  } as Parameters<typeof expandProviderPreset>[1]);
+  const providerConfig = expandProviderPreset(
+    choices.providerId,
+    {
+      ...overrides,
+      ...(envVar ? { apiKey: `\${${envVar}}` } : {}),
+      models,
+    } as Parameters<typeof expandProviderPreset>[1],
+    { ...(choices.accessModeId ? { modeId: choices.accessModeId } : {}) },
+  );
 
   const modelRef = `${preset.id}/${modelId}`;
   return {
@@ -272,6 +297,7 @@ const ONBOARDING_CHOICE_FIELDS: ReadonlyArray<keyof OnboardingChoices> = [
   'deploymentMode',
   'orgName',
   'providerId',
+  'accessModeId',
   'providerOverrides',
   'adminPassword',
   'apiKey',
