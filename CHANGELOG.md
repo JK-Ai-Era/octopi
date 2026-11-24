@@ -140,6 +140,47 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.131.3 (2026-11-25)
+
+### fix(engine): git_commit 增加 stagedOnly，只提交索引内容
+
+上一次会话把 `.sidebar-archives-entry` 的 CSS 误提交进 `d5fe7e2d`，而同一改动的
+TSX 半留在工作区。追查后确认这不是参数用错，而是**工具缺失一条语义路径**。
+
+**根因（实测证据）**：`git_commit` 在传 `paths` 时会先 `git add -- <paths>`，
+再 `git commit -- <paths>`。两者都作用于**工作区**内容：
+
+| 同一仓库状态（索引 = `b→B`，工作区另加未暂存 `C`） | 提交进仓库的内容 |
+|---|---|
+| `git commit -- f.txt` | `a / B / C-UNSTAGED`（绕过索引） |
+| `git commit`（无 pathspec） | `a / B / c`（按索引） |
+
+`git add -- <path>` 是**整文件**暂存，不是 hunk 级；因此调用方精心用
+`git apply --cached` 造出的部分暂存会被静默抹平。而「传 paths 做限定」与
+「按索引提交」在这个工具里是互斥的，需要后者时反而无法表达。
+
+**修法**：新增 `stagedOnly?: boolean`。
+
+- `stagedOnly: true` 时**不执行 add**，且 `commit` **不传 pathspec**（裸 commit）
+- `paths` 退化为**断言**，挡两类事故：
+  - 列出的路径没有暂存内容 → `no staged content for …`
+  - 索引里还有 paths 之外的暂存 → `index also holds staged changes outside paths: …`
+- 与 `all` / `amend` 互斥（显式报错，不静默组合）
+- `stagedOnly` 下**强制跳过 EOL 归一化**：该步骤会重写工作区文件并重新 `add`，
+  那会把提交内容变回工作区全量，正是 stagedOnly 要避免的事
+- 路径比较统一到「仓库相对」口径（git 输出为相对路径，`paths` 解析后是绝对路径；
+  混比会造成「明明暂存了却报没有」的假失败）
+
+默认行为（未传 `stagedOnly`）完全不变：仍然是 `add -- paths` + `commit -- paths`。
+
+**测试**（`tests/harness/dedicated-tools-functional.test.ts`，+5 例）：
+部分暂存时 `stagedOnly` 提交内容等于索引且未暂存改动留在工作区、paths 缺暂存即
+报错、索引有额外暂存即报错、参数互斥、默认模式行为未变。
+
+`npm run lint` 通过。
+
+---
+
 ## v0.131.2 (2026-11-25)
 
 ### fix(webui): 左栏归档入口补齐 TSX 半（v0.131.0 误带入 CSS）；右栏「目录」改为「工作目录」

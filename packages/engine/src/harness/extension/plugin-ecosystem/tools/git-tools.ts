@@ -20,6 +20,7 @@ import { detectEol, toEol } from './eol.js';
 import { assertSafeRef, type AllowlistedRunResult } from './allowlisted-run.js';
 import { matchesDenyPattern } from '../../../shared/paths/glob.js';
 import { runGit } from './git-runner.js';
+import { sep } from 'node:path';
 
 function resolveCwd(context: ToolExecutionContext | undefined, raw?: string): string {
   const cwd = raw ?? context?.cwd ?? process.cwd();
@@ -446,6 +447,37 @@ export function createGitShowTool(): RegisteredTool {
   };
 }
 
+/** stagedOnly 用：索引里已暂存的文件（相对仓库根） */
+async function stagedFileList(
+  context: ToolExecutionContext | undefined,
+  cwd: string,
+): Promise<string[]> {
+  const res = await runGit(context, cwd, ['diff', '--cached', '--name-only', '-z']);
+  if (res.exitCode !== 0) {
+    throw new Error(`git_commit(stagedOnly): cannot read index: ${res.stderr.trim()}`);
+  }
+  return res.stdout
+    .split('\0')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 绝对路径 → 仓库相对路径（git 输出口径）。
+ *
+ * 落在仓库外、或无法归一的情况保留原样：断言会因此报「无暂存内容」，
+ * 这是正确的行为（git 也不会把仓库外路径算进索引）。
+ *
+ * @param absPath - 已 containment 解析过的绝对路径
+ * @param cwd - 仓库根
+ * @returns 仓库相对路径（posix 分隔符）或原路径
+ */
+function toRepoRelative(absPath: string, cwd: string): string {
+  const prefix = cwd.endsWith(sep) ? cwd : `${cwd}${sep}`;
+  if (!absPath.startsWith(prefix)) return absPath;
+  return absPath.slice(prefix.length).split(sep).join('/');
+}
+
 /** git_commit — add paths + commit (hooks disabled) */
 export function createGitCommitTool(): RegisteredTool {
   return {
@@ -465,6 +497,14 @@ export function createGitCommitTool(): RegisteredTool {
         all: {
           type: 'boolean',
           description: 'Stage all tracked modifications (git add -A on given paths or repo)',
+        },
+        stagedOnly: {
+          type: 'boolean',
+          description:
+            'Commit only what is already in the index (no `git add`, no pathspec on commit). ' +
+            'Use this after staging hunks/files yourself. `paths` then acts as an assertion: ' +
+            'it fails if any listed path has nothing staged, or if the index also holds staged ' +
+            'changes outside `paths`. Incompatible with `all` and `amend`.',
         },
         amend: { type: 'boolean', description: 'Amend the previous commit' },
         eol: {
@@ -500,8 +540,48 @@ export function createGitCommitTool(): RegisteredTool {
       const paths = Array.isArray(args.paths) ? (args.paths as string[]) : [];
       const resolvedPaths = paths.map((p) => toGitPathspec(p, context, 'commit', cwd));
       const useAll = args.all === true;
+      const stagedOnly = args.stagedOnly === true;
 
-      if (resolvedPaths.length > 0 || useAll) {
+      if (stagedOnly && useAll) {
+        throw new Error('git_commit: stagedOnly and all are mutually exclusive');
+      }
+      if (stagedOnly && args.amend === true) {
+        throw new Error('git_commit: stagedOnly and amend are mutually exclusive');
+      }
+
+      if (stagedOnly) {
+        // 只提交索引内容：不 add、不传 pathspec。
+        //
+        // 为什么必须两者都不做：`git add -- <path>` 是整文件暂存（会把用户精心
+        // 挑好的 hunk 覆盖成工作区全量），而 `git commit -- <path>` 也按工作区
+        // 内容提交（实测：索引只有 b→B 时，带 pathspec 的 commit 仍把未暂存的
+        // C 提交进去）。要「只提交已暂存内容」，唯一正确的形式是裸 commit。
+        // paths 因此退化为断言，用来挡住「以为暂存了其实没有」与「顺手带走了
+        // 别人的暂存」这两类事故。
+        //
+        // 比较基准：git 返回的是「相对仓库根」的路径，而 resolvedPaths 是绝对
+        // 路径。这里把两者都归一到仓库相对形式再比——直接用绝对路径比会出现
+        // 「明明暂存了却报没有」的假失败。
+        const stagedFiles = await stagedFileList(context, cwd);
+        if (stagedFiles.length === 0) {
+          throw new Error('git_commit(stagedOnly): nothing staged; stage changes first');
+        }
+        if (resolvedPaths.length > 0) {
+          const want = new Set(resolvedPaths.map((p) => toRepoRelative(p, cwd)));
+          const missing = [...want].filter((p) => !stagedFiles.includes(p));
+          if (missing.length > 0) {
+            throw new Error(
+              `git_commit(stagedOnly): no staged content for ${missing.join(', ')}`,
+            );
+          }
+          const extra = stagedFiles.filter((f) => !want.has(f));
+          if (extra.length > 0) {
+            throw new Error(
+              `git_commit(stagedOnly): index also holds staged changes outside paths: ${extra.join(', ')}`,
+            );
+          }
+        }
+      } else if (resolvedPaths.length > 0 || useAll) {
         const addArgs = ['add'];
         if (useAll) addArgs.push('-A');
         if (resolvedPaths.length > 0) addArgs.push('--', ...resolvedPaths);
@@ -514,8 +594,12 @@ export function createGitCommitTool(): RegisteredTool {
       // EOL 归一：工具 git 隔离全局配置（autocrlf 不可见），worktree 的 CRLF 会被
       // 原样入库，与 HEAD blob 的行尾约定相悖时产生整文件 churn。跟随 HEAD blob 的
       // 行尾约定重写已暂存文本文件（新文件 / 删除 / 二进制 / 非 UTF-8 不动）。
+      //
+      // stagedOnly 下强制跳过：该归一化会重写工作区文件并 `git add`，那样提交内容
+      // 就变成了工作区全量，正是 stagedOnly 要避免的事。
+      const eolMode = stagedOnly ? 'keep' : (args.eol ?? 'normalize');
       const eolNormalized: string[] = [];
-      if (args.eol !== 'keep') {
+      if (eolMode !== 'keep') {
         const staged = await runGit(context, cwd, ['diff', '--cached', '--name-only', '-z', 'HEAD']);
         if (staged.exitCode === 0) {
           const { readFile, writeFile } = await import('node:fs/promises');
@@ -543,7 +627,8 @@ export function createGitCommitTool(): RegisteredTool {
 
       const commitArgs = ['commit', '--no-verify', '--no-gpg-sign', '-m', message];
       if (args.amend === true) commitArgs.push('--amend');
-      if (resolvedPaths.length > 0) {
+      // stagedOnly 一律裸 commit：带 pathspec 会让 git 从工作区取内容，绕过索引。
+      if (!stagedOnly && resolvedPaths.length > 0) {
         // Limit the commit to the given paths (working-tree state).
         commitArgs.push('--', ...resolvedPaths);
       }
