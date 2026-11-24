@@ -29,6 +29,10 @@ import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/p
 import type { EffectPolicyConfig, ProcessIsolationProfile } from '@octopi-agent/engine';
 import { expandHomePath } from '@octopi-agent/engine/paths.js';
 import { SessionArchiveService, type ArchiveEntryInfo } from '@octopi-agent/engine/integration/storage/archives/service.js';
+import {
+  nextRetentionRunAt,
+  shouldRunRetention,
+} from '@octopi-agent/engine/integration/storage/archives/retention-job.js';
 import type { GatewayConfig } from '../types/gateway-config.js';
 
 import type { HookContext } from '@octopi-agent/engine/harness/shared/types/hook-context.js';
@@ -1056,7 +1060,7 @@ export class Gateway {
     this.sessionSchedules = undefined;
     // 封存服务：停每日保留任务并关注册表句柄（下次 start 懒重建）
     if (this.archiveRetentionTimer) {
-      clearInterval(this.archiveRetentionTimer);
+      clearTimeout(this.archiveRetentionTimer);
       this.archiveRetentionTimer = undefined;
     }
     this.archiveSvc?.close();
@@ -2049,6 +2053,56 @@ export class Gateway {
   }
 
   /**
+   * 清空回收站（组级彻底删除全部 trashed 条目；不可逆）。
+   * 未就绪（phase != ready）的组显式跳过并入 warnings，不中断其余组销毁。
+   *
+   * @param onlyTenantId - 非宿主调用方限定本租户（null/缺省=全部）
+   * @returns 销毁的会话 id、累计字节与显式警告
+   */
+  async purgeTrash(
+    onlyTenantId?: string | null,
+  ): Promise<{ purged: string[]; bytes: number; warnings: string[] }> {
+    await this.ensureStore();
+    const svc = this.requireArchiveService();
+    const entries = svc
+      .list('trashed')
+      .filter((e) => !onlyTenantId || e.tenantId === onlyTenantId);
+    // 组级去重：整组一次 purge（组内一致性由服务的组守卫保证）
+    const groups = new Map<string, ArchiveEntryInfo[]>();
+    for (const e of entries) {
+      const members = groups.get(e.groupSealId);
+      if (members) members.push(e);
+      else groups.set(e.groupSealId, [e]);
+    }
+    const purged: string[] = [];
+    const warnings: string[] = [];
+    for (const [groupSealId, members] of groups) {
+      const unsettled = members.filter((m) => m.phase !== 'ready');
+      if (unsettled.length > 0) {
+        warnings.push(
+          `archive: group ${groupSealId} skipped (${unsettled
+            .map((m) => `${m.sessionId}=${m.phase}`)
+            .join(', ')}); not ready to purge`,
+        );
+        continue;
+      }
+      try {
+        const result = await svc.purge(members[0].sessionId);
+        purged.push(...result.purged);
+        warnings.push(...result.warnings);
+      } catch (err) {
+        // fail loud + 继续其余组：清空回收站是尽力批处理，单组失败不吞、不中断
+        warnings.push(
+          `archive: purge group ${groupSealId} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    const bytesById = new Map(entries.map((e) => [e.sessionId, e.bytes]));
+    const bytes = purged.reduce((sum, id) => sum + (bytesById.get(id) ?? 0), 0);
+    return { purged, bytes, warnings };
+  }
+
+  /**
    * 列出封存条目（归档/回收站）
    *
    * @param state - 状态过滤（缺省全部）
@@ -2203,6 +2257,30 @@ export class Gateway {
             }
           }
         },
+        restoreSessionSources: async (sessionId, sources) => {
+          // 恢复后重登记可检索附件源（封存时旧源已 purge，注册新源并回写 manifest 的
+          // searchableSourceId）。单附件失败不阻断恢复，逐条进 warnings 显式降级
+          const warnings: string[] = [];
+          const svc = await this.getAttachmentService();
+          const byPath = new Map(svc.list(sessionId).map((i) => [i.path, i]));
+          for (const s of sources) {
+            const item = s.attachmentFile ? byPath.get(s.attachmentFile) : undefined;
+            if (!item) {
+              warnings.push(
+                `archive: ${sessionId} attachment ${s.attachmentFile ?? s.sourceId} missing after restore; searchable source not re-registered`,
+              );
+              continue;
+            }
+            try {
+              await this.makeAttachmentSearchable(sessionId, item.id);
+            } catch (err) {
+              warnings.push(
+                `archive: ${sessionId} re-register searchable source for ${item.name} failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+          return warnings;
+        },
       },
       wireDumpDir:
         this.config.observability?.llmRequestDump?.dir ??
@@ -2218,7 +2296,7 @@ export class Gateway {
     return this.archiveSvc;
   }
 
-  /** 封存保留任务：启动对账 + 到期清除/自动冷归档（每日幂等）；无封存能力则显式禁用 */
+  /** 封存保留任务：启动对账 + 槽位触发的到期清除/自动冷归档（每日 04:30 本地，幂等可补跑） */
   private startArchiveRetention(): void {
     if (this.archiveRetentionTimer) return;
     const svc = this.getArchiveService();
@@ -2237,11 +2315,40 @@ export class Gateway {
         console.warn(
           `[Gateway] archive reconcile failed: ${err instanceof Error ? err.message : String(err)}`,
         ),
+      )
+      // reconcile 先结清未就绪行，再做槽位补跑（§7 顺序）；任务体幂等，
+      // reconcile 失败也照跑（purge 组守卫只接受 ready，不会误伤未就绪行）
+      .finally(() => this.runArchiveRetentionIfDue());
+    this.scheduleArchiveRetention();
+  }
+
+  /** 槽位判定后跑一轮保留任务；成功后落盘 retention.lastRun（同槽重复启动跳过、跨槽漏跑补跑） */
+  private runArchiveRetentionIfDue(): void {
+    const svc = this.getArchiveService();
+    if (!svc) return;
+    const raw = svc.getMeta('retention.lastRun');
+    const parsed = raw === null ? NaN : Number(raw);
+    const lastRun = Number.isFinite(parsed) ? parsed : null;
+    if (!shouldRunRetention(lastRun, Date.now())) return;
+    void this.runArchiveRetention()
+      .then(() => {
+        // 只在跑完后落盘：中途失败不记槽，下次启动/触发补跑（任务幂等，重复无副作用）
+        this.getArchiveService()?.setMeta('retention.lastRun', String(Date.now()));
+      })
+      .catch((err: unknown) =>
+        console.warn(
+          `[Gateway] archive retention run failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
       );
-    void this.runArchiveRetention();
-    this.archiveRetentionTimer = setInterval(() => {
-      void this.runArchiveRetention();
-    }, 24 * 60 * 60 * 1000);
+  }
+
+  /** 每日槽位对齐的触发链（setTimeout 到点重排，不累积 interval 漂移） */
+  private scheduleArchiveRetention(): void {
+    const delay = Math.max(nextRetentionRunAt(Date.now()) - Date.now(), 1_000);
+    this.archiveRetentionTimer = setTimeout(() => {
+      this.runArchiveRetentionIfDue();
+      this.scheduleArchiveRetention();
+    }, delay);
     this.archiveRetentionTimer.unref?.();
   }
 

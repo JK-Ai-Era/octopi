@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useT } from './i18n/react';
 import ChatWorkspace from './components/ChatWorkspace';
 import { KnowledgeAdminPanel } from './components/KnowledgeAdminPanel';
+import { ArchivesWorkspace } from './components/ArchivesWorkspace';
 import { PrivilegedBadge } from './components/PrivilegedBadge';
 import { KnowledgeServiceStatus } from './components/KnowledgeServiceStatus';
 import { SettingsWorkspace, type SettingsTab } from './components/SettingsWorkspace';
@@ -24,7 +25,7 @@ import {
 
 initTheme(); // 恢复持久化主题偏好（§5d：prefers-color-scheme 跟随 + 手动切换）
 
-type Surface = 'playground' | 'knowledge' | 'settings';
+type Surface = 'playground' | 'knowledge' | 'archives' | 'settings';
 
 export default function App() {
   const t = useT();
@@ -38,6 +39,8 @@ export default function App() {
   });
   const [surface, setSurface] = useState<Surface>('playground');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('models');
+  // 归档页「恢复→打开」请求：切 playground 并让 ChatWorkspace 选中该会话（token 防重放）
+  const [openSessionRequest, setOpenSessionRequest] = useState<{ id: string; token: number } | null>(null);
   // 设置深链（#settings / #settings-services）：左栏连接条「设置 →」入口。
   // hashchange 监听 + 消费后清 hash——已加载页点击即跳；点回 Playground 后刷新不回跳（收敛批 B2/NIT-9）。
   useEffect(() => {
@@ -150,6 +153,13 @@ export default function App() {
             </button>
             <button
               type="button"
+              className={surface === 'archives' ? 'btn-tab btn-tab-active' : 'btn-ghost'}
+              onClick={() => setSurface('archives')}
+            >
+              {t('app.navArchives')}
+            </button>
+            <button
+              type="button"
               className={surface === 'settings' ? 'btn-tab btn-tab-active' : 'btn-ghost'}
               onClick={() => setSurface('settings')}
             >
@@ -181,9 +191,18 @@ export default function App() {
         <ChatWorkspace
           rightPanelVisible={rightPanelVisible}
           onAgentIdChange={setAgentId}
+          onOpenArchives={() => setSurface('archives')}
+          openSessionRequest={openSessionRequest}
         />
       ) : surface === 'knowledge' ? (
         <KnowledgeAdminPanel agentId={agentId || 'default'} />
+      ) : surface === 'archives' ? (
+        <ArchivesWorkspace
+          onOpenSession={(id) => {
+            setSurface('playground');
+            setOpenSessionRequest({ id, token: Date.now() });
+          }}
+        />
       ) : (
         <SettingsWorkspace key={settingsTab} initialTab={settingsTab} />
       )}

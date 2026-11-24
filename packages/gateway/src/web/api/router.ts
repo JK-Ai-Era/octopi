@@ -724,6 +724,40 @@ export class WebApiRouter {
         return this.json(res, 200, { ok: true, data: items });
       }
 
+      if (archivesListMatch && method === 'DELETE') {
+        // 清空回收站（批量不可逆）：确认闩 + 仅接受 state=trashed；返回 { purged, bytes, warnings }
+        if (url.searchParams.get('confirm') !== 'true') {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'confirm=true is required for emptying the trash',
+          });
+        }
+        const stateRaw = url.searchParams.get('state');
+        if (stateRaw !== 'trashed') {
+          // 非法参数不静默当"全部回收站"（fail loud）
+          return this.json(res, 400, {
+            ok: false,
+            error: `invalid state: ${stateRaw ?? '(missing)'} (expected trashed)`,
+          });
+        }
+        const identity = this.resolveRequestUser(req);
+        if (identity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        try {
+          const result = await this.gateway.purgeTrash(
+            identity !== 'host' && !identity.isPlatformAdmin ? identity.tenantId : null,
+          );
+          return this.json(res, 200, { ok: true, data: result });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return this.json(res, msg.includes('archive_unavailable') ? 400 : 500, {
+            ok: false,
+            error: msg,
+          });
+        }
+      }
+
       const archiveRestoreMatch = relativePath.match(/^\/archives\/([^/]+)\/restore$/);
       if (archiveRestoreMatch && method === 'POST') {
         const identity = this.resolveRequestUser(req);

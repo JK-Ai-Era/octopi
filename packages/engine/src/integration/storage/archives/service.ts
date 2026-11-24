@@ -56,6 +56,7 @@ export interface ArchiveEntryInfo {
   purgeAt: number | null;
   bytes: number;
   messageCount: number;
+  attachmentCount: number;
 }
 
 /** store 依赖面（JsonlSessionStore 满足；测试可换替身） */
@@ -701,6 +702,16 @@ export class SessionArchiveService {
       );
     }
     const group = this.registry.listByGroup(row.groupSealId);
+    // 组级 ready 守卫：入口行 ready 不代表兄弟行就绪（崩溃恢复中的组会混相），
+    // 组销毁会连带清 staging/旁车 —— 任一成员未就绪则整组拒销，交 reconcile 先结清
+    const unsettled = group.filter((r) => r.phase !== 'ready');
+    if (unsettled.length > 0) {
+      throw new Error(
+        `entry_not_ready: group "${row.groupSealId}" has unsettled members (${unsettled
+          .map((r) => `${r.sessionId}=${r.phase}`)
+          .join(', ')}); reconcile before purge`,
+      );
+    }
     const purged: string[] = [];
     const warnings: string[] = [];
     for (const r of group) {
@@ -763,6 +774,26 @@ export class SessionArchiveService {
    *
    * @returns 对账报告
    */
+  /**
+   * 读注册表 meta 键（组合侧调度状态，如 retention.lastRun）
+   *
+   * @param key - 键名
+   * @returns 值；不存在返回 null
+   */
+  getMeta(key: string): string | null {
+    return this.registry.getMeta(key);
+  }
+
+  /**
+   * 写注册表 meta 键（upsert）
+   *
+   * @param key - 键名
+   * @param value - 值
+   */
+  setMeta(key: string, value: string): void {
+    this.registry.setMeta(key, value);
+  }
+
   async reconcile(): Promise<ReconcileReport> {
     return this.serial(() => this.reconcileInner());
   }
@@ -877,6 +908,15 @@ export class SessionArchiveService {
 
 /** 注册表行 → 对外条目 */
 function toEntryInfo(rec: ArchiveRecord): ArchiveEntryInfo {
+  // attachmentCount 只在 manifest 缓存里（stats）；缓存不可解析时降级 0（真实失败兜底，
+  // 不是占位——正常路径下 manifestJson 由本类写入必为合法 JSON）
+  let attachmentCount = 0;
+  try {
+    const parsed = JSON.parse(rec.manifestJson) as { stats?: { attachmentCount?: number } };
+    attachmentCount = parsed.stats?.attachmentCount ?? 0;
+  } catch {
+    // swallow: 缓存读侧唯一失败面 = 历史坏行；包内清单仍是权威，列表展示降级不阻塞
+  }
   return {
     sessionId: rec.sessionId,
     groupSealId: rec.groupSealId,
@@ -893,6 +933,7 @@ function toEntryInfo(rec: ArchiveRecord): ArchiveEntryInfo {
     purgeAt: rec.purgeAt ?? null,
     bytes: rec.bytes,
     messageCount: rec.messageCount,
+    attachmentCount,
   };
 }
 

@@ -37,6 +37,7 @@ export interface ArchiveEntryInfoDto {
   purgeAt: number | null;
   bytes: number;
   messageCount: number;
+  attachmentCount: number;
 }
 
 /**
@@ -1312,6 +1313,12 @@ export class OctopiClient {
       `/archives/${encodeURIComponent(sessionId)}?confirm=true`,
     );
     return data?.data as { purged: string[]; warnings: string[] };
+  }
+
+  /** 清空回收站（批量彻底删除全部 trashed 条目；服务端要求 confirm=true，本方法已带） */
+  async emptyTrash(): Promise<{ purged: string[]; bytes: number; warnings: string[] }> {
+    const data = await this.deleteJson('/archives?state=trashed&confirm=true');
+    return data?.data as { purged: string[]; bytes: number; warnings: string[] };
   }
 
   /** Session temporary effect roots (append-only, session lifetime) */

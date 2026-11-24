@@ -72,7 +72,36 @@ export class ArchiveRegistry {
       );
       CREATE INDEX IF NOT EXISTS idx_archives_purge ON archives(state, purge_at);
       CREATE INDEX IF NOT EXISTS idx_archives_group ON archives(group_seal_id);
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
+  }
+
+  /**
+   * 读 meta 键（如 retention.lastRun）
+   *
+   * @param key - 键名
+   * @returns 值；不存在返回 null
+   */
+  getMeta(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key);
+    return row ? String((row as Record<string, unknown>).value) : null;
+  }
+
+  /**
+   * 写 meta 键（upsert）
+   *
+   * @param key - 键名
+   * @param value - 值
+   */
+  setMeta(key: string, value: string): void {
+    this.db
+      .prepare(
+        'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      )
+      .run(key, value);
   }
 
   /**

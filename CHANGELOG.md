@@ -8,7 +8,8 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 | Segment | Location |
 |---------|----------|
-| v0.128 | this file (current) |
+| v0.129 | this file (current) |
+| v0.128 | [changelog/v0.128.md](./changelog/v0.128.md) |
 | v0.127 | [changelog/v0.127.md](./changelog/v0.127.md) |
 | v0.126 | [changelog/v0.126.md](./changelog/v0.126.md) |
 | v0.125 | [changelog/v0.125.md](./changelog/v0.125.md) |
@@ -138,15 +139,15 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.128.0 (2026-11-24)
+## v0.129.0 (2026-11-24)
 
-### feat(storage): 会话归档+回收站统一机制（seal/restore/purge，删除改软删）
+### feat(webui,gateway): 归档/回收站工作台 + 清空回收站 + 恢复重登记 + 保留任务精化
 
-- **删除语义变更**：`DELETE /sessions/:id` = 移入回收站（软删，整组封存为 `trashed`，`archives.trashRetentionDays` 缺省 30 天到期由每日任务销毁）；已手动归档会话再删 = 归档→回收站改标；幂等语义保持。无 relocate 能力的 store（InMemory）走硬删能力分支并告警，非双实现。
-- **封存包 bundle.ts**：自写最小 USTAR+gzip 写入/读取器（不加 tar 依赖）+ 逐文件 sha256 清单 + manifest 置首；支持 GNU LongLink/UTF-8 长名、octal 溢出 fail loud、路径逃逸拒绝、截断/篡改/换包检测（包内 manifest 身份校验）、`tar tzf` 可交叉验证。
-- **注册表 registry.ts**（`archives/archives.db`，单写者=gateway 门面）：state（archived/trashed）× phase（sealing/ready/restoring）+ purgeAt + manifest 缓存；`listExpiredTrashed` 只命中 ready 行（TTL 不销毁未就绪行的 staging 唯一副本）。
-- **seal/restore/purge 编排 service.ts**：旁车（`.staging/<base>.seal.json`）先行落盘 + forward-to-complete 崩溃恢复 + 启动 reconcile 全矩阵（旁车续封/空账撤行/restoring 续传/ready 残留尾扫/幻影行清账）；操作全串行（并发双删/删除撞恢复不交错写包）；组原子（seal 失败整组回滚，purge 失败即停显式 `group_partial`）；entry_not_ready / session_id_conflict / bundle_manifest_invalid 守卫。封存范围收口历史残留：`derived/`、transform、附件、`<sid>.events.jsonl`、wire dump（缺省直删，`includeLlmDumps=true` 随包；目录名与写入侧 `sanitizeSessionDirName` 同源）。
-- **gateway/API**：手动归档 `POST /sessions/:id/archive`（永久）、列表 `GET /archives`、恢复 `POST /archives/:id/restore`（级联组整组）、彻底删除 `DELETE /archives/:id?confirm=true`（确认闩）；租户闸含已封存 id 回落（404 不泄漏存在性）；响应体 `{sealed, purgeAt}`；`session.restored` 广播。retention 任务：启动 reconcile + 每日到期 purge + 自动冷归档候选（组级流程执行：关账+spawnBy 级联+广播）。
-- **配置** `archives` 段（trashRetentionDays / includeLlmDumps / autoArchive{enabled,recentRetentionDays,forceDays,retentionDays}），schema/example 同步。
-- 测试 63 例：包往返/篡改/换包/逃逸、崩溃矩阵（搬迁前崩/空账/就绪前后/restoring/尾崩幻影）、并发双删、非 ready 拒绝、id 复用冲突、dump sanitize（`@` 微信号）、events.jsonl 全生命周期、软删→列表→恢复→再删→彻底删除 gateway 闭环、级联组共进退、TTL 派生（trash=+30d/manual=永久/auto=+180d）。
+- **WebUI 归档工作台**：顶层 surface「归档」（playground / knowledge / **archives** / settings）+ 左栏常驻入口（徽标 `归档 N · 回收站 M`，回收站有 ≤7 天临期项时警示色）。`ArchivesWorkspace` 双 Tab（归档=归档时间倒序 / 回收站=剩余天数升序）、级联组徽标（含 N 个子会话，tooltip 列标题、点开展开）、自动/手动归档徽标、倒计时（不足一天=「今天自动清除」，≤7 天警示）。
+- **三级确认落地**：移入回收站=直接执行 + 撤销 toast（toast state 扩为 `{message, action?}`，3.2s 不变）；彻底删除/清空回收站=强确认对话框（影响面量化「N 个会话（含 M 个子会话）· X MB · 附件 A 个 · 无法恢复」、按钮自解释「永久删除」、Esc/点外=取消）。会话卡菜单改「置顶｜归档｜移到回收站」；原 `window.confirm` 删除确认随软删语义移除（`chatWorkspace.deleteConfirm` 键删除，改 `toastTrashed`）。
+- **恢复重登记**：`SessionArchiveKnowledgePort.restoreSessionSources` 网关实现——恢复后按 manifest 映射经 `makeAttachmentSearchable` 重注册 scopeRef=session 检索源（旧源已随封存 purge），单附件失败逐条入 warnings 显式降级。
+- **保留任务精化**：`retention-job.ts` 纯函数槽位（每日本地 04:30）+ `archives.db` meta 表 `retention.lastRun` 落盘——同槽重复启动跳过、停机跨槽启动补跑；timer 改 setTimeout 链对齐槽位（不累积 interval 漂移）。
+- **清空回收站**：`DELETE /archives?state=trashed&confirm=true`（组级逐组销毁、未就绪组跳过入 warnings、非宿主仅限本租户条目）+ SDK `emptyTrash()`；`GET /archives` 条目补 `attachmentCount`（强确认影响面用）。
+- **P0 遗留缺口修复**：purge 的 ready 守卫升级为**组级**——组内任一成员未就绪（混相组）整组拒销，堵住「入口行 ready、兄弟行 sealing 的 staging 唯一副本被连带销毁」缺口（附回归）。
+- 测试 +21：ArchivesWorkspace 行为 10 例（组徽标/倒计时警示/空态/强确认 Esc 取消/清空回收站/撤销/恢复打开/纯函数）、retention 槽位+meta 4 例、purgeTrash gateway 3 例、restoreSessionSources/组级守卫 2 例；全量 5884 passed / 9 skipped。
 

@@ -130,3 +130,37 @@ describe('软删（回收站）gateway 闭环', () => {
     expect(await gateway.listArchives()).toEqual([]);
   });
 });
+
+describe('清空回收站（purgeTrash）', () => {
+  it('批量销毁全部 trashed + bytes 累计；archived 不受影响', async () => {
+    await makeSession('t1');
+    await makeSession('t2');
+    await makeSession('keep');
+    await gateway.deleteSession('t1');
+    await gateway.deleteSession('t2');
+    await gateway.archiveSession('keep');
+    const { purged, bytes, warnings } = await gateway.purgeTrash();
+    expect(purged.sort()).toEqual(['t1', 't2']);
+    expect(bytes).toBeGreaterThan(0);
+    expect(warnings).toEqual([]);
+    expect(await gateway.listArchives('trashed')).toEqual([]);
+    expect((await gateway.listArchives('archived')).map((e) => e.sessionId)).toEqual(['keep']);
+  });
+
+  it('组级：一次销毁整组（含 spawnBy 子会话）', async () => {
+    await makeSession('p');
+    await makeSession('c1', 'p');
+    await gateway.deleteSession('p');
+    const { purged } = await gateway.purgeTrash();
+    expect(purged.sort()).toEqual(['c1', 'p']);
+    expect(await gateway.listArchives()).toEqual([]);
+  });
+
+  it('租户限定：onlyTenantId 过滤后本租户外条目不动', async () => {
+    await makeSession('t1');
+    await gateway.deleteSession('t1');
+    const { purged } = await gateway.purgeTrash('other-tenant');
+    expect(purged).toEqual([]);
+    expect(await gateway.listArchives('trashed')).toHaveLength(1);
+  });
+});

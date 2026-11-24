@@ -854,14 +854,24 @@ function TaskPanel({ tasks }: { tasks: SessionTaskView[] }) {
 
 // ── Main Component ──
 
-export interface ChatWorkspaceProps {
+export /** toast 状态（§5.4：可带单动作=撤销/打开；字符串提示走 showToast 包装） */
+interface ToastState {
+  message: string;
+  action?: { label: string; run: () => void };
+}
+
+interface ChatWorkspaceProps {
   /** §5b：右边栏显隐（Focus 语义 = 隐藏/显示，默认隐藏 = 产品面纯对话） */
   rightPanelVisible: boolean;
   /** 同步当前 Agent 到顶栏（Knowledge 管理面共用） */
   onAgentIdChange?: (agentId: string) => void;
+  /** 打开归档与回收站工作台（左栏常驻入口） */
+  onOpenArchives?: () => void;
+  /** 归档页「恢复→打开」请求（token 递增防重放；token 变化时选中该会话） */
+  openSessionRequest?: { id: string; token: number } | null;
 }
 
-export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: ChatWorkspaceProps) {
+export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange, onOpenArchives, openSessionRequest }: ChatWorkspaceProps) {
   // 连接参数调用时读取（resolveDefaultBase/getConsoleKey）——设置-服务改地址/密钥后
   // 重连即生效，无需刷新页面（打磨批 M3；勿退回模块级常量/伪 state）。
   const baseUrl = resolveDefaultBase();
@@ -1020,7 +1030,11 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
   const pushFlowError = useCallback((e: Omit<FlowErrorItem, 'id' | 'at'>): void => {
     setFlowErrors((prev) => [...prev, { ...e, sessionId: activeSessionId ?? '', id: `fe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`, at: Date.now() }]);
   }, []);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  /** toast 入口（字符串=纯提示；带 action=撤销/打开动线 §5.4；子组件 onToast 只传字符串） */
+  const showToast = useCallback((input: string | ToastState): void => {
+    setToast(typeof input === 'string' ? { message: input } : input);
+  }, []);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog>({ models: [], agents: [] });
   const [sessionModel, setSessionModel] = useState<SessionModelView | null>(null);
   /** 下拉框选中的模型 id；会话打开时等于 sessionModel，否则为新建会话的预选 */
@@ -1511,7 +1525,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
       // 会话已切换或已有更新的跳转：本次作废，不动视口、不弹误报
       if (aborted()) return;
       if (!anchor) {
-        setToast(t(timedOut ? 'chatWorkspace.turnJumpTimeout' : 'chatWorkspace.turnJumpFailed'));
+        showToast(t(timedOut ? 'chatWorkspace.turnJumpTimeout' : 'chatWorkspace.turnJumpFailed'));
         return;
       }
       const top = anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
@@ -1978,7 +1992,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     setActionError(null);
     try {
       await store.setSessionPinned(sessionId, pinned);
-      setToast(pinned ? t('chatWorkspace.toastPinned') : t('chatWorkspace.toastUnpinned'));
+      showToast(pinned ? t('chatWorkspace.toastPinned') : t('chatWorkspace.toastUnpinned'));
     } catch (e) {
       pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
       setActionError(t('chatWorkspace.actionFailed'));
@@ -2010,36 +2024,127 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
     // 依赖 bindComposerScope（useCallback 稳定）：ESLint 要求显式列出
   }, [bindComposerScope]);
 
-  const removeSession = async (sessionId: string) => {
+  /** 左栏「归档与回收站」入口徽标（辅助信息：失败静默降级，动作路径会显式报错） */
+  const [archiveCounts, setArchiveCounts] = useState<{
+    archived: number;
+    trashed: number;
+    urgent: boolean;
+  } | null>(null);
+  const [archiveCountsTick, setArchiveCountsTick] = useState(0);
+  const bumpArchiveCounts = useCallback(() => setArchiveCountsTick((n) => n + 1), []);
+
+  useEffect(() => {
+    const client = clientRef.current;
+    if (!client) return;
+    let alive = true;
+    void client
+      .listArchives()
+      .then((items) => {
+        if (!alive) return;
+        const nowTs = Date.now();
+        const trashed = items.filter((e) => e.state === 'trashed');
+        setArchiveCounts({
+          archived: items.filter((e) => e.state === 'archived').length,
+          trashed: trashed.length,
+          urgent: trashed.some((e) => e.purgeAt != null && e.purgeAt - nowTs <= 7 * 86400000),
+        });
+      })
+      .catch(() => {
+        // swallow: 入口徽标为辅助信息，加载失败不打断工作台；归档页自身有显式错误条
+      });
+    return () => {
+      alive = false;
+    };
+  }, [connection, archiveCountsTick]);
+
+  /** 归档页「恢复→打开」：token 变化即选中会话（consumed 记账防 effect 重放） */
+  const consumedOpenTokenRef = useRef(0);
+  useEffect(() => {
+    if (!openSessionRequest || openSessionRequest.token === consumedOpenTokenRef.current) return;
+    consumedOpenTokenRef.current = openSessionRequest.token;
+    void openSession(openSessionRequest.id);
+  }, [openSessionRequest, openSession]);
+
+  /** 在途 Run 预检（软删/归档共用）：徽标可能失鲜（WS 终态丢失），拒绝前用服务端投影复核 */
+  const ensureNotRunning = async (sessionId: string): Promise<boolean> => {
     const store = storeRef.current;
-    if (!store) return;
+    if (!store) return false;
     let target = sessions.find((s) => s.id === sessionId);
-    // 服务端 409 兜底；这里先拦在途 Run 避免用户白确认。徽标可能失鲜（WS 终态丢失），
-    // 拒绝前先用服务端投影复核，防止陈旧「运行中」把删除永久卡死
     if (target?.running) {
       const fresh = await store.refreshSessions().catch(() => null);
       target = fresh?.find((s) => s.id === sessionId) ?? target;
       if (target.running) {
         setActionError(t('chatWorkspace.deleteWhileRunning'));
-        return;
+        return false;
       }
     }
-    const label = target ? sessionDisplayTitle(target) : sessionId;
-    if (!window.confirm(t('chatWorkspace.deleteConfirm', { label }))) return;
+    return true;
+  };
+
+  /** 会话离开热库列表后的 UI 收尾（移到回收站/归档共用） */
+  const cleanupSessionUi = (sessionId: string): void => {
+    if (activeSessionIdRef.current === sessionId) {
+      // 必须先切回空态再删草稿：bindComposerScope 会把输入落盘到被删会话，
+      // 顺序反了会把刚删掉的键又写回来
+      clearActiveSessionUi();
+    }
+    // 会话已离开列表：草稿与待发附件随之清理，避免孤儿键永久占用 localStorage
+    removeComposerDraft({ sessionId });
+    removePendingAttachments(sessionId);
+    clearLastSessionIfMatches(sessionId);
+    if (sidebarSessionId === sessionId) setSidebarSessionId(null);
+  };
+
+  /** 撤销「移到回收站/归档」：整组解封回热库并回列表（§5.4） */
+  const undoSeal = async (sessionId: string) => {
+    const client = clientRef.current;
+    if (!client) return;
+    try {
+      await client.restoreArchive(sessionId);
+      showToast(t('chatWorkspace.toastRestored'));
+      await storeRef.current?.refreshSessions().catch(() => null);
+      bumpArchiveCounts();
+    } catch (e) {
+      pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
+    }
+  };
+
+  /** 归档（组级封存，永久保留；可撤销） */
+  const archiveSession = async (sessionId: string) => {
+    const store = storeRef.current;
+    const client = clientRef.current;
+    if (!store || !client) return;
+    if (!(await ensureNotRunning(sessionId))) return;
+    setActionError(null);
+    try {
+      await client.archiveSession(sessionId);
+      cleanupSessionUi(sessionId);
+      await store.refreshSessions().catch(() => null);
+      showToast({
+        message: t('chatWorkspace.toastArchived'),
+        action: { label: t('chatWorkspace.undo'), run: () => void undoSeal(sessionId) },
+      });
+      bumpArchiveCounts();
+    } catch (e) {
+      pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
+      setActionError(t('chatWorkspace.actionFailed'));
+    }
+  };
+
+  /** 移到回收站（软删=组级封存 trashed，30 天内可恢复；§5.3 直接执行 + 撤销 toast） */
+  const removeSession = async (sessionId: string) => {
+    const store = storeRef.current;
+    if (!store) return;
+    if (!(await ensureNotRunning(sessionId))) return;
     setActionError(null);
     try {
       await store.deleteSession(sessionId);
-      if (activeSessionIdRef.current === sessionId) {
-        // 必须先切回空态再删草稿：bindComposerScope 会把输入落盘到被删会话，
-        // 顺序反了会把刚删掉的键又写回来
-        clearActiveSessionUi();
-      }
-      // 会话已删除：草稿与待发附件随之清理，避免孤儿键永久占用 localStorage
-      removeComposerDraft({ sessionId });
-      removePendingAttachments(sessionId);
-      clearLastSessionIfMatches(sessionId);
-      if (sidebarSessionId === sessionId) setSidebarSessionId(null);
-      setToast(t('chatWorkspace.toastSessionDeleted'));
+      cleanupSessionUi(sessionId);
+      showToast({
+        message: t('chatWorkspace.toastTrashed'),
+        action: { label: t('chatWorkspace.undo'), run: () => void undoSeal(sessionId) },
+      });
+      bumpArchiveCounts();
     } catch (e) {
       pushFlowError(classifyFlowError(e instanceof Error ? e.message : String(e), 'app'));
       setActionError(t('chatWorkspace.actionFailed'));
@@ -2380,7 +2485,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
         ]);
       }
       setAttachmentsReload((n) => n + 1);
-      setToast(t('chatWorkspace.toastUploaded', { count: uploaded.length }));
+      showToast(t('chatWorkspace.toastUploaded', { count: uploaded.length }));
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -2732,11 +2837,18 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                             {s.pinnedAt == null ? t('chatWorkspace.pinSession') : t('chatWorkspace.unpinSession')}
                           </button>
                           <button
+                            className="session-menu-item"
+                            role="menuitem"
+                            onClick={() => { closeSessionMenu(); void archiveSession(s.id); }}
+                          >
+                            {t('chatWorkspace.archiveSession')}
+                          </button>
+                          <button
                             className="session-menu-item session-menu-item-danger"
                             role="menuitem"
                             onClick={() => { closeSessionMenu(); void removeSession(s.id); }}
                           >
-                            {t('chatWorkspace.deleteSession')}
+                            {t('chatWorkspace.trashSession')}
                           </button>
                         </div>
                       </>
@@ -2764,6 +2876,23 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 {t('chatWorkspace.collapseSessions')}
               </button>
             )}
+            <button
+              className="btn-ghost small sidebar-archives-entry"
+              style={{ marginTop: 6, textAlign: 'left', width: '100%' }}
+              onClick={() => onOpenArchives?.()}
+            >
+              {t('archives.sidebarEntry')}
+              {archiveCounts && archiveCounts.archived + archiveCounts.trashed > 0 && (
+                <span
+                  className={archiveCounts.urgent ? 'archive-count-badge archive-count-urgent' : 'archive-count-badge'}
+                >
+                  {t('archives.countBadge', {
+                    archived: archiveCounts.archived,
+                    trashed: archiveCounts.trashed,
+                  })}
+                </span>
+              )}
+            </button>
           </section>
         </aside>
 
@@ -3214,12 +3343,29 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
                 <SessionCorpusMenu
                   agentId={agentId || 'default'}
                   sessionId={activeSessionId}
-                  onToast={setToast}
+                  onToast={showToast}
                 />
               </div>
               {/* 单行 footer：左=附件/语料；中=toast/警告；右=模型选择 + 发送（按钮尺寸统一） */}
               <div className="composer-footer-center small muted">
-                {toast && <span className="corpus-toast">{toast}</span>}
+                {toast && (
+                  <span className="corpus-toast">
+                    {toast.message}
+                    {toast.action && (
+                      <button
+                        type="button"
+                        className="btn-ghost small corpus-toast-action"
+                        onClick={() => {
+                          const action = toast.action;
+                          setToast(null);
+                          action?.run();
+                        }}
+                      >
+                        {toast.action.label}
+                      </button>
+                    )}
+                  </span>
+                )}
                 {openIssues.length > 0 && (
                   <span className="small" style={{ color: 'var(--color-warn)' }}>
                     ⚠️ {openIssues.length} issue · /issues
@@ -3518,7 +3664,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
               client={clientRef.current}
               sessionId={activeSessionId}
               reloadToken={attachmentsReload}
-              onToast={setToast}
+              onToast={showToast}
             />
           )}
 
@@ -3526,7 +3672,7 @@ export default function ChatWorkspace({ rightPanelVisible, onAgentIdChange }: Ch
             <SessionEffectRootsPanel
               client={clientRef.current}
               sessionId={activeSessionId}
-              onToast={setToast}
+              onToast={showToast}
             />
           )}
 

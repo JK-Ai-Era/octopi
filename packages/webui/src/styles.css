@@ -2139,3 +2139,164 @@ button.ctx-band {
 @media (max-width: 720px) {
   .about-grid { grid-template-columns: 1fr; }
 }
+
+/* ── 归档与回收站（ArchivesWorkspace，§5.2–5.4） ── */
+.archives-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+}
+.archives-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.archives-tabs {
+  display: flex;
+  gap: 8px;
+}
+.archives-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.archive-row {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--color-surface);
+}
+.archive-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.archive-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 48ch;
+}
+.archive-group-badge {
+  border: 1px solid var(--color-accent-border);
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.archive-row .chip {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-3);
+  color: var(--color-muted);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 12px;
+}
+.archive-row .chip.muted {
+  opacity: 0.75;
+}
+.archive-row-meta {
+  margin-top: 4px;
+}
+.archive-group-children {
+  margin: 6px 0 2px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.archive-child-row {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.archive-row-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+.archive-danger {
+  color: var(--color-error);
+}
+.archive-danger:hover {
+  background: var(--color-error-bg);
+}
+.archives-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-2);
+}
+.corpus-toast-action {
+  color: var(--color-info);
+  text-decoration: underline;
+}
+.archive-count-badge {
+  margin-left: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-3);
+  color: var(--color-muted);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.archive-count-badge.archive-count-urgent {
+  border-color: var(--color-error);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+/* ── 强确认对话框（§5.3：影响面量化 + 自解释按钮 + Esc/点外=取消） ── */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.dialog-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 320px;
+  max-width: 480px;
+}
+.dialog-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dialog-note {
+  color: var(--color-error);
+}
+.dialog-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.btn-danger {
+  background: var(--color-error);
+  color: var(--color-text-invert);
+  border: 1px solid var(--color-error);
+  border-radius: 8px;
+}
+.btn-danger:hover {
+  filter: brightness(0.92);
+}

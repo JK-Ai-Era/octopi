@@ -216,6 +216,21 @@ describe('restore', () => {
     expect(existsSync(join(wireDumpDir, 's1'))).toBe(false);
   });
 
+  it('restoreSessionSources 端口在位：按 manifest 映射重登记并透传警告', async () => {
+    const restoreSessionSources = vi.fn(async () => ['重登记警告-1']);
+    (knowledge as { restoreSessionSources?: typeof restoreSessionSources }).restoreSessionSources =
+      restoreSessionSources;
+    await makeSession('s1');
+    await service.seal({ sessionId: 's1', state: 'trashed', sealedBy: 'trash' });
+    const { warnings } = await service.restore('s1');
+    expect(restoreSessionSources).toHaveBeenCalledWith('s1', [
+      { sourceId: 'src-1', attachmentFile: 'attachments/a.bin' },
+    ]);
+    expect(warnings).toContain('重登记警告-1');
+    // 端口在位时不再出「需重开可恢复检索」的降级警告
+    expect(warnings.some((w) => w.includes('可恢复检索'))).toBe(false);
+  });
+
   it('includeLlmDumps=true：dump 随包往返', async () => {
     service.close();
     service = new SessionArchiveService({
@@ -247,6 +262,26 @@ describe('purge（彻底删除）', () => {
     expect(existsSync(join(archivesDir, 'sessions', 's1.tar.gz'))).toBe(false);
     expect(existsSync(join(wireDumpDir, 's1'))).toBe(false);
     expect(service.list()).toHaveLength(0);
+  });
+
+  it('组级 ready 守卫：混相组（sealing 兄弟）整组拒销，包不陪葬', async () => {
+    await makeSession('p');
+    await makeSession('c1', { spawnParent: 'p' });
+    await service.seal({
+      sessionId: 'p',
+      state: 'trashed',
+      sealedBy: 'trash',
+      groupSessionIds: ['c1'],
+    });
+    // 伪造组封存中途崩、reconcile 未结清：c1 行降回 sealing（正文可能只在 staging）
+    const raw = new ArchiveRegistry(join(archivesDir, 'archives.db'));
+    raw.setPhase('c1', 'sealing');
+    raw.close();
+    await expect(service.purge('p')).rejects.toThrow(/entry_not_ready/);
+    await expect(service.purge('c1')).rejects.toThrow(/entry_not_ready/);
+    // 拒销后包与注册表行原样在（reconcile 可继续结清）
+    expect(existsSync(join(archivesDir, 'sessions', 'p.tar.gz'))).toBe(true);
+    expect(service.list()).toHaveLength(2);
   });
 });
 
