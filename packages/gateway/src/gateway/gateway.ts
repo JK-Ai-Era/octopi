@@ -620,6 +620,96 @@ export class Gateway {
   private commandRouter: CommandRouter;
   /** user/skill 命令是否已装载（启动时装载，不依赖 buildAgent） */
   private commandSourcesReady = false;
+  /** 技能生命周期宿主（skill-state 懒建 + per-agent 缓存；与 run-serve-child 共用一份实现） */
+  private skillLifecycleHost?: import('./skill-lifecycle-host.js').SkillLifecycleHost;
+
+  /**
+   * 技能生命周期服务（skill-creator 能力；arch/skill-creation-design.md）。
+   * 启用闸门 + skill_submit/skill_status 的单一实现来源。
+   *
+   * @param agentId - agent id
+   * @returns 生命周期服务；skill-state 打开失败时 undefined（无闸门降级并告警）
+   */
+  private async skillLifecycleFor(
+    agentId: string,
+  ): Promise<
+    import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle | undefined
+  > {
+    const { createSkillLifecycleHost } = await import('./skill-lifecycle-host.js');
+    this.skillLifecycleHost ??= createSkillLifecycleHost();
+    return this.skillLifecycleHost.get(agentId);
+  }
+
+  /**
+   * 技能管理面：注册表 + 审查队列列表（REST/CLI 共用语义，实现在 SkillLifecycle）。
+   *
+   * @param agentId - agent id
+   * @returns { skills, submissions }；skill-state 不可用时抛错（fail-loud）
+   */
+  async skillList(agentId: string): Promise<{
+    skills: unknown[];
+    submissions: unknown[];
+  }> {
+    const lifecycle = await this.skillLifecycleFor(agentId);
+    if (!lifecycle) throw new Error('skill-state unavailable');
+    return { skills: lifecycle.list(), submissions: lifecycle.listSubmissions() };
+  }
+
+  /**
+   * 技能审查预览（设计 §5 内容面：staging 文件清单 + SKILL.md 全文）。
+   *
+   * @param agentId - agent id
+   * @param submissionId - 审查单 id
+   * @returns 预览 DTO（不含内部路径）；不存在返回 null
+   */
+  async skillPreview(agentId: string, submissionId: string): Promise<unknown> {
+    const lifecycle = await this.skillLifecycleFor(agentId);
+    if (!lifecycle) throw new Error('skill-state unavailable');
+    return lifecycle.previewSubmission(submissionId);
+  }
+
+  /**
+   * 技能审查裁决（人工审查面）。
+   *
+   * @param input - agentId / skillId / verdict / by / findings
+   * @returns 裁决后的登记条目
+   */
+  async skillReview(input: {
+    agentId: string;
+    skillId: string;
+    verdict: 'approved' | 'rejected';
+    by?: string;
+    findings?: string;
+  }): Promise<unknown> {
+    const lifecycle = await this.skillLifecycleFor(input.agentId);
+    if (!lifecycle) throw new Error('skill-state unavailable');
+    const result = await lifecycle.review({
+      skillId: input.skillId,
+      verdict: input.verdict,
+      // 审查者署名由 router 取认证身份（approverIdentity）；缺省 unauthenticated
+      //（不收客户端自报——可仿冒=审计撒谎，B-1 拍板 2026-11-18）
+      by: input.by ?? 'unauthenticated',
+      findings: input.findings,
+    });
+    if (!result.ok) throw new Error(result.error);
+    return result.record;
+  }
+
+  /**
+   * 技能启停开关（运维维度；disable = 出事一键下线）。
+   *
+   * @param input - agentId / skillId / enabled
+   * @returns 更新后登记条目
+   */
+  async skillSetEnabled(input: {
+    agentId: string;
+    skillId: string;
+    enabled: boolean;
+  }): Promise<unknown> {
+    const lifecycle = await this.skillLifecycleFor(input.agentId);
+    if (!lifecycle) throw new Error('skill-state unavailable');
+    return lifecycle.setEnabled(input.skillId, input.enabled);
+  }
 
   /** run 侧执行装配（P0b 自 buildAgent 抽出；面接线经 hooks）。懒建：首次构建时全部字段已就绪 */
   private assemblyInstance?: RunAssembly;
@@ -634,6 +724,7 @@ export class Gateway {
       getHookPort: () => this.pluginManager.getHookPort(),
       globalTools: this.tools,
       getObserverHub: () => this.observerHub,
+      getSkillLifecycle: (agentId) => this.skillLifecycleFor(agentId),
       getSessionLock: () => this.seamSessionLock,
       getSessionAcl: () => this.sessionAcl,
       getSessionSchedules: () => this.sessionSchedules,
@@ -3274,18 +3365,21 @@ export class Gateway {
         ? expandHomePath(agent.skillDirectory.trim())
         : join(home, 'skills');
       try {
-        // 双层发现（与 run-assembly 同规）：共享层先扫、agent 层同名赢
+        // 双层发现（与 run-assembly 同规）：共享层先扫、agent 层同名赢。
+        // 不按存在性过滤（层角色恒定 [shared, agent]，缺失目录 discover 天然跳过）
         const { getOctopiHome, sharedSkillsDir } = await import('@octopi-agent/engine/paths.js');
         const sharedDir = sharedSkillsDir(getOctopiHome());
-        const skillDirs = [sharedDir, skillDir].filter((d) => existsSync(d));
+        const skillDirs = [sharedDir, skillDir].filter((d) => !!d);
         if (skillDirs.length > 0) {
           const { DefaultSkillManager } = await import(
             '@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/manager.js'
           );
-          const skillManager = new DefaultSkillManager(
-            undefined,
-            agent.skills ? { only: agent.skills } : undefined,
-          );
+          // 准入闸门：未过审/停用技能的 command 不注册（设计 §6.2「审查通过后才注册」）
+          const lifecycle = await this.skillLifecycleFor(agent.id);
+          const skillManager = new DefaultSkillManager(undefined, {
+            ...(agent.skills ? { only: agent.skills } : {}),
+            ...(lifecycle ? { gate: lifecycle } : {}),
+          });
           await skillManager.discover(skillDirs);
           this.registerSkillCommands(skillManager);
         }

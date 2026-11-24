@@ -50,6 +50,12 @@ Commands:
   ops kill <id>     Kill switch: stop ALL execution of an agent (host-side, immediate)
   ops revive <id>   Release the kill switch and resume execution
   ops status [id]   Show kill-switch state for one or all agents
+  skill list [agentId]  Show skill registry and review queue (skill-creator review gate)
+  skill show <agentId> <skillId>      Preview a submitted skill (files + SKILL.md)
+  skill approve <agentId> <skillId>   Approve a submitted skill [--findings "…"]
+  skill reject <agentId> <skillId>    Reject a submitted skill [--findings "…"]
+  skill enable <agentId> <skillId>    Enable an approved skill
+  skill disable <agentId> <skillId>   Disable a skill (one-line kill switch)
   llm-diff [session]
                     Compare dumped LLM requests and locate cache-prefix breaks
   version           Show the installed version

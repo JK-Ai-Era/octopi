@@ -103,6 +103,11 @@ async function main(): Promise<void> {
     case 'ops':
       await opsCommand(args);
       break;
+    case 'skill': {
+      const { skillCommand } = await import('./skill.js');
+      await skillCommand(args);
+      break;
+    }
     case 'llm-diff':
     case 'llmDiff':
       await llmDiffCommand(args);

@@ -217,6 +217,124 @@ export class WebApiRouter {
         return await this.handleRegistry(req, res, relativePath, method);
       }
 
+      // ── 技能管理面（skill-creator 能力；arch/skill-creation-design.md §5 人工审查）──
+      if (relativePath === '/skills' && method === 'GET') {
+        const agentId = url.searchParams.get('agentId');
+        if (!agentId) {
+          return this.json(res, 400, { ok: false, error: 'agentId query param is required' });
+        }
+        try {
+          return this.json(res, 200, {
+            ok: true,
+            data: await this.gateway.skillList(agentId),
+          });
+        } catch (err) {
+          return this.json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      if (relativePath.startsWith('/skills/submissions/') && method === 'GET') {
+        const submissionId = decodeURIComponent(relativePath.slice('/skills/submissions/'.length));
+        const agentId = url.searchParams.get('agentId');
+        if (!submissionId || !agentId) {
+          return this.json(res, 400, {
+            ok: false,
+            error: 'submissionId path segment and agentId query param are required',
+          });
+        }
+        try {
+          const preview = await this.gateway.skillPreview(agentId, submissionId);
+          if (!preview) {
+            return this.json(res, 404, { ok: false, error: `submission "${submissionId}" not found` });
+          }
+          return this.json(res, 200, { ok: true, data: preview });
+        } catch (err) {
+          return this.json(res, 500, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      if (relativePath === '/skills/review' && method === 'POST') {
+        // 无认证部署拒写（对齐 refuseUnauthenticatedSecurityWrite 先例）：
+        // console API 无法区分人与 agent——匿名可 POST approved = agent 自批自己的提交，
+        // 「人工审查是金标准」（设计 §5）形同虚设
+        if (!this.approverIdentity) {
+          return this.json(res, 503, {
+            ok: false,
+            error: 'skill_review_unauthenticated: skill review requires an authenticated deployment (apiKey)',
+          });
+        }
+        const body = (await this.readBody(req)) as {
+          agentId?: unknown;
+          skillId?: unknown;
+          verdict?: unknown;
+          findings?: unknown;
+        };
+        if (typeof body.agentId !== 'string' || typeof body.skillId !== 'string') {
+          return this.json(res, 400, { ok: false, error: 'agentId and skillId are required strings' });
+        }
+        if (body.verdict !== 'approved' && body.verdict !== 'rejected') {
+          return this.json(res, 400, { ok: false, error: 'verdict must be "approved" or "rejected"' });
+        }
+        try {
+          return this.json(res, 200, {
+            ok: true,
+            data: await this.gateway.skillReview({
+              agentId: body.agentId,
+              skillId: body.skillId,
+              verdict: body.verdict,
+              // 审查者署名 = 认证身份（apiKey 闸验明的持钥方）；不信客户端自报
+              //（可仿冒=审计撒谎）——B-1 拍板 2026-11-18 同规
+              by: this.approverIdentity,
+              findings: typeof body.findings === 'string' ? body.findings : undefined,
+            }),
+          });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      if (relativePath === '/skills/enable' && method === 'POST') {
+        const body = (await this.readBody(req)) as {
+          agentId?: unknown;
+          skillId?: unknown;
+          enabled?: unknown;
+        };
+        if (typeof body.agentId !== 'string' || typeof body.skillId !== 'string') {
+          return this.json(res, 400, { ok: false, error: 'agentId and skillId are required strings' });
+        }
+        if (typeof body.enabled !== 'boolean') {
+          return this.json(res, 400, { ok: false, error: 'enabled must be a boolean' });
+        }
+        // enable = 让内容上线，同 review 一样要求认证（disable 止血方向放行）
+        if (body.enabled && !this.approverIdentity) {
+          return this.json(res, 503, {
+            ok: false,
+            error: 'skill_enable_unauthenticated: enabling a skill requires an authenticated deployment (apiKey)',
+          });
+        }
+        try {
+          return this.json(res, 200, {
+            ok: true,
+            data: await this.gateway.skillSetEnabled({
+              agentId: body.agentId,
+              skillId: body.skillId,
+              enabled: body.enabled,
+            }),
+          });
+        } catch (err) {
+          return this.json(res, 400, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       // ── fleet 运维面（MAJ-4）：ops 原语入口（arch/service-topology-p0c.md §5.2；鉴权随上游闸）──
       if (relativePath === '/fleet' && method === 'GET') {
         return this.json(res, 200, { ok: true, data: this.gateway.fleetStatus() });

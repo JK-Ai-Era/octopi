@@ -66,7 +66,7 @@ export function getOctopiHome(): string {
 // ── 家当路径派生（arch/multi-tenancy.md §4 隔离矩阵的单一来源） ──
 
 /** 路径段守卫：目录名不得为空 / 含分隔符 / 含 `..`（containment 安全判定点） */
-function assertPathSegment(segment: string, label: string): string {
+export function assertPathSegment(segment: string, label: string): string {
   if (
     !segment ||
     segment === '.' ||

@@ -578,6 +578,7 @@ export class AgentBuilder {
   /** Skill id allowlist（agents[].skills）；未设置 = 全部启用 */
   private _skillAllowlist?: string[];
   private _skillManager?: import('../extension/plugin-ecosystem/skills/types.js').SkillManager;
+  private _skillLifecycle?: import('../extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle;
   /** 记忆检索（注入 system prompt MemoryLayer） */
   private _memoryStore?: import('../memory/types.js').MemoryStore;
   private _backfillCoverage?: import('../memory/backfill-coverage.js').BackfillCoverageStore;
@@ -868,6 +869,15 @@ export class AgentBuilder {
   /** 直接注入 SkillManager（跳过目录 discover） */
   skills(manager: import('../extension/plugin-ecosystem/skills/types.js').SkillManager): this {
     this._skillManager = manager;
+    return this;
+  }
+
+  /**
+   * 注入 SkillLifecycle（skill-creator 能力）：
+   * build 时注册 skill_submit / skill_status 工具。
+   */
+  skillLifecycle(lifecycle: import('../extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle): this {
+    this._skillLifecycle = lifecycle;
     return this;
   }
 
@@ -1318,6 +1328,16 @@ export class AgentBuilder {
     };
     if (!this._toolBus.getTool('schedule_set')) {
       for (const t of createSessionScheduleTools(sessionScheduleService)) {
+        this._toolBus.register(t);
+      }
+    }
+
+    // skill_submit / skill_status 必须在 buildCore 之前注册（Agent 构造时从 ToolBus 快照 tools）
+    if (this._skillLifecycle && !this._toolBus.getTool('skill_submit')) {
+      const { createSkillTools } = await import(
+        '../extension/plugin-ecosystem/tools/skill-tools.js'
+      );
+      for (const t of createSkillTools({ lifecycle: this._skillLifecycle })) {
         this._toolBus.register(t);
       }
     }
@@ -1847,7 +1867,11 @@ export class AgentBuilder {
       const { DefaultSkillManager } = await import('../extension/plugin-ecosystem/skills/manager.js');
       const mgr = new DefaultSkillManager(
         undefined,
-        this._skillAllowlist ? { only: this._skillAllowlist } : undefined,
+        {
+          ...(this._skillAllowlist ? { only: this._skillAllowlist } : {}),
+          // 兜底路径同样过准入闸门（P0）：无 gate 的兜底 = 同批目录二次 discover 全放行
+          ...(this._skillLifecycle ? { gate: this._skillLifecycle } : {}),
+        },
       );
       try {
         await mgr.discover(skillDirs);

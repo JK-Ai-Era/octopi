@@ -21,6 +21,8 @@ export interface SkillDefinition {
    * 校验 `^[a-z][a-z0-9_-]*$`（可写 `/pdf`，规范化后存储）。
    */
   command?: string;
+  /** 放盘即信任来源（dropped-in）的「未经审查」标注（审计面；不进 prompt 索引） */
+  unreviewed?: boolean;
 }
 
 /** Skill 管理器接口 */

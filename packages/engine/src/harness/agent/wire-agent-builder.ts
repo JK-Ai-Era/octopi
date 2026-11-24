@@ -193,6 +193,12 @@ export interface AgentWireSpec {
   skillSharedDirectory?: string;
   /** Skill 启用清单（agents[].skills，按 skill id）；缺省 = 目录内全部启用 */
   skills?: string[];
+  /**
+   * 技能生命周期服务（skill-creator 能力；arch/skill-creation-design.md）。
+   * 提供：discover 准入闸门（agent 层）+ skill_submit/skill_status 工具。
+   * 缺省 = 无闸门（嵌入式/测试自担）。
+   */
+  skillLifecycle?: import('../extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle;
   /** SEC-2 / E6 工具策略与会话权利天花板 */
   tools?: import('@octopi-agent/core/types.js').ToolPolicy;
   maxSessionRights?: SessionAwareRunnerConfig['agentMaxSessionRights'];
@@ -333,15 +339,22 @@ export async function wireAgentBuilder(
   const skillSharedDir = spec.skillSharedDirectory
     ? expandHomePath(spec.skillSharedDirectory.trim())
     : undefined;
-  // 双层发现：共享层先扫、agent 层同名赢（skillDirs 顺序即优先级）；共享层缺省不启用
-  const skillDirs = [skillSharedDir, skillDir].filter((d): d is string => !!d && existsSync(d));
+  // 双层发现：共享层先扫、agent 层同名赢（skillDirs 顺序即优先级）。
+  // 不按存在性过滤：层角色必须恒定（[shared, agent]），否则 shared 缺失时
+  // 数组退化为单层、manager 无法分辨该层是 shared（放盘信任）还是 agent（过闸）。
+  // 缺失目录由 FileSystemSkillSource.discover 天然跳过（返回空）。
+  const skillDirs = [skillSharedDir, skillDir].filter((d): d is string => !!d);
   let skillManager: unknown;
   if (skillDirs.length > 0) {
     try {
       const { DefaultSkillManager } = await import(
         '../extension/plugin-ecosystem/skills/manager.js'
       );
-      skillManager = new DefaultSkillManager(undefined, spec.skills ? { only: spec.skills } : undefined);
+      skillManager = new DefaultSkillManager(undefined, {
+        ...(spec.skills ? { only: spec.skills } : {}),
+        // 准入闸门（agent 覆盖层）：SkillLifecycle 即 SkillAdmissionGate
+        ...(spec.skillLifecycle ? { gate: spec.skillLifecycle } : {}),
+      });
       await (skillManager as { discover: (d: string | readonly string[]) => Promise<void> }).discover(
         skillDirs,
       );
@@ -358,6 +371,12 @@ export async function wireAgentBuilder(
     builder.skillAllowlist(spec.skills);
     if (skillDir) builder.skillDirectory(skillDir);
     if (skillSharedDir) builder.skillSharedDirectory(skillSharedDir);
+  }
+
+  // skill_submit / skill_status 工具（skill-creator 能力）：
+  // 与目录发现无关——起草提交面始终可用（技能目录可尚不存在）
+  if (spec.skillLifecycle) {
+    builder.skillLifecycle(spec.skillLifecycle);
   }
 
   // ── Memory / Wisdom / Cognition（agent home 下 AgentDatabase） ──

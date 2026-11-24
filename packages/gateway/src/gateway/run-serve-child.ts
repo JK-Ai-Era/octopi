@@ -231,6 +231,11 @@ async function main(): Promise<void> {
   knowledgeClient?.setTenantProvider(runTenantClaimProvider());
   let knowledgeState: KnowledgeStateWire = boot.knowledge?.state ?? (knowledgeClient ? 'ready' : 'disabled');
 
+  // skill-state（skill-creator 能力）：与 gateway 共用的生命周期宿主（懒建）
+  let skillLifecycleHost:
+    | import('./skill-lifecycle-host.js').SkillLifecycleHost
+    | undefined;
+
   const defs = new Map<string, AgentDefinition>();
   for (const raw of boot.agentDefinitions) {
     const def = raw as unknown as AgentDefinition;
@@ -412,6 +417,14 @@ async function main(): Promise<void> {
       return knowledgeClient;
     },
     getKnowledgeRuntime: async () => ({ state: knowledgeState }),
+    getSkillLifecycle: async (agentId) => {
+      // 与 gateway 共用一份宿主实现（skill-state 懒建 + per-agent 缓存）
+      const { createSkillLifecycleHost } = await import('./skill-lifecycle-host.js');
+      skillLifecycleHost ??= createSkillLifecycleHost({
+        warn: (m) => console.warn(`[RunServeChild] ${m}`),
+      });
+      return skillLifecycleHost.get(agentId);
+    },
     requestApproval: (input) => host.askApproval(input),
     registerSkillCommands: (agentId, skillManager) => {
       // 命令面归 gateway（UI face），但**发现源**在构建侧：gateway 的启动期扫描只覆盖

@@ -40,6 +40,10 @@ export interface CliArgs {
   limit?: number;
   /** llm-diff：缓存命中相对全价的比例（0.1 = 一折），用于老化回本估算 */
   cacheDiscount?: number;
+  /** 全部位置参数（含 command）；多位置参数命令（skill approve <agent> <skill> …）用 */
+  positional: string[];
+  /** skill reject/approve：审查意见（回传提交会话） */
+  findings?: string;
 }
 
 /**
@@ -83,6 +87,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
   let cliMode = false;
   let provider: string | undefined;
   let model: string | undefined;
+  let findings: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -183,6 +188,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
       case '--model':
         model = requireFlagValue(argv, ++i, '--model');
         break;
+      case '--findings':
+        findings = requireFlagValue(argv, ++i, '--findings');
+        break;
       default:
         positional.push(argv[i]!);
         break;
@@ -215,5 +223,7 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): CliArgs {
     cliMode,
     provider,
     model,
+    positional,
+    findings,
   };
 }

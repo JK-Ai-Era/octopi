@@ -14,8 +14,11 @@
  */
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
-import { join, resolve } from 'path';
+import { dirname, join, resolve } from 'path';
 import type { SkillDefinition, SkillManager } from './types.js';
+import { parseSkillFile, type SkillFrontmatter } from './frontmatter.js';
+import { hashSkillDir } from './hash.js';
+import type { SkillAdmissionGate } from './lifecycle.js';
 
 // ── SkillSource 接口 ──
 
@@ -69,57 +72,15 @@ n   * @param filePath - SKILL.md 文件路径（由 discover 返回）
 // ── 文件系统实现 ──
 
 /**
- * SKILL.md 文件 frontmatter 解析
+ * 读取并解析 SKILL.md（frontmatter 解析单源在 frontmatter.ts）
  */
-interface SkillFrontmatter {
-  name?: string;
-  description?: string;
-  'disable-model-invocation'?: string;
-  tools?: string;
-  command?: string;
-  [key: string]: string | undefined;
-}
-
-/**
- * 剥离 YAML 标量的成对引号（双引号含转义还原；单引号按 YAML 惯例还原 ''）。
- * 只处理标量层的一对引号——多行/嵌套 YAML 仍不在解析范围。
- */
-function unquoteYamlScalar(value: string): string {
-  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-    return value.slice(1, -1).replace(/\\(["\\])/g, '$1');
-  }
-  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
-    return value.slice(1, -1).replace(/''/g, "'");
-  }
-  return value;
-}
-
-/**
- * 解析 SKILL.md 的 YAML frontmatter（只读元数据，不读正文）
- */
-function parseFrontmatter(filePath: string): {
+function parseSkillMdFile(filePath: string): {
   meta: SkillFrontmatter;
   content: string;
 } | null {
   try {
-    // 统一换行，避免 Windows CRLF 让 frontmatter 行解析失败
-    const raw = readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n');
-    const fmMatch = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-    if (!fmMatch) return null;
-
-    const fmLines = fmMatch[1].split('\n');
-    const content = fmMatch[2].trim();
-
-    // 简单 YAML 解析（只支持 key: value 标量）
-    const meta: SkillFrontmatter = {};
-    for (const line of fmLines) {
-      const m = line.match(/^([\w-]+):\s*(.+)$/);
-      if (m) {
-        meta[m[1]] = unquoteYamlScalar(m[2].trim());
-      }
-    }
-
-    return { meta, content };
+    // parseSkillFile 内部统一换行，兼容 Windows CRLF
+    return parseSkillFile(readFileSync(filePath, 'utf-8'));
   } catch {
     return null;
   }
@@ -151,12 +112,8 @@ export class FileSystemSkillSource implements SkillSource {
       const skillFile = join(absDir, entry.name, 'SKILL.md');
       if (!existsSync(skillFile)) continue;
 
-      const parsed = parseFrontmatter(skillFile);
+      const parsed = parseSkillMdFile(skillFile);
       if (!parsed?.meta.name || !parsed.meta.description) continue;
-
-      const rawCommand = parsed.meta.command?.trim().replace(/^\/+/, '').toLowerCase();
-      const command =
-        rawCommand && /^[a-z][a-z0-9_-]*$/.test(rawCommand) ? rawCommand : undefined;
 
       results.push({
         id: entry.name,
@@ -164,12 +121,10 @@ export class FileSystemSkillSource implements SkillSource {
         meta: {
           name: parsed.meta.name,
           description: parsed.meta.description,
-          disableModelInvocation:
-            parsed.meta['disable-model-invocation'] === 'true',
-          requiredTools: parsed.meta.tools
-            ? parsed.meta.tools.split(/[,，]/).map((s) => s.trim())
-            : undefined,
-          command,
+          disableModelInvocation: parsed.meta.disableModelInvocation,
+          requiredTools: parsed.meta.allowedTools,
+          // frontmatter.ts 已规范化；非法 command 不透出
+          command: parsed.meta.command,
         },
       });
     }
@@ -202,18 +157,25 @@ export class DefaultSkillManager implements SkillManager {
   private sourceOf = new Map<string, SkillSource>();
   /** Skill id allowlist（`agents[].skills`）；undefined = 全部启用 */
   private readonly only?: ReadonlySet<string>;
+  /** 准入闸门（lifecycle 实现）：仅多层装配的 agent 覆盖层应用；shared 层放盘信任不过闸 */
+  private readonly gate?: SkillAdmissionGate;
 
   /**
    * @param sourceOrDirectory - SkillSource 实例或目录路径（向后兼容）
    * @param options.only - 启用的 Skill id allowlist（缺省全部）；discover 未列入的 Skill 不进索引、load 恒 null
+   * @param options.gate - discover 准入闸门（arch/skill-creation-design.md §6）；缺省无闸门（嵌入式/测试自担）
    */
-  constructor(sourceOrDirectory?: SkillSource | string, options?: { only?: string[] }) {
+  constructor(
+    sourceOrDirectory?: SkillSource | string,
+    options?: { only?: string[]; gate?: SkillAdmissionGate },
+  ) {
     if (typeof sourceOrDirectory === 'string') {
       this.source = new FileSystemSkillSource(sourceOrDirectory);
     } else {
       this.source = sourceOrDirectory ?? new FileSystemSkillSource('./skills');
     }
     this.only = options?.only ? new Set(options.only) : undefined;
+    this.gate = options?.gate;
   }
 
   /**
@@ -231,6 +193,10 @@ export class DefaultSkillManager implements SkillManager {
    */
   async discover(directory: string | readonly string[]): Promise<void> {
     const dirs = typeof directory === 'string' ? [directory] : [...directory];
+    // 重建语义：上一轮的技能不得残留（同实例二次 discover 时被闸门拒掉的
+    // 技能若留在 map，load() 还会照常服务它——与「disabled 拒」矛盾）
+    this.skills.clear();
+    this.sourceOf.clear();
     // allowlist 未命中的 id 要对**合并后全集**判一次（跨层互补可凑齐 allowlist）
     const seenIds = new Set<string>();
     for (const [dirIdx, dir] of dirs.entries()) {
@@ -242,6 +208,34 @@ export class DefaultSkillManager implements SkillManager {
       for (const item of discovered) {
         // agents[].skills allowlist：未列入的 Skill 不进索引（load 经 skills map 天然拒绝）
         if (this.only && !this.only.has(item.id)) continue;
+        // 准入闸门（agent 覆盖层；shared 层放盘信任不过闸）：
+        // pending/rejected/disabled/哈希漂移(submitted) 不进索引——fail-loud 告警，不静默吞。
+        // 唯一豁免 = 双层装配的首层（shared）；单层装配按 agent 层过闸（fail-closed：
+        // shared 目录不存在时 filter 后只剩 agent 层，不能因数组长度退化而失闸）。
+        let unreviewed = false;
+        const isSharedLayer = dirs.length > 1 && dirIdx === 0;
+        if (this.gate && !isSharedLayer) {
+          // per-item 隔离：单个坏技能（非法目录名 / 哈希读失败 / db 忙）只损失自己，
+          // 不得中止整个 discover（那会经 wire 降级成无闸门兜底 = fail-open）
+          try {
+            const admission = this.gate.admit({
+              skillId: item.id,
+              contentHash: hashSkillDir(dirname(item.filePath)),
+            });
+            if (!admission.admitted) {
+              console.warn(
+                `[Skills] "${item.id}" excluded by admission gate: ${admission.reason}`,
+              );
+              continue;
+            }
+            unreviewed = admission.unreviewed === true;
+          } catch (err) {
+            console.warn(
+              `[Skills] "${item.id}" excluded by admission gate error (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+            );
+            continue;
+          }
+        }
         // 多层约定调用序 [共享层, agent 覆盖层…]：后写赢 = 覆盖语义（正常路径，不告警）
         const skill: SkillDefinition = {
           id: item.id,
@@ -254,6 +248,7 @@ export class DefaultSkillManager implements SkillManager {
           disableModelInvocation: item.meta.disableModelInvocation,
           requiredTools: item.meta.requiredTools,
           command: item.meta.command,
+          ...(unreviewed ? { unreviewed: true } : {}),
         };
         this.skills.set(skill.id, skill);
         this.sourceOf.set(skill.id, source);

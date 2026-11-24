@@ -102,6 +102,16 @@ export interface RunAssemblyDeps extends RunAssemblyHooks {
   globalTools: RegisteredTool[];
   getObserverHub(): ObserverHub;
   /**
+   * 技能生命周期服务（skill-creator 能力；arch/skill-creation-design.md）。
+   * 返回 undefined = 无闸门/无 skill_submit 工具（嵌入式自担）；
+   * gateway 与 run 实例均实现（共享 skill-state/skills.db，sqlite WAL 多进程安全）。
+   */
+  getSkillLifecycle(
+    agentId: string,
+  ): Promise<
+    import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle | undefined
+  >;
+  /**
    * 观测专属事件出口（跨进程桥，run 实例侧注入：notify('session_event')）。
    * 缺省不注入：in-process 宿主（gateway 直连 EventBus）不需要桥。
    */
@@ -255,6 +265,8 @@ export class RunAssembly {
       // 公共技能层（双层发现：共享层先扫、agent 层同名赢）
       skillSharedDirectory: sharedSkillsDir(getOctopiHome()),
       skills: agent.skills,
+      // 技能生命周期（准入闸门 + skill_submit/skill_status；缺省无闸门）
+      skillLifecycle: await this.deps.getSkillLifecycle(agent.id),
       tools: agent.tools,
       maxSessionRights: agent.maxSessionRights,
       effectPolicy:

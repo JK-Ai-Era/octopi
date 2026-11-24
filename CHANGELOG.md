@@ -140,6 +140,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.0 (2026-11-25)
+
+### feat(engine,gateway,cli): skill-creator P1 — 技能自创建的提交、审查与启用闸门
+
+技能自创建能力首期（设计定稿见 `arch/skill-creation-design.md`，2026-11-25 四项拍板收口）：
+
+- **规范对齐（agentskills.io）**：`skills/frontmatter.ts` 解析单源化（`allowed-tools` 标准字段、兼容旧 `tools`/顶层扩展键、metadata 单层嵌套、command 归一；块标量等认不出的形态显式 `unsupported`，不再静默当值收下）；`skills/validate.ts` 校验器（name/description MUST→error、危险模式扫描→warning 审查线索、symlink/大小安全阀）。
+- **启用闸门（唯一真相源）**：`skills/registry.ts`（skill-state/skills.db，sqlite WAL——审查与 discover 自动登记是真实并发写方）+ `skills/lifecycle.ts`（提交/审查/启停/准入的单一实现）。语义按拍板：`skill_submit` 来源须过审；host 直写/用户拷贝按**放盘即信任**自动登记（`dropped-in` + unreviewed 标注，不拦截）；submitted 哈希漂移 = 审查作废回 pending（**审查的是内容不是名字**）。
+- **工具面**：`skill_submit`（沙箱起草 → 引擎 staging → 审查单；校验失败逐项错误 fail-loud）+ `skill_status`（审查进度/驳回 findings；对外 DTO 不泄内部路径）。
+- **人工审查面**：`octopi skill list|show|approve|reject|enable|disable`（show = staging 内容预览）+ REST `GET /skills`、`GET /skills/submissions/:id`、`POST /skills/review`、`POST /skills/enable`。署名取认证身份（B-1 拍板同规，不信客户端自报）；review/enable 在无认证部署 503 拒写（防 agent 自批），disable 止血放行。
+- **独立评审修复（P0/P1）**：闸门异常不中止 discover、不失闸（per-item fail-closed + 兜底 manager 继承 gate）；同名提交不可顶下线已批准技能/抹审查记录；批准物化做 staging 哈希锚点校验（漂移即要求重提，不再拿旧 staging 覆盖磁盘新版本）；staging 复制后二次校验（TOCTOU 收口）；skill-state 目录 owner-only。
+
+---
+
 ## v0.131.3 (2026-11-25)
 
 ### fix(engine): git_commit 增加 stagedOnly，只提交索引内容
