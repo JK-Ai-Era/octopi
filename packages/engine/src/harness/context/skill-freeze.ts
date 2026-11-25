@@ -13,6 +13,7 @@
  */
 
 import type { SkillIndexEntry } from '../extension/plugin-ecosystem/skills/index-render.js';
+import { computeMissingTools } from '../extension/plugin-ecosystem/skills/index-render.js';
 
 /** 冻结快照（write-once；text 与 entries 同源，text 即 system 份的逐字节内容） */
 export interface FrozenSkillIndex {
@@ -91,7 +92,10 @@ export function diffSkillIndex(
  * @param diff - 技能集差异（调用方保证至少一项非空）
  * @returns 增量块文本
  */
-export function renderSkillDelta(diff: SkillIndexDiff): string {
+export function renderSkillDelta(
+  diff: SkillIndexDiff,
+  opts?: { availableTools?: string[] },
+): string {
   const lines: string[] = ['<skill-delta>'];
   lines.push(
     '  ATTENTION — SESSION-SCOPED OVERRIDE, not a turn-scoped pick:',
@@ -103,12 +107,12 @@ export function renderSkillDelta(diff: SkillIndexDiff): string {
   );
   if (diff.added.length > 0) {
     lines.push('  <new_skills>');
-    for (const e of diff.added) lines.push(renderEntry(e));
+    for (const e of diff.added) lines.push(renderEntry(e, opts));
     lines.push('  </new_skills>');
   }
   if (diff.updated.length > 0) {
     lines.push('  <updated_skills>');
-    for (const e of diff.updated) lines.push(renderEntry(e));
+    for (const e of diff.updated) lines.push(renderEntry(e, opts));
     lines.push('  </updated_skills>');
   }
   if (diff.removed.length > 0) {
@@ -120,14 +124,23 @@ export function renderSkillDelta(diff: SkillIndexDiff): string {
   return lines.join('\n');
 }
 
-function renderEntry(e: SkillIndexEntry): string {
-  return [
+function renderEntry(e: SkillIndexEntry, opts?: { availableTools?: string[] }): string {
+  const lines = [
     '    <skill>',
     `      <name>${escapeXml(e.id)}</name>`,
     `      <description>${escapeXml(e.description)}</description>`,
     `      <path>${escapeXml(e.filePath)}</path>`,
-    '    </skill>',
-  ].join('\n');
+  ];
+  // S4 失配标注（computeMissingTools 单源）：增量条目同样携带工具缺口
+  const missing = computeMissingTools(
+    e,
+    opts?.availableTools ? new Set(opts.availableTools) : undefined,
+  );
+  if (missing.length > 0) {
+    lines.push(`      <missing-tools>${escapeXml(missing.join(', '))}</missing-tools>`);
+  }
+  lines.push('    </skill>');
+  return lines.join('\n');
 }
 
 function escapeXml(str: string): string {

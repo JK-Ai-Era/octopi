@@ -48,14 +48,10 @@ export function renderSkillIndexEntries(
     lines.push(`    <description>${xmlEscape(skill.description)}</description>`);
     lines.push(`    <path>${xmlEscape(skill.filePath)}</path>`);
     // S4 失配标注（§12.5）：技能声明的工具在当前部署不可用——加载时即知，
-    // 不让模型用时才发现（missing = requiredTools 与可用集的差集）
-    if (available && skill.requiredTools && skill.requiredTools.length > 0) {
-      const missing = skill.requiredTools.filter((t) => !available.has(t));
-      if (missing.length > 0) {
-        lines.push(
-          `    <missing-tools>${xmlEscape(missing.join(', '))}</missing-tools>`,
-        );
-      }
+    // 不让模型用时才发现（computeMissingTools 单源，增量块渲染共用）
+    const missing = computeMissingTools(skill, available);
+    if (missing.length > 0) {
+      lines.push(`    <missing-tools>${xmlEscape(missing.join(', '))}</missing-tools>`);
     }
     lines.push('  </skill>');
   }
@@ -67,4 +63,22 @@ export function renderSkillIndexEntries(
   );
 
   return lines.join('\n');
+}
+
+/**
+ * S4 失配标注计算（单源）：requiredTools 与当前可用工具集的差集。
+ *
+ * 索引渲染（renderSkillIndexEntries）与增量块渲染（renderSkillDelta）共用——
+ * 两处各算会漂移（S4 标注曾漏进增量条目，2026-11-26 实测发现）。
+ *
+ * @param entry - 技能条目（无 requiredTools = 不标注）
+ * @param available - 可用工具名集合；缺省 = 不标注（冻结字节稳定性优先）
+ * @returns 缺失工具名列表（可能为空）
+ */
+export function computeMissingTools(
+  entry: SkillIndexEntry,
+  available?: ReadonlySet<string>,
+): string[] {
+  if (!available || !entry.requiredTools || entry.requiredTools.length === 0) return [];
+  return entry.requiredTools.filter((t) => !available.has(t));
 }

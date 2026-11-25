@@ -224,13 +224,24 @@ describe('评审修复回归（M2b/M3/M6）', () => {
         await mgr.ensureFresh?.();
         return mgr.list().map(toEntry);
       };
-      const deltaLayer = new SkillDeltaLayer({ store, getEntries });
+      const deltaLayer = new SkillDeltaLayer({
+        store,
+        getEntries,
+        getAvailableTools: () => ['shell', 'file_read'],
+      });
       expect(await deltaLayer.assemble(ctx())).toBeNull(); // 无变化无 delta
 
-      writeSkill(root, 'skill-b');
+      // skill-b 声明一个不存在的工具（frobnicate）：S4 标注应随增量条目出现
+      mkdirSync(join(root, 'skill-b'), { recursive: true });
+      writeFileSync(
+        join(root, 'skill-b', 'SKILL.md'),
+        '---\nname: "skill-b"\ndescription: "test skill skill-b"\nallowed-tools: "shell frobnicate"\n---\n\n# skill-b\n\nbody\n',
+      );
       const content = await deltaLayer.assemble(ctx());
       expect(content).not.toBeNull();
       expect(JSON.stringify(content)).toContain('skill-b'); // 中途新增进增量块
+      expect(JSON.stringify(content)).toContain('frobnicate'); // S4 失配标注进增量条目
+      expect(JSON.stringify(content)).toContain('missing-tools');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

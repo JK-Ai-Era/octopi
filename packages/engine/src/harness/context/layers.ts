@@ -194,15 +194,19 @@ export class SkillLayer extends BaseLayer {
 export class SkillDeltaLayer extends BaseLayer {
   private readonly store: FrozenSkillIndexStore;
   private readonly getEntries: () => Promise<SkillIndexEntry[]> | SkillIndexEntry[];
+  private readonly getAvailableTools?: () => string[];
 
   constructor(options: {
     store: FrozenSkillIndexStore;
     getEntries: () => Promise<SkillIndexEntry[]> | SkillIndexEntry[];
+    /** S4 失配标注数据源（缺省不标注）：与索引渲染同一可用工具集 */
+    getAvailableTools?: () => string[];
     order?: number;
   }) {
     super('skill', { order: options.order, placement: 'snapshot' });
     this.store = options.store;
     this.getEntries = options.getEntries;
+    this.getAvailableTools = options.getAvailableTools;
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
@@ -214,7 +218,7 @@ export class SkillDeltaLayer extends BaseLayer {
     if (diff.added.length === 0 && diff.updated.length === 0 && diff.removed.length === 0) {
       return null;
     }
-    const text = renderSkillDelta(diff);
+    const text = renderSkillDelta(diff, { availableTools: this.getAvailableTools?.() });
     const { text: body, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
     return this.content(body, { dropped, sources: ['skills:delta'] });
   }

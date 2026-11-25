@@ -121,6 +121,8 @@ export function createDefaultSystemPromptAssembler(options?: {
    * 冻结+增量语义（设计 §7）：system 份冻结、中途变化进 snapshot 增量块。
    */
   getSkillEntries?: () => Promise<SkillIndexEntry[]> | SkillIndexEntry[];
+  /** S4 失配标注数据源：当前 agent 可用工具名（增量块条目标注；缺省不标注） */
+  getSkillAvailableTools?: () => string[];
   /** 冻结快照存取（session 作用域 write-once）；缺省不冻结（历史行为） */
   frozenSkillStore?: FrozenSkillIndexStore;
   memoryStore?: MemoryStore;
@@ -180,6 +182,7 @@ export function createDefaultSystemPromptAssembler(options?: {
 
   const ratio = options?.systemBudgetRatio ?? DEFAULT_SYSTEM_BUDGET_RATIO;
   const getSkillPromptText = options?.getSkillPromptText;
+  const getSkillAvailableTools = options?.getSkillAvailableTools;
   const wisdomStore = options?.wisdomStore;
   const cognitionStore = options?.cognitionStore;
   const resolvedPreamble = options?.assemblerConfig?.constitutionPreamble ?? preamble;
@@ -246,6 +249,7 @@ export function createDefaultSystemPromptAssembler(options?: {
             new SkillDeltaLayer({
               store: freeze.store,
               getEntries: freeze.getEntries,
+              getAvailableTools: getSkillAvailableTools,
             }),
           );
         }

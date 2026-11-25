@@ -1505,6 +1505,9 @@ export class AgentBuilder {
     const cognitionStore = this._cognitionStore;
     const assemblerCfg = this._contextAssemblerConfig;
     const constitutionCfg = this._constitutionConfig;
+    // S4 失配标注数据源（单源）：索引渲染与增量渲染共用同一可用工具集
+    const skillAvailableTools = (): string[] =>
+      this._toolBus.listForAgent(this._agentId ?? 'default').map((t) => t.definition.name);
     const systemPromptAssembler = createDefaultSystemPromptAssembler({
       getSkillPromptText: skillManager
         ? async () => {
@@ -1513,9 +1516,7 @@ export class AgentBuilder {
             return skillManager.formatForPrompt({
               // S4 失配标注（§12.5）：技能 requiredTools 与当前 agent 可用工具比对，
               // 缺口在索引条目上即标注（missing-tools），不让模型用时才发现
-              availableTools: this._toolBus
-                .listForAgent(this._agentId ?? 'default')
-                .map((t) => t.definition.name),
+              availableTools: skillAvailableTools(),
             });
           }
         : undefined,
@@ -1538,6 +1539,8 @@ export class AgentBuilder {
                 }));
             }
           : undefined,
+      // S4 失配标注数据源（单源）：增量块条目同样标注工具缺口
+      getSkillAvailableTools: skillManager ? skillAvailableTools : undefined,
       frozenSkillStore: this._frozenSkillStore,
       memoryStore,
       knowledgeCatalog,

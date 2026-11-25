@@ -140,6 +140,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.9 (2026-11-26)
+
+### fix(engine): delta entries carry the S4 missing-tools marking
+
+实测复验时发现：S4 的 `<missing-tools>` 失配标注只进了稳定索引渲染，增量块
+（`<skill-delta>`）的条目没有——会话中途新增技能的能力缺口对模型不可见，
+直到下个会话冻结转正。
+
+- `computeMissingTools` 抽为单源（`index-render.ts` 导出），索引渲染与增量
+  条目渲染共用——两处各算会漂移。
+- `renderSkillDelta(diff, opts)` 携带 `availableTools`；`SkillDeltaLayer` 经
+  `getAvailableTools` provider 注入（builder 侧抽 `skillAvailableTools` 单源，
+  与 `formatForPrompt` 同一可用工具集）。
+- 旧冻结条目无 `requiredTools` 字段 = 不标注，向后兼容不变。
+- 测试：增量链用例补 missing-tools 断言（声明不存在的 `frobnicate` → 增量
+  条目出现 `<missing-tools>`）。
+
 ## v0.132.8 (2026-11-26)
 
 ### fix(engine): mid-session skill visibility — index refresh (assembly dirty-probe + consumption-gate freshness)
