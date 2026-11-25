@@ -16,7 +16,9 @@ import {
   resolveToolPath,
 } from './platform.js';
 import type { SkillLifecycle } from '../skills/lifecycle.js';
-import { DEFAULT_READ_LIMIT, MAX_READ_LIMIT } from '../skills/manager.js';
+import { DEFAULT_READ_LIMIT, MAX_READ_LIMIT, isProbablyBinary, stripFrontmatter } from '../skills/manager.js';
+import { collectPatternTerms, compileContentMatchers, lineMatches } from './search-matchers.js';
+import { globToPathRegex } from '../../../shared/paths/glob.js';
 import type { SkillFileEntry, SkillLoadResult, SkillManager } from '../skills/types.js';
 
 /** 工具 handler 的 containment 上下文（与 file-ops 同形） */
@@ -60,8 +62,8 @@ export function createSkillLifecycleTools(lifecycle: SkillLifecycle): Registered
 }
 
 /**
- * 消费面工具（skill_read / skill_run）——只要 SkillManager（provider），
- * 不绑 lifecycle（F10：嵌入式/无 skill-state 部署同样要有消费面）。
+ * 消费面工具（skill_read / skill_list / skill_search / skill_run）——只要
+ * SkillManager（provider），不绑 lifecycle（F10：嵌入式/无 skill-state 部署同样要有消费面）。
  *
  * @param skills - SkillManager 或懒 provider（注册先于 discover 时用 provider）
  * @returns 工具注册数组
@@ -69,7 +71,12 @@ export function createSkillLifecycleTools(lifecycle: SkillLifecycle): Registered
 export function createSkillConsumptionTools(
   skills: SkillManager | (() => SkillManager | undefined),
 ): RegisteredTool[] {
-  return [createSkillReadTool(skills), createSkillRunTool(skills)];
+  return [
+    createSkillReadTool(skills),
+    createSkillListTool(skills),
+    createSkillSearchTool(skills),
+    createSkillRunTool(skills),
+  ];
 }
 
 function createSkillSubmitTool(lifecycle: SkillLifecycle): RegisteredTool {
@@ -191,15 +198,6 @@ function createSkillStatusTool(lifecycle: SkillLifecycle): RegisteredTool {
 function createSkillReadTool(
   skills: SkillManager | (() => SkillManager | undefined),
 ): RegisteredTool {
-  const resolveManager = (): SkillManager => {
-    const mgr = typeof skills === 'function' ? skills() : skills;
-    if (!mgr) {
-      throw new Error(
-        'skill_read: skill index is not ready (discover has not run for this agent yet)',
-      );
-    }
-    return mgr;
-  };
   return {
     definition: {
       name: 'skill_read',
@@ -231,7 +229,7 @@ function createSkillReadTool(
       },
     },
     handler: async (args) => {
-      const mgr = resolveManager();
+      const mgr = resolveSkillManager(skills, 'skill_read');
       const id = (args as { id?: unknown }).id;
       if (typeof id !== 'string' || !id.trim()) {
         throw new Error('skill_read: "id" (string) is required');
@@ -363,6 +361,280 @@ async function asFileResult(
   };
 }
 
+// ── skill_list / skill_search 检索面（S2） ──
+
+/**
+ * skill_list — 技能附件清单面（§12.3；S2）。
+ *
+ * 只列条目不带内容（首行提要也没有——要比 skill_read 的清单更轻）；
+ * subdir/pattern 收窄（清单超 LIST_MAX 时的续路）。走 consume 快照同源。
+ */
+function createSkillListTool(
+  skills: SkillManager | (() => SkillManager | undefined),
+): RegisteredTool {
+  return {
+    definition: {
+      name: 'skill_list',
+      capabilities: ['fs-read'],
+      description:
+        'List the files of a skill bundle (paths + sizes + kind, no content). ' +
+        'Use subdir/pattern to narrow when a bundle has many files. ' +
+        'For SKILL.md body + first-line excerpts use skill_read; for content search use skill_search.',
+      parameters: {
+        id: {
+          type: 'string',
+          description: 'Skill id from the skills index.',
+          required: true,
+        },
+        subdir: {
+          type: 'string',
+          description: 'Only list files under this subdirectory (e.g. "references").',
+        },
+        pattern: {
+          type: 'string',
+          description: 'Path glob filter (e.g. "**/*.md").',
+        },
+      },
+    },
+    handler: async (args) => {
+      const mgr = resolveSkillManager(skills, 'skill_list');
+      const id = (args as { id?: unknown }).id;
+      if (typeof id !== 'string' || !id.trim()) {
+        throw new Error('skill_list: "id" (string) is required');
+      }
+      const skillId = id.trim();
+      const subdir = (args as { subdir?: unknown }).subdir;
+      const pattern = (args as { pattern?: unknown }).pattern;
+      const listing = await mgr.listFiles(skillId, {
+        ...(typeof subdir === 'string' && subdir.trim() ? { subdir: subdir.trim() } : {}),
+        ...(typeof pattern === 'string' && pattern.trim() ? { pattern: pattern.trim() } : {}),
+      });
+      if (!listing) {
+        throw new Error(
+          `skill_list: skill "${skillId}" not found (missing, disabled, or not admitted)`,
+        );
+      }
+      // F3（S2 评审）：拒绝语义与 skill_read/skill_search 一致——漂移/停用/未过审 throw，
+      // 不降级成空清单；unreadable 柔性（清单不完整如实标注）
+      if (listing.error && listing.errorKind !== 'unreadable') {
+        throw new Error(`skill_list: ${skillId}: ${listing.error}`);
+      }
+      return {
+        skill: skillId,
+        // 清单面不带提要（比 skill_read 的清单更轻；要看内容用 skill_read/skill_search）
+        files: listing.entries.map((e) => ({ path: e.path, bytes: e.bytes, kind: e.kind })),
+        total: listing.total,
+        filesOmitted: Math.max(0, listing.total - listing.entries.length),
+        ...(listing.error ? { filesError: listing.error } : {}),
+      };
+    },
+  };
+}
+
+/**
+ * skill_search — 技能目录内内容搜索（§12.3；S2）。
+ *
+ * 在 consume 快照字节上搜索（与锚定哈希同源——搜到的就是通过审查的内容）。
+ * pattern 语义与 file_search 完全一致（compileContentMatchers 共享单源：
+ * auto 判定/`a|b` 字面 OR/转义规则不漂移）。
+ */
+function createSkillSearchTool(
+  skills: SkillManager | (() => SkillManager | undefined),
+): RegisteredTool {
+  return {
+    definition: {
+      name: 'skill_search',
+      capabilities: ['fs-read'],
+      description:
+        'Search inside one skill bundle (like file_search but scoped to a single skill). ' +
+        'Returns file:line matches with optional context lines. Pattern semantics match ' +
+        'file_search exactly (auto literal/regex detection). Searched content is the ' +
+        'review-anchored snapshot — drift-refused bundles are not searchable.',
+      parameters: {
+        id: {
+          type: 'string',
+          description: 'Skill id from the skills index.',
+          required: true,
+        },
+        pattern: {
+          type: 'string',
+          description: 'Search term (literal or regex; multi-term OR via patterns).',
+        },
+        patterns: {
+          type: 'array',
+          description: 'Additional search terms (any match counts).',
+        },
+        glob: {
+          type: 'string',
+          description: 'Only search files matching this path glob (e.g. "scripts/**").',
+        },
+        pattern_mode: {
+          type: 'string',
+          description: 'auto (default) | literal | regex.',
+        },
+        case_sensitive: {
+          type: 'boolean',
+          description: 'Case-sensitive match (default false).',
+        },
+        context_lines: {
+          type: 'number',
+          description: 'Lines of context before/after each match (0-5, default 0).',
+        },
+        max_results: {
+          type: 'number',
+          description: 'Maximum matches to return (default 50, capped at 200).',
+        },
+      },
+    },
+    handler: async (args) => {
+      const mgr = resolveSkillManager(skills, 'skill_search');
+      const id = (args as { id?: unknown }).id;
+      if (typeof id !== 'string' || !id.trim()) {
+        throw new Error('skill_search: "id" (string) is required');
+      }
+      const skillId = id.trim();
+      // F4：与 file_search 同一词条收集单源（空白词过滤——空串会匹配一切）
+      const terms = collectPatternTerms(args as Record<string, unknown>);
+
+      // 与 file_search 同一编译单源（search-matchers）——同一 pattern 两面命中一致
+      const requested = (args as { pattern_mode?: unknown }).pattern_mode;
+      const mode: 'auto' | 'literal' | 'regex' =
+        requested === 'literal' || requested === 'regex' ? requested : 'auto';
+      const caseSensitive = (args as { case_sensitive?: unknown }).case_sensitive === true;
+      let matchers;
+      try {
+        matchers = compileContentMatchers(terms, mode, caseSensitive);
+      } catch (err) {
+        throw new Error(`skill_search: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      const consumed = mgr.consume(skillId);
+      if (!consumed.ok) {
+        throw new Error(
+          consumed.status === 'not_found'
+            ? `skill_search: skill "${skillId}" not found (missing, disabled, or not admitted)`
+            : `skill_search: ${skillId}: ${consumed.reason}`,
+        );
+      }
+
+      const globArg = (args as { glob?: unknown }).glob;
+      const globRe = typeof globArg === 'string' && globArg.trim() ? globToPathRegex(globArg.trim()) : undefined;
+      const rawCtx = Number((args as { context_lines?: unknown }).context_lines);
+      const contextLines = Number.isFinite(rawCtx) ? Math.min(Math.max(Math.floor(rawCtx), 0), 5) : 0;
+      const rawMax = Number((args as { max_results?: unknown }).max_results);
+      const maxResults = Math.min(
+        Number.isFinite(rawMax) && rawMax >= 1 ? Math.floor(rawMax) : 50,
+        200,
+      );
+
+      const matches: Array<{
+        file: string;
+        line: number;
+        content: string;
+        before?: string[];
+        after?: string[];
+      }> = [];
+      const matchedFiles = new Map<string, number>();
+      let filesSeen = 0;
+      let filesSkippedBinary = 0;
+      let moreFound = false;
+
+      for (const [rel, bytes] of consumed.files) {
+        if (moreFound) break;
+        if (globRe && !globRe.test(rel)) continue;
+        filesSeen += 1;
+        if (isProbablyBinary(bytes)) {
+          filesSkippedBinary += 1;
+          continue;
+        }
+        // F2：SKILL.md 走正文坐标（stripFrontmatter）——与 skill_read(file='SKILL.md')
+        // 的 offset 同一坐标系，搜索命中可直接续读；其余文件按原始文本（loadFile 同口径）
+        const raw = bytes.toString('utf-8').replace(/\r\n/g, '\n');
+        const text = rel === 'SKILL.md' ? stripFrontmatter(raw) : raw;
+        const lines = text.split('\n');
+        for (let i = 0; i < lines.length; i += 1) {
+          const line = lines[i]!;
+          if (!lineMatches(line, matchers.matchers)) continue;
+          // 满额后又发现新命中才截断（恰好满额不误报；S2 评审 Low）
+          if (matches.length >= maxResults) {
+            moreFound = true;
+            break;
+          }
+          matchedFiles.set(rel, (matchedFiles.get(rel) ?? 0) + 1);
+          matches.push({
+            file: rel,
+            line: i + 1,
+            // F1：单行截断（与 file_search 预览同口径）——上下文行同样截断
+            content: capLine(line),
+            ...(contextLines > 0
+              ? {
+                  before: lines.slice(Math.max(0, i - contextLines), i).map(capLine),
+                  after: lines.slice(i + 1, i + 1 + contextLines).map(capLine),
+                }
+              : {}),
+          });
+        }
+      }
+
+      // F1：输出总预算——超过 SEARCH_OUTPUT_BUDGET 时剥上下文（保 file+line 清单完整）
+      let outputShrunk = false;
+      let total = 0;
+      for (const m of matches) {
+        total += m.content.length + (m.before?.join('\n').length ?? 0) + (m.after?.join('\n').length ?? 0);
+      }
+      if (total > SEARCH_OUTPUT_BUDGET) {
+        outputShrunk = true;
+        for (const m of matches) {
+          delete m.before;
+          delete m.after;
+        }
+      }
+
+      return {
+        skill: skillId,
+        matches,
+        matchedFiles: Object.fromEntries(matchedFiles),
+        // truncated：满额后仍有更多命中才为 true（恰好满额不误报）
+        truncated: moreFound,
+        ...(outputShrunk ? { outputShrunk: true } : {}),
+        diagnostics: {
+          root: `skill:${skillId}`,
+          patternMode: matchers.mode,
+          patterns: terms,
+          compiledPatterns: matchers.compiled,
+          ...(globRe ? { glob: globArg } : {}),
+          filesSeen,
+          filesSkippedBinary,
+        },
+      };
+    },
+  };
+}
+
+/** skill_search 输出总预算（字符；超预算剥上下文，file+line 清单永不丢） */
+const SEARCH_OUTPUT_BUDGET = 128 * 1024;
+/** 单行预览截断（共享魔数收敛；S2 评审 Low） */
+const SEARCH_LINE_CAP = 300;
+
+/** 单行预览截断（content 与上下文行同口径） */
+function capLine(line: string): string {
+  return line.length > SEARCH_LINE_CAP ? `${line.slice(0, SEARCH_LINE_CAP)}…` : line;
+}
+
+/** 消费面工具共用的 manager 解析（provider 懒解析 + 未就绪 fail-loud） */
+function resolveSkillManager(
+  skills: SkillManager | (() => SkillManager | undefined),
+  toolName: string,
+): SkillManager {
+  const mgr = typeof skills === 'function' ? skills() : skills;
+  if (!mgr) {
+    throw new Error(
+      `${toolName}: skill index is not ready (discover has not run for this agent yet)`,
+    );
+  }
+  return mgr;
+}
+
 // ── skill_run 执行面（S1 §12.4） ──
 
 /**
@@ -451,15 +723,6 @@ function resolveInterpreter(
 function createSkillRunTool(
   skills: SkillManager | (() => SkillManager | undefined),
 ): RegisteredTool {
-  const resolveManager = (): SkillManager => {
-    const mgr = typeof skills === 'function' ? skills() : skills;
-    if (!mgr) {
-      throw new Error(
-        'skill_run: skill index is not ready (discover has not run for this agent yet)',
-      );
-    }
-    return mgr;
-  };
   return {
     definition: {
       name: 'skill_run',
@@ -494,7 +757,7 @@ function createSkillRunTool(
       },
     },
     handler: async (args, context) => {
-      const mgr = resolveManager();
+      const mgr = resolveSkillManager(skills, 'skill_run');
       const id = (args as { id?: unknown }).id;
       const script = (args as { script?: unknown }).script;
       if (typeof id !== 'string' || !id.trim()) {

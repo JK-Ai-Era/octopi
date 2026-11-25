@@ -140,6 +140,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.5 (2026-11-25)
+
+### feat(engine): skill consumption S2 — skill_list/skill_search with shared search-matchers
+
+技能检索面 S2（`arch/skill-creation-design.md` §12.3）：多文件技能的清单与内容搜索。
+
+- **`skill_list(id, subdir?, pattern?)`**：附件清单面（路径/大小/类型，不带内容）；`subdir` 前缀 + 路径 glob 过滤（清单超限时的收窄续路）。
+- **`skill_search(id, pattern, patterns?, glob?, …)`**：技能目录内内容搜索。在 consume 快照字节上扫描（搜到的即通过审查锚定的内容；漂移包拒搜）；**SKILL.md 搜索坐标 = skill_read 正文坐标**（stripFrontmatter 单源，命中可直接 offset 续读不偏移）；输出预算（单行 300 字符 + 128KB 总预算剥上下文）；`truncated` 精确（恰好满额不误报）+ `filesSkippedBinary` 计数。
+- **`search-matchers.ts` 共享单源**：`compileContentMatchers`/`lineMatches`/`collectPatternTerms` 从 `file-search.ts` 平移为共享导出——`file_search` 与 `skill_search` 同一 pattern 语义（auto 判定/`a|b` 字面 OR/空白词条过滤），不再两处漂移。
+- **消费面拒绝语义统一**：skill_list 对 drift/停用/未过审 throw（与 skill_read/skill_search 一致），仅 unreadable 柔性标注。
+- **独立评审 2 Major + 2 Medium 全修复**（上下文预算收缩、SKILL.md 坐标分裂、清单面拒绝降级、词条收集漂移）+ Low 清单（死代码/魔数/二进制阈值收敛、测试缺口补齐）。
+
+
+
 ## v0.132.4 (2026-11-25)
 
 ### feat(engine): skill consumption S1 — skill_read/skill_run with single-IO review-anchored reads

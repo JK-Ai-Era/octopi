@@ -26,6 +26,7 @@ import type {
 import { parseSkillFile, type SkillFrontmatter } from './frontmatter.js';
 import { renderSkillIndexEntries } from './index-render.js';
 import { hashSkillDir, hashSkillFiles } from './hash.js';
+import { globToPathRegex } from '../../../shared/paths/glob.js';
 import type { SkillAdmissionGate, SkillLoadGuard, SkillLoadVerdict } from './lifecycle.js';
 
 // ── 读取面常量（消费面；提交面阈值在 validate.ts 各管各层） ──
@@ -47,8 +48,22 @@ const EXCERPT_MAX = 120;
 /** 提要探测读取量 */
 const EXCERPT_READ_BYTES = 4096;
 
-/** 二进制探测：前 8KB 含 NUL 即判二进制（与 file 嗅探同口径的轻量版） */
-function isProbablyBinary(buf: Buffer): boolean {
+/**
+ * 剥 frontmatter 取正文（消费面正文坐标单源；S2 评审 F2）。
+ *
+ * skill_read（load）、skill_search（SKILL.md 扫描）共用——保证「搜索到的行号」
+ * 与「skill_read(file='SKILL.md', offset=…) 续读的行号」同一坐标系。
+ *
+ * @param text - SKILL.md 原始文本
+ * @returns 剥 frontmatter 并 trim 后的正文
+ */
+export function stripFrontmatter(text: string): string {
+  const fmMatch = text.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
+  return (fmMatch ? fmMatch[1] : text).trim();
+}
+
+/** 二进制探测：前 8KB 含 NUL 即判二进制（与 file 嗅探同口径的轻量版）；skill_search 同源 */
+export function isProbablyBinary(buf: Buffer): boolean {
   const probe = buf.subarray(0, 8192);
   return probe.includes(0);
 }
@@ -525,10 +540,8 @@ export class DefaultSkillManager implements SkillManager {
     }
     const raw = consumed.files.get('SKILL.md');
     if (!raw) return { status: 'not_found' };
-    // SKILL.md 超读取阀已在 consume fail-closed；此处只按 frontmatter 剥壳（与 source.load 同语义）
-    const text = raw.toString('utf-8').replace(/\r\n/g, '\n');
-    const fmMatch = text.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
-    const body = (fmMatch ? fmMatch[1] : text).trim();
+    // SKILL.md 超读取阀已在 consume fail-closed；正文坐标 = stripFrontmatter（与 skill_search 同源）
+    const body = stripFrontmatter(raw.toString('utf-8').replace(/\r\n/g, '\n'));
     return {
       status: 'ok',
       body,
@@ -539,25 +552,41 @@ export class DefaultSkillManager implements SkillManager {
   }
 
   /**
-   * 技能附件清单（skill_read 清单面；设计 §12.3 清单上限防线）。
+   * 技能附件清单（skill_read/skill_list 清单面；设计 §12.3 清单上限防线）。
    *
    * 走 {@link consume} 快照（字节同源；F14：walk 失败如实带 error，不再谎报 0 附件）。
    * SKILL.md 不列（正文面已给）。文本小文件带首行提要（EXCERPT_MAX 字符），
    * 二进制/大文件只标类型+大小。条目按路径排序，截 LIST_MAX 条，total 供「+N more」。
    *
    * @param skillId - 技能 id
-   * @returns 清单 + 全量条目数（+可选 error）；id 不在索引时 null
+   * @param opts.subdir - 只列此前缀下的条目（如 `references/`）
+   * @param opts.pattern - 路径 glob 过滤（`**`/`*`/`?`/`{a,b}`，匹配技能内相对路径）
+   * @returns 清单 + 过滤后全量条目数（+可选 error）；id 不在索引时 null
    */
   async listFiles(
     skillId: string,
+    opts?: { subdir?: string; pattern?: string },
   ): Promise<{ entries: SkillFileEntry[]; total: number; error?: string } | null> {
     const skill = this.skills.get(skillId);
     if (!skill) return null;
     const consumed = this.consume(skillId);
     if (!consumed.ok) {
-      return { entries: [], total: 0, error: consumed.reason };
+      // F3（S2 评审）：拒绝语义透传 kind——drift/disabled/not_approved 由工具面
+      // 升格为 throw（与 skill_read/skill_search 一致）；unreadable 柔性（walk 失败如实标注）
+      return {
+        entries: [],
+        total: 0,
+        error: consumed.reason,
+        ...(consumed.status === 'refused' && consumed.kind ? { errorKind: consumed.kind } : {}),
+      };
     }
-    const rels = [...consumed.files.keys()].filter((rel) => rel !== 'SKILL.md').sort();
+    const prefix = opts?.subdir?.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const globRe = opts?.pattern ? globToPathRegex(opts.pattern) : undefined;
+    const rels = [...consumed.files.keys()]
+      .filter((rel) => rel !== 'SKILL.md')
+      .filter((rel) => (prefix ? rel.startsWith(prefix + '/') || rel === prefix : true))
+      .filter((rel) => (globRe ? globRe.test(rel) : true))
+      .sort();
     const total = rels.length;
     const entries: SkillFileEntry[] = [];
     for (const rel of rels.slice(0, LIST_MAX)) {

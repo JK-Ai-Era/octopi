@@ -61,7 +61,15 @@ export interface SkillManager {
    * 技能附件清单（SKILL.md 之外；截 LIST_MAX 条 + total 如实标注）。
    * id 不在索引时 null；快照失败时 entries 空 + error 如实标注（F14）。
    */
-  listFiles(skillId: string): Promise<{ entries: SkillFileEntry[]; total: number; error?: string } | null>;
+  listFiles(
+    skillId: string,
+    opts?: { subdir?: string; pattern?: string },
+  ): Promise<{
+    entries: SkillFileEntry[];
+    total: number;
+    error?: string;
+    errorKind?: 'hash_drift' | 'disabled' | 'not_approved' | 'invalid_id' | 'unreadable';
+  } | null>;
   /**
    * 读取技能附件（二次 containment + 审查哈希锚定，见 manager 实现）。
    */
