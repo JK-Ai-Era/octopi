@@ -241,3 +241,31 @@ describe('validateSkillDir（S1 消费面规则）', () => {
     expect(result.issues.find((i) => i.code === 'skill_md_oversized')).toBeUndefined();
   });
 });
+
+describe('S4 死角：disableModelInvocation 无 command = 不可达', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'skill-s4-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('unreachable 组合 error 拒提交；有 command 或无 flag 各放行', () => {
+    mkdirSync(join(dir, 'a'), { recursive: true });
+    writeFileSync(
+      join(dir, 'a', 'SKILL.md'),
+      '---\nname: a\ndescription: D\ndisable-model-invocation: true\n---\nBODY',
+    );
+    const bad = validateSkillDir(join(dir, 'a'));
+    expect(bad.ok).toBe(false);
+    expect(bad.issues.some((i) => i.code === 'unreachable_skill')).toBe(true);
+
+    mkdirSync(join(dir, 'b'), { recursive: true });
+    writeFileSync(
+      join(dir, 'b', 'SKILL.md'),
+      '---\nname: b\ndescription: D\ndisable-model-invocation: true\ncommand: b\n---\nBODY',
+    );
+    expect(validateSkillDir(join(dir, 'b')).ok).toBe(true);
+  });
+});

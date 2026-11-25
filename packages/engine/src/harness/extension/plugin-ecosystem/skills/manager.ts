@@ -401,7 +401,7 @@ export class DefaultSkillManager implements SkillManager {
    *
    * disableModelInvocation 的 Skill 不输出（只能显式调用）
    */
-  formatForPrompt(): string {
+  formatForPrompt(opts?: { availableTools?: string[] }): string {
     const visible = Array.from(this.skills.values()).filter(
       (s) => !s.disableModelInvocation,
     );
@@ -412,7 +412,9 @@ export class DefaultSkillManager implements SkillManager {
         name: s.name,
         description: s.description,
         filePath: s.filePath,
+        requiredTools: s.requiredTools,
       })),
+      opts,
     );
   }
 

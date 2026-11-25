@@ -30,7 +30,7 @@ import {
 } from '../../../context/capabilities/summary/index.js';
 import {
   containmentOptions,
-  resolveToolPath,
+  resolveReadableToolPath,
 } from './platform.js';
 import { globToPathRegex, matchesDenyPattern } from '../../../shared/paths/glob.js';
 
@@ -265,7 +265,9 @@ export function createFileSearchTool(options?: { summary?: ToolSummarySupport })
 
       const rawRoot = args.path as string | undefined;
       const rootPath = rawRoot
-        ? resolveToolPath(rawRoot, context.cwd ?? process.cwd(), containmentOptions(context))
+        // S4 单源化（§12.5）：与 file_read/file_list 同一只读解析面（含 attachments
+        // 只读根）——消除「file_search 搜不到 file_read 读得到」类不一致
+        ? resolveReadableToolPath(rawRoot, context.cwd ?? process.cwd(), context.attachmentRoots ?? [], containmentOptions(context))
         : (context.cwd ?? process.cwd());
 
       const terms = collectPatternTerms(args);

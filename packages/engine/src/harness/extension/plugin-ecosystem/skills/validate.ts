@@ -249,6 +249,19 @@ export function validateSkillDir(skillDir: string): SkillValidationResult {
   }
   const { meta, content } = parsed;
 
+  // S4 死角收口（§12.5）：disableModelInvocation 不进索引（模型不可见），
+  // 没有 command 就没有 /命令入口——技能完全不可达 = 作者组合错误，拒提交
+  if (meta.disableModelInvocation === true && !meta.command) {
+    issues.push({
+      severity: 'error',
+      code: 'unreachable_skill',
+      field: 'disableModelInvocation',
+      message:
+        'disableModelInvocation without a command makes the skill unreachable ' +
+        '(not in the skills index and no /command entry) — remove the flag or declare metadata.command',
+    });
+  }
+
   // 解析器不支持的 frontmatter 形态（块标量等）——fail-loud，不放行解析器认不出的输入
   for (const key of parsed.unsupported ?? []) {
     issues.push({

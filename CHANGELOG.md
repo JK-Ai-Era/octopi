@@ -140,6 +140,17 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.7 (2026-11-25)
+
+### fix(engine): skill consumption S4 — structural debt sweep (parser unification, tool-mismatch marking, unreachable-skill gate)
+
+技能消费面 S4 结构债收口（`arch/skill-creation-design.md` §12.5）：
+
+- **读取解析器单源化**：`file_search` 的根解析从 `resolveToolPath` 收敛到 `resolveReadableToolPath`（与 `file_read`/`file_list` 同一只读面，含 attachments 只读根）——消除「file_search 搜不到 file_read 读得到」类不一致。
+- **`requiredTools` 失配标注**：技能声明的 `allowed-tools` 与当前 agent 可用工具（`ToolBus.listForAgent`）差集在索引条目渲染 `<missing-tools>`——加载时即知能力缺口，不让模型用时才发现；冻结索引同步携带（旧冻结条目无字段=不标注，向后兼容）。
+- **`unreachable_skill` 死角**：`disableModelInvocation` 无 `metadata.command` 的组合（不进索引、无 /命令入口=完全不可达）在 `skill_submit` 校验直接 error 拒。
+- 测试：失配标注三分支（缺工具标注/齐了不标/未传不标）、死角组合（拒/放行对照）。
+
 ## v0.132.6 (2026-11-25)
 
 ### feat(engine): skill consumption S3 — skill_read activation semantics (session-scoped body, aged listings)

@@ -248,3 +248,22 @@ describe('search-matchers 共享语义（file_search / skill_search 同源）', 
     expect(lineMatches('needle', cs.matchers)).toBe(false);
   });
 });
+
+describe('S4 失配标注：requiredTools 与可用工具差集', () => {
+  it('缺工具标注 missing-tools；齐了/未传 availableTools 不标注', async () => {
+    const { renderSkillIndexEntries } = await import(
+      '../packages/engine/src/harness/extension/plugin-ecosystem/skills/index-render.js'
+    );
+    const entries = [
+      { id: 'a', name: 'a', description: 'D', filePath: '/x/a/SKILL.md', requiredTools: ['shell', 'web_search'] },
+      { id: 'b', name: 'b', description: 'D', filePath: '/x/b/SKILL.md', requiredTools: ['shell'] },
+    ];
+    const partial = renderSkillIndexEntries(entries, { availableTools: ['shell', 'file_read'] });
+    expect(partial).toContain('<missing-tools>web_search</missing-tools>');
+    expect(partial).not.toContain('shell</missing-tools>');
+    const full = renderSkillIndexEntries(entries, { availableTools: ['shell', 'web_search'] });
+    expect(full).not.toContain('missing-tools');
+    const noTools = renderSkillIndexEntries(entries);
+    expect(noTools).not.toContain('missing-tools');
+  });
+});

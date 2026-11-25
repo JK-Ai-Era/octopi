@@ -34,7 +34,7 @@ export interface SkillManager {
    * （约定调用序 = [共享层, agent 层]，agent 层赢）。
    */
   discover(directory: string | readonly string[]): Promise<void>;
-  formatForPrompt(): string;
+  formatForPrompt(opts?: { availableTools?: string[] }): string;
   /**
    * 加载 Skill 正文（消费面单源：skill_read 工具与 /name 命令展开共用）。
    * 注入 loadGuard 时随文做审查哈希锚定（漂移即拒，见 SkillLoadGuard）。

@@ -1507,7 +1507,14 @@ export class AgentBuilder {
     const constitutionCfg = this._constitutionConfig;
     const systemPromptAssembler = createDefaultSystemPromptAssembler({
       getSkillPromptText: skillManager
-        ? () => skillManager.formatForPrompt()
+        ? () =>
+            skillManager.formatForPrompt({
+              // S4 失配标注（§12.5）：技能 requiredTools 与当前 agent 可用工具比对，
+              // 缺口在索引条目上即标注（missing-tools），不让模型用时才发现
+              availableTools: this._toolBus
+                .listForAgent(this._agentId ?? 'default')
+                .map((t) => t.definition.name),
+            })
         : undefined,
       // 冻结+增量（设计 §7）：有 store 才启用；缺省=实时渲染（历史行为）
       getSkillEntries:
@@ -1521,6 +1528,7 @@ export class AgentBuilder {
                   name: s.name,
                   description: s.description,
                   filePath: s.filePath,
+                  requiredTools: s.requiredTools,
                 }))
           : undefined,
       frozenSkillStore: this._frozenSkillStore,
