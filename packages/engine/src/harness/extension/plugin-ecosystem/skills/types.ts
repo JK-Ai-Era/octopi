@@ -80,6 +80,15 @@ export interface SkillManager {
   ): Promise<SkillFileLoadResult>;
   list(): SkillDefinition[];
   get(skillId: string): SkillDefinition | null;
+  /**
+   * 中途索引刷新（脏检：文件面或 registry 戳变化才重扫重建）。
+   * 消费入口与快照装配前调用，让会话中途新增/停用的技能即刻可见
+   * （设计 §7「中途新增→增量块」的索引重建入口）。
+   * 可选——实现缺位时退化为构建期索引（历史行为）。
+   */
+  ensureFresh?(): Promise<void>;
+  /** 无条件重扫重建索引（ensureFresh 的底座；可选） */
+  refresh?(): Promise<void>;
 }
 
 /**

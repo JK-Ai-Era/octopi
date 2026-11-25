@@ -140,6 +140,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.8 (2026-11-26)
+
+### fix(engine): mid-session skill visibility — index refresh (assembly dirty-probe + consumption-gate freshness)
+
+实测复盘修复（`arch/skill-creation-design.md` §12.8）：P2「中途新增 → 增量块」承诺在会话存活期内不成立——`discover()` 仅在 agent 构建期运行，增量 diff 与消费面读到的是陈旧索引（批准后 `skill_read` 仍 not found，直到 daemon 重启）。
+
+- **A′ 装配前脏检**：`DefaultSkillManager.ensureFresh()` = 文件面签名（技能根条目 + 各 SKILL.md mtime/size）+ registry 状态戳（`SkillAdmissionGate.registryStamp?()`，覆盖停用/批准等无文件痕迹的状态迁移）任一变化才重扫；挂 `getSkillEntries`/`getSkillPromptText` 闭包（delta 与实时渲染双路径）。
+- **B 消费入口必检**：`load`/`loadFile`/`listFiles` 入口 + `skill_search`/`skill_run` 的 consume 前 `ensureFresh()`——批准后直接消费同刻可见，无需重启。
+- **discover 原子 swap**：局部 map 全量构建后整体替换，重建在途的并发消费不再看到半空索引（旧 clear-then-fill 的 await 间隙窗口）。
+- 拓扑修正：会话 run 在 run-serve-child 子进程、审查在 gateway 进程，进程内事件跨不了界——脏检探测走文件系统 + sqlite（WAL 跨进程安全），天然覆盖 CLI 直写 / 手拷 dropped-in / 跨进程批准。
+- 独立评审修复（1 blocker + 6 major 全修）：扫描前探针防「扫描期批准被记成已新鲜」（B1）；registry 戳失败按「未知=未变」处理 + 闸门报错保留旧条目（db 抖动不换空索引，M2）；附件变更全量 stat 入签（含 ctime，hash_drift 会话内收敛，M3）；skill_run 刷新先于 get()（M1）；refresh 失败保留旧索引 + 并发去重（M4）。
+- 测试：`tests/skill-refresh.test.ts` 8 例（含原子 swap 判别力、真实 registry 链 setEnabled、增量链 delta 集成）。
+
 ## v0.132.7 (2026-11-25)
 
 ### fix(engine): skill consumption S4 — structural debt sweep (parser unification, tool-mismatch marking, unreachable-skill gate)

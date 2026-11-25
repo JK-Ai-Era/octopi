@@ -1507,20 +1507,26 @@ export class AgentBuilder {
     const constitutionCfg = this._constitutionConfig;
     const systemPromptAssembler = createDefaultSystemPromptAssembler({
       getSkillPromptText: skillManager
-        ? () =>
-            skillManager.formatForPrompt({
+        ? async () => {
+            // 中途刷新（§7 实测修正）：装配前脏检——实时渲染路径同样吃到中途新增/停用
+            await skillManager.ensureFresh?.();
+            return skillManager.formatForPrompt({
               // S4 失配标注（§12.5）：技能 requiredTools 与当前 agent 可用工具比对，
               // 缺口在索引条目上即标注（missing-tools），不让模型用时才发现
               availableTools: this._toolBus
                 .listForAgent(this._agentId ?? 'default')
                 .map((t) => t.definition.name),
-            })
+            });
+          }
         : undefined,
       // 冻结+增量（设计 §7）：有 store 才启用；缺省=实时渲染（历史行为）
       getSkillEntries:
         skillManager && this._frozenSkillStore
-          ? () =>
-              skillManager
+          ? async () => {
+              // 中途刷新（§7 实测修正）：增量 diff 的 current 必须是新鲜索引——
+              // 否则「中途新增→增量块」在会话存活期内永不出现（2026-11-26 实测）
+              await skillManager.ensureFresh?.();
+              return skillManager
                 .list()
                 .filter((s) => !s.disableModelInvocation)
                 .map((s) => ({
@@ -1529,7 +1535,8 @@ export class AgentBuilder {
                   description: s.description,
                   filePath: s.filePath,
                   requiredTools: s.requiredTools,
-                }))
+                }));
+            }
           : undefined,
       frozenSkillStore: this._frozenSkillStore,
       memoryStore,

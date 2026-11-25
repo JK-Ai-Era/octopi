@@ -516,6 +516,7 @@ function createSkillSearchTool(
         throw new Error(`skill_search: ${err instanceof Error ? err.message : String(err)}`);
       }
 
+      await mgr.ensureFresh?.();
       const consumed = mgr.consume(skillId);
       if (!consumed.ok) {
         throw new Error(
@@ -820,6 +821,9 @@ function createSkillRunTool(
         throw new Error('skill_run: "script" (string) is required');
       }
       const skillId = id.trim();
+      // ensureFresh 必须先于 get()（M1 修）：中途新增的技能 get() 不到会提前
+      // 报 not found，永远走不到消费前的刷新
+      await mgr.ensureFresh?.();
       const skill = mgr.get(skillId);
       if (!skill) {
         throw new Error(

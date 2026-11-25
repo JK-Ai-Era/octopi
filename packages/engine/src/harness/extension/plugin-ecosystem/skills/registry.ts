@@ -219,6 +219,22 @@ export class SkillStateDatabase {
   }
 
   /**
+   * 登记状态戳（manager 脏检用）：该 agent 全部登记行的最大 updated_at。
+   *
+   * 停用/批准/回 pending 等登记态变化没有文件面痕迹，仅靠目录 mtime 探不到；
+   * 此戳让消费侧 ensureFresh 能发现「无文件变化的状态迁移」。
+   *
+   * @param agentId - agent id
+   * @returns 最大 updated_at（epoch ms）；无登记行时 null
+   */
+  maxUpdatedAt(agentId: string): number | null {
+    const row = this.db
+      .prepare('SELECT MAX(updated_at) AS m FROM skills WHERE agent_id = ?')
+      .get(agentId) as { m: number | null } | undefined;
+    return row?.m ?? null;
+  }
+
+  /**
    * 列出 agent 的全部技能登记
    *
    * @param agentId - agent id

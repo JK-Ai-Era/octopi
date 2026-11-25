@@ -267,6 +267,14 @@ export class DefaultSkillManager implements SkillManager {
   private source: SkillSource;
   /** 每个 skill 的发现来源（双层时 load 须回到各自 source，不跟最后一次 discover 漂移） */
   private sourceOf = new Map<string, SkillSource>();
+  /** 上次 discover 的目录集（refresh/ensureFresh 重放用） */
+  private lastDirs?: string[];
+  /** 上次 discover 的文件面签名（**扫描前**探针；B1：扫描期变更不得被记成已新鲜） */
+  private lastFileSig?: string;
+  /** 上次成功读到的 registry 状态戳（戳读失败按「未知=未变」；M2 防换空连锁） */
+  private lastRegistryStamp?: string;
+  /** in-flight 重建（并发 ensureFresh/refresh 共享一次，防双份全量重扫） */
+  private refreshing?: Promise<void>;
   /** Skill id allowlist（`agents[].skills`）；undefined = 全部启用 */
   private readonly only?: ReadonlySet<string>;
   /** 准入闸门（lifecycle 实现）：仅多层装配的 agent 覆盖层应用；shared 层放盘信任不过闸 */
@@ -310,11 +318,16 @@ export class DefaultSkillManager implements SkillManager {
   async discover(directory: string | readonly string[]): Promise<void> {
     const dirs = typeof directory === 'string' ? [directory] : [...directory];
     // 重建语义：上一轮的技能不得残留（同实例二次 discover 时被闸门拒掉的
-    // 技能若留在 map，load() 还会照常服务它——与「disabled 拒」矛盾）
-    this.skills.clear();
-    this.sourceOf.clear();
+    // 技能若留在 map，load() 还会照常服务它——与「disabled 拒」矛盾）。
+    // 原子 swap：全量建到局部 map 再整体替换——discover 的 await 让出点期间
+    // 并发消费不得看到半空索引（中途刷新引入后此窗口每轮出现）
+    const nextSkills = new Map<string, SkillDefinition>();
+    const nextSourceOf = new Map<string, SkillSource>();
     // allowlist 未命中的 id 要对**合并后全集**判一次（跨层互补可凑齐 allowlist）
     const seenIds = new Set<string>();
+    // 扫描前探针（B1 修）：签名采样必须先于任何扫描——扫描窗口内完成的
+    // 批准/拷贝不得被记成「已新鲜」，否则该技能永不进索引且永不重扫
+    const probe = this.probeState(dirs);
     for (const [dirIdx, dir] of dirs.entries()) {
       // 单目录向后兼容：替换 source（历史语义）；多层时 source 只兜底 load
       const source = new FileSystemSkillSource(dir);
@@ -346,9 +359,23 @@ export class DefaultSkillManager implements SkillManager {
             }
             unreviewed = admission.unreviewed === true;
           } catch (err) {
-            console.warn(
-              `[Skills] "${item.id}" excluded by admission gate error (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
-            );
+            // 闸门**报错** ≠ 明确拒绝（db 异常等）：已准入过的旧条目保留此前
+            // 状态——一次 db 抖动不得把整张索引换成空（M2）；新面孔无旧条目
+            // 仍 fail-closed 不放行。消费安全由 checkLoad 活查兜底，恢复后
+            // registryStamp 变化会触发重扫收敛
+            const prev = this.skills.get(item.id);
+            if (prev) {
+              nextSkills.set(prev.id, prev);
+              nextSourceOf.set(item.id, source);
+              seenIds.add(item.id);
+              console.warn(
+                `[Skills] "${item.id}" admission gate error — kept previous entry: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            } else {
+              console.warn(
+                `[Skills] "${item.id}" excluded by admission gate error (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
             continue;
           }
         }
@@ -367,8 +394,8 @@ export class DefaultSkillManager implements SkillManager {
           interpreter: item.meta.interpreter,
           ...(unreviewed ? { unreviewed: true } : {}),
         };
-        this.skills.set(skill.id, skill);
-        this.sourceOf.set(skill.id, source);
+        nextSkills.set(skill.id, skill);
+        nextSourceOf.set(skill.id, source);
         seenIds.add(item.id);
       }
     }
@@ -382,6 +409,114 @@ export class DefaultSkillManager implements SkillManager {
         }
       }
     }
+    // 原子 swap：此刻起并发读方看到完整新索引（此前一刻仍是完整旧索引）。
+    // lastFileSig/lastRegistryStamp 取**扫描前**探针（B1）：扫描期间完成的
+    // 批准/拷贝会让下次探针不同 → 必然再对账，不会被记成「已新鲜」
+    this.skills = nextSkills;
+    this.sourceOf = nextSourceOf;
+    this.lastDirs = dirs;
+    this.lastFileSig = probe.fileSig;
+    if (probe.registryStamp !== undefined) this.lastRegistryStamp = probe.registryStamp;
+  }
+
+  /**
+   * 中途索引刷新（设计 §7「中途新增→增量块」的索引重建入口）。
+   *
+   * 实测修正（2026-11-26）：会话 run 在 run-serve-child 子进程、审查在 gateway
+   * 进程——进程内事件到不了消费侧，故刷新触发 = 脏检（ensureFresh）+ 消费/装配
+   * 入口必检，天然覆盖 CLI 直写、手拷 dropped-in 等一切变更来源。
+   */
+  async refresh(): Promise<void> {
+    if (!this.lastDirs) return;
+    // in-flight 去重：并发 ensureFresh/refresh 共享同一次重建
+    this.refreshing ??= this.discover(this.lastDirs).finally(() => {
+      this.refreshing = undefined;
+    });
+    try {
+      await this.refreshing;
+    } catch (err) {
+      // 重建失败保留旧索引（swap 未发生）+ fail-loud 告警：不得让异常冒到
+      // 装配层把整个技能层静默吞掉（M4）——陈旧索引好过没有索引
+      console.warn(
+        `[Skills] index refresh failed (kept previous index): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 脏检刷新：技能根目录面（条目 + 各 SKILL.md mtime/size）或 registry 戳
+   * （gate.registryStamp：停用/批准/回 pending 等无文件面痕迹的状态迁移）
+   * 任一变化才重扫重建。常态成本 = readdir + stat + 一次轻查询；
+   * 变了才付 discover 全价（P1 遗留的 discover 成本不放大到每轮）。
+   */
+  async ensureFresh(): Promise<void> {
+    if (!this.lastDirs) return;
+    const probe = this.probeState(this.lastDirs);
+    const fileChanged = probe.fileSig !== this.lastFileSig;
+    // 戳读失败（undefined）= 「未知，按未变」：不触发重扫（M2——戳失败→重扫→
+    // 闸门全抛→索引换空的连环就此切断）；文件面变化仍会触发重扫
+    const stampChanged =
+      probe.registryStamp !== undefined && probe.registryStamp !== this.lastRegistryStamp;
+    if (!fileChanged && !stampChanged) return;
+    await this.refresh();
+  }
+
+  /**
+   * 新鲜度探针：文件面签名 + registry 状态戳。
+   *
+   * 文件面走**全量 stat 清单**（含 ctimeMs）：附件（非 SKILL.md）变更正是
+   * hash_drift 的触发条件（M3）——只看 SKILL.md 会让漂移在会话内永不收敛；
+   * ctimeMs 兜住「保留 mtime 的拷贝替换」（cp -p）类漏检。stat-only 成本远
+   * 低于 discover 全价（读字节 + 解析 + 闸门哈希），可负担于每次消费/装配前。
+   */
+  private probeState(dirs: readonly string[]): { fileSig: string; registryStamp?: string } {
+    const fileParts: string[] = [];
+    for (const dir of dirs) {
+      const entries: string[] = [];
+      const walk = (abs: string, rel: string): void => {
+        let list: Array<{ name: string; isDirectory(): boolean; isSymbolicLink(): boolean }>;
+        try {
+          list = readdirSync(abs, { withFileTypes: true });
+        } catch {
+          // 目录消失/不可读也入签（之后恢复 = 签名变化）
+          entries.push(`${rel || '.'}<?>`);
+          return;
+        }
+        for (const e of list) {
+          const childRel = rel ? `${rel}/${e.name}` : e.name;
+          if (e.isSymbolicLink()) {
+            // symlink 形态也入签（消费面拒 symlink，形态翻转必须可见）
+            entries.push(`${childRel}<lnk>`);
+            continue;
+          }
+          if (e.isDirectory()) {
+            entries.push(`${childRel}/`);
+            walk(join(abs, e.name), childRel);
+            continue;
+          }
+          try {
+            const st = statSync(join(abs, e.name));
+            entries.push(`${childRel}@${st.mtimeMs}:${st.ctimeMs}:${st.size}`);
+          } catch {
+            entries.push(`${childRel}@-`);
+          }
+        }
+      };
+      walk(resolve(dir), '');
+      entries.sort();
+      fileParts.push(`${dir}:${entries.join(',')}`);
+    }
+    let registryStamp: string | undefined;
+    try {
+      registryStamp = this.gate?.registryStamp?.() ?? '';
+    } catch {
+      // 戳读失败 = 未知（M2）：按「未变」处理，不触发重扫。消费安全不靠索引
+      // 新旧（checkLoad 每次消费活查 registry，db 异常时它 fail-loud 抛错），
+      // 但索引被换空会让消费直接 not_found——宁可暂陈旧，不做「戳失败→重扫→
+      // 闸门全抛→索引换空」连锁
+      registryStamp = undefined;
+    }
+    return { fileSig: fileParts.join('|'), registryStamp };
   }
 
   /**
@@ -534,6 +669,7 @@ export class DefaultSkillManager implements SkillManager {
    * 走 {@link consume} 单 IO 快照（审查哈希锚定与正文同源；§12.3）。
    */
   async load(skillId: string): Promise<SkillLoadResult> {
+    await this.ensureFresh();
     const consumed = this.consume(skillId);
     if (!consumed.ok) {
       return consumed.status === 'not_found'
@@ -569,6 +705,7 @@ export class DefaultSkillManager implements SkillManager {
     skillId: string,
     opts?: { subdir?: string; pattern?: string },
   ): Promise<{ entries: SkillFileEntry[]; total: number; error?: string } | null> {
+    await this.ensureFresh();
     const skill = this.skills.get(skillId);
     if (!skill) return null;
     const consumed = this.consume(skillId);
@@ -614,6 +751,7 @@ export class DefaultSkillManager implements SkillManager {
     relPath: string,
     opts?: { offset?: number; limit?: number },
   ): Promise<SkillFileLoadResult> {
+    await this.ensureFresh();
     const skill = this.skills.get(skillId);
     if (!skill) return { status: 'not_found' };
     const consumed = this.consume(skillId);

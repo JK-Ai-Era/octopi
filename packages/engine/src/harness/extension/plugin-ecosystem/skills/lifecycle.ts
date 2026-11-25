@@ -43,6 +43,12 @@ export interface SkillAdmission {
 /** discover 准入闸门（DefaultSkillManager 依赖倒置；不感知 agentId 之外的业务） */
 export interface SkillAdmissionGate {
   admit(input: { skillId: string; contentHash: string }): SkillAdmission;
+  /**
+   * 登记状态戳（可选；manager 脏检用）：注册表状态迁移（停用/批准/回 pending）
+   * 没有文件面痕迹，仅靠目录 mtime 探不到。返回值变化 = 登记态变过。
+   * 缺位时 manager 脏检只看文件面（嵌入式/测试自担）。
+   */
+  registryStamp?(): string;
 }
 
 /** 消费期加载判定结果（纯判定：无副作用，注册表收敛交给下次 discover/admit） */
@@ -431,6 +437,15 @@ export class SkillLifecycle implements SkillAdmissionGate, SkillLoadGuard {
     const updated: SkillRecord = { ...record, enabled };
     this.db.upsertSkill(updated);
     return updated;
+  }
+
+  /**
+   * 登记状态戳（SkillAdmissionGate.registryStamp）：manager 脏检用。
+   *
+   * @returns 该 agent 全部登记行的最大 updated_at（无行 = '0'）
+   */
+  registryStamp(): string {
+    return String(this.db.maxUpdatedAt(this.agentId) ?? 0);
   }
 
   /**
