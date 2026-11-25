@@ -622,6 +622,8 @@ export class Gateway {
   private commandSourcesReady = false;
   /** 技能生命周期宿主（skill-state 懒建 + per-agent 缓存；与 run-serve-child 共用一份实现） */
   private skillLifecycleHost?: import('./skill-lifecycle-host.js').SkillLifecycleHost;
+  /** 技能索引冻结存取（session 附属文件；无状态，懒建单例） */
+  private frozenSkillIndexStore?: import('@octopi-agent/engine/harness/context/skill-freeze.js').FrozenSkillIndexStore;
 
   /**
    * 技能生命周期服务（skill-creator 能力；arch/skill-creation-design.md）。
@@ -725,6 +727,18 @@ export class Gateway {
       globalTools: this.tools,
       getObserverHub: () => this.observerHub,
       getSkillLifecycle: (agentId) => this.skillLifecycleFor(agentId),
+      getFrozenSkillIndexStore: async () => {
+        // sessionsDir 收敛到会话存储的唯一真相（可配置；硬编码 home/sessions 会
+        // 与自定义 store 分叉 → 冻结文件既不随会话归档/删除，也可能错位复用）
+        if (!this.frozenSkillIndexStore) {
+          const { createFrozenSkillIndexStore } = await import('./skill-lifecycle-host.js');
+          const storeSessionsDir = (this.store as { sessionsDir?: string }).sessionsDir;
+          this.frozenSkillIndexStore = createFrozenSkillIndexStore({
+            sessionsDir: storeSessionsDir,
+          });
+        }
+        return this.frozenSkillIndexStore;
+      },
       getSessionLock: () => this.seamSessionLock,
       getSessionAcl: () => this.sessionAcl,
       getSessionSchedules: () => this.sessionSchedules,

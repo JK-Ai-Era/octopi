@@ -579,6 +579,7 @@ export class AgentBuilder {
   private _skillAllowlist?: string[];
   private _skillManager?: import('../extension/plugin-ecosystem/skills/types.js').SkillManager;
   private _skillLifecycle?: import('../extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle;
+  private _frozenSkillStore?: import('../context/skill-freeze.js').FrozenSkillIndexStore;
   /** 记忆检索（注入 system prompt MemoryLayer） */
   private _memoryStore?: import('../memory/types.js').MemoryStore;
   private _backfillCoverage?: import('../memory/backfill-coverage.js').BackfillCoverageStore;
@@ -878,6 +879,15 @@ export class AgentBuilder {
    */
   skillLifecycle(lifecycle: import('../extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle): this {
     this._skillLifecycle = lifecycle;
+    return this;
+  }
+
+  /**
+   * 注入技能索引冻结存取（设计 §7：system 份冻结 + snapshot 增量）。
+   * 不注入 = 实时渲染（历史行为，无缓存冻结保护）。
+   */
+  skillIndexFreeze(store: import('../context/skill-freeze.js').FrozenSkillIndexStore): this {
+    this._frozenSkillStore = store;
     return this;
   }
 
@@ -1486,6 +1496,21 @@ export class AgentBuilder {
       getSkillPromptText: skillManager
         ? () => skillManager.formatForPrompt()
         : undefined,
+      // 冻结+增量（设计 §7）：有 store 才启用；缺省=实时渲染（历史行为）
+      getSkillEntries:
+        skillManager && this._frozenSkillStore
+          ? () =>
+              skillManager
+                .list()
+                .filter((s) => !s.disableModelInvocation)
+                .map((s) => ({
+                  id: s.id,
+                  name: s.name,
+                  description: s.description,
+                  filePath: s.filePath,
+                }))
+          : undefined,
+      frozenSkillStore: this._frozenSkillStore,
       memoryStore,
       knowledgeCatalog,
       knowledgeMaxEntries: this._knowledgeCatalogOpts?.maxEntries,

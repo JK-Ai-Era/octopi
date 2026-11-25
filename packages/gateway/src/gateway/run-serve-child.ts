@@ -235,6 +235,10 @@ async function main(): Promise<void> {
   let skillLifecycleHost:
     | import('./skill-lifecycle-host.js').SkillLifecycleHost
     | undefined;
+  // 技能索引冻结存取（设计 §7；无状态，懒建单例）
+  let frozenSkillIndexStore:
+    | import('@octopi-agent/engine/harness/context/skill-freeze.js').FrozenSkillIndexStore
+    | undefined;
 
   const defs = new Map<string, AgentDefinition>();
   for (const raw of boot.agentDefinitions) {
@@ -424,6 +428,13 @@ async function main(): Promise<void> {
         warn: (m) => console.warn(`[RunServeChild] ${m}`),
       });
       return skillLifecycleHost.get(agentId);
+    },
+    getFrozenSkillIndexStore: async () => {
+      // sessionsDir 取自本实例 store（与 gateway 同规：路径来源收敛到会话存储）
+      frozenSkillIndexStore ??= (
+        await import('./skill-lifecycle-host.js')
+      ).createFrozenSkillIndexStore({ sessionsDir: store.sessionsDir });
+      return frozenSkillIndexStore;
     },
     requestApproval: (input) => host.askApproval(input),
     registerSkillCommands: (agentId, skillManager) => {

@@ -10,6 +10,9 @@
 import { getOctopiHome } from '@octopi-agent/engine/paths.js';
 import { SkillStateDatabase } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/registry.js';
 import { SkillLifecycle } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/lifecycle.js';
+import { FileFrozenSkillIndexStore } from '@octopi-agent/engine/integration/storage/frozen-skill-index.js';
+import type { FrozenSkillIndexStore } from '@octopi-agent/engine/harness/context/skill-freeze.js';
+import { join } from 'node:path';
 
 export interface SkillLifecycleHost {
   /**
@@ -55,4 +58,22 @@ export function createSkillLifecycleHost(options?: {
       }
     },
   };
+}
+
+/**
+ * 创建技能索引冻结存取（设计 §7 缓存保护）。
+ *
+ * 落点 `<sessionsDir>/<id>/frozen-skill-index.json`（session 附属目录，
+ * 随归档搬迁；write-once 原子落位）。无状态轻量对象，调用方可缓存单例。
+ *
+ * @param options.sessionsDir - 会话存储目录（**必须**传 store 的真实 sessionsDir——
+ *   可配置；缺省仅作未接 store 时的兜底，勿在有 store 时依赖）
+ * @returns 冻结存取实现
+ */
+export function createFrozenSkillIndexStore(options?: {
+  sessionsDir?: string;
+}): FrozenSkillIndexStore {
+  return new FileFrozenSkillIndexStore(
+    options?.sessionsDir ?? join(getOctopiHome(), 'sessions'),
+  );
 }

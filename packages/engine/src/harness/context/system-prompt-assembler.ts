@@ -14,11 +14,14 @@ import {
   MemoryLayer,
   PersonaLayer,
   RuntimeLayer,
+  SkillDeltaLayer,
   SkillLayer,
   WisdomLayer,
 } from './layers.js';
 import type { ContextAssembler, ContextLayer } from './layer-types.js';
 import { extractLayerQuery } from './layer-types.js';
+import type { FrozenSkillIndexStore } from './skill-freeze.js';
+import type { SkillIndexEntry } from '../extension/plugin-ecosystem/skills/index-render.js';
 import type { ConceptGraphStore, MemoryStore, WisdomStore } from '../memory/types.js';
 import type { KnowledgeCatalogProvider } from '../knowledge/catalog-types.js';
 import { loadConstitution, type ConstitutionConfig } from './constitution/load-constitution.js';
@@ -113,6 +116,13 @@ export function createDefaultSystemPromptAssembler(options?: {
    */
   snapshotBudgetTokens?: number;
   getSkillPromptText?: () => Promise<string> | string;
+  /**
+   * 当前技能集条目（冻结/增量对比用）。与 frozenSkillStore 同时提供时启用
+   * 冻结+增量语义（设计 §7）：system 份冻结、中途变化进 snapshot 增量块。
+   */
+  getSkillEntries?: () => Promise<SkillIndexEntry[]> | SkillIndexEntry[];
+  /** 冻结快照存取（session 作用域 write-once）；缺省不冻结（历史行为） */
+  frozenSkillStore?: FrozenSkillIndexStore;
   memoryStore?: MemoryStore;
   /** Knowledge Tier 0 catalog（有哪些源）；内容命中不进 system */
   knowledgeCatalog?: KnowledgeCatalogProvider;
@@ -189,6 +199,10 @@ export function createDefaultSystemPromptAssembler(options?: {
       let hasSkill = false;
       if (getSkillPromptText) {
         hasSkill = Boolean((await getSkillPromptText()).trim());
+        // 冻结语义下 live 可能为空（技能全被移出）而冻结索引仍在——早退不得吞掉它
+        if (!hasSkill && options?.frozenSkillStore) {
+          hasSkill = Boolean(await options.frozenSkillStore.load(input.sessionId));
+        }
       }
       const hasRetrieval = Boolean(
         options?.memoryStore ||
@@ -221,7 +235,20 @@ export function createDefaultSystemPromptAssembler(options?: {
         }),
       ];
       if (getSkillPromptText) {
-        layers.push(new SkillLayer({ getPromptText: getSkillPromptText }));
+        const freeze =
+          options?.frozenSkillStore && options.getSkillEntries
+            ? { store: options.frozenSkillStore, getEntries: options.getSkillEntries }
+            : undefined;
+        layers.push(new SkillLayer({ getPromptText: getSkillPromptText, freeze }));
+        if (freeze) {
+          // 增量层（snapshot）：会话中途技能变化不 bust system 前缀（设计 §7 / B0）
+          layers.push(
+            new SkillDeltaLayer({
+              store: freeze.store,
+              getEntries: freeze.getEntries,
+            }),
+          );
+        }
       }
       if (wisdomStore) {
         layers.push(

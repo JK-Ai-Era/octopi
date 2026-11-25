@@ -112,6 +112,14 @@ export interface RunAssemblyDeps extends RunAssemblyHooks {
     import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle | undefined
   >;
   /**
+   * 技能索引冻结存取（设计 §7 缓存保护；session 附属文件，write-once）。
+   * 返回 undefined = 不冻结（实时渲染）。
+   */
+  getFrozenSkillIndexStore?(): Promise<
+    | import('@octopi-agent/engine/harness/context/skill-freeze.js').FrozenSkillIndexStore
+    | undefined
+  >;
+  /**
    * 观测专属事件出口（跨进程桥，run 实例侧注入：notify('session_event')）。
    * 缺省不注入：in-process 宿主（gateway 直连 EventBus）不需要桥。
    */
@@ -267,6 +275,8 @@ export class RunAssembly {
       skills: agent.skills,
       // 技能生命周期（准入闸门 + skill_submit/skill_status；缺省无闸门）
       skillLifecycle: await this.deps.getSkillLifecycle(agent.id),
+      // 技能索引冻结+增量（设计 §7 缓存保护；缺省不冻结）
+      frozenSkillStore: await this.deps.getFrozenSkillIndexStore?.(),
       tools: agent.tools,
       maxSessionRights: agent.maxSessionRights,
       effectPolicy:

@@ -638,6 +638,11 @@ export class SessionArchiveService {
         join(this.opts.sessionsDir, hotBase, dir),
       ]);
     }
+    // 技能索引冻结快照（skill-creator P2）：随包往返，restore 后保持原冻结（不重冻）
+    targets.push([
+      join(staging, 'frozen-skill-index.json'),
+      join(this.opts.sessionsDir, hotBase, 'frozen-skill-index.json'),
+    ]);
     targets.push([join(staging, 'llm-dumps'), this.dumpDir(sessionId)]);
     targets.push([
       join(staging, 'events.jsonl'),

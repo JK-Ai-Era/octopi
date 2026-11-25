@@ -352,6 +352,9 @@ export class JsonlSessionStore implements SessionStore<SessionData> {
     };
     await moveOrUnlink(this.sessionFile(sessionId), `${base}.jsonl`);
     await moveOrUnlink(this.sessionStateFile(sessionId), `${base}.state.json`);
+    // 技能索引冻结快照（skill-creator P2）：会话私有数据，随封存包走/随删除清，
+    // 不留孤儿文件（否则 rmdir 留残壳、restore 后冻结丢失重冻 = 一次 cache bust）
+    await moveOrUnlink(join(sessionDir, 'frozen-skill-index.json'), 'frozen-skill-index.json');
     // OP-15：会话附件目录随 session 删除清理；转换记录同理（F6：摘要正文含用户内容）；
     // derived 同清（读图派生品含用户内容，曾漏删 —— arch/session-archive-recycle.md §1）
     for (const dir of ['attachments', 'transform', 'derived']) {

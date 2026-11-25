@@ -140,6 +140,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.1 (2026-11-25)
+
+### feat(engine,gateway): skill-creator P2 — 技能索引冻结+增量注入（缓存保护）
+
+会话中途技能变化不再 bust system prompt 前缀（设计 §7；B0/E8 纪律的技能侧落法）：
+
+- **冻结**：会话首轮把技能索引固化（write-once），system 的 `<available_skills>` 逐字节稳定。落点 `<sessionsDir>/<id>/frozen-skill-index.json`（session 附属文件随归档搬迁；link 原子 no-clobber，gateway 与 run 实例并发首轮安全）。
+- **增量**：中途新增/变更/停用进 snapshot 增量块 `<skill-delta>`（`<new_skills>/<updated_skills>/<removed_skills>`，消息尾 content 侧每轮重发；自声明 SESSION-SCOPED OVERRIDE 覆盖稳定索引）。停用只提示勿再用（拍板 4，不 bust 缓存）。
+- **转正**：新会话重新冻结即并入稳定索引，delta 归零。
+- **接线**：`FrozenSkillIndexStore` Port（harness）+ 文件实现（integration）经 wire 注入；无 store = 历史实时渲染行为。sessionsDir 收敛到会话存储唯一真相（可配置）。
+- **独立评审修复（5×P1）**：冻结写失败降级实时渲染不丢索引；冻结文件进会话删除/封存/恢复清单（removeSessionFiles + restore targets）；write-once 用 link 防后写覆盖；sessionsDir 不硬编码；增量块权威声明对抗 turn_context ephemeral 信封语义。另修转义单源失真（撇号 `&apos;` 字节等价）、corrupt 冻结自愈、hasSkill 早退吞冻结、delta 标签对齐规格。
+
+---
+
 ## v0.132.0 (2026-11-25)
 
 ### feat(engine,gateway,cli): skill-creator P1 — 技能自创建的提交、审查与启用闸门

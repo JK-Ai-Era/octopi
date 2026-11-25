@@ -17,6 +17,7 @@ import { readFileSync, readdirSync, existsSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import type { SkillDefinition, SkillManager } from './types.js';
 import { parseSkillFile, type SkillFrontmatter } from './frontmatter.js';
+import { renderSkillIndexEntries } from './index-render.js';
 import { hashSkillDir } from './hash.js';
 import type { SkillAdmissionGate } from './lifecycle.js';
 
@@ -288,25 +289,15 @@ export class DefaultSkillManager implements SkillManager {
     const visible = Array.from(this.skills.values()).filter(
       (s) => !s.disableModelInvocation,
     );
-
-    if (visible.length === 0) return '';
-
-    const lines: string[] = ['<available_skills>'];
-    for (const skill of visible) {
-      lines.push('  <skill>');
-      lines.push(`    <name>${this.xmlEscape(skill.id)}</name>`);
-      lines.push(`    <description>${this.xmlEscape(skill.description)}</description>`);
-      lines.push(`    <path>${this.xmlEscape(skill.filePath)}</path>`);
-      lines.push('  </skill>');
-    }
-    lines.push('</available_skills>');
-    lines.push('');
-    lines.push(
-      'Load a skill with file_read using the absolute <path> above (skill files are NOT under the workspace cwd). ' +
-        'Example: file_read(path=<path of the skill you need>)',
+    // 渲染单源在 index-render.ts（与冻结快照/增量块共用，防格式漂移）
+    return renderSkillIndexEntries(
+      visible.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        filePath: s.filePath,
+      })),
     );
-
-    return lines.join('\n');
   }
 
   /**
@@ -329,17 +320,5 @@ export class DefaultSkillManager implements SkillManager {
 
   get(skillId: string): SkillDefinition | null {
     return this.skills.get(skillId) ?? null;
-  }
-
-  /**
-   * XML 转义：防止 skill 名称或描述中的特殊字符破坏 XML 格式
-   */
-  private xmlEscape(str: string): string {
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&apos;');
   }
 }

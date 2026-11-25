@@ -14,6 +14,15 @@ import type {
   LayerPlacement,
 } from './layer-types.js';
 import {
+  diffSkillIndex,
+  renderSkillDelta,
+  type FrozenSkillIndexStore,
+} from './skill-freeze.js';
+import {
+  renderSkillIndexEntries,
+  type SkillIndexEntry,
+} from '../extension/plugin-ecosystem/skills/index-render.js';
+import {
   LAYER_DEFAULT_SHARE,
   LAYER_ORDER,
   LAYER_PRIORITY,
@@ -116,19 +125,98 @@ export class PersonaLayer extends BaseLayer {
 
 // ── Skill ──
 
-/** Skill 层 — 包装 SkillManager.formatForPrompt() 索引 */
+/**
+ * Skill 层 — 技能索引（system 稳定份）
+ *
+ * 冻结语义（设计 §7）：会话首轮把当前技能集固化（write-once），之后 system
+ * 份逐字节稳定——中途技能变化不 bust 缓存前缀；变化经 SkillDeltaLayer 进
+ * snapshot 增量块。无 freeze 配置 = 历史行为（每轮实时渲染）。
+ */
 export class SkillLayer extends BaseLayer {
   private readonly getPromptText: () => Promise<string> | string;
+  private readonly freeze?: {
+    store: FrozenSkillIndexStore;
+    getEntries: () => Promise<SkillIndexEntry[]> | SkillIndexEntry[];
+  };
 
-  constructor(options: { getPromptText: () => Promise<string> | string; order?: number }) {
+  constructor(options: {
+    getPromptText: () => Promise<string> | string;
+    order?: number;
+    /** 冻结配置：store（session 作用域 write-once）+ 当前技能集供给 */
+    freeze?: {
+      store: FrozenSkillIndexStore;
+      getEntries: () => Promise<SkillIndexEntry[]> | SkillIndexEntry[];
+    };
+  }) {
     super('skill', { order: options.order });
     this.getPromptText = options.getPromptText;
+    this.freeze = options.freeze;
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
-    const text = await this.getPromptText();
+    let text: string;
+    if (this.freeze) {
+      // 冻结：首轮固化当前集，之后恒用冻结文本（逐字节稳定）
+      const frozen = await this.freeze.store.load(ctx.sessionId);
+      if (frozen) {
+        text = frozen.text;
+      } else {
+        const entries = await this.freeze.getEntries();
+        text = renderSkillIndexEntries(entries);
+        try {
+          await this.freeze.store.save(ctx.sessionId, {
+            entries,
+            text,
+            frozenAt: Date.now(),
+          });
+        } catch (err) {
+          // 冻结写入失败（磁盘满/只读 home）= 本轮降级为不冻结（下轮重试），
+          // 但索引文本照常返回——缓存优化失败绝不能退化成技能从 prompt 消失
+          console.warn(
+            `[Skills] frozen skill index persist failed (session=${ctx.sessionId}, degraded to live render): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    } else {
+      text = await this.getPromptText();
+    }
     const { text: body, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
     return this.content(body, { dropped, sources: ['skills'] });
+  }
+}
+
+/**
+ * Skill 增量层 — 会话中途技能变化（snapshot 易变份，设计 §7）
+ *
+ * placement='snapshot'：进本轮快照（消息尾 content 侧 `<runtime_snapshot>` 槽），
+ * 不改 system 前缀。每轮随快照重发（快照只回放最近一条）；新会话冻结时归零转正。
+ */
+export class SkillDeltaLayer extends BaseLayer {
+  private readonly store: FrozenSkillIndexStore;
+  private readonly getEntries: () => Promise<SkillIndexEntry[]> | SkillIndexEntry[];
+
+  constructor(options: {
+    store: FrozenSkillIndexStore;
+    getEntries: () => Promise<SkillIndexEntry[]> | SkillIndexEntry[];
+    order?: number;
+  }) {
+    super('skill', { order: options.order, placement: 'snapshot' });
+    this.store = options.store;
+    this.getEntries = options.getEntries;
+  }
+
+  async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
+    // 首轮（尚未冻结）无 delta：system 份正在冻结当时的全量
+    const frozen = await this.store.load(ctx.sessionId);
+    if (!frozen) return null;
+    const current = await this.getEntries();
+    const diff = diffSkillIndex(frozen.entries, current);
+    if (diff.added.length === 0 && diff.updated.length === 0 && diff.removed.length === 0) {
+      return null;
+    }
+    const text = renderSkillDelta(diff);
+    const { text: body, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
+    return this.content(body, { dropped, sources: ['skills:delta'] });
   }
 }
 
@@ -510,6 +598,12 @@ export interface CreateDefaultLayersOptions {
  *
  * 未提供的依赖对应层直接不注册（而不是注册空层），
  * 避免 manifest 里出现永远 empty 的噪声层。
+ */
+/**
+ * 造默认层集合（外置/定制装配用）。
+ *
+ * 注意：技能索引冻结+增量（设计 §7）只在 `createDefaultSystemPromptAssembler`
+ * 路径生效（需 freeze 配置）；本工厂产出的 SkillLayer 为实时渲染（历史行为）。
  */
 export function createDefaultLayers(options: CreateDefaultLayersOptions): ContextLayer[] {
   const layers: ContextLayer[] = [];

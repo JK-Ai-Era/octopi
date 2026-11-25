@@ -199,6 +199,11 @@ export interface AgentWireSpec {
    * 缺省 = 无闸门（嵌入式/测试自担）。
    */
   skillLifecycle?: import('../extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle;
+  /**
+   * 技能索引冻结存取（设计 §7：system 份冻结 + snapshot 增量，缓存保护）。
+   * 缺省 = 实时渲染（无冻结）。
+   */
+  frozenSkillStore?: import('../context/skill-freeze.js').FrozenSkillIndexStore;
   /** SEC-2 / E6 工具策略与会话权利天花板 */
   tools?: import('@octopi-agent/core/types.js').ToolPolicy;
   maxSessionRights?: SessionAwareRunnerConfig['agentMaxSessionRights'];
@@ -377,6 +382,10 @@ export async function wireAgentBuilder(
   // 与目录发现无关——起草提交面始终可用（技能目录可尚不存在）
   if (spec.skillLifecycle) {
     builder.skillLifecycle(spec.skillLifecycle);
+  }
+  // 技能索引冻结+增量（设计 §7，缓存保护）：缺省不冻结
+  if (spec.frozenSkillStore) {
+    builder.skillIndexFreeze(spec.frozenSkillStore);
   }
 
   // ── Memory / Wisdom / Cognition（agent home 下 AgentDatabase） ──
