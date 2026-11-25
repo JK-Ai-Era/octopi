@@ -11,6 +11,28 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 /**
+ * 从已读字节序列计算内容哈希（单源）。
+ *
+ * 快照消费面（manager.readSkillSnapshot）用它保证「哈希与所服务字节同源」
+ * ——同一次读取的字节既算哈希又供消费，闭合 TOCTOU（S1 评审 F3）。
+ *
+ * @param files - 相对路径 → 字节（walk 顺序无关，本函数按 rel 排序）
+ * @returns `sha256:<hex>` 形态的内容哈希
+ */
+export function hashSkillFiles(files: Iterable<{ rel: string; bytes: Buffer }>): string {
+  const sorted = [...files].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  const hash = createHash('sha256');
+  for (const f of sorted) {
+    // sep 归一为 `/`：跨平台同一树产出同一哈希
+    hash.update(f.rel.split(sep).join('/'));
+    hash.update('\0');
+    hash.update(f.bytes);
+    hash.update('\0');
+  }
+  return `sha256:${hash.digest('hex')}`;
+}
+
+/**
  * 计算技能目录的内容哈希（sha256）。
  *
  * 覆盖：每个常规文件的相对路径 + 内容字节（按相对路径排序）。
@@ -33,17 +55,7 @@ export function hashSkillDir(skillDir: string): string {
     }
   };
   walk(skillDir);
-  files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
-
-  const hash = createHash('sha256');
-  for (const f of files) {
-    // sep 归一为 `/`：跨平台同一树产出同一哈希
-    hash.update(f.rel.split(sep).join('/'));
-    hash.update('\0');
-    hash.update(readFileSync(f.abs));
-    hash.update('\0');
-  }
-  return `sha256:${hash.digest('hex')}`;
+  return hashSkillFiles(files.map((f) => ({ rel: f.rel, bytes: readFileSync(f.abs) })));
 }
 
 /**

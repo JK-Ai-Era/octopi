@@ -36,6 +36,13 @@ export interface SandboxConfig {
    */
   allowRoots?: string[];
   /**
+   * Read-only roots (S1 skill_run): jail may read but never write.
+   * bwrap: `--ro-bind-try`; Seatbelt: deliberately absent from write-allow
+   * (reads are unrestricted there — same end state); supervised: no FS
+   * enforcement (callers note the degradation).
+   */
+  readonlyRoots?: string[];
+  /**
    * D7: when true (untrusted / L4-required), jail backend must actually apply.
    * Setup failure throws instead of falling back to supervised spawn.
    */

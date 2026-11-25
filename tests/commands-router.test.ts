@@ -345,7 +345,13 @@ describe('Skill frontmatter.command', () => {
     const skill = mgr.get('pdf-reader');
     expect(skill?.command).toBe('pdf');
 
-    const defs = skillCommandsFromManager(mgr, async () => 'Read it.\n\n## Arguments\n$ARGUMENTS\n');
+    const defs = skillCommandsFromManager(mgr, async () => ({
+      status: 'ok' as const,
+      body: 'Read it.\n\n## Arguments\n$ARGUMENTS\n',
+      totalLines: 2,
+      fileHash: 'sha256:test',
+      unreviewed: false,
+    }));
     expect(defs).toHaveLength(1);
     expect(defs[0].name).toBe('pdf');
     expect(defs[0].kind).toBe('prompt');
@@ -370,7 +376,38 @@ describe('Skill frontmatter.command', () => {
     const mgr = new DefaultSkillManager();
     await mgr.discover(dir);
     expect(mgr.get('plain')?.command).toBeUndefined();
-    expect(skillCommandsFromManager(mgr, async () => null)).toHaveLength(0);
+    expect(
+      skillCommandsFromManager(mgr, async () => ({ status: 'not_found' as const })),
+    ).toHaveLength(0);
+  });
+
+  test('hash_drift：正文不展开，警示 + description 兜底（审查锚定）', async () => {
+    mkdirSync(resolve(dir, 'drifted'), { recursive: true });
+    writeFileSync(
+      resolve(dir, 'drifted/SKILL.md'),
+      '---\nname: drifted\ndescription: Drifted skill\ncommand: drifted\n---\nSECRET BODY',
+    );
+    const mgr = new DefaultSkillManager();
+    await mgr.discover(dir);
+    const defs = skillCommandsFromManager(mgr, async () => ({
+      status: 'refused' as const,
+      kind: 'hash_drift' as const,
+      reason: 'content changed since review (hash drift) — resubmit via skill_submit for review',
+    }));
+    expect(defs).toHaveLength(1);
+    const expanded = await defs[0].expand!({
+      sessionId: 's',
+      agentId: 'a',
+      principal: {},
+      args: [],
+      raw: '',
+      view: view(),
+    });
+    const content = expanded.messages[0].content as string;
+    expect(content).toContain('Drifted skill');
+    expect(content).toContain('WARNING');
+    expect(content).toContain('resubmit');
+    expect(content).not.toContain('SECRET BODY');
   });
 
   test('非法 command 不透出', async () => {

@@ -163,10 +163,12 @@ describe('DefaultSkillManager', () => {
       await manager.discover(FIXTURES);
 
       const content = await manager.load('valid-skill');
-      expect(content).not.toBeNull();
-      expect(content).not.toContain('---');
-      expect(content).toContain('测试 Skill');
-      expect(content).toContain('步骤 1');
+      expect(content.status).toBe('ok');
+      if (content.status !== 'ok') return;
+      expect(content.body).not.toContain('---');
+      expect(content.body).toContain('测试 Skill');
+      expect(content.body).toContain('步骤 1');
+      expect(content.totalLines).toBeGreaterThan(0);
     });
 
     test('返回最新文件内容（热重载）', async () => {
@@ -184,8 +186,8 @@ describe('DefaultSkillManager', () => {
         const m1 = new DefaultSkillManager();
         await m1.discover(testDir);
         const v1 = await m1.load('reload-skill');
-        expect(v1).not.toBeNull();
-        expect(v1).toContain('版本 1');
+        expect(v1.status).toBe('ok');
+        if (v1.status === 'ok') expect(v1.body).toContain('版本 1');
 
         // 修改文件，重新 discover，应该拿到新内容
         writeFileSync(
@@ -195,21 +197,50 @@ describe('DefaultSkillManager', () => {
         const m2 = new DefaultSkillManager();
         await m2.discover(testDir);
         const v2 = await m2.load('reload-skill');
-        expect(v2).not.toBeNull();
-        expect(v2).toContain('版本 2');
-        expect(v2).not.toContain('版本 1');
+        expect(v2.status).toBe('ok');
+        if (v2.status === 'ok') {
+          expect(v2.body).toContain('版本 2');
+          expect(v2.body).not.toContain('版本 1');
+        }
       } finally {
         rmSync(testDir, { recursive: true });
       }
     });
 
-    test('不存在的 Skill 返回 null', async () => {
-      expect(await manager.load('nonexistent')).toBeNull();
+    test('不存在的 Skill 返回 not_found', async () => {
+      expect((await manager.load('nonexistent')).status).toBe('not_found');
+    });
+
+    test('loadGuard 漂移锚定：hash_drift 时拒正文（§12.3 load 单源）', async () => {
+      const guarded = new DefaultSkillManager(undefined, {
+        loadGuard: {
+          checkLoad: () => ({ allow: false, reason: 'content changed since review' }),
+        },
+      });
+      await guarded.discover(FIXTURES);
+      expect(await guarded.load('valid-skill')).toEqual({
+        status: 'refused',
+        kind: 'hash_drift',
+        reason: 'content changed since review',
+      });
+    });
+
+    test('loadGuard 放行透传 unreviewed 标注', async () => {
+      const guarded = new DefaultSkillManager(undefined, {
+        loadGuard: { checkLoad: () => ({ allow: true, unreviewed: true }) },
+      });
+      await guarded.discover(FIXTURES);
+      const r = await guarded.load('valid-skill');
+      expect(r.status).toBe('ok');
+      if (r.status === 'ok') {
+        expect(r.unreviewed).toBe(true);
+        expect(r.fileHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+      }
     });
 
     test('load 前必须先 discover', async () => {
-      // 没有 discover 就 load，应该返回 null
-      expect(await manager.load('valid-skill')).toBeNull();
+      // 没有 discover 就 load，应该返回 not_found
+      expect((await manager.load('valid-skill')).status).toBe('not_found');
     });
   });
 

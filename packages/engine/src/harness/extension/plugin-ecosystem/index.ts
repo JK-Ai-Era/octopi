@@ -10,6 +10,7 @@ export type { ChannelAdapter, ChannelMessage, ChannelReply } from './channel-typ
 export { BUILTIN_CHANNEL_IDS } from './channel-types.js';
 export { DefaultSkillManager, FileSystemSkillSource } from './skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './skills/manager.js';
-export type { SkillDefinition, SkillManager } from './skills/types.js';
+export type { SkillDefinition, SkillManager, SkillLoadResult, SkillFileEntry, SkillFileLoadResult } from './skills/types.js';
+export type { SkillLoadVerdict, SkillLoadGuard } from './skills/lifecycle.js';
 export * from './mcp/index.js';
 export * from './commands/index.js';

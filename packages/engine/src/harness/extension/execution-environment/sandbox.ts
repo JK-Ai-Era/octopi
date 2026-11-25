@@ -410,6 +410,16 @@ export class ProcessSandbox implements SandboxProvider {
       // --bind-try: stale pathRoots must not abort the whole command
       bwrapArgs.push('--bind-try', root, root);
     }
+    // 只读根（S1 skill_run）：技能目录可见可读、不可写——脚本改不了自己（哈希锚定）。
+    // 词法+canonical 双形，与 resolveJailRoots 的归一化同口径（别名根经 symlink 也匹配）。
+    for (const root of config?.readonlyRoots ?? []) {
+      const lexical = resolve(root);
+      bwrapArgs.push('--ro-bind-try', lexical, lexical);
+      const canonical = await realpath(lexical).catch(() => null);
+      if (canonical && canonical !== lexical) {
+        bwrapArgs.push('--ro-bind-try', canonical, canonical);
+      }
+    }
     bwrapArgs.push('--chdir', opts.cwd, '--', file, ...args);
 
     const applied: ProcessIsolationProfile = {
@@ -463,7 +473,13 @@ export class ProcessSandbox implements SandboxProvider {
         `octopi-sb-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.sb`,
       );
       try {
-        await writeFile(generatedPath, buildSeatbeltProfile(roots, network), { encoding: 'utf8', mode: 0o600 });
+        await writeFile(
+          generatedPath,
+          buildSeatbeltProfile(roots, network, {
+            readonlyRoots: config?.readonlyRoots ?? [],
+          }),
+          { encoding: 'utf8', mode: 0o600 },
+        );
         profilePath = generatedPath;
         denyExec = DEFAULT_PRIVILEGE_DENY_EXEC;
       } catch (err) {
@@ -731,7 +747,7 @@ async function realpathSafe(p: string): Promise<string | null> {
 export function buildSeatbeltProfile(
   roots: string[],
   network: 'open' | 'deny',
-  extra?: { privilegeDenyExec?: string[] },
+  extra?: { privilegeDenyExec?: string[]; readonlyRoots?: string[] },
 ): string {
   const esc = (p: string): string => {
     // A newline would break out of the profile's string literal; refuse loudly
@@ -763,6 +779,11 @@ export function buildSeatbeltProfile(
     lines.push(`(allow file-write* (literal "${esc(dev)}"))`);
   }
   lines.push('(allow file-write* (subpath "/dev/fd"))');
+  // 只读根（S1 skill_run / F6）：Seatbelt 规则后置覆盖——deny 放在 allow roots
+  // 之后压掉父路径 allow（homeWrite 下 $HOME 可写，但技能目录必须拒写）。
+  for (const root of extra?.readonlyRoots ?? []) {
+    lines.push(`(deny file-write* (subpath "${esc(root)}"))`);
+  }
   return lines.join('\n') + '\n';
 }
 

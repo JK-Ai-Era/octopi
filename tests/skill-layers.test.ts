@@ -71,8 +71,10 @@ describe('skill two-layer discovery', () => {
     await mgr.discover([sharedDir, agentDir]);
 
     const content = await mgr.load('alpha');
-    expect(content).toContain('AGENT OVERRIDE BODY');
-    expect(content).not.toContain('SHARED BODY');
+    expect(content.status).toBe('ok');
+    if (content.status !== 'ok') return;
+    expect(content.body).toContain('AGENT OVERRIDE BODY');
+    expect(content.body).not.toContain('SHARED BODY');
   });
 
   test('无覆盖时 load() 读共享层内容（sourceOf 各自回源）', async () => {
@@ -82,7 +84,9 @@ describe('skill two-layer discovery', () => {
     await mgr.discover([sharedDir, agentDir]);
 
     const content = await mgr.load('alpha');
-    expect(content).toContain('SHARED BODY');
+    expect(content.status).toBe('ok');
+    if (content.status !== 'ok') return;
+    expect(content.body).toContain('SHARED BODY');
   });
 
   test('layer 标注：首层 shared、其余 agent', async () => {

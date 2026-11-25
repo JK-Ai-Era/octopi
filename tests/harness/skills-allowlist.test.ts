@@ -3,7 +3,7 @@
  *
  * 防回归背景：该键自声明以来无消费方（skills 一律目录全量发现）；
  * v0.98.12 接线为 allowlist（undefined = 全部启用），discover 未列入的
- * Skill 不进索引、load 恒 null。
+ * Skill 不进索引、load 恒 not_found。
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -35,13 +35,15 @@ describe('DefaultSkillManager only allowlist', () => {
     expect(mgr.list().map((s) => s.id).sort()).toEqual(['alpha', 'beta']);
   });
 
-  it('with allowlist: only listed ids are indexed, others load as null', async () => {
+  it('with allowlist: only listed ids are indexed, others load as not_found', async () => {
     const mgr = new DefaultSkillManager(undefined, { only: ['alpha'] });
     await mgr.discover(dir);
     expect(mgr.list().map((s) => s.id)).toEqual(['alpha']);
     expect(mgr.get('beta')).toBeNull();
-    await expect(mgr.load('beta')).resolves.toBeNull();
-    await expect(mgr.load('alpha')).resolves.toContain('body');
+    await expect(mgr.load('beta')).resolves.toEqual({ status: 'not_found' });
+    const loaded = await mgr.load('alpha');
+    expect(loaded.status).toBe('ok');
+    if (loaded.status === 'ok') expect(loaded.body).toContain('body');
     expect(mgr.formatForPrompt()).not.toContain('beta');
   });
 

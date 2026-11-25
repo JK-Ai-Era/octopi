@@ -1342,12 +1342,25 @@ export class AgentBuilder {
       }
     }
 
-    // skill_submit / skill_status 必须在 buildCore 之前注册（Agent 构造时从 ToolBus 快照 tools）
+    // skill_submit / skill_status（lifecycle 面）必须在 buildCore 之前注册（Agent 构造时从 ToolBus 快照 tools）
     if (this._skillLifecycle && !this._toolBus.getTool('skill_submit')) {
-      const { createSkillTools } = await import(
+      const { createSkillLifecycleTools } = await import(
         '../extension/plugin-ecosystem/tools/skill-tools.js'
       );
-      for (const t of createSkillTools({ lifecycle: this._skillLifecycle })) {
+      for (const t of createSkillLifecycleTools(this._skillLifecycle)) {
+        this._toolBus.register(t);
+      }
+    }
+    // skill_read / skill_run（消费面，F10）：不绑 lifecycle——嵌入式/无 skill-state
+    // 部署同样要有消费面；manager 经 provider 运行期解析（注册先于 discover）
+    if (
+      (this._skillDirectory || this._skillSharedDirectory) &&
+      !this._toolBus.getTool('skill_read')
+    ) {
+      const { createSkillConsumptionTools } = await import(
+        '../extension/plugin-ecosystem/tools/skill-tools.js'
+      );
+      for (const t of createSkillConsumptionTools(() => this._skillManager ?? undefined)) {
         this._toolBus.register(t);
       }
     }
@@ -1896,6 +1909,8 @@ export class AgentBuilder {
           ...(this._skillAllowlist ? { only: this._skillAllowlist } : {}),
           // 兜底路径同样过准入闸门（P0）：无 gate 的兜底 = 同批目录二次 discover 全放行
           ...(this._skillLifecycle ? { gate: this._skillLifecycle } : {}),
+          // 消费期漂移锚定（§12.3）：load 命令展开与 skill_read 共用同一守卫
+          ...(this._skillLifecycle ? { loadGuard: this._skillLifecycle } : {}),
         },
       );
       try {

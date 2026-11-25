@@ -179,3 +179,65 @@ describe('P1-7 回归：解析器不放行认不出的形态', () => {
     expect(parsed!.meta.allowedTools).toBeUndefined();
   });
 });
+
+// ─────────────────────────────────────────────
+// S1 §12.3/§12.4 消费面新规则：SKILL.md 硬限 + scripts/ 二进制禁令
+// ─────────────────────────────────────────────
+
+describe('validateSkillDir（S1 消费面规则）', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'skill-s1-rules-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('scripts/ 二进制 → error binary_in_scripts（审查内在要求）', () => {
+    const skillDir = join(dir, 'binny');
+    mkdirSync(join(skillDir, 'scripts'), { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: binny\ndescription: x\n---\nbody');
+    writeFileSync(join(skillDir, 'scripts', 'tool.sh'), '#!/bin/bash\necho ok\n');
+    writeFileSync(join(skillDir, 'scripts', 'evil.bin'), Buffer.from([0x7f, 0x45, 0x00, 0x01]));
+    const result = validateSkillDir(skillDir);
+    expect(result.ok).toBe(false);
+    const hit = result.issues.find((i) => i.code === 'binary_in_scripts');
+    expect(hit).toBeDefined();
+    expect(hit!.field).toBe('scripts/evil.bin');
+    expect(hit!.severity).toBe('error');
+  });
+
+  test('assets/ 下二进制不拦（只禁 scripts/）', () => {
+    const skillDir = join(dir, 'assets-ok');
+    mkdirSync(join(skillDir, 'assets'), { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: assets-ok\ndescription: x\n---\nbody');
+    writeFileSync(join(skillDir, 'assets', 'logo.png'), Buffer.from([0x89, 0x50, 0x00]));
+    const result = validateSkillDir(skillDir);
+    expect(result.issues.find((i) => i.code === 'binary_in_scripts')).toBeUndefined();
+  });
+
+  test('SKILL.md 超硬限 → error skill_md_oversized', () => {
+    const skillDir = join(dir, 'huge');
+    mkdirSync(skillDir, { recursive: true });
+    const huge = 'x'.repeat(200 * 1024 + 1);
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---\nname: huge\ndescription: x\n---\n${huge}`,
+    );
+    const result = validateSkillDir(skillDir);
+    const hit = result.issues.find((i) => i.code === 'skill_md_oversized');
+    expect(hit).toBeDefined();
+    expect(hit!.severity).toBe('error');
+    expect(result.ok).toBe(false);
+  });
+
+  test('SKILL.md 硬限内不误报（既有 body_too_long 软限保持独立）', () => {
+    const skillDir = join(dir, 'normal');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: normal\ndescription: x\n---\nbody');
+    const result = validateSkillDir(skillDir);
+    expect(result.issues.find((i) => i.code === 'skill_md_oversized')).toBeUndefined();
+  });
+});

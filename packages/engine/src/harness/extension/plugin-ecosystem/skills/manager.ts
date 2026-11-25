@@ -13,13 +13,99 @@
  * 对齐标准：https://agentskills.io/integrate-skills
  */
 
-import { readFileSync, readdirSync, existsSync } from 'fs';
-import { dirname, join, resolve } from 'path';
-import type { SkillDefinition, SkillManager } from './types.js';
+import { readFileSync, readdirSync, existsSync, statSync, realpathSync, lstatSync } from 'fs';
+import { createHash } from 'node:crypto';
+import { dirname, join, relative, resolve, sep } from 'path';
+import type {
+  SkillDefinition,
+  SkillFileEntry,
+  SkillFileLoadResult,
+  SkillLoadResult,
+  SkillManager,
+} from './types.js';
 import { parseSkillFile, type SkillFrontmatter } from './frontmatter.js';
 import { renderSkillIndexEntries } from './index-render.js';
-import { hashSkillDir } from './hash.js';
-import type { SkillAdmissionGate } from './lifecycle.js';
+import { hashSkillDir, hashSkillFiles } from './hash.js';
+import type { SkillAdmissionGate, SkillLoadGuard, SkillLoadVerdict } from './lifecycle.js';
+
+// ── 读取面常量（消费面；提交面阈值在 validate.ts 各管各层） ──
+
+/** 附件单次返回行数上限（与 file_read 默认同口径）；export 供工具面同源复用（F16） */
+export const DEFAULT_READ_LIMIT = 2000;
+/** limit 参数硬顶（F4：模型可控参数不得绕过截断防线） */
+export const MAX_READ_LIMIT = 5000;
+/** 附件读取大小安全阀（超限拒读，防内存打爆；快照层整包 fail-closed） */
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+/** 快照文件数上限（F27：vendored 大目录防 walk 无界） */
+const SNAPSHOT_MAX_FILES = 20_000;
+/** 清单条目数上限（超出「+N more」如实标注） */
+const LIST_MAX = 200;
+/** 清单条目「大文件」阈值（超此只标类型+大小，不读内容） */
+const LARGE_ENTRY_BYTES = 1024 * 1024;
+/** 首行提要长度上限 */
+const EXCERPT_MAX = 120;
+/** 提要探测读取量 */
+const EXCERPT_READ_BYTES = 4096;
+
+/** 二进制探测：前 8KB 含 NUL 即判二进制（与 file 嗅探同口径的轻量版） */
+function isProbablyBinary(buf: Buffer): boolean {
+  const probe = buf.subarray(0, 8192);
+  return probe.includes(0);
+}
+
+/** 清单条目：从快照字节判类型；文本小文件带首行提要（不二次读盘，F14） */
+function describeAttachment(rel: string, bytes: Buffer): SkillFileEntry {
+  if (bytes.length > LARGE_ENTRY_BYTES) return { path: rel, bytes: bytes.length, kind: 'large' };
+  if (isProbablyBinary(bytes)) return { path: rel, bytes: bytes.length, kind: 'binary' };
+  const head = bytes.subarray(0, EXCERPT_READ_BYTES).toString('utf-8');
+  const firstLine = head.split('\n', 1)[0] ?? '';
+  return {
+    path: rel,
+    bytes: bytes.length,
+    kind: 'text',
+    excerpt: firstLine.trim().slice(0, EXCERPT_MAX),
+  };
+}
+
+/**
+ * 附件二次 containment：relPath 解析后必须落在技能目录内。
+ *
+ * 三重拒绝：绝对路径 / `..` 段（词法）/ symlink 逃逸（realpath 后仍在目录内）。
+ * validate 拒绝 symlink，但 dropped-in 来源不过校验——消费面必须自防。
+ * skill_read 附件与 skill_run 脚本共用（One source of truth）。
+ *
+ * @param skillDir - 技能目录绝对路径
+ * @param relPath - 模型给出的相对路径
+ * @returns 解析后的绝对路径，或拒绝原因
+ */
+export function resolveAttachmentPath(
+  skillDir: string,
+  relPath: string,
+): { abs: string } | { forbidden: string; reason: string } {
+  const cleaned = relPath.trim().replace(/\\/g, '/');
+  if (!cleaned || cleaned.startsWith('/') || /^[A-Za-z]:/.test(cleaned)) {
+    return { forbidden: relPath, reason: 'absolute paths are not allowed; pass a path inside the skill' };
+  }
+  const segments = cleaned.split('/');
+  if (segments.includes('..')) {
+    return { forbidden: relPath, reason: 'path traversal ("..") is not allowed' };
+  }
+  const abs = resolve(skillDir, ...segments);
+  // realpath 双查：symlink 指向目录外 = 逃逸（词法上无 `..` 也可能出去）
+  const realDir = realpathSync(skillDir);
+  let realTarget: string;
+  try {
+    realTarget = realpathSync(abs);
+  } catch {
+    // 不存在的文件交由调用方按 not_found 处理；只要词法已收口即不报 forbidden
+    return { abs };
+  }
+  const prefix = realDir.endsWith(sep) ? realDir : realDir + sep;
+  if (realTarget !== realDir && !realTarget.startsWith(prefix)) {
+    return { forbidden: relPath, reason: 'symlink escapes the skill directory' };
+  }
+  return { abs: realTarget };
+}
 
 // ── SkillSource 接口 ──
 
@@ -39,6 +125,8 @@ export interface DiscoveredSkill {
     requiredTools?: string[];
     /** frontmatter.command（已规范化；非法则不透出） */
     command?: string;
+    /** metadata.interpreter（skill_run 解释器声明；S1 §12.4） */
+    interpreter?: string;
   };
 }
 
@@ -112,6 +200,13 @@ export class FileSystemSkillSource implements SkillSource {
 
       const skillFile = join(absDir, entry.name, 'SKILL.md');
       if (!existsSync(skillFile)) continue;
+      // F26：SKILL.md 本身是 symlink（可能指向目录外）不入索引——
+      // discover 是消费面的第一道门，dropped-in 不过 validate 必须自防
+      try {
+        if (lstatSync(skillFile).isSymbolicLink()) continue;
+      } catch {
+        continue;
+      }
 
       const parsed = parseSkillMdFile(skillFile);
       if (!parsed?.meta.name || !parsed.meta.description) continue;
@@ -126,6 +221,7 @@ export class FileSystemSkillSource implements SkillSource {
           requiredTools: parsed.meta.allowedTools,
           // frontmatter.ts 已规范化；非法 command 不透出
           command: parsed.meta.command,
+          interpreter: parsed.meta.metadata?.interpreter,
         },
       });
     }
@@ -160,15 +256,18 @@ export class DefaultSkillManager implements SkillManager {
   private readonly only?: ReadonlySet<string>;
   /** 准入闸门（lifecycle 实现）：仅多层装配的 agent 覆盖层应用；shared 层放盘信任不过闸 */
   private readonly gate?: SkillAdmissionGate;
+  /** 消费期加载守卫（lifecycle 实现）：load 时审查哈希锚定（设计 §12.3）；缺省不锚定（嵌入式/测试自担） */
+  private readonly loadGuard?: SkillLoadGuard;
 
   /**
    * @param sourceOrDirectory - SkillSource 实例或目录路径（向后兼容）
-   * @param options.only - 启用的 Skill id allowlist（缺省全部）；discover 未列入的 Skill 不进索引、load 恒 null
+   * @param options.only - 启用的 Skill id allowlist（缺省全部）；discover 未列入的 Skill 不进索引、load 恒 not_found
    * @param options.gate - discover 准入闸门（arch/skill-creation-design.md §6）；缺省无闸门（嵌入式/测试自担）
+   * @param options.loadGuard - 消费期加载守卫（§12.3 漂移锚定）；缺省不锚定
    */
   constructor(
     sourceOrDirectory?: SkillSource | string,
-    options?: { only?: string[]; gate?: SkillAdmissionGate },
+    options?: { only?: string[]; gate?: SkillAdmissionGate; loadGuard?: SkillLoadGuard },
   ) {
     if (typeof sourceOrDirectory === 'string') {
       this.source = new FileSystemSkillSource(sourceOrDirectory);
@@ -177,6 +276,7 @@ export class DefaultSkillManager implements SkillManager {
     }
     this.only = options?.only ? new Set(options.only) : undefined;
     this.gate = options?.gate;
+    this.loadGuard = options?.loadGuard;
   }
 
   /**
@@ -249,6 +349,7 @@ export class DefaultSkillManager implements SkillManager {
           disableModelInvocation: item.meta.disableModelInvocation,
           requiredTools: item.meta.requiredTools,
           command: item.meta.command,
+          interpreter: item.meta.interpreter,
           ...(unreviewed ? { unreviewed: true } : {}),
         };
         this.skills.set(skill.id, skill);
@@ -301,17 +402,251 @@ export class DefaultSkillManager implements SkillManager {
   }
 
   /**
-   * 加载 Skill 完整内容（LLM 按需调用）
+   * 消费面快照（单 IO；S1 评审 F3 结构修）。
    *
-   * 通过 SkillSource 加载，支持热重载。
+   * 一次读取技能目录全部字节 → 从**本次读到的字节**算内容哈希 → 与登记锚点
+   * 比对 → 从同一份字节服务消费。哈希与所服务字节同源，闭合「锚定算 A、
+   * 消费读 B」的 TOCTOU（同尺寸替换窗口）。
+   *
+   * 全程 fail-closed：目录不可读/单文件超读取阀/文件数超上限 → 拒绝消费并
+   * 报因（F2 不抛原始 fs 异常；F4 字节闸；F27 walk 上限）。
+   *
+   * @param skillId - 技能 id（调用方应先经 get() 确认在索引）
+   * @returns 快照（rel → 字节）+ 锚定判定，或拒绝原因
    */
-  async load(skillId: string): Promise<string | null> {
+  consume(skillId: string):
+    | { ok: true; files: Map<string, Buffer>; skippedSymlinks: Set<string>; unreviewed: boolean }
+    | {
+        ok: false;
+        status: 'not_found' | 'refused';
+        kind?: 'hash_drift' | 'disabled' | 'not_approved' | 'invalid_id' | 'unreadable';
+        reason: string;
+      } {
+    const skill = this.skills.get(skillId);
+    if (!skill) return { ok: false, status: 'not_found', reason: 'skill not found in the index' };
+    const skillDir = dirname(skill.filePath);
+
+    const files = new Map<string, Buffer>();
+    const skippedSymlinks = new Set<string>();
+    let count = 0;
+    try {
+      const walk = (dir: string): void => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const abs = join(dir, entry.name);
+          // symlink 不消费（F26：SKILL.md 若是 symlink 指目录外，walk 跳过 =
+          // 不入快照不入哈希 = 不被消费；validate 拒绝的形态 dropped-in 也自防）
+          if (entry.isSymbolicLink()) {
+            // 记名供消费面显式报「symlink 拒」而非含糊的 not_found（评审 5.1）
+            skippedSymlinks.add(relative(skillDir, abs).split(sep).join('/'));
+            continue;
+          }
+          if (entry.isDirectory()) {
+            walk(abs);
+            continue;
+          }
+          if (!entry.isFile()) continue;
+          count += 1;
+          if (count > SNAPSHOT_MAX_FILES) {
+            throw new Error(`skill has more than ${SNAPSHOT_MAX_FILES} files`);
+          }
+          const rel = relative(skillDir, abs).split(sep).join('/');
+          const bytes = readFileSync(abs);
+          if (bytes.length > MAX_ATTACHMENT_BYTES) {
+            throw new Error(`file "${rel}" exceeds the ${MAX_ATTACHMENT_BYTES}-byte read cap`);
+          }
+          files.set(rel, bytes);
+        }
+      };
+      walk(skillDir);
+    } catch (err) {
+      // 目录消失/权限/超限都归「不可读」：fail-closed 拒消费，报因不抛原始异常（F2）
+      return {
+        ok: false,
+        status: 'refused',
+        kind: 'unreadable',
+        reason: `cannot read skill bundle: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    // 锚定：哈希来自本次读到的字节（hashSkillFiles 单源）——与消费内容同源
+    const verdict = this.loadGuard
+      ? this.loadGuard.checkLoad(
+          skillId,
+          hashSkillFiles([...files].map(([rel, bytes]) => ({ rel, bytes }))),
+        )
+      : { allow: true as const, unreviewed: skill.unreviewed === true };
+    if (!verdict.allow) {
+      return {
+        ok: false,
+        status: 'refused',
+        kind: verdict.kind ?? 'hash_drift',
+        reason: verdict.reason ?? 'content hash drift',
+      };
+    }
+    return { ok: true, files, skippedSymlinks, unreviewed: verdict.unreviewed === true };
+  }
+
+  /**
+   * 审查哈希锚定（消费面前置判定；设计 §12.3）。
+   *
+   * ⚠️ 轻量版（不读内容，仅复算目录哈希）——存在「算哈希与读内容不同源」的
+   * TOCTOU 窗口，仅供诊断/预检用。**正文与附件消费一律走 {@link consume}**
+   * （单 IO 快照，哈希与字节同源）。
+   *
+   * @param skillId - 技能 id（调用方应先经 get() 确认在索引）
+   * @returns 判定（allow / unreviewed 标注 / 拒绝原因）；fs 异常 fail-closed（F2）
+   */
+  verifyAnchor(skillId: string): SkillLoadVerdict {
+    const skill = this.skills.get(skillId);
+    if (!skill) return { allow: false, kind: 'invalid_id', reason: 'skill not found in the enabled index' };
+    if (!this.loadGuard) return { allow: true, unreviewed: skill.unreviewed === true };
+    try {
+      return this.loadGuard.checkLoad(skillId, hashSkillDir(dirname(skill.filePath)));
+    } catch (err) {
+      return {
+        allow: false,
+        kind: 'unreadable',
+        reason: `anchor verification failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
+  /**
+   * 加载 Skill 完整内容（消费面单源：skill_read 工具 + /name 命令展开共用）。
+   *
+   * 走 {@link consume} 单 IO 快照（审查哈希锚定与正文同源；§12.3）。
+   */
+  async load(skillId: string): Promise<SkillLoadResult> {
+    const consumed = this.consume(skillId);
+    if (!consumed.ok) {
+      return consumed.status === 'not_found'
+        ? { status: 'not_found' }
+        : { status: 'refused', kind: consumed.kind ?? 'hash_drift', reason: consumed.reason };
+    }
+    const raw = consumed.files.get('SKILL.md');
+    if (!raw) return { status: 'not_found' };
+    // SKILL.md 超读取阀已在 consume fail-closed；此处只按 frontmatter 剥壳（与 source.load 同语义）
+    const text = raw.toString('utf-8').replace(/\r\n/g, '\n');
+    const fmMatch = text.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
+    const body = (fmMatch ? fmMatch[1] : text).trim();
+    return {
+      status: 'ok',
+      body,
+      totalLines: body.length === 0 ? 0 : body.split('\n').length,
+      fileHash: `sha256:${createHash('sha256').update(body).digest('hex')}`,
+      unreviewed: consumed.unreviewed,
+    };
+  }
+
+  /**
+   * 技能附件清单（skill_read 清单面；设计 §12.3 清单上限防线）。
+   *
+   * 走 {@link consume} 快照（字节同源；F14：walk 失败如实带 error，不再谎报 0 附件）。
+   * SKILL.md 不列（正文面已给）。文本小文件带首行提要（EXCERPT_MAX 字符），
+   * 二进制/大文件只标类型+大小。条目按路径排序，截 LIST_MAX 条，total 供「+N more」。
+   *
+   * @param skillId - 技能 id
+   * @returns 清单 + 全量条目数（+可选 error）；id 不在索引时 null
+   */
+  async listFiles(
+    skillId: string,
+  ): Promise<{ entries: SkillFileEntry[]; total: number; error?: string } | null> {
     const skill = this.skills.get(skillId);
     if (!skill) return null;
+    const consumed = this.consume(skillId);
+    if (!consumed.ok) {
+      return { entries: [], total: 0, error: consumed.reason };
+    }
+    const rels = [...consumed.files.keys()].filter((rel) => rel !== 'SKILL.md').sort();
+    const total = rels.length;
+    const entries: SkillFileEntry[] = [];
+    for (const rel of rels.slice(0, LIST_MAX)) {
+      entries.push(describeAttachment(rel, consumed.files.get(rel)!));
+    }
+    return { entries, total };
+  }
 
-    // 双层发现：各自 skill 回各自 source（agent 层覆盖后读到的必须是覆盖层文件）
-    const source = this.sourceOf.get(skillId) ?? this.source;
-    return source.load(skillId, skill.filePath);
+  /**
+   * 读取技能附件（skill_read file= 分支；设计 §12.3）。
+   *
+   * 走 {@link consume} 快照（审查锚定与字节同源）。二次 containment：
+   * relPath 必须落在该技能目录内（拒绝对路径/`..`/symlink 逃逸）。
+   *
+   * @param skillId - 技能 id
+   * @param relPath - 技能目录内相对路径（SKILL.md 由 {@link load} 服务，此处按附件读）
+   * @param opts.offset - 起始行（1-indexed）
+   * @param opts.limit - 返回行数上限（缺省 DEFAULT_READ_LIMIT，与 file_read 同口径；硬顶 MAX_READ_LIMIT）
+   * @returns 附件内容（分段）或明确拒绝原因
+   */
+  async loadFile(
+    skillId: string,
+    relPath: string,
+    opts?: { offset?: number; limit?: number },
+  ): Promise<SkillFileLoadResult> {
+    const skill = this.skills.get(skillId);
+    if (!skill) return { status: 'not_found' };
+    const consumed = this.consume(skillId);
+    if (!consumed.ok) {
+      return consumed.status === 'not_found'
+        ? { status: 'not_found' }
+        : { status: 'refused', kind: consumed.kind ?? 'hash_drift', reason: consumed.reason };
+    }
+
+    // 二次 containment（快照 key 已归一 `/`；此处判逃逸——symlink 已在快照层跳过）
+    const cleaned = relPath.trim().replace(/\\/g, '/');
+    if (!cleaned || cleaned.startsWith('/') || /^[A-Za-z]:/.test(cleaned)) {
+      return {
+        status: 'path_forbidden',
+        reason: 'absolute paths are not allowed; pass a path inside the skill',
+      };
+    }
+    if (cleaned.split('/').includes('..')) {
+      return { status: 'path_forbidden', reason: 'path traversal ("..") is not allowed' };
+    }
+    const raw = consumed.files.get(cleaned);
+    if (!raw) {
+      // symlink 不入快照——显式报拒（symlink 形态是被拒不是缺失；评审 5.1）
+      if (consumed.skippedSymlinks.has(cleaned)) {
+        return {
+          status: 'path_forbidden',
+          reason: 'symbolic links are not consumed (path-containment risk)',
+        };
+      }
+      return { status: 'not_found' };
+    }
+    if (isProbablyBinary(raw)) return { status: 'binary' };
+
+    const text = raw.toString('utf-8').replace(/\r\n/g, '\n');
+    const lines = text.split('\n');
+    const totalLines = text.length === 0 ? 0 : lines.length;
+    const offset = Math.max(1, Math.floor(opts?.offset ?? 1));
+    // F4：limit 模型可控 → 硬顶 MAX_READ_LIMIT（截断防线不被超大参数绕过）
+    const limit = Math.min(Math.max(1, Math.floor(opts?.limit ?? DEFAULT_READ_LIMIT)), MAX_READ_LIMIT);
+    // F15：越界 offset 不静默钳制到末行——显式 outOfRange + 空内容
+    if (offset > totalLines && totalLines > 0) {
+      return {
+        status: 'ok',
+        content: '',
+        totalLines,
+        fromLine: offset,
+        toLine: offset - 1,
+        truncated: false,
+        outOfRange: true,
+        fileHash: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
+      };
+    }
+    const fromLine = Math.max(1, Math.min(offset, Math.max(totalLines, 1)));
+    const toLine = Math.min(fromLine + limit - 1, totalLines);
+    const content = lines.slice(fromLine - 1, toLine).join('\n');
+    return {
+      status: 'ok',
+      content,
+      totalLines,
+      fromLine,
+      toLine,
+      truncated: toLine < totalLines,
+      fileHash: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
+    };
   }
 
   list(): SkillDefinition[] {

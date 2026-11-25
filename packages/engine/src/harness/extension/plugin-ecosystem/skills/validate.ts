@@ -28,6 +28,14 @@ export const SKILL_BODY_RECOMMENDED_LINES = 500;
 /** 技能目录总大小安全阀（防提交面 DoS；error） */
 export const SKILL_DIR_MAX_BYTES = 8 * 1024 * 1024;
 
+// ── 消费面大小防线（S1 §12.3 三层防线的提交侧；读取侧截断在 manager/tools） ──
+
+/**
+ * SKILL.md 硬限（error：正文随 skill_read 进上下文，必须可预算）。
+ * 软限引导沿用既有 `body_too_long`（SKILL_BODY_RECOMMENDED_LINES，建议拆 references/）。
+ */
+export const SKILL_MD_MAX_BYTES = 200 * 1024;
+
 // ── 类型 ──
 
 export type SkillIssueSeverity = 'error' | 'warning';
@@ -172,6 +180,29 @@ export function validateSkillDir(skillDir: string): SkillValidationResult {
     });
   }
 
+  // scripts/ 二进制禁令（§12.4）：脚本必须是可审计文本源码——审查承诺
+  // 「LLM 能读完 scripts/ 才允许自动批」对二进制失效，所以是审查机制的内在要求。
+  for (const f of files) {
+    // F5：rel 按平台分隔符归一——Windows 上 `scripts\x.exe` 必须同样命中
+    if (!f.rel.split(sep).join('/').startsWith('scripts/')) continue;
+    let head: Buffer;
+    try {
+      head = readFileSync(f.abs).subarray(0, 8192);
+    } catch {
+      continue; // 读不出的文件由后续检查报 unreadable，此处不重复报
+    }
+    if (head.includes(0)) {
+      issues.push({
+        severity: 'error',
+        code: 'binary_in_scripts',
+        field: f.rel,
+        message:
+          'scripts/ must contain auditable text source only — binary files are not reviewable ' +
+          '(put binaries in assets/ instead, or vendor source)',
+      });
+    }
+  }
+
   const skillMd = files.find((f) => f.rel === 'SKILL.md');
   if (!skillMd) {
     issues.push({
@@ -194,6 +225,16 @@ export function validateSkillDir(skillDir: string): SkillValidationResult {
       message: `cannot read SKILL.md: ${(err as Error).message}`,
     });
     return { ok: false, issues };
+  }
+
+  // SKILL.md 硬限（§12.3 消费面三层防线的提交侧）：正文随 skill_read 进上下文
+  if (skillMd.bytes > SKILL_MD_MAX_BYTES) {
+    issues.push({
+      severity: 'error',
+      code: 'skill_md_oversized',
+      field: 'SKILL.md',
+      message: `SKILL.md is ${skillMd.bytes} bytes; max is ${SKILL_MD_MAX_BYTES} (move detail to references/)`,
+    });
   }
 
   const parsed = parseSkillFile(raw);

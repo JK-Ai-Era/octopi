@@ -69,7 +69,7 @@ type EffectIntentPayload =
       cwd?: string;
     }
   | {
-      /** project_run / package_install — executes workspace-defined scripts. Not shellEscape-gated. */
+      /** project_run / package_install / skill_run（§12.4）— workspace/plugin-defined scripts via dedicated allowlisted tools. Not shellEscape-gated（shellEscape 只闸 shell 工具；skill_run 走审查锚定的包内容 + 固定解释器，拍板 §12.7-1）. */
       kind: 'runner';
       command: string;
       cwd?: string;

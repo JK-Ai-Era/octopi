@@ -333,3 +333,112 @@ describe('评审修复回归（2026-11-25 独立评审 P0/P1）', () => {
     expect(JSON.stringify(preview)).not.toContain(sub.stagingPath); // 内部路径不出 DTO
   });
 });
+
+// ─────────────────────────────────────────────
+// checkLoad — 消费期加载判定（S1 §12.3 load 单源升级）
+// ─────────────────────────────────────────────
+
+describe('SkillLifecycle.checkLoad（消费期漂移锚定）', () => {
+  let home: string;
+  let db: SkillStateDatabase;
+  let lifecycle: SkillLifecycle;
+
+  beforeEach(async () => {
+    home = mkdtempSync(join(tmpdir(), 'skill-home-'));
+    db = await SkillStateDatabase.create({ dbPath: ':memory:' });
+    lifecycle = new SkillLifecycle({ db, octopiHome: home, agentId: 'agent-1' });
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test('未登记（shared 放盘未登记）→ 放行 + unreviewed', () => {
+    const v = lifecycle.checkLoad('any-skill', 'sha256:aaa');
+    expect(v.allow).toBe(true);
+    expect(v.unreviewed).toBe(true);
+  });
+
+  test('submitted 漂移 → 拒（审查的是内容不是名字）', () => {
+    db.upsertSkill({
+      agentId: 'agent-1',
+      skillId: 'sub-skill',
+      source: 'submitted',
+      reviewStatus: 'approved',
+      enabled: true,
+      contentHash: 'sha256:old',
+      unreviewed: false,
+    });
+    const v = lifecycle.checkLoad('sub-skill', 'sha256:new');
+    expect(v.allow).toBe(false);
+    expect(v.reason).toContain('resubmit');
+  });
+
+  test('dropped-in 漂移 → 放行 + unreviewed（放盘信任延续）', () => {
+    db.upsertSkill({
+      agentId: 'agent-1',
+      skillId: 'drop-skill',
+      source: 'dropped-in',
+      reviewStatus: 'approved',
+      enabled: true,
+      contentHash: 'sha256:old',
+      unreviewed: true,
+    });
+    const v = lifecycle.checkLoad('drop-skill', 'sha256:new');
+    expect(v.allow).toBe(true);
+    expect(v.unreviewed).toBe(true);
+  });
+
+  test('哈希一致 + approved + enabled → 放行', () => {
+    db.upsertSkill({
+      agentId: 'agent-1',
+      skillId: 'ok-skill',
+      source: 'submitted',
+      reviewStatus: 'approved',
+      enabled: true,
+      contentHash: 'sha256:same',
+      unreviewed: false,
+    });
+    expect(lifecycle.checkLoad('ok-skill', 'sha256:same')).toEqual({
+      allow: true,
+      unreviewed: false,
+    });
+  });
+
+  test('哈希一致但 disabled → 拒（未启用报因）', () => {
+    db.upsertSkill({
+      agentId: 'agent-1',
+      skillId: 'off-skill',
+      source: 'submitted',
+      reviewStatus: 'approved',
+      enabled: false,
+      contentHash: 'sha256:same',
+      unreviewed: false,
+    });
+    const v = lifecycle.checkLoad('off-skill', 'sha256:same');
+    expect(v.allow).toBe(false);
+    expect(v.reason).toContain('disabled');
+  });
+
+  test('哈希一致但 pending → 拒（未过审不得消费）', () => {
+    db.upsertSkill({
+      agentId: 'agent-1',
+      skillId: 'pend-skill',
+      source: 'submitted',
+      reviewStatus: 'pending',
+      enabled: true,
+      contentHash: 'sha256:same',
+      unreviewed: false,
+    });
+    const v = lifecycle.checkLoad('pend-skill', 'sha256:same');
+    expect(v.allow).toBe(false);
+    expect(v.reason).toContain('not approved');
+  });
+
+  test('非法 id → 拒而不抛（与 admit 同规）', () => {
+    const v = lifecycle.checkLoad('bad_id!', 'sha256:x');
+    expect(v.allow).toBe(false);
+    expect(v.reason).toBe('invalid_skill_id');
+  });
+});

@@ -207,7 +207,8 @@ export type { PluginManifest, PluginContributions, PluginHookName, PluginSession
 
 export { DefaultSkillManager, FileSystemSkillSource } from './harness/extension/plugin-ecosystem/skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './harness/extension/plugin-ecosystem/skills/manager.js';
-export type { SkillDefinition, SkillManager } from './harness/extension/plugin-ecosystem/skills/types.js';
+export type { SkillDefinition, SkillManager, SkillLoadResult, SkillFileEntry, SkillFileLoadResult } from './harness/extension/plugin-ecosystem/skills/types.js';
+export type { SkillLoadVerdict, SkillLoadGuard } from './harness/extension/plugin-ecosystem/skills/lifecycle.js';
 /** 产品装配 DTO（非 Kernel）；ModelInfo/ToolPolicy 仍从 core/types 导出 */
 export type { AgentPersona, ModelConfig, AgentDefinition } from './harness/shared/types/agent-definition.js';
 

@@ -140,6 +140,22 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.4 (2026-11-25)
+
+### feat(engine): skill consumption S1 — skill_read/skill_run with single-IO review-anchored reads
+
+技能消费面 S1（`arch/skill-creation-design.md` §12）：技能正文/附件/脚本的按需读取与执行不再依赖通用 `file_read`（strict 非 host 档读不到 `~/.octopi/skills/**` 的缺口），改为 `skill_*` 专属命名空间（拍板 §12.7-1）。
+
+- **`skill_read(id, file?, offset?, limit?)`**：不给 `file` 返回 SKILL.md 正文 + 附件清单（首行提要）一次给出；给 `file` 分段读附件。大小三层防线：读取侧截断 + 续读指针、清单条目/提要上限、`limit` 参数硬顶（5000 行，防超大参数绕过截断）。
+- **`skill_run(id, script, args?, timeout?)`**：技能脚本执行面（§12.4）。解释器三级解析（shebang → `metadata.interpreter` → 扩展名映射；`.bat`/`.cmd` 拒执行，CVE-2024-27980）；执行副本机制（执行字节 = 通过审查锚定的字节）；jail 只读根 = 技能目录（bwrap `--ro-bind-try` + Seatbelt 后置 deny 双后端强制）、写根 = workspace（产出入 shell journal 账本）；`gateEffect kind:'runner'`（不受 shellEscape 闸，host-gate 仍确认）+ `ops.command.executed` 审计（含 unreviewed/jail 标注）。
+- **`SkillManager.load()` 消费面单源升级**：`consume()` 单 IO 快照——读到的字节与内容哈希同源，闭合「锚定算 A、消费读 B」TOCTOU；`/name` 命令展开与工具读取同锚（审查哈希锚定，漂移即拒）；拒绝态细分（`hash_drift`/`disabled`/`not_approved`/`unreadable`——停用不再误报「被篡改」）；SKILL.md symlink 不入索引（F26）。
+- **sandbox `readonlyRoots` 原语**：只读挂载根（bwrap `--ro-bind-try` 词法+canonical 双形；Seatbelt 后置 deny 压掉父路径 allow）。
+- **validate 新规则**：`scripts/` 二进制禁令（可审计文本源码——审查机制内在要求；Windows 分隔符归一）+ SKILL.md 200KB 硬限（软限沿用 `body_too_long`）。
+- **消费面工具注册不绑 lifecycle**：嵌入式/无 skill-state 部署同样有 `skill_read`/`skill_run`（F10）。
+- **独立评审 28 findings 全裁定**（1 blocker 计划内 + 10 major 修复：TOCTOU 快照闭合、锚定异常 fail-closed、读取字节闸、`.bat/.cmd` 注入面拒、Seatbelt 只读、journal 入账、注册拆分、interpreter 分词（`env -S`）等；F7②「shellEscape 旁路」为拍板 §12.7-1 设计意图不修；F28 hardlink 有意不做）。
+
+
+
 ## v0.132.3 (2026-11-25)
 
 ### feat(engine,gateway): skill-creator P4 — 独立 reviewer 委托（消自审）与审查协议单源

@@ -200,7 +200,8 @@ export type {
 } from './extension/plugin-ecosystem/tools/git-status-snapshot.js';
 export { DefaultSkillManager, FileSystemSkillSource } from './extension/plugin-ecosystem/skills/manager.js';
 export type { SkillSource, DiscoveredSkill } from './extension/plugin-ecosystem/skills/manager.js';
-export type { SkillDefinition, SkillManager } from './extension/plugin-ecosystem/skills/types.js';
+export type { SkillDefinition, SkillManager, SkillLoadResult, SkillFileEntry, SkillFileLoadResult } from './extension/plugin-ecosystem/skills/types.js';
+export type { SkillLoadVerdict, SkillLoadGuard } from './extension/plugin-ecosystem/skills/lifecycle.js';
 export { IssueRegistry } from './observability/diagnostics/index.js';
 export type {
   IssueDomain,

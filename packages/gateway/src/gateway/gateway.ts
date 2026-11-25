@@ -3420,6 +3420,8 @@ export class Gateway {
           const skillManager = new DefaultSkillManager(undefined, {
             ...(agent.skills ? { only: agent.skills } : {}),
             ...(lifecycle ? { gate: lifecycle } : {}),
+            // 消费期漂移锚定（§12.3）：/name 命令展开与 skill_read 共用同一守卫
+            ...(lifecycle ? { loadGuard: lifecycle } : {}),
           });
           await skillManager.discover(skillDirs);
           this.registerSkillCommands(skillManager);

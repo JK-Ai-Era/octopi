@@ -45,6 +45,32 @@ export interface SkillAdmissionGate {
   admit(input: { skillId: string; contentHash: string }): SkillAdmission;
 }
 
+/** 消费期加载判定结果（纯判定：无副作用，注册表收敛交给下次 discover/admit） */
+export interface SkillLoadVerdict {
+  /** false = 正文不得消费（审查哈希锚定/登记状态） */
+  allow: boolean;
+  /** 放盘即信任来源（dropped-in）的未审查标注 */
+  unreviewed?: boolean;
+  /** 拒绝分类（消费面按类给不同文案——漂移≠停用≠未过审，F12） */
+  kind?: 'hash_drift' | 'disabled' | 'not_approved' | 'invalid_id' | 'unreadable';
+  /** 拒绝原因（skill_read 报因 / skill-bridge 展开警示） */
+  reason?: string;
+}
+
+/**
+ * 消费期加载守卫（DefaultSkillManager.load 依赖倒置）。
+ *
+ * 与 {@link SkillAdmissionGate} 同源语义（设计 §12.3 load 单源升级）：
+ * - 未登记（shared 放盘未登记 / 嵌入无注册表）→ 放行（放盘即信任）；
+ * - 哈希漂移：submitted → 拒（审查的是内容，不是名字）；
+ *   dropped-in → 放行 + unreviewed 标注（放盘信任延续）；
+ * - 哈希一致 → 按登记状态放行。
+ * 判定纯读无副作用：dropped-in 哈希刷新、submitted 回 pending 由下次 admit 收敛。
+ */
+export interface SkillLoadGuard {
+  checkLoad(skillId: string, contentHash: string): SkillLoadVerdict;
+}
+
 export type SkillSubmitResult =
   | { ok: true; submission: SkillSubmission; issues: SkillIssue[] }
   | { ok: false; issues: SkillIssue[] };
@@ -107,7 +133,7 @@ export interface SkillLifecycleOptions {
 
 // ── 实现 ──
 
-export class SkillLifecycle implements SkillAdmissionGate {
+export class SkillLifecycle implements SkillAdmissionGate, SkillLoadGuard {
   private readonly db: SkillStateDatabase;
   private readonly octopiHome: string;
   private readonly agentId: string;
@@ -473,6 +499,55 @@ export class SkillLifecycle implements SkillAdmissionGate {
       return { admitted: false, reason: 'disabled' };
     }
     return { admitted: true, unreviewed: record.unreviewed };
+  }
+
+  /**
+   * 消费期加载判定（SkillLoadGuard）——admit 同源语义的纯判定版（设计 §12.3）。
+   *
+   * 与 admit 的差异：无副作用。dropped-in 漂移不在此刷新哈希、submitted 漂移
+   * 不在此回 pending——注册表收敛统一交给下次 discover/admit；消费面只回答
+   * 「这段正文现在能不能被消费」。
+   *
+   * @param skillId - 技能 id（discover 已过闸的 id，非法形态拒而不抛）
+   * @param contentHash - 加载时复算的目录内容哈希
+   * @returns 消费判定（allow / unreviewed 标注 / 拒绝原因）
+   */
+  checkLoad(skillId: string, contentHash: string): SkillLoadVerdict {
+    let id: string;
+    try {
+      id = assertSkillId(skillId);
+    } catch {
+      return { allow: false, kind: 'invalid_id', reason: 'invalid_skill_id' };
+    }
+    const record = this.db.getSkill(this.agentId, id);
+    // 未登记：shared 放盘未登记（拍板 §11-2 放盘即信任）/ 嵌入无注册表——放行
+    if (!record) return { allow: true, unreviewed: true };
+    if (record.contentHash !== contentHash) {
+      // 审查的是内容不是名字（与 admit 同源）：
+      // submitted 漂移 = 旧审查作废，正文不得消费；
+      // dropped-in 漂移 = 放盘信任延续（本就 unreviewed），放行新内容
+      if (record.source === 'submitted') {
+        return {
+          allow: false,
+          kind: 'hash_drift',
+          reason:
+            'content changed since review (hash drift) — resubmit via skill_submit for review',
+        };
+      }
+      return { allow: true, unreviewed: true };
+    }
+    // 哈希一致：按登记状态判（与 admit 同源：未过审/停用不得消费）
+    if (record.reviewStatus !== 'approved') {
+      return {
+        allow: false,
+        kind: 'not_approved',
+        reason: `skill is not approved (status: ${record.reviewStatus})`,
+      };
+    }
+    if (!record.enabled) {
+      return { allow: false, kind: 'disabled', reason: 'skill is disabled' };
+    }
+    return { allow: true, unreviewed: record.unreviewed };
   }
 
   /**

@@ -359,6 +359,8 @@ export async function wireAgentBuilder(
         ...(spec.skills ? { only: spec.skills } : {}),
         // 准入闸门（agent 覆盖层）：SkillLifecycle 即 SkillAdmissionGate
         ...(spec.skillLifecycle ? { gate: spec.skillLifecycle } : {}),
+        // 消费期漂移锚定（§12.3）：SkillLifecycle 即 SkillLoadGuard
+        ...(spec.skillLifecycle ? { loadGuard: spec.skillLifecycle } : {}),
       });
       await (skillManager as { discover: (d: string | readonly string[]) => Promise<void> }).discover(
         skillDirs,
