@@ -140,6 +140,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.10 (2026-11-26)
+
+### fix(engine): skills index footer points at skill_read, not file_read
+
+消费面指路牌修正：技能索引 footer 仍教模型「用 `file_read` 读绝对路径」——
+S1 之前的消费面形态（file_read 在非 host 部署读不到技能目录，skill_read 的
+工具描述亦明言勿经 file_read），两处常驻提示互相矛盾。
+
+- footer 改为 `skill_read(id=<name>)` 指路（无 `file` = 激活正文为会话知识；
+  `file=` = 按需查阅附件），并声明 skill_* 命名空间为唯一入口。
+- 操作宪法（default-agents.md）Skill 节顺带最小指名："read the skill first
+  (`skill_read`), then act"——机制细节仍以工具 schema 为单源权威，宪法不复制。
+- 测试：formatForPrompt footer 断言随行为更新。
+
 ## v0.132.9 (2026-11-26)
 
 ### fix(engine): delta entries carry the S4 missing-tools marking

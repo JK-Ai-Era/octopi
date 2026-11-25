@@ -58,8 +58,9 @@ export function renderSkillIndexEntries(
   lines.push('</available_skills>');
   lines.push('');
   lines.push(
-    'Load a skill with file_read using the absolute <path> above (skill files are NOT under the workspace cwd). ' +
-      'Example: file_read(path=<path of the skill you need>)',
+    'Load a skill with skill_read(id=<name>): no file = activate the SKILL.md body as ' +
+      'session knowledge; file=<path> = consult one attachment on demand. ' +
+      'The skill_* namespace is the only way to reach these files.',
   );
 
   return lines.join('\n');

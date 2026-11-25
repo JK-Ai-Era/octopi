@@ -141,13 +141,13 @@ describe('DefaultSkillManager', () => {
       expect(prompt).not.toContain('隐藏 Skill');
     });
 
-    test('末尾提示用绝对 <path> 读取，且说明 skill 不在 workspace', async () => {
+    test('末尾提示用 skill_read 激活/查阅，且声明 skill_* 为唯一入口', async () => {
       await manager.discover(FIXTURES);
 
       const prompt = manager.formatForPrompt();
-      expect(prompt).toContain('file_read');
+      expect(prompt).toContain('skill_read(id=<name>)');
       expect(prompt).toContain('SKILL.md');
-      expect(prompt).toContain('NOT under the workspace');
+      expect(prompt).toContain('skill_* namespace is the only way');
     });
 
     test('无 Skill 时返回空字符串', () => {
