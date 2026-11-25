@@ -265,3 +265,61 @@ describe('skill_read 工具渲染', () => {
     await expect(readTool.handler!({ id: 'alpha' }, undefined as never)).rejects.toThrow('not ready');
   });
 });
+
+describe('S3 激活/老化语义（skill_read ageResult）', () => {
+  it('激活小体量不老化；大体量正文保留+清单降级纯文件名；file=查阅老化指针', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 's3-'));
+    const abs = (p: string) => resolve(dir, p);
+    mkdirSync(abs('alpha/references'), { recursive: true });
+    writeFileSync(abs('alpha/SKILL.md'), '---\nname: alpha\ndescription: D\n---\nBODY');
+    writeFileSync(abs('alpha/references/spec.md'), 'spec content');
+    const mgr = new DefaultSkillManager();
+    await mgr.discover(dir);
+    const [readTool] = createSkillTools({ lifecycle: {} as never, skills: mgr }).filter(
+      (t) => t.definition.name === 'skill_read',
+    );
+    const ager = readTool.ageResult!;
+
+    // 激活小体量：不老化
+    const small = await readTool.handler!({ id: 'alpha' }, undefined as never);
+    expect(ager({ args: { id: 'alpha' }, result: small, chars: 500 })).toBeUndefined();
+
+    // 激活大体量：正文保留，清单降级纯文件名
+    const big = { skill: 'alpha', body: 'x'.repeat(30000), files: [{ path: 'a.md', bytes: 1, kind: 'text' }], filesTotal: 1 };
+    const aged = ager({ args: { id: 'alpha' }, result: big, chars: 31000 });
+    expect(String(aged)).toContain('x'.repeat(30000));
+    expect(String(aged)).toContain('a.md');
+    expect(String(aged)).toContain('skill listing aged');
+    expect(String(aged)).not.toContain('bytes');
+
+    // 纯函数：同输入恒同字节
+    expect(ager({ args: { id: 'alpha' }, result: big, chars: 31000 })).toBe(aged);
+
+    // file= 查阅：老化为重读指针
+    const lookup = await readTool.handler!(
+      { id: 'alpha', file: 'references/spec.md' },
+      undefined as never,
+    );
+    const lookupAged = String(ager({ args: {}, result: lookup, chars: 100 }));
+    expect(lookupAged).toContain('aged tool result');
+    expect(lookupAged).toContain('skill_read(id="alpha", file="references/spec.md")');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('激活分支返回预算标注（activation）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 's3b-'));
+    mkdirSync(resolve(dir, 'alpha'), { recursive: true });
+    writeFileSync(resolve(dir, 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: D\n---\nBODY');
+    const mgr = new DefaultSkillManager();
+    await mgr.discover(dir);
+    const [readTool] = createSkillTools({ lifecycle: {} as never, skills: mgr }).filter(
+      (t) => t.definition.name === 'skill_read',
+    );
+    const r = (await readTool.handler!({ id: 'alpha' }, undefined as never)) as Record<string, unknown>;
+    const activation = r.activation as Record<string, unknown>;
+    expect(activation.bodyChars).toBe(4);
+    expect(activation.approxTokens).toBeGreaterThan(0);
+    expect(String(activation.note)).toContain('session-scoped');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

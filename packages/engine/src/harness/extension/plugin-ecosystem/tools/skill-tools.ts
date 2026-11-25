@@ -228,6 +228,8 @@ function createSkillReadTool(
         },
       },
     },
+    // S3 激活语义（§12.3）：无 file 的调用=激活（正文不老化）；file=查阅（老化指针）
+    ageResult: (input) => ageSkillReadResult(input),
     handler: async (args) => {
       const mgr = resolveSkillManager(skills, 'skill_read');
       const id = (args as { id?: unknown }).id;
@@ -320,6 +322,12 @@ function createSkillReadTool(
         filesOmitted: Math.max(0, (listing?.total ?? 0) - (listing?.entries.length ?? 0)),
         // F14：清单走查失败如实透传，不静默显示 0 附件
         ...(listing?.error ? { filesError: listing.error } : {}),
+        // S3 激活预算标注（§12.3）：正文体量大时模型可自行取舍后续激活
+        activation: {
+          bodyChars: loaded.body.length,
+          approxTokens: Math.ceil(loaded.body.length / 4),
+          note: 'skill body is session-scoped knowledge — it is not aged; call skill_read again if lost',
+        },
       };
     },
   };
@@ -615,6 +623,51 @@ function createSkillSearchTool(
 const SEARCH_OUTPUT_BUDGET = 128 * 1024;
 /** 单行预览截断（共享魔数收敛；S2 评审 Low） */
 const SEARCH_LINE_CAP = 300;
+
+// ── skill_read 激活/老化语义（S3 §12.3） ──
+
+/** 激活结果的老化阈值（字符）：超此清单降级纯文件名，正文仍保留 */
+const SKILL_READ_AGE_THRESHOLD = 24_000;
+
+/**
+ * skill_read 结果老化策略（S3；§12.3 激活语义）。
+ *
+ * 语义：**不给 file 的调用 = 激活**（会话级知识——正文永不老化，清单可降级）；
+ * **给 file 的调用 = 查阅**（临时读取——老化为可重读的指针）。
+ * 纯函数（同 args/result 恒同字节）：体量分档来自 chars，不读时钟/状态。
+ *
+ * @param input - 老化输入（原始 args/result + 序列化字符数）
+ * @returns 替换文本；undefined = 不老化保留原文
+ */
+function ageSkillReadResult({ result, chars }: { result: unknown; chars: number }): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const r = result as Record<string, unknown>;
+  const skillId = typeof r.skill === 'string' ? r.skill : '';
+
+  // file= 分支（查阅语义）：老化为重读指针（词汇同 AGED_POINTER_PREFIX 族）
+  if (typeof r.file === 'string') {
+    return `[aged tool result · pointer] skill_read(id="${skillId}", file="${r.file}") re-reads this attachment`;
+  }
+
+  // 激活分支（正文 + 清单）
+  if (typeof r.body !== 'string') return undefined;
+  if (chars <= SKILL_READ_AGE_THRESHOLD) return undefined;
+
+  // 大体量激活：正文保留（会话级知识），清单降级纯文件名（确定性重建）
+  const files = Array.isArray(r.files) ? r.files : [];
+  const names = files
+    .map((f) =>
+      f && typeof f === 'object'
+        ? String((f as Record<string, unknown>).path ?? '')
+        : String(f),
+    )
+    .filter(Boolean);
+  return (
+    `${r.body}\n\n` +
+    `[skill listing aged → file names only; skill_list(id="${skillId}") re-lists sizes/kinds]\n` +
+    names.join('\n')
+  );
+}
 
 /** 单行预览截断（content 与上下文行同口径） */
 function capLine(line: string): string {

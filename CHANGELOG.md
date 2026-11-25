@@ -140,6 +140,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.6 (2026-11-25)
+
+### feat(engine): skill consumption S3 — skill_read activation semantics (session-scoped body, aged listings)
+
+技能激活/老化语义 S3（`arch/skill-creation-design.md` §12.3）：技能正文是「会话级知识」而非「临时查文件」，与 `file_read` 的 `[aged]` 行为刻意不同。
+
+- **激活语义**：`skill_read` 不带 `file` 的调用 = 激活——正文永不老化（会话内常驻，可重复引用不需重读）；清单超过 24K 字符体量时降级为纯文件名列表（`skill_list` 可重列）。带 `file` 的调用 = 查阅——老化为可重读指针（`skill_read(id, file=…)` 一键重取）。
+- **实现**：`ageResult` 声明（RegisteredTool 既有 per-tool 老化契约，纯函数——体量分档确定性，无时钟/状态依赖）+ 激活分支返回 `activation` 预算标注（bodyChars/approxTokens——正文体量大时模型可自行取舍后续激活）。
+- 测试锁：ager 纯函数性（同输入恒同字节）、大小体量分档、file= 指针形态、activation 标注。
+
 ## v0.132.5 (2026-11-25)
 
 ### feat(engine): skill consumption S2 — skill_list/skill_search with shared search-matchers
