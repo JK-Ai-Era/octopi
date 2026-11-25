@@ -52,6 +52,7 @@ import type { Observer } from '@octopi-agent/core/interfaces/observer.js';
 import type { SessionStore } from '@octopi-agent/core/interfaces/session-store.js';
 import type { SessionData } from '@octopi-agent/engine/harness/session/types.js';
 import { applyUserTitle, maybeUpdateSessionTitle } from './session-title.js';
+import { resolveReviewDelegation } from './skill-lifecycle-host.js';
 import type { StreamingChannelAdapter } from '../protocols/http.js';
 import { projectUserMessageContent } from '../web/conversation/projection.js';
 import type { Message } from '@octopi-agent/core/types.js';
@@ -647,18 +648,22 @@ export class Gateway {
   }
 
   /**
-   * agent 模型 → provider 实例（LLM 技能审查用；与 title 模型同解析路径）。
+   * 审查委托模型解析（P4 独立审查者）：经 `agents[].skillReviewAgent` 委托的
+   * reviewer agent 模型——独立于被审 agent，消除自审。守卫与告警在
+   * `resolveReviewDelegation` 单一实现（自指拒绝/目标缺失退 human/同模型告警）。
    *
-   * @param agentId - agent id
-   * @returns provider+model；agent 未配置或 provider 未注册时 null
+   * @param agentId - 被审 agent id（其 config 声明委托目标）
+   * @returns 委托 reviewer 的 provider+model；无有效委托时 null
    */
   private resolveAgentReviewModel(
     agentId: string,
   ): { provider: ModelProvider; model?: string } | null {
-    const agentDef = this.agents.get(agentId);
-    if (!agentDef) return null;
-    const provider = this.providers.get(agentDef.model.provider);
-    return provider ? { provider, model: agentDef.model.model } : null;
+    return resolveReviewDelegation(
+      agentId,
+      this.agents,
+      this.providers,
+      (m) => console.warn(`[Gateway] ${m}`),
+    );
   }
 
   /**

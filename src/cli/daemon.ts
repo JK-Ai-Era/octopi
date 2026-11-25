@@ -16,7 +16,8 @@ import {
 } from 'node:fs';
 import type { CliArgs } from './args.js';
 import { installCrashForensics } from './crash-forensics.js';
-import { getOctopiHome, isInitialized, initOctopi, formatInitReport } from '../init.js';
+import { getOctopiHome, isInitialized, initOctopi, formatInitReport, seedBuiltinSkills } from '../init.js';
+import { sharedSkillsDir } from '@octopi-agent/engine/paths.js';
 import { setupWizardUrl, readSetupToken } from './helpers.js';
 import { loadConfig, toGatewayConfig, resolveConfigFilePath } from '../config.js';
 import { resolveListenConfig } from './listen-config.js';
@@ -549,7 +550,12 @@ export async function ensureDaemonConfig(args: CliArgs): Promise<string | undefi
   if (args.config) return args.config;
 
   const home = getOctopiHome();
-  if (isInitialized(home)) return resolve(home, 'octopi.json');
+  if (isInitialized(home)) {
+    // 内置技能种子补种（copy-if-missing 幂等；与 ensureInitialized 同规）：
+    // serve 路径也补——review-checklist 缺失会让 llm-gated 永久静默退化 human
+    seedBuiltinSkills(sharedSkillsDir(home));
+    return resolve(home, 'octopi.json');
+  }
 
   if (isInitialized(process.cwd())) return undefined;
 

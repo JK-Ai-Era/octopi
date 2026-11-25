@@ -50,6 +50,8 @@ export interface AgentDefinition {
    * human=须人审 / llm-gated=机器审低风险自动批 / auto=跳过审查（开发用）
    */
   skillReviewPolicy?: 'human' | 'llm-gated' | 'auto';
+  /** 技能审查委托目标（reviewer agent id；llm-gated 前置，缺省退化 human） */
+  skillReviewAgent?: string;
   contextEngine?: string;
   channelBindings?: Record<string, string>;
   /**

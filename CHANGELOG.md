@@ -140,6 +140,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.3 (2026-11-25)
+
+### feat(engine,gateway): skill-creator P4 — 独立 reviewer 委托（消自审）与审查协议单源
+
+llm-gated 机器审查不再自审（P3 遗留差距收口，设计 §5 P4 形态）：
+
+- **独立审查者**：审查模型经 `agents[].skillReviewAgent` 委托的 reviewer agent（独立于被审 agent）；守卫收口 `resolveReviewDelegation` 单一实现（gateway 与 run 实例共用）——**自指拒绝**（配置自指即恢复自审的静默路径堵死）、委托目标缺失退 human、同 provider+model 仅告警（模型层注入弱点未完全消除，如实标注）。
+- **审查协议单源**：`skills/review-checklist`（packaged，通用审查纪律 + 技能审查专章）；与 reviewer preset 套装同源（一致性测试锁正文 + description 防漂移——人审标准 = 机器审标准）；**无内联兜底**（协议缺失即退 human，内联副本会漂移成第二真相源）。
+- **fail-closed 链路**：协议缺失/委托缺失/目标不存在/解析失败全部保持 pending 转人工（回归测试覆盖）。
+- **独立评审修复（4×P1）**：自指守卫（P1-2）、serve 启动补种内置技能（P1-3——否则既有部署 llm-gated 永久静默退化）、审查协议 name 防篡改收口（P1-1，残余与更强收口待拍板已记遗留）、低风险自动批的 scripts 判定收紧（大小写不敏感/任意层级）、prompt 不可信边界句、skillReviewAgent 拒空串、preset/packaged description 对齐。
+
+---
+
 ## v0.132.2 (2026-11-25)
 
 ### feat(engine,gateway,webui): skill-creator P3 — 元技能、审查策略、LLM 审查通道与 WebUI 审查面

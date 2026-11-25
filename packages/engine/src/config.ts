@@ -58,6 +58,8 @@ export interface AgentConfig {
   skills?: string[];
   /** 技能审查策略（skill-creator；缺省 human：human/llm-gated/auto） */
   skillReviewPolicy?: 'human' | 'llm-gated' | 'auto';
+  /** 技能审查委托目标（reviewer agent id；llm-gated 前置，缺省退化 human） */
+  skillReviewAgent?: string;
   /** Channel 绑定 */
   channelBindings?: Record<string, string>;
   /** Session ACL 天花板（E6 L1） */

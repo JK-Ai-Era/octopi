@@ -429,6 +429,10 @@
               "auto"
             ]
           },
+          "skillReviewAgent": {
+            "type": "string",
+            "minLength": 1
+          },
           "channelBindings": {
             "type": "object",
             "propertyNames": {

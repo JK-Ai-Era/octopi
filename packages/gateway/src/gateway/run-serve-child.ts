@@ -423,17 +423,21 @@ async function main(): Promise<void> {
     getKnowledgeRuntime: async () => ({ state: knowledgeState }),
     getSkillLifecycle: async (agentId) => {
       // 与 gateway 共用一份宿主实现（skill-state 懒建 + per-agent 缓存）；
-      // 审查策略/审查模型与 gateway 同规（agents[].skillReviewPolicy）
-      const { createSkillLifecycleHost } = await import('./skill-lifecycle-host.js');
+      // 审查策略/委托解析与 gateway 同规（resolveReviewDelegation 单一实现）
+      const { createSkillLifecycleHost, resolveReviewDelegation } = await import(
+        './skill-lifecycle-host.js'
+      );
       skillLifecycleHost ??= createSkillLifecycleHost({
         warn: (m) => console.warn(`[RunServeChild] ${m}`),
         getReviewPolicy: (id) =>
           boot.config.agents?.find((a) => a.id === id)?.skillReviewPolicy,
-        resolveModel: (id) => {
-          const def = boot.config.agents?.find((a) => a.id === id);
-          const provider = def ? providers.get(def.model.provider) : undefined;
-          return provider && def ? { provider, model: def.model.model } : null;
-        },
+        resolveModel: (id) =>
+          resolveReviewDelegation(
+            id,
+            new Map((boot.config.agents ?? []).map((a) => [a.id, a])),
+            providers,
+            (m) => console.warn(`[RunServeChild] ${m}`),
+          ),
       });
       return skillLifecycleHost.get(agentId);
     },

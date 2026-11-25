@@ -249,6 +249,7 @@ export function resolveAgentDefinition(
     skillDirectory: ac.skillDirectory,
     skills: ac.skills,
     skillReviewPolicy: ac.skillReviewPolicy,
+    skillReviewAgent: ac.skillReviewAgent,
     channelBindings: ac.channelBindings,
     maxSessionRights: ac.maxSessionRights,
     knowledge: ac.knowledge,

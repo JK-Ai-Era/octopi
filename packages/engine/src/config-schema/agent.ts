@@ -41,6 +41,12 @@ export const AgentConfigSchema = z.object({
    * - `auto`：跳过审查直接登记启用（仅开发用；审计留痕）
    */
   skillReviewPolicy: z.enum(['human', 'llm-gated', 'auto']).optional(),
+  /**
+   * 技能审查委托目标（reviewer agent id，skill-creator P4）：llm-gated 的审查
+   * 由该 agent 的模型 + review-checklist 技能驱动（独立审查者，消除被审 agent 自审）。
+   * 缺省 = 无委托 → llm-gated 退化 human（fail-closed）。
+   */
+  skillReviewAgent: z.string().min(1).optional(),
   channelBindings: z.record(z.string(), z.string()).optional(),
   /** Session ACL 天花板（E6 L1）；与角色 max / 绑定取交集 */
   maxSessionRights: SessionRightsSchema.optional(),

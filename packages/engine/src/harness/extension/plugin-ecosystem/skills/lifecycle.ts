@@ -251,7 +251,11 @@ export class SkillLifecycle implements SkillAdmissionGate {
       issues: preview.issues as SkillIssue[],
     });
 
-    const hasScripts = preview.files.some((f) => f.path.startsWith('scripts/'));
+    // low-risk 判定收紧（P2）：大小写不敏感、任意层级的 scripts/ 段都算脚本
+    //（`Scripts/`、`a/scripts/x` 曾可绕过自动批的脚本边界）
+    const hasScripts = preview.files.some((f) =>
+      f.path.split('/').some((seg) => seg.toLowerCase() === 'scripts'),
+    );
     const hasToolExpansion = Boolean(parseSkillFile(preview.skillMd)?.meta.allowedTools?.length);
     const lowRisk = !hasScripts && !hasToolExpansion;
 
