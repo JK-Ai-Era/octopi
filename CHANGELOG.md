@@ -140,6 +140,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.2 (2026-11-25)
+
+### feat(engine,gateway,webui): skill-creator P3 — 元技能、审查策略、LLM 审查通道与 WebUI 审查面
+
+技能自创建能力收口（设计 §5/§8；三批完整闭环 P1 提交审查闸门 → P2 缓存注入 → P3 体验与自动化）：
+
+- **skill-creator 元技能**（packaged，随 seed copy-if-missing 到 shared 层；`metadata.command` 注册 `/skill-creator`）：教 agent 创建/提交/修订技能的完整闭环，规范速查 + 渐进披露（references/spec-reference.md）。`ensureInitialized` 幂等补种——既有部署升级即得，不再 init-only。
+- **`agents[].skillReviewPolicy`**（human 默认 / llm-gated / auto）：lifecycle 策略分支。auto=跳过审查登记启用（审计留痕 policy:auto）；llm-gated=异步 LLM 审查，**仅低风险自动批**（LLM 通过且无 scripts/、无 allowed-tools 扩张），其余转人工留痕、人终审可推翻。
+- **LLM 审查通道**（`SkillLlmReviewer` Port + gateway 实现）：单次 chat completion 结构化 verdict，解析失败 fail-closed 转人工；llm-gated 无通道时退化 human。实现形态与差距（自审模型、reviewer preset 委托 P4）已在设计 §5 如实标注。
+- **WebUI 审查面**：SkillReviewPanel（审查队列/内容预览/裁决/启停）挂「我的组织」；SDK 四方法；i18n 分片。
+- **独立评审修复（2×P0 + 5×P1）**：①审查裁决绑定 `expectedSubmissionId` 锚点（人工/LLM/REST/WebUI 同锚）——堵「审查在飞期间同名重提、旧结论放行带 scripts 新包」的 TOCTOU（含回归测试复现攻击链）；②`resolveAgentDefinition` 补 `skillReviewPolicy`（CLI→Gateway 边界静默丢配置，同类第三次复发，守卫 fixture 覆盖）；③删 wire 链死字段；④内置技能种子补种修复既有部署缺口；⑤spec-reference 与校验器对齐（消第二真相源）。
+
+---
+
 ## v0.132.1 (2026-11-25)
 
 ### feat(engine,gateway): skill-creator P2 — 技能索引冻结+增量注入（缓存保护）

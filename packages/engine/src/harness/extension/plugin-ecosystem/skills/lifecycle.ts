@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { agentHomeDir, assertPathSegment, sharedSkillsDir } from '../../../../paths.js';
+import { parseSkillFile } from './frontmatter.js';
 import { hashSkillDir } from './hash.js';
 import {
   SkillStateDatabase,
@@ -64,6 +65,31 @@ export interface SkillSubmissionPreview {
   skillMd?: string;
 }
 
+/** LLM 审查输入（提交包内容面） */
+export interface LlmSkillReviewInput {
+  skillId: string;
+  skillMd: string;
+  files: Array<{ path: string; bytes: number }>;
+  issues: SkillIssue[];
+}
+
+/** LLM 审查结论 */
+export interface LlmSkillReviewVerdict {
+  verdict: 'approved' | 'rejected';
+  findings?: string;
+}
+
+/**
+ * LLM 审查通道（reviewPolicy='llm-gated' 时由宿主注入；如 gateway 起审查 run）。
+ * 缺省无实现 = llm-gated 退化为 human（fail-closed，不静默自动批）。
+ */
+export interface SkillLlmReviewer {
+  review(input: LlmSkillReviewInput): Promise<LlmSkillReviewVerdict>;
+}
+
+/** 技能审查策略（agents[].skillReviewPolicy；缺省 human） */
+export type SkillReviewPolicy = 'human' | 'llm-gated' | 'auto';
+
 export type SkillReviewResult =
   | { ok: true; record: SkillRecord; submissionId?: string }
   | { ok: false; error: string };
@@ -73,6 +99,10 @@ export interface SkillLifecycleOptions {
   /** OCTOPI_HOME（staging 与 agent home 物化路径派生） */
   octopiHome: string;
   agentId: string;
+  /** 审查策略（agents[].skillReviewPolicy；缺省 human） */
+  reviewPolicy?: SkillReviewPolicy;
+  /** LLM 审查通道（llm-gated 用；缺省 = llm-gated 退化为 human，fail-closed） */
+  llmReviewer?: SkillLlmReviewer;
 }
 
 // ── 实现 ──
@@ -81,11 +111,15 @@ export class SkillLifecycle implements SkillAdmissionGate {
   private readonly db: SkillStateDatabase;
   private readonly octopiHome: string;
   private readonly agentId: string;
+  private readonly reviewPolicy: SkillReviewPolicy;
+  private readonly llmReviewer?: SkillLlmReviewer;
 
   constructor(options: SkillLifecycleOptions) {
     this.db = options.db;
     this.octopiHome = options.octopiHome;
     this.agentId = options.agentId;
+    this.reviewPolicy = options.reviewPolicy ?? 'human';
+    this.llmReviewer = options.llmReviewer;
   }
 
   /** 审查对象的物化目标：agents/<id>/skills/<skillId>/ */
@@ -176,7 +210,85 @@ export class SkillLifecycle implements SkillAdmissionGate {
       // 审查记录可追溯：保留历史审查记录（其 contentHash 锚点可辨版本），不抹除
       review: existing?.review,
     });
+
+    // 审查策略分支（agents[].skillReviewPolicy；缺省 human = 现状等人工）
+    if (this.reviewPolicy === 'auto') {
+      // 开发用：跳过审查直接登记启用；审计留痕（by: policy:auto，不冒充人审）
+      await this.review({
+        skillId,
+        verdict: 'approved',
+        by: 'policy:auto',
+        findings: 'auto-approved by skillReviewPolicy=auto (no review performed)',
+      });
+      // 返回态如实反映已批准（旧 submission 快照的 pending_review 会误导调用方）
+      return { ok: true, submission: { ...submission, status: 'approved' }, issues };
+    } else if (this.reviewPolicy === 'llm-gated' && this.llmReviewer) {
+      // 异步 LLM 审查：不阻塞提交；结论自动回写（仅低风险通过才自动批）
+      void this.runLlmReview(skillId, submissionId).catch((err) => {
+        // LLM 审查失败 = 保持 pending 等人工（fail-closed），显式告警
+        console.warn(
+          `[Skills] llm review failed for "${skillId}" (stays pending for human review): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }
+    // llm-gated 但无 llmReviewer = 退化 human（fail-closed，不静默自动批）
+
     return { ok: true, submission, issues };
+  }
+
+  /**
+   * LLM 审查（llm-gated 策略的自动段）。自动批仅限低风险（拍板语义）：
+   * LLM 通过 **且** 无 scripts/ **且** 无 allowed-tools 扩张；否则转人工
+   *（LLM 结论留痕供人工参考，人终审可推翻）。
+   */
+  private async runLlmReview(skillId: string, submissionId: string): Promise<void> {
+    const preview = await this.previewSubmission(submissionId);
+    if (!preview?.skillMd) return;
+    const verdict = await this.llmReviewer!.review({
+      skillId,
+      skillMd: preview.skillMd,
+      files: preview.files,
+      issues: preview.issues as SkillIssue[],
+    });
+
+    const hasScripts = preview.files.some((f) => f.path.startsWith('scripts/'));
+    const hasToolExpansion = Boolean(parseSkillFile(preview.skillMd)?.meta.allowedTools?.length);
+    const lowRisk = !hasScripts && !hasToolExpansion;
+
+    if (verdict.verdict === 'approved' && lowRisk) {
+      // 锚点绑定（P0）：只对被审的这一代 submission 生效——审查期间同名重提
+      // 不得借旧包的 lowRisk 混过自动批
+      const result = await this.review({
+        skillId,
+        verdict: 'approved',
+        by: 'llm-gated',
+        findings: verdict.findings,
+        expectedSubmissionId: submissionId,
+      });
+      if (!result.ok) {
+        console.warn(
+          `[Skills] llm-gated auto-approve refused for "${skillId}" (stays pending for human): ${result.error}`,
+        );
+      }
+      return;
+    }
+    // 转人工：保持 pending；LLM 结论留痕（by 显式标注是机器审，不冒充人审）。
+    // 绑定当前代 submission：记录换代（同名重提）则不写——留痕不得挂到没见过的包上
+    const record = this.db.getSkill(this.agentId, skillId);
+    if (record && record.reviewStatus === 'pending' && record.submissionId === submissionId) {
+      this.db.upsertSkill({
+        ...record,
+        review: {
+          by: 'llm-gated',
+          verdict: verdict.verdict,
+          findings:
+            verdict.findings ??
+            (lowRisk ? 'llm rejected' : `llm verdict=${verdict.verdict}; low-risk auto-approve not applicable (scripts/ or allowed-tools present) — human review required`),
+          at: Date.now(),
+          contentHash: record.contentHash,
+        },
+      });
+    }
   }
 
   /**
@@ -193,6 +305,12 @@ export class SkillLifecycle implements SkillAdmissionGate {
     verdict: 'approved' | 'rejected';
     by: string;
     findings?: string;
+    /**
+     * 审查锚点：裁决只对这个 submission 代生效（P0 竞态防线）。
+     * 预览/审查期间同名重提会让 record 换代——不锚定就会「审 A 批 B」
+     *（LLM 按旧包判的 lowRisk，被用来自动批一个带 scripts 的新包）。
+     */
+    expectedSubmissionId?: string;
   }): Promise<SkillReviewResult> {
     const skillId = assertSkillId(input.skillId);
     const record = this.db.getSkill(this.agentId, skillId);
@@ -201,6 +319,16 @@ export class SkillLifecycle implements SkillAdmissionGate {
       return {
         ok: false,
         error: `skill "${skillId}" is not pending review (status: ${record.reviewStatus})`,
+      };
+    }
+    // 锚点校验（P0）：裁决必须指向审查者看过的那个 submission 代
+    if (
+      input.expectedSubmissionId !== undefined &&
+      record.submissionId !== input.expectedSubmissionId
+    ) {
+      return {
+        ok: false,
+        error: `review_conflict: submission changed since it was inspected (expected ${input.expectedSubmissionId}, current ${record.submissionId ?? 'none'}) — re-inspect the new submission and decide again`,
       };
     }
 

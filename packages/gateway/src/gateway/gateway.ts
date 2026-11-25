@@ -638,8 +638,27 @@ export class Gateway {
     import('@octopi-agent/engine/harness/extension/plugin-ecosystem/skills/lifecycle.js').SkillLifecycle | undefined
   > {
     const { createSkillLifecycleHost } = await import('./skill-lifecycle-host.js');
-    this.skillLifecycleHost ??= createSkillLifecycleHost();
+    this.skillLifecycleHost ??= createSkillLifecycleHost({
+      // 审查策略供给 + llm-gated 的审查模型解析（agents[].skillReviewPolicy）
+      getReviewPolicy: (id) => this.agents.get(id)?.skillReviewPolicy,
+      resolveModel: (id) => this.resolveAgentReviewModel(id),
+    });
     return this.skillLifecycleHost.get(agentId);
+  }
+
+  /**
+   * agent 模型 → provider 实例（LLM 技能审查用；与 title 模型同解析路径）。
+   *
+   * @param agentId - agent id
+   * @returns provider+model；agent 未配置或 provider 未注册时 null
+   */
+  private resolveAgentReviewModel(
+    agentId: string,
+  ): { provider: ModelProvider; model?: string } | null {
+    const agentDef = this.agents.get(agentId);
+    if (!agentDef) return null;
+    const provider = this.providers.get(agentDef.model.provider);
+    return provider ? { provider, model: agentDef.model.model } : null;
   }
 
   /**
@@ -682,6 +701,8 @@ export class Gateway {
     verdict: 'approved' | 'rejected';
     by?: string;
     findings?: string;
+    /** 审查锚点（强烈建议）：预览过的 submission 代；换代即 conflict（防「审 A 批 B」） */
+    expectedSubmissionId?: string;
   }): Promise<unknown> {
     const lifecycle = await this.skillLifecycleFor(input.agentId);
     if (!lifecycle) throw new Error('skill-state unavailable');
@@ -692,6 +713,7 @@ export class Gateway {
       //（不收客户端自报——可仿冒=审计撒谎，B-1 拍板 2026-11-18）
       by: input.by ?? 'unauthenticated',
       findings: input.findings,
+      expectedSubmissionId: input.expectedSubmissionId,
     });
     if (!result.ok) throw new Error(result.error);
     return result.record;

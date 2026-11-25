@@ -56,6 +56,8 @@ export interface AgentConfig {
   skillDirectory?: string;
   /** 启用的 Skill 列表 */
   skills?: string[];
+  /** 技能审查策略（skill-creator；缺省 human：human/llm-gated/auto） */
+  skillReviewPolicy?: 'human' | 'llm-gated' | 'auto';
   /** Channel 绑定 */
   channelBindings?: Record<string, string>;
   /** Session ACL 天花板（E6 L1） */

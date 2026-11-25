@@ -45,6 +45,11 @@ export interface AgentDefinition {
   model: ModelConfig;
   skillDirectory?: string;
   skills?: string[];
+  /**
+   * 技能审查策略（skill-creator；缺省 human）：
+   * human=须人审 / llm-gated=机器审低风险自动批 / auto=跳过审查（开发用）
+   */
+  skillReviewPolicy?: 'human' | 'llm-gated' | 'auto';
   contextEngine?: string;
   channelBindings?: Record<string, string>;
   /**

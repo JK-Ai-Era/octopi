@@ -15,6 +15,7 @@ import { zh as knowledgeZh, en as knowledgeEn } from './knowledge';
 import { zh as observatoryZh, en as observatoryEn } from './observatory';
 import { zh as miscZh, en as miscEn } from './misc';
 import { zh as archivesZh, en as archivesEn } from './archives';
+import { zh as skillReviewZh, en as skillReviewEn } from './skill-review';
 
 /** 中文文案（键全集 = MessageKey） */
 export const zh = {
@@ -26,6 +27,7 @@ export const zh = {
   ...observatoryZh,
   ...miscZh,
   ...archivesZh,
+  ...skillReviewZh,
 } as const;
 
 /** 文案键（全字典键联合） */
@@ -41,4 +43,5 @@ export const en: Record<MessageKey, string> = {
   ...observatoryEn,
   ...miscEn,
   ...archivesEn,
+  ...skillReviewEn,
 };

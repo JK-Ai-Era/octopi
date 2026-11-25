@@ -1578,6 +1578,79 @@ export class OctopiClient {
   }
 
   /**
+   * 技能注册表 + 审查队列（skill-creator 审查面）。
+   */
+  async getSkills(agentId: string): Promise<{
+    skills: Array<{
+      skillId: string;
+      source: string;
+      reviewStatus: string;
+      enabled: boolean;
+      unreviewed: boolean;
+      contentHash: string;
+      review?: { by: string; verdict: string; findings?: string; at: number };
+    }>;
+    submissions: Array<{
+      submissionId: string;
+      skillId: string;
+      status: string;
+      summary?: string;
+      createdAt: number;
+    }>;
+  } | null> {
+    const data = await this.getJson(`/skills?agentId=${encodeURIComponent(agentId)}`);
+    return (data?.data as Awaited<ReturnType<OctopiClient['getSkills']>>) ?? null;
+  }
+
+  /**
+   * 审查预览：提交包文件清单 + SKILL.md 全文（内容面裁决依据）。
+   */
+  async getSkillSubmission(
+    agentId: string,
+    submissionId: string,
+  ): Promise<{
+    submissionId: string;
+    skillId: string;
+    status: string;
+    contentHash: string;
+    issues: Array<{ severity: string; code: string; message: string }>;
+    files: Array<{ path: string; bytes: number }>;
+    skillMd?: string;
+  } | null> {
+    const data = await this.getJson(
+      `/skills/submissions/${encodeURIComponent(submissionId)}?agentId=${encodeURIComponent(agentId)}`,
+    );
+    return (data?.data as Awaited<ReturnType<OctopiClient['getSkillSubmission']>>) ?? null;
+  }
+
+  /**
+   * 技能审查裁决（人工审查面；认证部署才可裁决）。
+   */
+  async reviewSkill(input: {
+    agentId: string;
+    skillId: string;
+    verdict: 'approved' | 'rejected';
+    findings?: string;
+    /** 审查锚点：预览过的 submission 代（换代即 conflict，防「审 A 批 B」） */
+    expectedSubmissionId?: string;
+  }): Promise<unknown> {
+    const data = await this.postJson('/skills/review', input);
+    return data?.data;
+  }
+
+  /**
+   * 技能启停开关（enable 认证闸；disable 止血放行）。
+   */
+  async setSkillEnabled(input: {
+    agentId: string;
+    skillId: string;
+    enabled: boolean;
+  }): Promise<unknown> {
+    const data = await this.postJson('/skills/enable', input);
+    return data?.data;
+  }
+
+  /**
    * run 服务实例拓扑（fleet 运维面）：实例表（pid/port/state/load）+ 路由权重快照。
    */
   async getFleet(): Promise<{

@@ -6,7 +6,8 @@ import { resolve, join } from 'node:path';
 import { fork } from 'node:child_process';
 import type { CliArgs } from './args.js';
 import { loadConfig } from '../config.js';
-import { initOctopi, getOctopiHome, isInitialized, formatInitReport } from '../init.js';
+import { initOctopi, getOctopiHome, isInitialized, formatInitReport, seedBuiltinSkills } from '../init.js';
+import { sharedSkillsDir } from '@octopi-agent/engine/paths.js';
 import { readPidFile, writePidFile, removePidFile, isProcessAlive } from './daemon.js';
 import { resolveListenConfig } from './listen-config.js';
 import { createProviderFromConfig } from '@octopi-agent/engine/config.js';
@@ -158,6 +159,10 @@ export async function ensureInitialized(args: CliArgs): Promise<string | undefin
   // Prefer OCTOPI_HOME over cwd so a stray ./octopi.json cannot shadow workspace config
   const home = getOctopiHome();
   if (isInitialized(home)) {
+    // 内置技能种子补种（copy-if-missing 幂等，内部降级告警不阻塞）：
+    // 既有部署升级后也能拿到新增内置技能（如 skill-creator）——init-only
+    // seeding 会让老部署永远缺新技能且无告警
+    seedBuiltinSkills(sharedSkillsDir(home));
     return resolve(home, 'octopi.json');
   }
 

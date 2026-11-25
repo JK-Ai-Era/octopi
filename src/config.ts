@@ -248,6 +248,7 @@ export function resolveAgentDefinition(
     model: resolveModelConfig(ac.model, config.flatModels, config.defaults, config.levelMap),
     skillDirectory: ac.skillDirectory,
     skills: ac.skills,
+    skillReviewPolicy: ac.skillReviewPolicy,
     channelBindings: ac.channelBindings,
     maxSessionRights: ac.maxSessionRights,
     knowledge: ac.knowledge,

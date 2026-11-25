@@ -80,6 +80,7 @@ describe('toGatewayConfig agent field preservation (no silent drop)', () => {
       home: 'C:/octopi/agents/default',
       workspace: 'C:/octopi/workspace/default',
       persona: { name: 'p', description: 'd', systemPrompt: 'sys' },
+      skillReviewPolicy: 'llm-gated',
       tools: { allow: ['shell'], deny: ['file_delete'] },
       model: { provider: 'test', model: 'm1' },
       skillDirectory: 'C:/octopi/agents/default/skills',

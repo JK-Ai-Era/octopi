@@ -34,6 +34,13 @@ export const AgentConfigSchema = z.object({
   skillDirectory: ConfigPathSchema.optional(),
   /** Skill 启用清单（按 skill id = SKILL.md 目录名）：只启用列出的 Skill；缺省 = 目录内全部；`[]` = 全部关闭（未命中的 id 在 discover 时告警） */
   skills: z.array(z.string()).optional(),
+  /**
+   * 技能审查策略（skill-creator；缺省 human）：
+   * - `human`：一切提交须人工批准
+   * - `llm-gated`：LLM 审查通过且无 scripts/、无 allowed-tools 扩张 → 自动批；否则强制人工
+   * - `auto`：跳过审查直接登记启用（仅开发用；审计留痕）
+   */
+  skillReviewPolicy: z.enum(['human', 'llm-gated', 'auto']).optional(),
   channelBindings: z.record(z.string(), z.string()).optional(),
   /** Session ACL 天花板（E6 L1）；与角色 max / 绑定取交集 */
   maxSessionRights: SessionRightsSchema.optional(),

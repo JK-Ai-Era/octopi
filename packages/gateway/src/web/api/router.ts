@@ -272,6 +272,7 @@ export class WebApiRouter {
           skillId?: unknown;
           verdict?: unknown;
           findings?: unknown;
+          expectedSubmissionId?: unknown;
         };
         if (typeof body.agentId !== 'string' || typeof body.skillId !== 'string') {
           return this.json(res, 400, { ok: false, error: 'agentId and skillId are required strings' });
@@ -290,6 +291,10 @@ export class WebApiRouter {
               //（可仿冒=审计撒谎）——B-1 拍板 2026-11-18 同规
               by: this.approverIdentity,
               findings: typeof body.findings === 'string' ? body.findings : undefined,
+              expectedSubmissionId:
+                typeof body.expectedSubmissionId === 'string'
+                  ? body.expectedSubmissionId
+                  : undefined,
             }),
           });
         } catch (err) {

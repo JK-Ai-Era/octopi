@@ -421,6 +421,14 @@
               "type": "string"
             }
           },
+          "skillReviewPolicy": {
+            "type": "string",
+            "enum": [
+              "human",
+              "llm-gated",
+              "auto"
+            ]
+          },
           "channelBindings": {
             "type": "object",
             "propertyNames": {

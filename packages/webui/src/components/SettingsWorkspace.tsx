@@ -11,6 +11,7 @@ import { ServiceSettingsPanel } from './ServiceSettingsPanel';
 import { AppearanceSettingsPanel } from './AppearanceSettingsPanel';
 import { AboutPanel } from './AboutPanel';
 import { BrowserSettingsPanel } from './BrowserSettingsPanel';
+import { SkillReviewPanel } from './SkillReviewPanel';
 import { useT } from '../i18n/react';
 import type { MessageKey } from '../i18n/core';
 
@@ -50,7 +51,12 @@ export function SettingsWorkspace({ initialTab = 'models' }: SettingsWorkspacePr
       </nav>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {tab === 'models' && <ModelSettingsPanel />}
-        {tab === 'org' && <AgentSettingsPanel />}
+        {tab === 'org' && (
+          <div style={{ display: 'grid', gap: 16 }}>
+            <AgentSettingsPanel />
+            <SkillReviewPanel />
+          </div>
+        )}
         {tab === 'appearance' && <AppearanceSettingsPanel />}
         {tab === 'services' && (
           <div style={{ display: 'grid', gap: 16 }}>
