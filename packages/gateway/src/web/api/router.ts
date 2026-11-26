@@ -2548,10 +2548,13 @@ export class WebApiRouter {
    * （project 模式 `network=open`）可匿名调 `/config/agents` 把自己升到 host 完成提权——
    * 正好绕开 §8.4 要防的自提权面（直写文件已被路径约束挡住，网络这条路没有）。
    *
-   * **只拦真正提权**（A2）：无 console key 时，仅当写入把 agent 升到 `mode=host`（全权：
-   * 无 jail、可写 `~/.octopi`、network=open、escalation full）才 503。workspace /
-   * project / untrusted 互改、默认值、tools 编辑都是非全权面，放行——否则无 key 部署连
-   * 默认 workspace 新建都被拦（WebUI 新建总带 `effectPolicy.mode`）。host 改成别的 = 降权，同样放行。
+   * **只拦真正提权**（A2）：无 console key 时，写入把 agent 升到 `mode=host`（全权：
+   * 无 jail、可写 `~/.octopi`、network=open、escalation full），或**自扩文件系统作用域**
+   * （`effectPolicy.transactionRoots` / `workspace` —— 允许根即读写面，指向 `~/.octopi`
+   * 等敏感树等于拿走 provider key / 凭据库，与升 host 同级）才 503。workspace / project /
+   * untrusted 互改（不含根变化）、默认值、tools 编辑都是非全权面，放行——否则无 key 部署
+   * 连默认 workspace 新建都被拦（WebUI 新建总带 `effectPolicy.mode`）。host 改成别的 =
+   * 降权，同样放行。
    *
    * @param res - 响应对象（503 时已写响应）
    * @param agentEntry - 待写的 agents[] 条目（create / update 共用）
@@ -2564,11 +2567,28 @@ export class WebApiRouter {
     // 认证部署：持钥方 = 宿主管理身份，放行
     if (this.approverIdentity) return false;
     const ep = agentEntry.effectPolicy;
-    if (ep && typeof ep === 'object' && (ep as Record<string, unknown>).mode === 'host') {
+    const epObj = ep && typeof ep === 'object' ? (ep as Record<string, unknown>) : undefined;
+    if (epObj?.mode === 'host') {
       this.json(res, 503, {
         ok: false,
         error:
           'security_config_unauthenticated: setting effectPolicy.mode=host (full privilege) requires an authenticated console (configure apiKey); unauthenticated deployments escalate via host restart only',
+      });
+      return true;
+    }
+    if (epObj && 'transactionRoots' in epObj) {
+      this.json(res, 503, {
+        ok: false,
+        error:
+          'security_config_unauthenticated: changing effectPolicy.transactionRoots (filesystem access roots) requires an authenticated console (configure apiKey); unauthenticated deployments change access roots via host restart only',
+      });
+      return true;
+    }
+    if ('workspace' in agentEntry) {
+      this.json(res, 503, {
+        ok: false,
+        error:
+          'security_config_unauthenticated: changing workspace (filesystem access root) requires an authenticated console (configure apiKey); unauthenticated deployments change access roots via host restart only',
       });
       return true;
     }

@@ -62,6 +62,8 @@ interface AgentForm {
   allow: string;
   deny: string;
   traits: string;
+  /** agent 级额外工作目录（effectPolicy.transactionRoots；基目录 workspace 不在此编辑） */
+  transactionRoots: string[];
 }
 
 interface WizardState {
@@ -99,6 +101,20 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
+/** 两组字符串序列是否一致（工作目录 dirty 跟踪） */
+function sameStringArray(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** 配置路径形态：客户端宽松预校验（POSIX/Windows 绝对路径、UNC 或 `~` 形态）。
+ * 权威校验在 engine 配置 schema（`isConfigPathShape`，按网关平台收窄）——此处只做
+ * 早反馈，服务端 Zod 拒绝才是最终裁决。 */
+function isConfigPathShape(path: string): boolean {
+  if (path === '~' || path.startsWith('~/') || path.startsWith('~\\')) return true;
+  if (path.startsWith('/') || path.startsWith('\\\\')) return true;
+  return /^[A-Za-z]:[\\/]/.test(path);
+}
+
 function isConflictError(err: unknown): boolean {
   return err instanceof Error && /HTTP 409/.test(err.message);
 }
@@ -121,6 +137,7 @@ export function AgentSettingsPanel() {
     allow: '',
     deny: '',
     traits: '',
+    transactionRoots: [],
   });
   const [wizard, setWizard] = useState<WizardState>(EMPTY_WIZARD);
   const [personaText, setPersonaText] = useState('');
@@ -132,8 +149,14 @@ export function AgentSettingsPanel() {
   );
   /** 新增自定义文件的输入（不含后缀；提交时统一补 .md） */
   const [newFileName, setNewFileName] = useState('');
+  /** 新增工作目录的输入（随「保存配置」落盘） */
+  const [newWorkdir, setNewWorkdir] = useState('');
   /** 载入快照（#6/#7 dirty 跟踪：未改动的字段不发，防全局固化/对象降级） */
-  const [initial, setInitial] = useState<{ effectMode: string; model: string }>({ effectMode: '', model: '' });
+  const [initial, setInitial] = useState<{ effectMode: string; model: string; transactionRoots: string[] }>({
+    effectMode: '',
+    model: '',
+    transactionRoots: [],
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -156,6 +179,10 @@ export function AgentSettingsPanel() {
     void reload();
   }, [reload]);
 
+  /** 当前选中 agent 的视图（基目录展示 + 工作目录写入策略判据） */
+  const selectedAgent = view?.agents.find((a) => a.id === selected);
+  const selectedHasOwnEffectPolicy = selectedAgent?.hasOwnEffectPolicy ?? false;
+
   const handleWriteError = async (err: unknown): Promise<void> => {
     if (isConflictError(err)) {
       setError(t('agentSettings.conflictReloaded'));
@@ -171,6 +198,7 @@ export function AgentSettingsPanel() {
     setNotice(null);
     if (!id || id === '__new__') {
       setWizard(EMPTY_WIZARD);
+      setNewWorkdir('');
       return;
     }
     const source = freshView ?? view;
@@ -179,7 +207,8 @@ export function AgentSettingsPanel() {
     const modelObj = agent.model as { provider?: string; model?: string } | undefined;
     const modelStr = modelObj?.provider ? `${modelObj.provider}/${modelObj.model}` : String(modelObj?.model ?? '');
     const effectMode = (agent.effectMode as EffectMode) ?? 'workspace';
-    setInitial({ effectMode, model: modelStr });
+    const transactionRoots = [...agent.transactionRoots];
+    setInitial({ effectMode, model: modelStr, transactionRoots });
     setForm({
       name: agent.persona.name,
       description: agent.persona.description,
@@ -188,6 +217,7 @@ export function AgentSettingsPanel() {
       allow: agent.tools.allow.join(', '),
       deny: agent.tools.deny.join(', '),
       traits: agent.traits.join(', '),
+      transactionRoots,
     });
     try {
       const [persona, files] = await Promise.all([
@@ -286,8 +316,43 @@ export function AgentSettingsPanel() {
     }
   };
 
+  /** 追加工作目录（本地编辑态；随「保存配置」写入 effectPolicy.transactionRoots） */
+  const addWorkdir = () => {
+    const path = newWorkdir.trim();
+    if (!path) return;
+    if (!isConfigPathShape(path)) {
+      setError(t('agentSettings.workdirsPathInvalid'));
+      return;
+    }
+    if (form.transactionRoots.includes(path)) {
+      setError(t('agentSettings.workdirsDuplicate'));
+      return;
+    }
+    setError(null);
+    setForm((p) => ({ ...p, transactionRoots: [...p.transactionRoots, path] }));
+    setNewWorkdir('');
+  };
+
   const saveAgent = async () => {
     if (!selected || selected === '__new__') return;
+    // 「继承全局」= 删除 agent 级 effectPolicy 整段（对象级覆盖语义）；与 agent 级
+    // 工作目录互斥——删键会连 transactionRoots 一起删，无法表达「跟随全局 + 自带根」
+    if (!form.effectMode && form.transactionRoots.length > 0) {
+      setError(t('agentSettings.workdirsInheritConflict'));
+      return;
+    }
+    const rootsDirty = !sameStringArray(form.transactionRoots, initial.transactionRoots);
+    // 静默固化才要确认（F3 反向后果：固化 = 该 agent 脱离全局安全组的后续收紧）：
+    // 本次显式改安全组 = 用户已表态，不追加弹窗
+    const silentPin = rootsDirty && !selectedHasOwnEffectPolicy && form.transactionRoots.length > 0
+      && form.effectMode === initial.effectMode;
+    if (silentPin && !window.confirm(t('agentSettings.workdirsPinConfirm', { mode: form.effectMode }))) {
+      return;
+    }
+    // 「继承全局」删整段（含面板未展示的安全旋钮）——显式确认（F7）
+    if (!form.effectMode && selectedHasOwnEffectPolicy && !window.confirm(t('agentSettings.inheritGlobalConfirm'))) {
+      return;
+    }
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -298,8 +363,20 @@ export function AgentSettingsPanel() {
         tools: { allow: splitList(form.allow), deny: splitList(form.deny) },
       };
       // #6 安全组 dirty：未改动不发（防全局模式被固化到 agent）；改「继承全局」发 null 删键
-      if (form.effectMode !== initial.effectMode) {
-        patch.effectPolicy = form.effectMode ? { mode: form.effectMode } : null;
+      if (form.effectMode !== initial.effectMode || rootsDirty) {
+        if (!form.effectMode) {
+          // 继承全局：删整段（工作目录必为空——顶部校验已挡互斥）
+          patch.effectPolicy = null;
+        } else {
+          const effectPolicy: Record<string, unknown> = {};
+          // 例外：给无 agent 级策略的 agent 建段（首个工作目录）时不带 mode 会让运行
+          // 模式从「继承全局」静默漂到引擎缺省 workspace——随建段固化当前生效安全组
+          if (form.effectMode !== initial.effectMode || (rootsDirty && !selectedHasOwnEffectPolicy)) {
+            effectPolicy.mode = form.effectMode;
+          }
+          if (rootsDirty) effectPolicy.transactionRoots = form.transactionRoots;
+          patch.effectPolicy = effectPolicy;
+        }
       }
       // #7 模型 dirty：未改动不发（防对象形态被字符串降级）
       if (form.model.trim() && form.model.trim() !== initial.model) {
@@ -308,6 +385,13 @@ export function AgentSettingsPanel() {
       // traits 全量发（空数组 = 清除，#25）
       patch.traits = splitList(form.traits);
       await client.updateConfigAgent(selected, patch, view?.hash ?? '');
+      // 保存成功 = 服务端已对齐本次提交：快照跟上（否则「删根→保存→加回→保存」
+      // 会被旧快照判成未改动而静默丢弃）。model 未发（空）时服务端保留旧值，快照同留。
+      setInitial({
+        effectMode: form.effectMode,
+        model: form.model.trim() || initial.model,
+        transactionRoots: [...form.transactionRoots],
+      });
       setNotice(t('agentSettings.saved'));
       await reload();
     } catch (err) {
@@ -620,6 +704,53 @@ export function AgentSettingsPanel() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="set-field">
+                <span>{t('agentSettings.workdirsLabel')}</span>
+                {selectedAgent?.workspace && (
+                  <div className="small muted">
+                    {t('agentSettings.workdirsBase', { path: selectedAgent.workspace })}
+                  </div>
+                )}
+                {form.transactionRoots.map((p) => (
+                  <div key={p} className="set-file-create">
+                    <code className="small" style={{ flex: 1, wordBreak: 'break-all', whiteSpace: 'normal' }}>
+                      {p}
+                    </code>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          transactionRoots: prev.transactionRoots.filter((r) => r !== p),
+                        }))
+                      }
+                      disabled={busy}
+                    >
+                      {t('agentSettings.workdirsRemove')}
+                    </button>
+                  </div>
+                ))}
+                <div className="set-file-create">
+                  <input
+                    className="set-input mono"
+                    value={newWorkdir}
+                    onChange={(e) => setNewWorkdir(e.target.value)}
+                    placeholder={t('agentSettings.workdirsPlaceholder')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') addWorkdir();
+                    }}
+                  />
+                  <button type="button" className="btn-ghost" onClick={addWorkdir} disabled={busy}>
+                    {t('agentSettings.workdirsAdd')}
+                  </button>
+                </div>
+                <span className="small muted">{t('agentSettings.workdirsHint')}</span>
+                {selectedHasOwnEffectPolicy && (
+                  <span className="small muted">{t('agentSettings.workdirsOwnPolicyNote')}</span>
+                )}
               </div>
 
               <label className="set-field">

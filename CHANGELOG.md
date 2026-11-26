@@ -140,6 +140,35 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.132.11 (2026-11-26)
+
+### feat(gateway,webui): agent 设置「工作目录」编辑；设置页「我的组织」改名「Agents 配置」
+
+- **设置页**：「我的组织」改「Agents 配置」（en: `Agents config`；tab id `org`→`agents`，键 `tabOrg`→`tabAgents`）。
+- **工作目录**：AgentSettingsPanel 新增编辑区——基目录（`agents[].workspace`）只读展示 + agent 级
+  `effectPolicy.transactionRoots` 添加/移除（绝对路径或 `~` 形态，与右栏「工作目录」同语义），
+  随「保存配置」写入（新会话生效）。`ConfigAgentViewDto` / `getAgentsView` 透出
+  `workspace` / `transactionRoots` / `hasOwnEffectPolicy`（additive）。
+- **写入策略**（agent 级 effectPolicy 是对象级覆盖全局，防静默行为漂移）：未改动不发 effectPolicy
+  （防全局固化，#6 锚）；已有 agent 级策略只发 `transactionRoots`（二级合并保留 mode 等旋钮，#5b 锚）；
+  尚无 agent 级策略时建段随带当前生效安全组（否则运行模式会从「继承全局」静默漂到引擎缺省 workspace）；
+  「继承全局」（删整段）与非空 agent 级工作目录互斥——保存拦截并提示。
+- **独立评审修复（4 major + 5 minor 全收）**：
+  ① **提权闸扩围**（A2「真正提权」口径内）：无认证部署拒绝 `effectPolicy.transactionRoots` /
+  `workspace` 写入——允许根即读写面，堵「匿名自扩作用域拿走 `~/.octopi` 密钥/凭据」旁路；
+  ② **安全指纹收口**：`transactionRoots` 纳入 `EFFECT_POLICY_SECURITY_KEYS`、`workspace` 进
+  per-agent 切面（扩根/迁基目录 = 安全面变化，审计 `changed` 与漂移检测可见，不再「changed: 无」）；
+  ③ **保存后快照对齐**：修「删根→保存→加回同根→保存」被陈旧快照判未改动而静默丢弃；
+  ④ **披露与确认**：静默固化安全组前弹确认（点明该 agent 此后不跟随全局收紧）；「继承全局」删整段
+  （含面板未展示旋钮）前弹确认；hint 写明目录 = 读写授权（`~/path` = 整个 home）。
+- **测试**：`tests/config-apply.test.ts` +2（getAgentsView 工作目录透出 / #5b 合并回归）；
+  `AgentSettingsPanel.test.tsx` 8 例（防全局固化 / 只发 roots / 建段固化 mode + 确认弹窗 / 互斥拦截 /
+  清空发空数组 / 陈旧快照序列 / 删整段 null + 确认）；`gateway-config-auth-gate.test.ts` +3（roots /
+  workspace 无认证拒写、署名通道放行）。
+- **验证**：全量 `npm test` 6084 用例通过；`npm run lint`（含 tests typecheck + webui tsc）通过。
+
+---
+
 ## v0.132.10 (2026-11-26)
 
 ### fix(engine): skills index footer points at skill_read, not file_read

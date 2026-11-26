@@ -93,7 +93,7 @@ export const zh = {
   'aboutPanel.linkSource': '🐙 源码',
 
   'settingsWorkspace.tabModels': '模型',
-  'settingsWorkspace.tabOrg': '我的组织',
+  'settingsWorkspace.tabAgents': 'Agents 配置',
   'settingsWorkspace.tabAppearance': '外观',
   'settingsWorkspace.tabServices': '服务',
   'settingsWorkspace.tabBrowser': '浏览器',
@@ -280,7 +280,7 @@ export const en: Record<keyof typeof zh, string> = {
   'aboutPanel.linkSource': '🐙 Source',
 
   'settingsWorkspace.tabModels': 'Models',
-  'settingsWorkspace.tabOrg': 'My organization',
+  'settingsWorkspace.tabAgents': 'Agents config',
   'settingsWorkspace.tabAppearance': 'Appearance',
   'settingsWorkspace.tabServices': 'Services',
   'settingsWorkspace.tabBrowser': 'Browser',

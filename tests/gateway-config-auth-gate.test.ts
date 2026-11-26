@@ -3,8 +3,10 @@
  *
  * console API 无法区分调用者是人还是 agent。无 apiKey 部署下，非 host agent（project
  * network=open）可匿名调 `/config/agents` 把自己升到 host 提权。**只拦真正提权**：
- * 无 console key 时仅当写入 mode=host 才 503；workspace/project/untrusted 互改、默认值、
- * tools 编辑放行（否则无 key 部署连默认 workspace 新建都被拦）。配 apiKey 后全放行。
+ * 无 console key 时，写入 mode=host（全权）或自扩文件系统作用域
+ * （effectPolicy.transactionRoots / workspace —— 允许根即读写面）才 503；
+ * workspace/project/untrusted 互改（不含根变化）、默认值、tools 编辑放行
+ * （否则无 key 部署连默认 workspace 新建都被拦）。配 apiKey 后全放行。
  */
 import { describe, it, expect, vi } from 'vitest';
 import { Readable } from 'node:stream';
@@ -122,5 +124,36 @@ describe('console 无认证部署提权闸（只拦升到 mode=host）', () => {
     });
     expect(r.status).toBe(200);
     expect(applyStub.createAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('无认证 + 自扩作用域（effectPolicy.transactionRoots）→ 503（允许根 = 读写面）', async () => {
+    const { router, applyStub } = makeRouter({});
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', effectPolicy: { transactionRoots: ['~/.octopi'] } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(503);
+    expect(r.body?.error).toMatch(/security_config_unauthenticated/);
+    expect(applyStub.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it('无认证 + 自扩作用域（workspace）→ 503', async () => {
+    const { router, applyStub } = makeRouter({});
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', workspace: '~/.octopi' },
+      hash: 'h',
+    });
+    expect(r.status).toBe(503);
+    expect(applyStub.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it('认证部署 + transactionRoots → 放行（署名通道可改作用域）', async () => {
+    const { router, applyStub } = makeRouter({ approverIdentity: 'owner' });
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', effectPolicy: { transactionRoots: ['/proj/a'] } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(200);
+    expect(applyStub.updateAgent).toHaveBeenCalledTimes(1);
   });
 });

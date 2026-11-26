@@ -51,6 +51,8 @@ const EFFECT_POLICY_SECURITY_KEYS = [
   'escalation',
   // ops P4：危险命令减速带也是安全闸（改档 = 放松/收紧确认闸，须重启 + 宿主署名）
   'dangerousCommands',
+  // 作用域面：事务根 = 读写允许根（扩根 = 扩读写面，安全面变化必须进指纹可见）
+  'transactionRoots',
 ] as const;
 
 const SECURITY_CONFIG_SECURITY_KEYS = ['enforce', 'injectionSensitivity', 'allowedPaths'] as const;
@@ -166,6 +168,8 @@ export function extractSecurityConfigSlice(jsonText: string): {
     return {
       id: agent.id,
       tools: agent.tools,
+      // workspace 与 transactionRoots 同为读写作用域面（allowRoots 基路径/追加根），进指纹
+      workspace: agent.workspace,
       ...pickFields((agent.effectPolicy ?? {}) as Record<string, unknown>, EFFECT_POLICY_SECURITY_KEYS, 'effectPolicy.'),
     };
   });

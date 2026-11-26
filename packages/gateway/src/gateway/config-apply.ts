@@ -703,7 +703,7 @@ export class ConfigApplyService {
   /**
    * agent 列表视图（注册表唯一权威 + raw 条目补充）
    *
-   * @returns 每个 agent 的 id / persona / model / effectMode / tools / traits + hash
+   * @returns 每个 agent 的 id / persona / model / effectMode / tools / traits / 工作目录（workspace + transactionRoots）+ hash
    */
   getAgentsView(): {
     agents: Array<{
@@ -714,6 +714,9 @@ export class ConfigApplyService {
       effectModeSource: 'agent' | 'global' | 'default';
       tools: { allow: string[]; deny: string[] };
       traits: string[];
+      workspace: string;
+      transactionRoots: string[];
+      hasOwnEffectPolicy: boolean;
     }>;
     hash: string;
   } {
@@ -724,6 +727,7 @@ export class ConfigApplyService {
       const entry = rawAgents.find((a) => a.id === reg.id) ?? {};
       const persona = (entry.persona ?? {}) as { name?: string; description?: string };
       const tools = (entry.tools ?? {}) as { allow?: string[]; deny?: string[] };
+      const effectPolicy = (entry.effectPolicy ?? {}) as { transactionRoots?: string[] };
       return {
         id: reg.id,
         persona: { name: persona.name ?? reg.id, description: persona.description ?? '' },
@@ -732,6 +736,11 @@ export class ConfigApplyService {
         effectModeSource: reg.effectModeSource,
         tools: { allow: tools.allow ?? [], deny: tools.deny ?? [] },
         traits: Array.isArray(entry.traits) ? (entry.traits as string[]) : [],
+        workspace: typeof entry.workspace === 'string' ? entry.workspace : '',
+        transactionRoots: Array.isArray(effectPolicy.transactionRoots)
+          ? effectPolicy.transactionRoots
+          : [],
+        hasOwnEffectPolicy: entry.effectPolicy != null && typeof entry.effectPolicy === 'object',
       };
     });
     return { agents, hash };

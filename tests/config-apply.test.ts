@@ -693,6 +693,50 @@ describe('ConfigApplyService — review blocker 回归锚', () => {
     expect('effectPolicy' in helper).toBe(false);
   });
 
+  it('getAgentsView：透出工作目录（workspace + transactionRoots）与 hasOwnEffectPolicy', async () => {
+    const before = service.read();
+    await apply.createAgent({
+      agent: {
+        id: 'helper',
+        model: 'standard',
+        workspace: '~/work/helper',
+        effectPolicy: { mode: 'project', transactionRoots: ['/proj/a'] },
+      },
+      hash: before.hash,
+    });
+    gateway.getRegisteredAgents.mockReturnValue([
+      { id: 'assistant', model: 'standard', effectMode: 'workspace', effectModeSource: 'default' },
+      { id: 'helper', model: 'standard', effectMode: 'project', effectModeSource: 'agent' },
+    ] as never);
+    const view = apply.getAgentsView();
+    const assistant = view.agents.find((a) => a.id === 'assistant')!;
+    const helper = view.agents.find((a) => a.id === 'helper')!;
+    // 无 agent 级 effectPolicy：无额外根；fixture 条目不带 workspace（createAgent 才自动补全）
+    expect(assistant.transactionRoots).toEqual([]);
+    expect(assistant.workspace).toBe('');
+    expect(assistant.hasOwnEffectPolicy).toBe(false);
+    // 原文透出（`~` 形态不展开），供控制台原样回写
+    expect(helper.workspace).toBe('~/work/helper');
+    expect(helper.transactionRoots).toEqual(['/proj/a']);
+    expect(helper.hasOwnEffectPolicy).toBe(true);
+  });
+
+  it('#5b 锚：updateAgent 部分更新 transactionRoots（工作目录）不动 mode 等旋钮', async () => {
+    const before = service.read();
+    await apply.createAgent({
+      agent: {
+        id: 'helper',
+        model: 'standard',
+        effectPolicy: { mode: 'project', shellEscape: 'deny', transactionRoots: ['/a'] },
+      },
+      hash: before.hash,
+    });
+    const mid = service.read();
+    await apply.updateAgent('helper', { effectPolicy: { transactionRoots: ['/a', '/b'] } }, mid.hash);
+    const helper = (service.read().raw.agents as Array<Record<string, unknown>>).find((a) => a.id === 'helper')!;
+    expect(helper.effectPolicy).toEqual({ mode: 'project', shellEscape: 'deny', transactionRoots: ['/a', '/b'] });
+  });
+
   it('#4 锚：路径穿越 id（..）拒绝', async () => {
     const before = service.read();
     await expect(

@@ -896,6 +896,12 @@ export interface ConfigAgentViewDto {
   effectModeSource: 'agent' | 'global' | 'default';
   tools: { allow: string[]; deny: string[] };
   traits: string[];
+  /** 工具工作目录（基目录；agents[].workspace 原文，`~` 形态不展开） */
+  workspace: string;
+  /** agent 级额外工作目录（effectPolicy.transactionRoots 原文；并入 allowRoots） */
+  transactionRoots: string[];
+  /** 是否存在 agent 级 effectPolicy 整段（对象级覆盖全局；影响工作目录写入策略） */
+  hasOwnEffectPolicy: boolean;
 }
 
 /** agent 列表视图 */

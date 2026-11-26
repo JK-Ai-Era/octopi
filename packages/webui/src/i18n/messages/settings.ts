@@ -118,6 +118,22 @@ export const zh = {
   'agentSettings.toolsAllow': '工具 allow（逗号分隔，空 = 不限）',
   'agentSettings.toolsDeny': '工具 deny（逗号分隔）',
   'agentSettings.traitsLabel': '特质标签（委派发现用，逗号分隔）',
+  'agentSettings.workdirsLabel': '工作目录',
+  'agentSettings.workdirsBase': '基目录：{path}（工具工作目录，创建时确定）',
+  'agentSettings.workdirsPlaceholder': '/absolute/path（~/path = 授予整个 home）',
+  'agentSettings.workdirsAdd': '添加',
+  'agentSettings.workdirsRemove': '移除',
+  'agentSettings.workdirsPathInvalid': '路径需为绝对路径或 ~ 形态',
+  'agentSettings.workdirsDuplicate': '该工作目录已在列表中',
+  'agentSettings.workdirsInheritConflict':
+    '「继承全局」不能与 agent 级工作目录共存——请先移除全部工作目录，或选择具体安全组',
+  'agentSettings.workdirsHint':
+    '添加的目录会授予 agent 对这些路径的读写权限（并入允许根），新会话生效；保存写入 agent 级 effectPolicy.transactionRoots。若 agent 尚无独立策略，保存会把安全组固化为 agent 级，此后不再跟随全局收紧（保存前会确认）。',
+  'agentSettings.workdirsPinConfirm':
+    '添加工作目录需要建立 agent 级安全策略：安全组将固化为「{mode}」——该 agent 此后不再跟随全局安全组的收紧。继续？',
+  'agentSettings.workdirsOwnPolicyNote': '当前 agent 使用独立安全策略（不跟随全局安全组变化）',
+  'agentSettings.inheritGlobalConfirm':
+    '「继承全局」将删除该 agent 的整段独立策略（包括面板未展示的安全旋钮）。继续？',
   'agentSettings.saving': '保存中…',
   'agentSettings.saveConfig': '保存配置',
   'agentSettings.templateIdPrompt': '模板 id（字母/数字/._-，如 my-coder）：',
@@ -317,6 +333,23 @@ export const en: Record<keyof typeof zh, string> = {
   'agentSettings.toolsAllow': 'Tool allow (comma-separated; empty = unrestricted)',
   'agentSettings.toolsDeny': 'Tool deny (comma-separated)',
   'agentSettings.traitsLabel': 'Trait tags (for delegation discovery; comma-separated)',
+  'agentSettings.workdirsLabel': 'Working directories',
+  'agentSettings.workdirsBase': 'Base: {path} (tool working directory, set at creation)',
+  'agentSettings.workdirsPlaceholder': '/absolute/path (~/path grants all of home)',
+  'agentSettings.workdirsAdd': 'Add',
+  'agentSettings.workdirsRemove': 'Remove',
+  'agentSettings.workdirsPathInvalid': 'Path must be absolute or in ~ form',
+  'agentSettings.workdirsDuplicate': 'This working directory is already in the list',
+  'agentSettings.workdirsInheritConflict':
+    '"Inherit global" cannot coexist with agent-level working directories — remove them all or pick a specific security group',
+  'agentSettings.workdirsHint':
+    'Added directories grant the agent read/write access to those paths (merged into allow roots); applies to new sessions. Saved to agent-level effectPolicy.transactionRoots. If the agent has no own policy yet, saving pins the security group at agent level — it will no longer follow global tightening (you will be asked to confirm).',
+  'agentSettings.workdirsPinConfirm':
+    'Adding a working directory requires an agent-level security policy: the security group will be pinned to "{mode}" — this agent will no longer follow global security-group tightening. Continue?',
+  'agentSettings.workdirsOwnPolicyNote':
+    'This agent uses its own security policy (does not follow global security-group changes)',
+  'agentSettings.inheritGlobalConfirm':
+    '"Inherit global" removes this agent\'s entire own policy (including knobs not shown in this panel). Continue?',
   'agentSettings.saving': 'Saving…',
   'agentSettings.saveConfig': 'Save config',
   'agentSettings.templateIdPrompt': 'Template id (letters/digits/._-, e.g. my-coder):',

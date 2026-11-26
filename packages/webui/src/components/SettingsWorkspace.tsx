@@ -1,5 +1,5 @@
 /**
- * SettingsWorkspace — 设置容器（§5d 五分组：模型 / 我的组织 / 外观 / 服务 / 关于）。
+ * SettingsWorkspace — 设置容器（§5d 分组：模型 / Agents 配置 / 外观 / 服务 / 浏览器 / 关于）。
  * 保存沿用配置热生效 L0–L3 + hash 乐观锁（ModelSettingsPanel 已接）。
  */
 
@@ -15,7 +15,7 @@ import { SkillReviewPanel } from './SkillReviewPanel';
 import { useT } from '../i18n/react';
 import type { MessageKey } from '../i18n/core';
 
-export type SettingsTab = 'models' | 'org' | 'appearance' | 'services' | 'browser' | 'about';
+export type SettingsTab = 'models' | 'agents' | 'appearance' | 'services' | 'browser' | 'about';
 
 export interface SettingsWorkspaceProps {
   /** 顶栏帮助按钮直达「关于」等入口指定的初始分组 */
@@ -28,7 +28,7 @@ export function SettingsWorkspace({ initialTab = 'models' }: SettingsWorkspacePr
 
   const tabs: Array<{ id: SettingsTab; label: MessageKey }> = [
     { id: 'models', label: 'settingsWorkspace.tabModels' },
-    { id: 'org', label: 'settingsWorkspace.tabOrg' },
+    { id: 'agents', label: 'settingsWorkspace.tabAgents' },
     { id: 'appearance', label: 'settingsWorkspace.tabAppearance' },
     { id: 'services', label: 'settingsWorkspace.tabServices' },
     { id: 'browser', label: 'settingsWorkspace.tabBrowser' },
@@ -51,7 +51,7 @@ export function SettingsWorkspace({ initialTab = 'models' }: SettingsWorkspacePr
       </nav>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {tab === 'models' && <ModelSettingsPanel />}
-        {tab === 'org' && (
+        {tab === 'agents' && (
           <div style={{ display: 'grid', gap: 16 }}>
             <AgentSettingsPanel />
             <SkillReviewPanel />
