@@ -14,6 +14,7 @@ import type {
   AdmitEdgeInput,
   AdmitEdgeResult,
   BirthCandidate,
+  ConceptDescriptionRevision,
   ConceptEdge,
   ConceptGraph,
   ConceptGraphStats,
@@ -36,6 +37,7 @@ import {
 } from '../cognition-decay.js';
 import {
   BIRTH_CANDIDATE_TTL_MS,
+  DESCRIPTION_HISTORY_CAP,
   evaluateConceptGate,
   licenseEdge,
   normalizeForCue,
@@ -105,6 +107,7 @@ interface ConceptRow {
   name: string;
   kind: string;
   description: string | null;
+  description_history: string;
   frequency: number;
   memory_ids: string;
   domain: string;
@@ -166,6 +169,11 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       name: row.name,
       kind: (row.kind as ConceptKind) ?? 'construct',
       description: row.description ?? undefined,
+      descriptionHistory: (() => {
+        // 空历史归一为 undefined（两后端一致，F10）
+        const parsed = safeJsonRevisions(row.description_history);
+        return parsed.length > 0 ? parsed : undefined;
+      })(),
       frequency: row.frequency,
       memoryIds: safeJsonArray(row.memory_ids),
       domain: safeJsonArray(row.domain),
@@ -245,11 +253,25 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       const domains = new Set([...node.domain, ...(input.domain ?? [])]);
       // frequency = 票数派生（与 insertConcept 同口径）；无票调用回退计次，不破坏 supportCount 表意的调用方
       const mergedFreq = memIds.size > 0 ? memIds.size : node.frequency + 1;
-      this.db.raw
-        .prepare(
-          'UPDATE concepts SET frequency = ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
-        )
-        .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, Date.now(), node.id);
+      if (input.birthChannel === 'definition' && input.description) {
+        // 活口径（R7′）：定义新口径胜，旧口径入版本链（最近旧版在前，cap 5）。
+        // 同值重申幂等（F3）：口径未变不入链，不挤掉真实旧版
+        const unchanged = node.description === input.description;
+        const history = node.description && !unchanged
+          ? [{ text: node.description, memoryId: input.memoryIds?.[0], at: Date.now() }, ...(node.descriptionHistory ?? [])].slice(0, DESCRIPTION_HISTORY_CAP)
+          : (node.descriptionHistory ?? []);
+        this.db.raw
+          .prepare(
+            'UPDATE concepts SET frequency = ?, memory_ids = ?, domain = ?, description = ?, description_history = ?, updated_at = ? WHERE id = ?',
+          )
+          .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description, JSON.stringify(history), Date.now(), node.id);
+      } else {
+        this.db.raw
+          .prepare(
+            'UPDATE concepts SET frequency = ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
+          )
+          .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, Date.now(), node.id);
+      }
       return { action: 'merged', id: node.id, reason: 'ok' };
     }
 
@@ -785,9 +807,21 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         ...safeJsonArray(left.domain),
         ...safeJsonArray(right.domain),
       ]);
+      // 活口径合并（F4）：两侧口径不同则被替换方（right）的口径与其版本链并入 left 版本链，不静默丢口径
+      const leftHistory = safeJsonRevisions(left.description_history);
+      const rightHistory = safeJsonRevisions(right.description_history);
+      const rightMemIds = safeJsonArray(right.memory_ids) as string[];
+      const mergedHistory =
+        right.description && right.description !== left.description && left.description
+          ? [
+              { text: right.description, memoryId: rightMemIds[0], at: Date.now() },
+              ...rightHistory,
+              ...leftHistory,
+            ].slice(0, DESCRIPTION_HISTORY_CAP)
+          : [...leftHistory, ...rightHistory].slice(0, DESCRIPTION_HISTORY_CAP);
       db.prepare(
-        'UPDATE concepts SET frequency = frequency + ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
-      ).run(right.frequency, JSON.stringify([...memIds]), JSON.stringify([...domains]), right.description ?? null, Date.now(), left.id);
+        'UPDATE concepts SET frequency = frequency + ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), description_history = ?, updated_at = ? WHERE id = ?',
+      ).run(right.frequency, JSON.stringify([...memIds]), JSON.stringify([...domains]), right.description ?? null, JSON.stringify(mergedHistory), Date.now(), left.id);
       if (options?.canonicalKind && left.kind !== options.canonicalKind) {
         db.prepare('UPDATE concepts SET kind = ?, updated_at = ? WHERE id = ?').run(
           options.canonicalKind,
@@ -1132,6 +1166,21 @@ function safeJsonArray(raw: string): string[] {
   try {
     const v = JSON.parse(raw ?? '[]');
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 口径修订链解析：保留 { text, memoryId?, at } 对象条目（safeJsonArray 会滤掉对象） */
+function safeJsonRevisions(raw: string): ConceptDescriptionRevision[] {
+  try {
+    const v = JSON.parse(raw ?? '[]');
+    return Array.isArray(v)
+      ? v.filter(
+          (x): x is ConceptDescriptionRevision =>
+            !!x && typeof x === 'object' && typeof (x as { text?: unknown }).text === 'string',
+        )
+      : [];
   } catch {
     return [];
   }

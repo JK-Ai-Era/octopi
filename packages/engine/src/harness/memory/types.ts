@@ -494,12 +494,24 @@ export interface EdgeBasis {
 }
 
 /** 概念节点（义项，非词面） */
+/** 口径修订条目（活口径版本链的 provenance） */
+export interface ConceptDescriptionRevision {
+  /** 被替换的旧口径文本 */
+  text: string;
+  /** 将其替换掉的定义命题（谁改的口径） */
+  memoryId?: string;
+  /** 替换时间 */
+  at: number;
+}
+
 export interface ConceptNode {
   id: string;
   name: string;
   kind: ConceptKind;
   /** 原型描述（含论域） */
   description?: string;
+  /** 活口径版本链：定义类命题覆盖 description 时被替换的旧口径（最近旧版在前，cap 5） */
+  descriptionHistory?: ConceptDescriptionRevision[];
   frequency: number;
   memoryIds: string[];
   /** 论域标签（多值；不参与义项判定——义项只看 kind，合并时取并集） */
@@ -590,6 +602,7 @@ export type ConceptGateReason =
   | 'budget_edge'
   | 'cue_mismatch'
   | 'endpoint_not_admitted'
+  | 'definition_requires_description'
   | 'multi_evidence_required'
   | 'cooccur_no_escalation'
   | 'demoted_related'

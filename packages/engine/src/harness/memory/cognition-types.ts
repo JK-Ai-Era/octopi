@@ -18,6 +18,7 @@ export type {
   AdmitEdgeInput,
   AdmitEdgeResult,
   BirthCandidate,
+  ConceptDescriptionRevision,
   ConceptGateReason,
   SpreadingActivateOptions,
   ActivatedGraph,

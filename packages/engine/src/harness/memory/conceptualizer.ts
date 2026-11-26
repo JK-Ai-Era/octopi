@@ -52,6 +52,8 @@ export interface ConceptualizerNodeOut {
   description?: string;
   domain: string[];
   supportCount: number;
+  /** 出生通道（观测：定义直生与复现计票可区分） */
+  birthChannel?: 'definition' | 'theme';
   admit: AdmitConceptResult;
 }
 
@@ -214,15 +216,33 @@ export async function conceptualizeAndAdmit(
     const domain = Array.isArray(o.domain)
       ? o.domain.filter((d): d is string => typeof d === 'string').map((d) => d.trim()).filter(Boolean)
       : [];
+    // 定义句标记（R7′ 定义通道）：定义/纠正/口径类命题直生，description = 口径原文。
+    // 结构防护（F2/F12）：只有 norm 命题 + 权威状态（active/strengthened）的定义标记有效——
+    // 低置信来源不得免票直生、更不得覆盖既有口径；非布尔标记显式留痕不静默降级。
+    const rawDefinition = o.definition;
+    if (rawDefinition !== undefined && rawDefinition !== false && rawDefinition !== true) {
+      rejected.push({ name, reason: 'definition_flag_invalid' });
+    }
+    const definitionAuthorized =
+      rawDefinition === true &&
+      input.memoryType === 'norm' &&
+      (input.memoryStatus === 'active' || input.memoryStatus === 'strengthened');
+    if (rawDefinition === true && !definitionAuthorized) {
+      rejected.push({ name, reason: 'definition_requires_norm_active' });
+    }
+    const birthChannel = definitionAuthorized ? 'definition' : undefined;
 
-    const gate = evaluateConceptGate({
-      name,
-      kind: resolvedKind,
-      description,
-      domain,
-      memoryIds: [input.memoryId],
-      supportCount: supportBase,
-    });
+    const gate = evaluateConceptGate(
+      {
+        name,
+        kind: resolvedKind,
+        description,
+        domain,
+        memoryIds: [input.memoryId],
+        supportCount: supportBase,
+      },
+      { skipMdl: birthChannel === 'definition' },
+    );
     // 票不够（mdl_insufficient）不是拒绝：交 store 入出生候选区投票（R7′ 复现计票）
     if (!gate.ok && gate.reason !== 'mdl_insufficient') {
       rejected.push({ name, reason: gate.reason });
@@ -242,6 +262,7 @@ export async function conceptualizeAndAdmit(
         domain,
         memoryIds: [input.memoryId],
         supportCount: supportBase,
+        birthChannel,
       });
     } else if (!gate.ok) {
       // gate-only 模式如实回传门控结论（1 票会 park，不是 created）
@@ -257,6 +278,7 @@ export async function conceptualizeAndAdmit(
       description,
       domain,
       supportCount: supportBase,
+      birthChannel: birthChannel ?? 'theme',
       admit,
     });
   }

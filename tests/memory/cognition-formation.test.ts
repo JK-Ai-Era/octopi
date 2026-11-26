@@ -42,10 +42,16 @@ describe('cognition-gates', () => {
     expect(
       evaluateConceptGate({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 }).ok,
     ).toBe(true);
-    // 定义直生通道（birthChannel='definition'）跳过计票门槛
+    // 定义直生通道（birthChannel='definition'）跳过计票门槛，但必须带口径正文
     expect(
       evaluateConceptGate(
-        { name: 'run', kind: 'construct', supportCount: 1, birthChannel: 'definition' },
+        {
+          name: 'run',
+          kind: 'construct',
+          supportCount: 1,
+          birthChannel: 'definition',
+          description: '一次 Agent.run() 执行',
+        },
         { skipMdl: true },
       ).ok,
     ).toBe(true);
@@ -184,6 +190,58 @@ describe('conceptualizer', () => {
     );
     expect(r.rejected[0]?.reason).toBe('no_context_slice');
     expect(r.nodes).toHaveLength(0);
+  });
+
+  it('R7′ definition flag without norm/authority is refused and parks as theme (F2)', async () => {
+    const store = new InMemoryConceptGraph();
+    // fact 命题标 definition：标记不授权，留痕 + 退主题通道
+    const r = await conceptualizeAndAdmit(
+      {
+        nodes: [
+          { name: '口径滥用', kind: 'construct', description: '不该直生', definition: true },
+        ],
+      },
+      {
+        proposition: '观察到一个事实',
+        memoryId: 'm1',
+        memoryType: 'fact',
+        memoryStatus: 'active',
+        evidence: '观察到一个事实',
+        contextSlice: '事实语境。',
+      },
+      store,
+    );
+    expect(r.rejected.some((x) => x.reason === 'definition_requires_norm_active')).toBe(true);
+    expect(r.nodes[0]!.admit.action).toBe('candidate_parked');
+    expect((await store.getFullGraph()).nodes).toHaveLength(0);
+  });
+
+  it('R7′ definition flag in extraction flows to definition birth (1-vote born)', async () => {
+    const store = new InMemoryConceptGraph();
+    const r = await conceptualizeAndAdmit(
+      {
+        nodes: [
+          {
+            name: 'run',
+            kind: 'construct',
+            description: '一次 Agent.run() 执行',
+            definition: true,
+          },
+        ],
+      },
+      {
+        proposition: 'run 指一次 Agent.run() 执行',
+        memoryId: 'm1',
+        memoryType: 'norm',
+        memoryStatus: 'active',
+        evidence: 'run 指一次 Agent.run() 执行',
+        contextSlice: 'run 是一次 Agent.run() 执行。',
+      },
+      store,
+    );
+    // definition 标记 → birthChannel='definition' → 1 票直生（不进候选区）
+    expect(r.nodes[0]!.admit.action).toBe('created');
+    expect((await store.getFullGraph()).nodes[0]!.status).toBe('active');
   });
 
   it('1-vote nodes park in birth candidates; unlicensed causes demote to related', async () => {
@@ -597,6 +655,86 @@ describe.each([
     const bad = await store.admitConcept({ name: 'turn', kind: 'construct', birthChannel: 'definition' });
     expect(bad.action).toBe('rejected');
     expect(bad.reason).toBe('mdl_insufficient');
+  });
+
+  it('R7′ live definition: definition overwrites description with history; theme merge keeps COALESCE', async () => {
+    const r1 = await store.admitConcept({
+      name: 'run',
+      kind: 'construct',
+      memoryIds: ['m1'],
+      birthChannel: 'definition',
+      description: '口径 v1：一次 Agent.run() 执行',
+    });
+    expect(r1.action).toBe('created');
+    // 新定义命题改写口径：旧口径入版本链（最近旧版在前，带 provenance）
+    const r2 = await store.admitConcept({
+      name: 'run',
+      kind: 'construct',
+      memoryIds: ['m2'],
+      birthChannel: 'definition',
+      description: '口径 v2：一次执行，可含多 turn',
+    });
+    expect(r2.action).toBe('merged');
+    const node = (await store.getFullGraph()).nodes[0]!;
+    expect(node.description).toBe('口径 v2：一次执行，可含多 turn');
+    expect(node.descriptionHistory).toHaveLength(1);
+    expect(node.descriptionHistory![0]!.text).toBe('口径 v1：一次 Agent.run() 执行');
+    expect(node.descriptionHistory![0]!.memoryId).toBe('m2');
+    // 同值重申幂等（F3）：口径未变不入链，不挤掉真实旧版
+    await store.admitConcept({
+      name: 'run',
+      kind: 'construct',
+      memoryIds: ['m3'],
+      birthChannel: 'definition',
+      description: '口径 v2：一次执行，可含多 turn',
+    });
+    const afterRepeat = (await store.getFullGraph()).nodes[0]!;
+    expect(afterRepeat.descriptionHistory).toHaveLength(1);
+    // 非定义命题合并不覆盖（COALESCE 语义保持）
+    await store.admitConcept({
+      name: 'run',
+      kind: 'construct',
+      memoryIds: ['m4'],
+      description: '主题释义不该覆盖口径',
+    });
+    const after = (await store.getFullGraph()).nodes[0]!;
+    expect(after.description).toBe('口径 v2：一次执行，可含多 turn');
+    expect(after.descriptionHistory![0]!.text).toBe('口径 v1：一次 Agent.run() 执行');
+  });
+
+  it('R7′ description history is capped at 5 revisions (cap shared constant)', async () => {
+    await store.admitConcept({
+      name: '口径链',
+      kind: 'construct',
+      memoryIds: ['m0'],
+      birthChannel: 'definition',
+      description: 'v0',
+    });
+    for (let i = 1; i <= 7; i++) {
+      await store.admitConcept({
+        name: '口径链',
+        kind: 'construct',
+        memoryIds: [`m${i}`],
+        birthChannel: 'definition',
+        description: `v${i}`,
+      });
+    }
+    const node = (await store.getFullGraph()).nodes[0]!;
+    expect(node.description).toBe('v7');
+    expect(node.descriptionHistory).toHaveLength(5);
+    expect(node.descriptionHistory![0]!.text).toBe('v6');
+    expect(node.descriptionHistory![4]!.text).toBe('v2');
+  });
+
+  it('R7′ definition without description is rejected (F1 regression)', async () => {
+    const bad = await store.admitConcept({
+      name: '空口径',
+      kind: 'construct',
+      memoryIds: ['m1'],
+      birthChannel: 'definition',
+    });
+    expect(bad.action).toBe('rejected');
+    expect(bad.reason).toBe('definition_requires_description');
   });
 
   it('multi-evidence across admitEdge calls licenses causes', async () => {

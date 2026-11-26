@@ -35,6 +35,9 @@ const CJK = /[一-鿿]/;
 /** 出生候选固定出生窗口（TTL）：到期仍 <2 票即遗忘（不随投票续期——压缩不了就忘）。两 store 同源引用。 */
 export const BIRTH_CANDIDATE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
+/** 活口径版本链容量（最近旧版在前）；两 store 同源引用 */
+export const DESCRIPTION_HISTORY_CAP = 5;
+
 /** 归一化空白，用于 cue ⊆ evidence 子串校验 */
 export function normalizeForCue(text: string): string {
   return text.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -83,6 +86,14 @@ export function evaluateConceptGate(
       ok: false,
       reason: 'mdl_insufficient',
       message: 'definition birth requires ≥1 memoryId',
+    };
+  }
+  // 定义直生必须带口径正文：空 description 的 definition 只是主题标签，不得拿免票权（F1）
+  if (options?.skipMdl && !input.description?.trim()) {
+    return {
+      ok: false,
+      reason: 'definition_requires_description',
+      message: 'definition birth requires non-empty description (口径原文)',
     };
   }
 

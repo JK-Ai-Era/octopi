@@ -140,6 +140,30 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.135.1 (2026-11-27)
+
+### feat(memory): 定义句识别 + 活口径版本链（R7′ commit 2）
+
+**行为变更（认知层 P1 定义权通道）**：概念化输出可标 `definition: true`（定义/纠正/口径类
+命题）→ 定义直生（1 票即出生）；同名定义命题**覆盖** description（新口径胜），旧口径入
+`descriptionHistory` 版本链（最近旧版在前，cap 5，带 provenance：谁改的/何时）。
+
+- **结构防护（不依赖提示词自觉）**：定义标记仅对 `memoryType=norm` + 权威状态
+  （active/strengthened）命题授权——低置信来源不得免票直生、更不得覆盖既有口径；
+  空 description 的 definition 显式拒绝（`definition_requires_description`）；
+  非布尔标记显式留痕不静默降级
+- **同值重申幂等**：口径未变不入版本链，不挤掉真实旧版；`resolveMerge` 人工合并纳入
+  活口径（被替换方口径与其链并入幸存者，不静默丢口径）
+- **迁移安全**：`description_history` 列旧库走 ALTER 补列（PRAGMA 判列后执行，失败显式
+  冒泡）；表不存在（新库）跳过由 CREATE 建全——绝不触发 DROP 重建（概念图已载真实数据）；
+  补「旧库升级保数据」回归测试
+- 提示词契约（SUBSYSTEM.md）：definition 标记说明 + 示例修正（主题概念示例不再标
+  definition，防过标偏置）；运行观测：conceptualize 信号带 `definitions=` 通道计数
+- 独立评审 2 major / 5 minor / 6 nit 全部修复（定义防护、版本链幂等、合并口径保留、
+  迁移吞错、cap 常量单源、空历史归一）；评审提出的「版本链 provenance」（谁改的口径）
+  已按「越晚改越难补」一并落地
+- 测试：6148 passed / 9 skipped（590 文件）；build 绿
+
 ## v0.135.0 (2026-11-27)
 
 ### feat(memory): 概念出生改「复现计票」+ 出生候选区（R7′ commit 1）

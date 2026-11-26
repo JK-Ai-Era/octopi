@@ -316,6 +316,46 @@ describe('SqliteWisdomStore', () => {
     expect(stats.totalApplied).toBe(1);
   });
 
+  it('description_history 列在旧库升级时补列且数据不丢（R7′ 迁移回归）', async () => {
+    const fs = await import('node:fs/promises');
+    const os = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await fs.mkdtemp(join(os.tmpdir(), 'octopi-mig-'));
+    const path = join(dir, 'agent.db');
+    const { DatabaseSync } = await import('node:sqlite');
+    // 手造旧结构库：concepts 无 description_history 列 + 一行真实形态数据
+    const raw = new DatabaseSync(path);
+    raw.exec(`
+      CREATE TABLE concepts (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        kind        TEXT NOT NULL DEFAULT 'construct',
+        description TEXT,
+        frequency   INTEGER NOT NULL DEFAULT 1,
+        memory_ids  TEXT NOT NULL DEFAULT '[]',
+        domain      TEXT NOT NULL DEFAULT '[]',
+        status      TEXT NOT NULL DEFAULT 'shadow',
+        embedding   BLOB,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL
+      );
+      INSERT INTO concepts (id, name, kind, description, frequency, memory_ids, domain, status, created_at, updated_at)
+      VALUES ('cpt_old', '旧口径概念', 'construct', '旧口径', 1, '["m1"]', '[]', 'active', 0, 0);
+    `);
+    raw.close();
+
+    const db = await AgentDatabase.create({ dbPath: path });
+    const cols = db.raw.prepare('PRAGMA table_info(concepts)').all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain('description_history');
+    // 行完整保留（绝不 DROP 重建）
+    const row = db.raw
+      .prepare('SELECT description, description_history FROM concepts WHERE id = ?')
+      .get('cpt_old') as { description: string; description_history: string };
+    expect(row.description).toBe('旧口径');
+    expect(row.description_history).toBe('[]');
+    db.close();
+  });
+
   it('schema 为 maxim（无 content 列）', async () => {
     const cols = db.raw.prepare('PRAGMA table_info(wisdom)').all() as Array<{ name: string }>;
     const names = new Set(cols.map((c) => c.name));

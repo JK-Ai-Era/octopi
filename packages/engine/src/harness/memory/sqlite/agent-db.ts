@@ -149,6 +149,9 @@ export class AgentDatabase {
 
   /**
    * Cognition 表结构一次性重建（概念图未投入生产；发现旧列即 DROP 重建）。
+  /**
+   * Cognition 表结构迁移：旧结构（pre-R5，缺 kind/status/domain 等）发现即 DROP 重建；
+   * **新结构库（概念图已载真实数据）绝不 DROP**——缺列只补列（ALTER），缺结构才重建。
    * 禁止对旧 `concepts(name)` UNIQUE 语义做兼容——义项允许多节点同名。
    */
   private migrateConceptTables(): void {
@@ -172,7 +175,22 @@ export class AgentDatabase {
       // ignore
     }
 
-    if (!needsRebuild) return;
+    if (!needsRebuild) {
+      // description_history 是纯增量列：旧表 ALTER 补列。
+      // 概念图已载真实数据，此处绝不 DROP——缺列只补列，只有缺结构才重建。
+      // 先查列再 ALTER（F5）：不用异常做控制流，迁移失败不伪装成「列已存在」。
+      try {
+        const cols = this.db.prepare('PRAGMA table_info(concepts)').all() as Array<{ name: string }>;
+        // 新库（表尚不存在）：CREATE TABLE IF NOT EXISTS 将带新列建表，无需 ALTER
+        if (cols.length > 0 && !cols.some((c) => c.name === 'description_history')) {
+          this.db.exec(`ALTER TABLE concepts ADD COLUMN description_history TEXT NOT NULL DEFAULT '[]'`);
+        }
+      } catch (e) {
+        // PRAGMA/ALTER 失败必须显式冒泡：吞掉会让缺列库在首次定义覆盖时才炸
+        throw new Error(`concept description_history migration failed: ${(e as Error).message}`);
+      }
+      return;
+    }
 
     this.db.exec(`
       DROP TABLE IF EXISTS concept_edges_aux;
@@ -256,6 +274,7 @@ export class AgentDatabase {
         name        TEXT NOT NULL,
         kind        TEXT NOT NULL DEFAULT 'construct',
         description TEXT,
+        description_history TEXT NOT NULL DEFAULT '[]',
         frequency   INTEGER NOT NULL DEFAULT 1,
         memory_ids  TEXT NOT NULL DEFAULT '[]',
         domain      TEXT NOT NULL DEFAULT '[]',

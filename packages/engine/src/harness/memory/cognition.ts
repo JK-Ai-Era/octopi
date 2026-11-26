@@ -35,7 +35,12 @@ import {
   hebbianStrengthen,
   nextEdgeStrength,
 } from './cognition-decay.js';
-import { BIRTH_CANDIDATE_TTL_MS, evaluateConceptGate, licenseEdge } from './cognition-gates.js';
+import {
+  BIRTH_CANDIDATE_TTL_MS,
+  DESCRIPTION_HISTORY_CAP,
+  evaluateConceptGate,
+  licenseEdge,
+} from './cognition-gates.js';
 import { createSeedMatcher, normName } from './cognition-seeds.js';
 
 function daysBetween(a: number, b: number): number {
@@ -96,7 +101,17 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       for (const d of input.domain ?? []) {
         if (!sameName.domain.includes(d)) sameName.domain.push(d);
       }
-      if (input.description && sameName.description == null) {
+      if (input.birthChannel === 'definition' && input.description) {
+        // 活口径（R7′）：定义新口径胜，旧口径入版本链（最近旧版在前，cap 5）。
+        // 同值重申幂等（F3）：口径未变不入链，不挤掉真实旧版
+        if (sameName.description && sameName.description !== input.description) {
+          sameName.descriptionHistory = [
+            { text: sameName.description, memoryId: input.memoryIds?.[0], at: Date.now() },
+            ...(sameName.descriptionHistory ?? []),
+          ].slice(0, DESCRIPTION_HISTORY_CAP);
+        }
+        sameName.description = input.description;
+      } else if (input.description && sameName.description == null) {
         sameName.description = input.description;
       }
       return { action: 'merged', id: sameName.id, reason: 'ok' };
@@ -444,6 +459,17 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
     for (const d of right.domain) {
       if (!left.domain.includes(d)) left.domain.push(d);
     }
+    // 活口径合并（F4，与 SqliteConceptGraph.resolveMerge 同构）：
+    // 被替换方（right）的口径与其版本链并入 left 版本链，不静默丢口径
+    const mergedHistory =
+      right.description && left.description && right.description !== left.description
+        ? [
+            { text: right.description, memoryId: right.memoryIds[0], at: Date.now() },
+            ...(right.descriptionHistory ?? []),
+            ...(left.descriptionHistory ?? []),
+          ].slice(0, DESCRIPTION_HISTORY_CAP)
+        : [...(left.descriptionHistory ?? []), ...(right.descriptionHistory ?? [])].slice(0, DESCRIPTION_HISTORY_CAP);
+    if (mergedHistory.length > 0) left.descriptionHistory = mergedHistory;
     if (left.description == null && right.description) {
       left.description = right.description;
     }
