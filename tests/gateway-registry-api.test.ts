@@ -262,6 +262,8 @@ describe('WebApiRouter /sessions — 租户身份收口（MAJ-3/MAJ-4 锚）', (
     seenFilters = [];
     const stub = {
       getRegistry: () => registry,
+      // A2 host 认证面闸的判据（stub agent 非 host）
+      getAgentEffectiveMode: () => 'workspace',
       createSession: async (o: { agentId: string; tenantId?: string }) => ({
         id: 's1',
         agentId: o.agentId,

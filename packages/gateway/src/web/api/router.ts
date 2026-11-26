@@ -501,7 +501,23 @@ export class WebApiRouter {
           }
           listTenant = listIdentity.tenantId;
         }
+        // A2 host 认证面（2026-11-27）：无认证不得操作 host agent——列表显式
+        // 查询 host agent = 操作（拒）；未指定 agent 时 host agent 的会话对
+        // 无认证面不可见（会话标题亦属内容，从严）。
         const sessions = await this.gateway.listSessions(agentId, listTenant);
+        if (!this.approverIdentity) {
+          if (agentId && this.gateway.getAgentEffectiveMode(agentId) === 'host') {
+            return this.json(res, 503, {
+              ok: false,
+              error:
+                "security_host_agent_unauthenticated: listing a host-mode agent's sessions requires an authenticated console (configure apiKey)",
+            });
+          }
+          const visible = sessions.filter(
+            (s) => this.gateway.getAgentEffectiveMode(s.agentId) !== 'host',
+          );
+          return this.json(res, 200, { ok: true, data: visible });
+        }
         return this.json(res, 200, { ok: true, data: sessions });
       }
 
@@ -509,6 +525,21 @@ export class WebApiRouter {
       // 身份租户（平台 admin 豁免）；越域按「不存在」回（不泄漏存在性）。
       // 无该头 = 宿主面（apiKey 闸已验），存量语义不变。**前置**于一切
       // /sessions/:id* 分支（含 events 回放——曾因注册在闸前漏放，评审 MAJ-3）。
+      // A2 host 认证面（2026-11-27 拍板）：无认证不得操作 host agent——会话级
+      // 一切操作（读历史/回放/改会话/发消息 REST 面）全拦。
+      const hostSessionMatch = relativePath.match(/^\/sessions\/([^/]+)/);
+      if (hostSessionMatch && !this.approverIdentity) {
+        const hostMode = await this.gateway.getAgentEffectiveModeBySession(
+          hostSessionMatch[1],
+        );
+        if (hostMode === 'host') {
+          return this.json(res, 503, {
+            ok: false,
+            error:
+              'security_host_agent_unauthenticated: operating a host-mode agent session requires an authenticated console (configure apiKey)',
+          });
+        }
+      }
       const singleSessionMatch = relativePath.match(/^\/sessions\/([^/]+)/);
       if (singleSessionMatch) {
         const singleIdentity = this.resolveRequestUser(req);
@@ -567,6 +598,19 @@ export class WebApiRouter {
         const body = await this.readBody(req);
         if (!body?.agentId) {
           return this.json(res, 400, { ok: false, error: 'agentId is required' });
+        }
+
+        // A2 host 认证面（2026-11-27 拍板）：无认证不得操作 host agent——
+        // 建会话即操作的开始（后续发消息/读历史都在此会话上）
+        if (
+          !this.approverIdentity &&
+          this.gateway.getAgentEffectiveMode(String(body.agentId)) === 'host'
+        ) {
+          return this.json(res, 503, {
+            ok: false,
+            error:
+              'security_host_agent_unauthenticated: creating a session for a host-mode agent requires an authenticated console (configure apiKey)',
+          });
         }
 
         const metadata = { ...(body.metadata ?? {}) };
@@ -2132,6 +2176,19 @@ export class WebApiRouter {
         return this.json(res, 404, { ok: false, error: 'Session not found' });
       }
     }
+    // A2 host 认证面（2026-11-27）：host agent 的 run 快照 / LLM 正文 = 读历史，
+    // 无认证拒（与单会话端点同闸）
+    if (!this.approverIdentity) {
+      const debugHostMode =
+        await this.gateway.getAgentEffectiveModeBySession(sessionId);
+      if (debugHostMode === 'host') {
+        return this.json(res, 503, {
+          ok: false,
+          error:
+            'security_host_agent_unauthenticated: reading a host-mode agent session requires an authenticated console (configure apiKey)',
+        });
+      }
+    }
     try {
       const hub = this.gateway.getObserverHub();
       if (kind === 'scope') {
@@ -2578,6 +2635,21 @@ export class WebApiRouter {
   ): boolean {
     // 认证部署：持钥方 = 宿主管理身份，放行
     if (this.approverIdentity) return false;
+
+    // A2 扩围（2026-11-27 拍板）：host 生效模式 agent 的**任何**写入都拒——
+    // 「操作 host agent 必须认证」覆盖 persona/tools 等非安全键（劫持面：改写
+    // systemPrompt 即可借全权执行）；目标当前就是 host 时不再逐键分析（含降权
+    // 写入：方向不可静态判定，按最坏方向拦，与 F-3 同则）。
+    const entryId = typeof agentEntry.id === 'string' ? agentEntry.id : undefined;
+    if (entryId && this.gateway.getAgentEffectiveMode(entryId) === 'host') {
+      this.json(res, 503, {
+        ok: false,
+        error:
+          'security_host_agent_unauthenticated: modifying a host-mode agent requires an authenticated console (configure apiKey); unauthenticated deployments may only edit sandboxed agents',
+      });
+      return true;
+    }
+
     const ep = agentEntry.effectPolicy;
     const epObj = ep && typeof ep === 'object' ? (ep as Record<string, unknown>) : undefined;
     const status = this.gateway.getEffectPolicyStatus();

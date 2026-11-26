@@ -133,3 +133,44 @@ describe('审批署名取认证身份（credential-backed）', () => {
     expect(seenApprover).toBe('unauthenticated');
   });
 });
+
+describe('WS chat host 认证面（A2 扩围，2026-11-27）', () => {
+  let adapter: HttpChannelAdapter | undefined;
+
+  afterEach(async () => {
+    await adapter?.stop();
+    adapter = undefined;
+  });
+
+  it('无 apiKey 部署：chat 触达 host agent 拒收；沙箱正常投递', async () => {
+    const delivered: Array<{ content: string }> = [];
+    adapter = new HttpChannelAdapter({
+      port: 19193,
+      host: '127.0.0.1',
+      path: '/messages',
+      enableWebSocket: true,
+      isHostEffectTarget: async (target) => target.agentId === 'hx',
+    });
+    await adapter.start(async (msg) => {
+      delivered.push({ content: msg.content });
+    });
+
+    const ws = new WebSocket('ws://127.0.0.1:19193/ws');
+    const got: string[] = [];
+    ws.on('message', (d) => got.push(String(d)));
+    await new Promise<void>((resolve) => ws.on('open', () => resolve()));
+
+    // host 目标 → 拒收（不投递）
+    ws.send(JSON.stringify({ type: 'chat', agentId: 'hx', content: 'do evil' }));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(got.some((m) => m.includes('host-mode agents require'))).toBe(true);
+    expect(delivered.length).toBe(0);
+
+    // 沙箱目标 → 正常投递
+    ws.send(JSON.stringify({ type: 'chat', agentId: 'sx', content: 'hello' }));
+    await new Promise((r) => setTimeout(r, 150));
+    expect(delivered.some((m) => m.content === 'hello')).toBe(true);
+
+    ws.close();
+  }, 15_000);
+});

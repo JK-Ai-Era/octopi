@@ -38,6 +38,7 @@ describe('WebhookSource', () => {
       defaultAgentId: 'a1',
       runtime,
       maxBodyBytes: 256,
+      resolveAgentEffectiveMode: () => 'workspace',
     });
     runtime.addSource(source);
     await runtime.start();
@@ -99,5 +100,76 @@ describe('FileWatchSource', () => {
     await runtime.stop();
     rmSync(dir, { recursive: true, force: true });
     void seen;
+  });
+});
+
+describe('WebhookSource host 认证面（A2 扩围，2026-11-27）', () => {
+  it('配了 apiKey：host 目标无 Bearer → 401，带 Bearer → 202', async () => {
+    const calls: unknown[] = [];
+    const runtime = new AgentRuntime();
+    runtime.registerAgent({ agentId: 'ops', dispatcher: mockDispatcher(calls) });
+    const modes: Record<string, string> = { ops: 'host' };
+    const source = new WebhookSource({
+      port: 0,
+      host: '127.0.0.1',
+      runtime,
+      apiKey: 'wh-secret',
+      resolveAgentEffectiveMode: (id) => modes[id],
+    });
+    runtime.addSource(source);
+    await runtime.start();
+    const url = `http://127.0.0.1:${source.port}/runtime/webhook`;
+
+    const noAuth = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: 'ops', content: 'x' }),
+    });
+    expect(noAuth.status).toBe(401);
+
+    const authed = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer wh-secret' },
+      body: JSON.stringify({ agentId: 'ops', content: 'x' }),
+    });
+    expect(authed.status).toBe(202);
+
+    await runtime.stop();
+  });
+
+  it('未配 apiKey：沙箱目标 202、host 目标 403（fail loud）', async () => {
+    const calls: unknown[] = [];
+    const runtime = new AgentRuntime();
+    runtime.registerAgent({ agentId: 'a1', dispatcher: mockDispatcher(calls) });
+    runtime.registerAgent({ agentId: 'ops', dispatcher: mockDispatcher(calls) });
+    const modes: Record<string, string> = { ops: 'host', a1: 'workspace' };
+    const source = new WebhookSource({
+      port: 0,
+      host: '127.0.0.1',
+      runtime,
+      resolveAgentEffectiveMode: (id) => modes[id],
+    });
+    runtime.addSource(source);
+    await runtime.start();
+    const url = `http://127.0.0.1:${source.port}/runtime/webhook`;
+
+    const sandbox = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: 'a1', content: 'x' }),
+    });
+    expect(sandbox.status).toBe(202);
+
+    const host = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: 'ops', content: 'x' }),
+    });
+    expect(host.status).toBe(403);
+    expect(((await host.json()) as { error: string }).error).toMatch(
+      /host_agent_unauthenticated/,
+    );
+
+    await runtime.stop();
   });
 });

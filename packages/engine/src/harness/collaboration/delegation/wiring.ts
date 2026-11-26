@@ -65,6 +65,11 @@ export interface DelegatableAgent {
   traits?: string[];
   /** 委派策略（`AgentConfig.delegation`） */
   delegation?: AgentDelegationPolicy;
+  /**
+   * 该 agent 的**生效** effectPolicy.mode（A2 权限域闸 2026-11-27：沙箱不得
+   * 委派给 host）。由装配层按全局+本 agent 合并后填入（勿填字面量）。
+   */
+  effectPolicyMode?: string;
   /** persona（进子的 systemPrompt） */
   persona?: string;
   /**
@@ -177,6 +182,9 @@ export function createDelegationRuntime(
     notifier,
     // 父 session 深度：子 session 的深度 = 创建它的那张委派单的 depth（§10.4，权威查询）
     resolveParentDepth: (sessionId) => delegationStore.findDepthByChildSession(sessionId) ?? 0,
+    // A2 权限域闸（2026-11-27 拍板）：沙箱不得借委派驱动 host agent；
+    // 按 attach 时声明的**生效** effectPolicy.mode 判（父/目标同源查表）
+    resolveAgentEffectiveMode: (agentId) => byId.get(agentId)?.effectPolicyMode,
   });
 
   const delegateTools = createDelegationTools(service);

@@ -802,6 +802,8 @@ export class Gateway {
         // 本债务随 buildAgent 脚手架删除时一并处置（§9 已注记）。
         (await this.ensureDelegationRuntime())?.attach({
           agentId: agent.id,
+          // A2 权限域闸（2026-11-27）：按生效模式声明，供委派闸判沙箱→host
+          effectPolicyMode: this.getAgentEffectiveMode(agent.id),
           agent: built.agent,
           runner: built.runner,
           store: this.store,
@@ -1846,6 +1848,41 @@ export class Gateway {
       effectPolicyConfig: eff,
       workspace,
     };
+  }
+
+  /**
+   * Effective effect-policy mode for one agent — sole authority: runtime registry
+   * + `mergeEffectPolicy` per-key fallback (identical computation to
+   * `resolveSessionEffectRoots`). Used by the unauthenticated host-agent access
+   * gate (A2 扩围拍板 2026-11-27): host-mode agents must not be driven — config
+   * writes, chat, session reads, delegation, webhooks — without an authenticated
+   * console.
+   *
+   * @param agentId - agent id (unknown ids resolve to the engine default, i.e.
+   *   non-host; the caller's own not-found path reports the 404)
+   * @returns effective mode string ('workspace' when set nowhere)
+   */
+  getAgentEffectiveMode(agentId: string): string {
+    const agentDef = this.agents.get(agentId);
+    const eff: EffectPolicyConfig | undefined = mergeEffectPolicy(
+      this.config.effectPolicy as EffectPolicyConfig | undefined,
+      agentDef?.effectPolicy,
+      { agentStandalone: agentDef?.effectPolicyStandalone === true },
+    );
+    return eff?.mode ?? 'workspace';
+  }
+
+  /**
+   * Effective mode of the agent owning one session (host-access gate helper).
+   *
+   * @param sessionId - session id
+   * @returns effective mode, or undefined when the session does not exist
+   *   (the caller's own not-found path reports the 404)
+   */
+  async getAgentEffectiveModeBySession(sessionId: string): Promise<string | undefined> {
+    const session = await this.store.load(sessionId);
+    if (!session) return undefined;
+    return this.getAgentEffectiveMode(session.primaryAgentId ?? session.agentId);
   }
 
   /**

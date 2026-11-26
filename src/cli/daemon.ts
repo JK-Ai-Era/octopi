@@ -1320,6 +1320,9 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
         resolveToken: (token) => gateway.getRegistry()?.resolveToken(token) ?? null,
         getSessionTenant: async (sessionId) => (await gateway.getSession(sessionId))?.tenantId,
         getAgentTenant: agentTenantReader(() => gateway.getRegistry()),
+        // A2 host 认证面（2026-11-27）：WS chat 闸的生效模式判据（单源工厂接线）
+        getAgentEffectiveMode: (agentId) => gateway.getAgentEffectiveMode(agentId),
+        getSessionEffectiveMode: (sessionId) => gateway.getAgentEffectiveModeBySession(sessionId),
       }),
     }), httpConfig?.tenantId ? { tenantId: httpConfig.tenantId } : undefined);
     // builtin 适配器出两种消息 label（http/ws）——bot 归属锚逐 label 补齐

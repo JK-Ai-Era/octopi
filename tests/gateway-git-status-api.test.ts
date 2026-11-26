@@ -184,6 +184,8 @@ describe('WebApiRouter git-status 路由映射', () => {
     const stub = {
       getSessionGitStatus: async (id: string, path: string, opts?: { maxEntries?: number }) =>
         impl(id, path, opts),
+      // A2 host 认证面闸的判据（stub 会话非 host）
+      getAgentEffectiveModeBySession: async () => undefined,
     };
     return new WebApiRouter({ gateway: stub as unknown as Gateway });
   }

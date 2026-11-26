@@ -140,6 +140,31 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.134.0 (2026-11-27)
+
+### feat(gateway,engine): host agent 认证面收口（A2 扩围，2026-11-27 拍板）
+
+**用户可见行为变更（无认证部署 = 未配 console apiKey）**：host 生效模式的 agent 现在
+**任何外部操作都要求认证**（拍板原话「host 模式的 agent，必须要有 apiKey 才能操作
+（包括发消息）」）。此前只有安全键写入受限、persona/tools 编辑与发消息放行——劫持面
+（改 systemPrompt 借全权执行）与命令面（发消息 = 命令全权主体执行）均已堵死：
+
+- **配置写入**：host agent 的一切编辑 503（含 persona / tools / 降权写入；`security_host_agent_unauthenticated`）
+- **发消息**：WS chat（`type:'chat'`，TUI/WebUI 主通道）触达 host 目标拒收；REST 建会话（POST /sessions）503
+- **读历史**：`/sessions/:id*` 全分支（消息 / 回放 / 文件等）与 debug run 面（LLM 正文）503；会话列表显式查 host 拒、隐式列表过滤 host 会话（标题亦属内容）
+- **委派**：沙箱 agent → host agent 拒（`DelegateResolutionError reason=elevation_denied`；host→host 同域放行；父模式未知 fail-closed）
+- **webhook**：`WebhookSource` 触达 host 目标必须 `Authorization: Bearer <apiKey>`（组件强制：未配 apiKey 只可驱动沙箱 agent；`resolveAgentEffectiveMode` 必填注入）
+- **放行边界（拍板确认）**：IM / 渠道消息照常（绑定规则 = 认证，远程运维通道）；定时 / 事件 trigger 照常（宿主声明的授权）；认证部署（配 apiKey）全不受影响
+
+判据 = **生效模式**（`gateway.getAgentEffectiveMode`，逐键兜底合并后），不按配置字面量
+（F-2 教训沿用）；判据单源供 web API / WS / 委派 / webhook 四面共用。已盘并排除的驱动面：
+`/fleet/spawn`（run 实例拓扑编排，非 agent 驱动）、skill review 委派（单次 chat
+completion，无工具循环）。
+
+- 测试：6123 passed / 9 skipped（590 文件）；lint 绿；arch/check-sync.sh 绿
+
+---
+
 ## v0.133.0 (2026-11-27)
 
 ### feat(engine,gateway,webui): effectPolicy 合并改「逐键兜底」（2026-11-26 拍板）

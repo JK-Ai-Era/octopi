@@ -1309,3 +1309,91 @@ describe('resolution failure returns available targets for self-correction', () 
     expect(ok.ok).toBe(true);
   });
 });
+
+// ── A2 权限域闸（2026-11-27 拍板）：沙箱不得借委派驱动 host agent ──
+
+describe('DelegateService elevation gate (A2 host 认证面)', () => {
+  const modes: Record<string, string | undefined> = {
+    main: 'workspace',
+    sandbox: 'workspace',
+    ops: 'host',
+    ops2: 'host',
+    // 'ghost' 故意缺席：父模式未知
+  };
+  function makeElevationService(opts?: { resolve?: boolean }) {
+    const registry = new DefaultAgentRegistry();
+    for (const id of ['ops', 'ops2', 'sandbox']) {
+      registry.register(
+        agentInfo({ id, delegation: { callable: true, canDelegate: false, maxDepth: 1 } }),
+      );
+    }
+    const store = new DelegationStore();
+    const service = new DelegateService(store, registry, makeOkTransport(), {
+      ...(opts?.resolve === false
+        ? {}
+        : { resolveAgentEffectiveMode: (agentId: string) => modes[agentId] }),
+    });
+    return { service };
+  }
+
+  it('sandbox parent -> host target → 拒（reason=elevation_denied）', async () => {
+    const { service } = makeElevationService();
+    const err = await service
+      .dispatch({ parent: PARENT, target: { agentId: 'ops' }, task: 't', input: 'i' })
+      .then(
+        () => null,
+        (e: { reason?: string }) => e,
+      );
+    expect(err).not.toBeNull();
+    expect(err?.reason).toBe('elevation_denied');
+  });
+
+  it('host parent -> host target 同域放行', async () => {
+    const { service } = makeElevationService();
+    const { resolvedAgentId } = await service.dispatch({
+      parent: { ...PARENT, agentId: 'ops2' },
+      target: { agentId: 'ops' },
+      task: 't',
+      input: 'i',
+    });
+    expect(resolvedAgentId).toBe('ops');
+  });
+
+  it('sandbox parent -> sandbox target 放行（不受影响）', async () => {
+    const { service } = makeElevationService();
+    const { resolvedAgentId } = await service.dispatch({
+      parent: PARENT,
+      target: { agentId: 'sandbox' },
+      task: 't',
+      input: 'i',
+    });
+    expect(resolvedAgentId).toBe('sandbox');
+  });
+
+  it('父模式未知（未登记）→ 拒（fail-closed，与 F-3 同则）', async () => {
+    const { service } = makeElevationService();
+    const err = await service
+      .dispatch({
+        parent: { ...PARENT, agentId: 'ghost' },
+        target: { agentId: 'ops' },
+        task: 't',
+        input: 'i',
+      })
+      .then(
+        () => null,
+        (e: { reason?: string }) => e,
+      );
+    expect(err?.reason).toBe('elevation_denied');
+  });
+
+  it('resolver 未注入（引擎库自治）→ 闸不生效（gateway 装配点必注入，有测试锚）', async () => {
+    const { service } = makeElevationService({ resolve: false });
+    const { resolvedAgentId } = await service.dispatch({
+      parent: PARENT,
+      target: { agentId: 'ops' },
+      task: 't',
+      input: 'i',
+    });
+    expect(resolvedAgentId).toBe('ops');
+  });
+});

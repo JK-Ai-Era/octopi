@@ -22,15 +22,18 @@ interface CallResult {
 
 async function call(
   router: WebApiRouter,
-  method: 'POST' | 'PUT',
+  method: 'POST' | 'PUT' | 'GET',
   url: string,
-  body: unknown,
+  body?: unknown,
 ): Promise<CallResult> {
-  const req = Object.assign(Readable.from([JSON.stringify(body)]), {
-    url,
-    method,
-    headers: { host: 'localhost' },
-  }) as unknown as IncomingMessage;
+  const req = Object.assign(
+    Readable.from(body === undefined ? [] : [JSON.stringify(body)]),
+    {
+      url,
+      method,
+      headers: { host: 'localhost' },
+    },
+  ) as unknown as IncomingMessage;
   let status = 0;
   let payload: CallResult['body'] = null;
   const res = {
@@ -50,9 +53,24 @@ async function call(
   return { handled, status, body: payload };
 }
 
-function makeRouter(opts: { approverIdentity?: string; globalMode?: string }) {
+function makeRouter(opts: {
+  approverIdentity?: string;
+  globalMode?: string;
+  /** agentId → 生效 effectPolicy.mode（A2 host 认证面闸判据） */
+  agentModes?: Record<string, string>;
+  /** sessionId → 生效 mode（会话级 host 闸） */
+  sessionModes?: Record<string, string>;
+  /** listSessions 返回 */
+  sessions?: Array<{ id: string; agentId: string; running?: boolean }>;
+}) {
   const gatewayStub = {
     getEffectPolicyStatus: () => ({ configuredMode: opts.globalMode }),
+    getAgentEffectiveMode: (agentId: string) =>
+      opts.agentModes?.[agentId] ?? 'workspace',
+    getAgentEffectiveModeBySession: async (sessionId: string) =>
+      opts.sessionModes?.[sessionId],
+    listSessions: async () => opts.sessions ?? [],
+    getSessionView: async () => null,
   };
   const applyStub = {
     createAgent: vi.fn(async () => ({ hash: 'h', applied: 'next-run', affectedAgents: [] })),
@@ -263,5 +281,96 @@ describe('console 无认证部署提权闸（判据 = 写入后生效模式）',
     });
     expect(r.status).toBe(200);
     expect(applyStub.updateAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('A2 扩围：host agent 认证面（2026-11-27 拍板：操作 host agent 必须认证，含发消息/读历史）', () => {
+  it('无认证 + host agent 的 tools/persona/降权编辑 → 503（劫持面全拒）', async () => {
+    for (const patch of [
+      { tools: { allow: ['shell'] } },
+      { persona: { name: 'p' } },
+      { effectPolicy: { mode: 'workspace' } },
+    ]) {
+      const { router, applyStub } = makeRouter({ agentModes: { x: 'host' } });
+      const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+        agent: { id: 'x', ...patch },
+        hash: 'h',
+      });
+      expect(r.status).toBe(503);
+      expect(r.body?.error).toMatch(/security_host_agent_unauthenticated/);
+      expect(applyStub.updateAgent).not.toHaveBeenCalled();
+    }
+  });
+
+  it('认证部署 + host agent 编辑 → 放行（署名通道）', async () => {
+    const { router, applyStub } = makeRouter({
+      approverIdentity: 'owner',
+      agentModes: { x: 'host' },
+    });
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', tools: { allow: ['shell'] } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(200);
+    expect(applyStub.updateAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('无认证 + 给 host agent 建会话 → 503（建会话即操作）', async () => {
+    const { router } = makeRouter({ agentModes: { hx: 'host' } });
+    const r = await call(router, 'POST', '/api/v1/sessions', { agentId: 'hx' });
+    expect(r.status).toBe(503);
+    expect(r.body?.error).toMatch(/security_host_agent_unauthenticated/);
+  });
+
+  it('无认证 + 读 host agent 会话（/sessions/:id* 全分支）→ 503（读历史面）', async () => {
+    const { router } = makeRouter({ sessionModes: { s9: 'host' } });
+    for (const path of [
+      '/api/v1/sessions/s9',
+      '/api/v1/sessions/s9/messages',
+      '/api/v1/sessions/s9/events',
+      '/api/v1/sessions/s9/files',
+    ]) {
+      const r = await call(router, 'GET', path);
+      expect(r.status).toBe(503);
+      expect(r.body?.error).toMatch(/security_host_agent_unauthenticated/);
+    }
+  });
+
+  it('无认证 + 读沙箱 agent 会话 → 闸放行（不过 host 闸）', async () => {
+    const { router } = makeRouter({ sessionModes: { s1: 'workspace' } });
+    const r = await call(router, 'GET', '/api/v1/sessions/s1');
+    expect(r.status).not.toBe(503);
+  });
+
+  it('无认证 + GET /sessions?agentId=host → 503（显式查 host agent）', async () => {
+    const { router } = makeRouter({ agentModes: { hx: 'host' } });
+    const r = await call(router, 'GET', '/api/v1/sessions?agentId=hx');
+    expect(r.status).toBe(503);
+  });
+
+  it('无认证 + GET /sessions 列表过滤 host agent 会话（标题亦属内容）', async () => {
+    const { router } = makeRouter({
+      agentModes: { hx: 'host', sx: 'workspace' },
+      sessions: [
+        { id: 's-h', agentId: 'hx', running: false },
+        { id: 's-s', agentId: 'sx', running: false },
+      ],
+    });
+    const r = await call(router, 'GET', '/api/v1/sessions');
+    expect(r.status).toBe(200);
+    const data = (r.body as unknown as { data: Array<{ id: string }> }).data;
+    expect(data.map((s) => s.id)).toEqual(['s-s']);
+  });
+
+  it('认证部署 + 列表含 host agent 会话（不过滤）', async () => {
+    const { router } = makeRouter({
+      approverIdentity: 'owner',
+      agentModes: { hx: 'host' },
+      sessions: [{ id: 's-h', agentId: 'hx', running: false }],
+    });
+    const r = await call(router, 'GET', '/api/v1/sessions');
+    expect(r.status).toBe(200);
+    const data = (r.body as unknown as { data: Array<{ id: string }> }).data;
+    expect(data.map((s) => s.id)).toEqual(['s-h']);
   });
 });

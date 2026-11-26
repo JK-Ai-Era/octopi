@@ -48,6 +48,9 @@ describe('WS 订阅租户闸（§9.1-3）', () => {
       resolveToken: (token) => (token === 'tok-alice' ? { tenantId: 'tA', isPlatformAdmin: false } : null),
       getSessionTenant: async (sessionId) => sessionTenants[sessionId],
       getAgentTenant: (agentId) => agentTenants[agentId],
+      // A2 host 认证面闸判据（本测试无 host agent）
+      getAgentEffectiveMode: () => 'workspace',
+      getSessionEffectiveMode: async () => undefined,
     });
     const next = new HttpChannelAdapter({
       port: PORT,

@@ -72,6 +72,14 @@ export interface HttpAdapterOptions {
     identity: WsTenantIdentity,
   ) => Promise<boolean> | boolean;
   /**
+   * host 目标判定（A2 host 认证面，2026-11-27 拍板）：无认证部署下 chat（发消息）
+   * 触达 host 生效模式 agent 一律拒收。由装配层注入（src/ws-identity-hooks.ts
+   * 单源工厂）。
+   */
+  isHostEffectTarget?: (
+    target: { sessionId?: string; agentId?: string },
+  ) => Promise<boolean> | boolean;
+  /**
    * 允许的 CORS 源（默认 '*'）
    *
    * 生产环境应设置为具体的域名列表。
@@ -189,6 +197,8 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
   private readonly resolveWsIdentity?: HttpAdapterOptions['resolveWsIdentity'];
   /** 订阅授权（租户身份连接的 session/agent 订阅校验） */
   private readonly canSubscribe?: HttpAdapterOptions['canSubscribe'];
+  /** host 目标判定（A2 host 认证面：无认证 chat 触达 host 拒收） */
+  private readonly isHostEffectTarget?: HttpAdapterOptions['isHostEffectTarget'];
   /** 自鉴权面（前缀）：跳过本适配器 Bearer 闸，由 onRequest 侧凭证闸把关（§7 向导面） */
   private readonly apiKeyExemptPaths: string[];
 
@@ -201,6 +211,7 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     this.apiKey = options.apiKey;
     this.resolveWsIdentity = options.resolveWsIdentity;
     this.canSubscribe = options.canSubscribe;
+    this.isHostEffectTarget = options.isHostEffectTarget;
     this.apiKeyExemptPaths = options.apiKeyExemptPaths ?? [];
     this.corsOrigins = options.corsOrigins?.join(', ') ?? '*';
     this.maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
@@ -543,6 +554,29 @@ export class HttpChannelAdapter implements StreamingChannelAdapter {
     }
 
     if (msg.type === 'chat') {
+      // A2 host 认证面（2026-11-27 拍板）：host 生效模式 agent 的一切操作
+      // （含发消息）都要认证。WS chat 是发消息主通道；无 apiKey 部署人人可信
+      // （authenticated 初值 = !apiKey），触达 host 目标一律拒收；有 apiKey
+      // 部署能走到这的都是持钥方（token 闸前置），放行。目标解析从严：连接
+      // 已绑 agent 与本帧目标/会话归属任一为 host 即拒。
+      if (!this.apiKey) {
+        const boundAgentId = msg.agentId ?? session.agentId;
+        const hostTarget = await this.isHostEffectTarget?.({
+          ...(boundAgentId ? { agentId: String(boundAgentId) } : {}),
+          ...(msg.sessionId ? { sessionId: String(msg.sessionId) } : {}),
+        });
+        if (hostTarget) {
+          session.ws.send(
+            JSON.stringify({
+              type: 'error',
+              message:
+                'Forbidden: host-mode agents require an authenticated console (configure apiKey)',
+              credential: 'hostAgent',
+            }),
+          );
+          return;
+        }
+      }
       // MAJ-4 修复：连接身份（agentId/sessionId）就是事件匹配面（matchesAgent 取
       // agentId ?? sessionId 前缀）——身份连接改写身份前必须过订阅授权，越域 chat
       // 拒收明示且不投递（防「一帧 chat 订阅他租户全部实时事件」）。

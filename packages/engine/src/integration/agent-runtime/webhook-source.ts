@@ -20,6 +20,13 @@ export interface WebhookSourceConfig {
   defaultAgentId?: string;
   /** 可选 API Key（Authorization: Bearer <key>） */
   apiKey?: string;
+  /**
+   * 解析目标 agent 的**生效** effectPolicy.mode（A2 host 认证面拍板 2026-11-27：
+   * webhook 与发消息同构——`content` 就是 user_message，触达 host agent 必须
+   * 认证）。未认证请求只能驱动非 host agent；目标为 host 且未过 Bearer 鉴权
+   * 一律 403。由装配层注入（勿在本层猜配置）。
+   */
+  resolveAgentEffectiveMode: (agentId: string) => string | undefined;
   /** 请求体上限字节（默认 64KB） */
   maxBodyBytes?: number;
 }
@@ -86,12 +93,15 @@ export class WebhookSource implements TriggerSource {
       res.writeHead(404).end();
       return;
     }
-    if (this.config.apiKey) {
-      const auth = req.headers.authorization ?? '';
-      if (auth !== `Bearer ${this.config.apiKey}`) {
-        res.writeHead(401).end();
-        return;
-      }
+    // 认证态（A2 host 认证面）：配了 apiKey 才可能认证；未配 = 全部请求视为
+    // 未认证（仅可驱动非 host agent）。
+    const providedAuth = req.headers.authorization ?? '';
+    const authenticated =
+      this.config.apiKey !== undefined &&
+      providedAuth === `Bearer ${this.config.apiKey}`;
+    if (this.config.apiKey && !authenticated) {
+      res.writeHead(401).end();
+      return;
     }
 
     const maxBytes = this.config.maxBodyBytes ?? 64 * 1024;
@@ -117,6 +127,19 @@ export class WebhookSource implements TriggerSource {
       const agentId = body.agentId ?? this.config.defaultAgentId;
       if (!agentId || !body.content) {
         res.writeHead(400).end(JSON.stringify({ error: 'agentId and content required' }));
+        return;
+      }
+      // A2 host 认证面（2026-11-27 拍板）：webhook 与发消息同构（content 即
+      // user_message）——触达 host 生效模式 agent 必须认证；未认证（含未配
+      // apiKey）一律 403，fail loud 不静默降级目标。
+      const targetMode = this.config.resolveAgentEffectiveMode(agentId);
+      if (targetMode === 'host' && !authenticated) {
+        res.writeHead(403).end(
+          JSON.stringify({
+            error:
+              'host_agent_unauthenticated: triggering a host-mode agent requires webhook apiKey authentication (Authorization: Bearer)',
+          }),
+        );
         return;
       }
       const trigger: Trigger = {

@@ -17,6 +17,10 @@ import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider
 import type { AgentEvent } from '@octopi-agent/core/primitives/event-bus.js';
 import { DefaultEventBus } from '@octopi-agent/core/primitives/event-bus.js';
 import type { AgentDefinition } from '@octopi-agent/engine/harness/shared/types/agent-definition.js';
+import {
+  mergeEffectPolicy,
+  type EffectPolicyConfig,
+} from '@octopi-agent/engine';
 import type { RunBackendMountSpec } from '@octopi-agent/engine/harness/run/run-host.js';
 import { createDelegatedLegHandle } from '@octopi-agent/engine/harness/activation/delegated-run.js';
 import { assembleGlobalTools } from '@octopi-agent/engine/integration/tools/assemble.js';
@@ -534,6 +538,19 @@ async function main(): Promise<void> {
           }
           delegationRuntime.attach({
             agentId: agent.id,
+            // A2 权限域闸（2026-11-27）：声明生效模式（全局逐键兜底合并，与
+            // gateway.getAgentEffectiveMode 同构），供委派闸判沙箱→host
+            effectPolicyMode:
+              (
+                mergeEffectPolicy(
+                  config.effectPolicy as EffectPolicyConfig | undefined,
+                  defs.get(agent.id)?.effectPolicy,
+                  {
+                    agentStandalone:
+                      defs.get(agent.id)?.effectPolicyStandalone === true,
+                  },
+                )?.mode ?? 'workspace'
+              ),
             agent: built.agent,
             runner: legRunner(built.runner),
             store,

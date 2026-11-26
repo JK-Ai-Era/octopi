@@ -105,6 +105,14 @@ export interface DelegateServiceConfig {
    * 缺省 = 0（父视为根 agent）。
    */
   resolveParentDepth?: (sessionId: string) => number | undefined;
+  /**
+   * 解析某 agent 的生效 effectPolicy.mode（A2 权限域闸，2026-11-27 拍板：
+   * 沙箱 agent 不得借委派驱动 host agent）。由装配层注入（wiring 按
+   * `DelegatableAgent.effectPolicyMode` 查表）。
+   *
+   * 缺省 = 不判（引擎库消费方自治；gateway 生产装配点必注入，有测试锚）。
+   */
+  resolveAgentEffectiveMode?: (agentId: string) => string | undefined;
 }
 
 /**
@@ -126,7 +134,14 @@ export interface ResolutionAvailability {
 export class DelegateResolutionError extends Error {
   constructor(
     message: string,
-    readonly reason: 'not_found' | 'not_callable' | 'forbidden' | 'depth_exceeded' | 'too_many_active' | 'cross_tenant',
+    readonly reason:
+      | 'not_found'
+      | 'not_callable'
+      | 'forbidden'
+      | 'depth_exceeded'
+      | 'too_many_active'
+      | 'cross_tenant'
+      | 'elevation_denied',
     /** 解析失败时的可用目标（可选；让调用方不必瞎猜） */
     readonly available?: ResolutionAvailability,
   ) {
@@ -213,6 +228,21 @@ export class DelegateService {
         `delegate cross-tenant: ${input.parent.agentId} (${parentTenant}) -> ${handle.agentId} (${targetTenant})`,
         'cross_tenant',
       );
+    }
+
+    // 1c. 权限域闸（A2 扩围拍板 2026-11-27）：沙箱 agent 委派给 host agent =
+    // 借委派提权（子以宿主全权执行父的指令链），拒；host→host 同域放行。
+    // 父模式查不到（未 attach）按最坏方向拦（与 F-3 同则）。
+    const resolveMode = this.config.resolveAgentEffectiveMode;
+    if (resolveMode) {
+      const targetMode = resolveMode(handle.agentId);
+      const parentMode = resolveMode(input.parent.agentId);
+      if (targetMode === 'host' && parentMode !== 'host') {
+        throw new DelegateResolutionError(
+          `delegate elevation denied: ${input.parent.agentId} (${parentMode ?? 'unknown'}) -> ${handle.agentId} (host); host agents accept delegation from host peers only`,
+          'elevation_denied',
+        );
+      }
     }
 
     // 2. 递归深度闸（§10.4）

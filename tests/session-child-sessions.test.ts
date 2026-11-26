@@ -162,6 +162,8 @@ describe('WebApiRouter /sessions/:id/children 路由映射', () => {
         if (id === 'missing') throw new Error('Session "missing" not found');
         return [{ id: 'child-1', agentId: 'a2', createdAt: 2, running: false }];
       },
+      // A2 host 认证面闸的判据（stub 会话非 host）
+      getAgentEffectiveModeBySession: async () => undefined,
     };
     const router = new WebApiRouter({ gateway: stub as unknown as Gateway });
 
