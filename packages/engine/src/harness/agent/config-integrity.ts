@@ -53,6 +53,10 @@ const EFFECT_POLICY_SECURITY_KEYS = [
   'dangerousCommands',
   // 作用域面：事务根 = 读写允许根（扩根 = 扩读写面，安全面变化必须进指纹可见）
   'transactionRoots',
+  // 作用域面补集（评审 F-3）：deny 清单与最终符号链接防线是读写面的拒绝侧/加固侧——
+  // 删键/清空/替换都可能扩大实际读写面且此前静默不可见（changed: []），必须进指纹
+  'pathDenylist',
+  'refuseFinalSymlink',
 ] as const;
 
 const SECURITY_CONFIG_SECURITY_KEYS = ['enforce', 'injectionSensitivity', 'allowedPaths'] as const;

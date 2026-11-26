@@ -27,6 +27,7 @@ import {
   createUnconfiguredFileEffects,
   createUnconfiguredMemoryEffects,
 } from '../extension/execution-environment/undo-log.js';
+import { mergeEffectPolicy } from '../extension/execution-environment/effect-policy.js';
 import { JournaledMemoryStore } from '../extension/execution-environment/memory-undo.js';
 import type {
   ModelProvider,
@@ -653,6 +654,8 @@ export class AgentBuilder {
   /** 工具效应隔离（I5）；Runner 解析 toolRuntime.cwd */
   private _toolIsolation?: import('../extension/execution-environment/isolation.js').ToolIsolationMode;
   private _effectPolicy?: import('../extension/execution-environment/effect-policy.js').EffectPolicyConfig;
+  /** effectPolicy 自成一套（MAJ-5 租户隔离）：不与 runnerConfig 缺省兜底 */
+  private _effectPolicyStandalone = false;
   private _confirmEffect?: import('../extension/execution-environment/effect-policy.js').ConfirmEffect;
 
   // MCP 配置
@@ -1252,8 +1255,12 @@ export class AgentBuilder {
    * @param mode - `none` | `session-subdir` | `session-lock`
    */
   /** P3：注入 ToolEffectPolicy */
-  effectPolicy(config: import('../extension/execution-environment/effect-policy.js').EffectPolicyConfig): this {
+  effectPolicy(
+    config: import('../extension/execution-environment/effect-policy.js').EffectPolicyConfig,
+    opts?: { standalone?: boolean },
+  ): this {
     this._effectPolicy = config;
+    this._effectPolicyStandalone = opts?.standalone === true;
     return this;
   }
 
@@ -1473,7 +1480,10 @@ export class AgentBuilder {
       ...this._runnerConfig,
       defaultIntentProvider: this._model,
       toolIsolation: this._toolIsolation ?? this._runnerConfig?.toolIsolation,
-      effectPolicy: this._effectPolicy ?? this._runnerConfig?.effectPolicy,
+      effectPolicy: mergeEffectPolicy(this._runnerConfig?.effectPolicy, this._effectPolicy, {
+        // MAJ-5 租户隔离（F-1）：自成一套的策略不兜底 runnerConfig 缺省
+        agentStandalone: this._effectPolicyStandalone,
+      }),
       confirmEffect: this._confirmEffect ?? this._runnerConfig?.confirmEffect,
       agentWorkspace: this._workspace?.trim() ? this._workspace : this._runnerConfig?.agentWorkspace,
       sessionLease: this._runnerConfig?.sessionLease,

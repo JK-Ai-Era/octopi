@@ -121,7 +121,12 @@ export function createRegistryAgentBridge(options: RegistryAgentBridgeOptions): 
         record.tenantId,
         rawConfig.language === 'en' ? 'en' : 'zh',
       );
-      return { ...def, tenantId: record.tenantId };
+      // effectPolicyStandalone（F-1，MAJ-5 落地）：逐键兜底语义下 `{mode:'workspace'}`
+      // 只钉 mode，平台顶层的 pathContainment/toolIsolation/shellEscape/transactionRoots
+      // 会泄漏给租户 agent。标记「自成一套」后各合并点不兜底、不并集顶层——恒 workspace
+      // 姿态。仅此宿主派生路径置位：`resolveAgentDefinition` 显式挑字段，definition JSON
+      // （白名单）与 config 写入（字段面）都无法伪造。
+      return { ...def, tenantId: record.tenantId, effectPolicyStandalone: true };
     },
   };
 }

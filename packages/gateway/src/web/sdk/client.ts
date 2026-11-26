@@ -900,13 +900,17 @@ export interface ConfigAgentViewDto {
   workspace: string;
   /** agent 级额外工作目录（effectPolicy.transactionRoots 原文；并入 allowRoots） */
   transactionRoots: string[];
-  /** 是否存在 agent 级 effectPolicy 整段（对象级覆盖全局；影响工作目录写入策略） */
+  /** 是否存在 agent 级 effectPolicy 整段（逐键兜底下仅个别键自有；提示展示用） */
   hasOwnEffectPolicy: boolean;
 }
 
 /** agent 列表视图 */
 export interface ConfigAgentsViewDto {
   agents: ConfigAgentViewDto[];
+  /** 顶层 effectPolicy.transactionRoots（宿主缺省；agent 级目录与之并集生效） */
+  globalTransactionRoots: string[];
+  /** 顶层 effectPolicy.mode 缺省值（「继承全局」的实际去向；F-6 透明展示） */
+  globalEffectMode: string;
   hash: string;
 }
 

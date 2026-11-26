@@ -737,6 +737,34 @@ describe('ConfigApplyService — review blocker 回归锚', () => {
     expect(helper.effectPolicy).toEqual({ mode: 'project', shellEscape: 'deny', transactionRoots: ['/a', '/b'] });
   });
 
+  it('#6b 锚：二级合并子键 null = 删该子键（「继承全局」只摘 mode 不炸隐藏旋钮）', async () => {
+    const before = service.read();
+    await apply.createAgent({
+      agent: {
+        id: 'helper',
+        model: 'standard',
+        effectPolicy: { mode: 'project', shellEscape: 'deny', transactionRoots: ['/a'] },
+      },
+      hash: before.hash,
+    });
+    const mid = service.read();
+    await apply.updateAgent('helper', { effectPolicy: { mode: null } }, mid.hash);
+    const helper = (service.read().raw.agents as Array<Record<string, unknown>>).find((a) => a.id === 'helper')!;
+    expect(helper.effectPolicy).toEqual({ shellEscape: 'deny', transactionRoots: ['/a'] });
+  });
+
+  it('#6c 锚：子键删空后 effectPolicy 整键消失（完全跟随全局的干净形态）', async () => {
+    const before = service.read();
+    await apply.createAgent({
+      agent: { id: 'helper', model: 'standard', effectPolicy: { mode: 'project' } },
+      hash: before.hash,
+    });
+    const mid = service.read();
+    await apply.updateAgent('helper', { effectPolicy: { mode: null } }, mid.hash);
+    const helper = (service.read().raw.agents as Array<Record<string, unknown>>).find((a) => a.id === 'helper')!;
+    expect('effectPolicy' in helper).toBe(false);
+  });
+
   it('#4 锚：路径穿越 id（..）拒绝', async () => {
     const before = service.read();
     await expect(

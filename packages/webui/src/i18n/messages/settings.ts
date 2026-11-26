@@ -111,9 +111,10 @@ export const zh = {
   'agentSettings.idLabel': 'id（不可改）· 身份/称谓请在下方 persona（AGENTS.md）中编辑',
   'agentSettings.modelLabel': '模型（provider/model 或档位名）',
   'agentSettings.effectModeLabel': '安全组（工具效应面策略）',
-  'agentSettings.inheritGlobalTitle': '删除 agent 级配置，跟随全局 effectPolicy',
+  'agentSettings.inheritGlobalTitle': '安全组跟随全局（仅清除 mode 键，其余已配置键不受影响）',
   'agentSettings.inheritGlobal': '继承全局',
-  'agentSettings.inheritGlobalDesc': '不写 agent 级策略，跟随全局配置。',
+  'agentSettings.inheritGlobalDesc': '不写 agent 级安全组，该键跟随全局；其余键不受影响。',
+  'agentSettings.inheritGlobalTarget': '当前全局安全组：{{mode}}',
   'agentSettings.inheritGlobalRisk': '跟随',
   'agentSettings.toolsAllow': '工具 allow（逗号分隔，空 = 不限）',
   'agentSettings.toolsDeny': '工具 deny（逗号分隔）',
@@ -123,17 +124,13 @@ export const zh = {
   'agentSettings.workdirsPlaceholder': '/absolute/path（~/path = 授予整个 home）',
   'agentSettings.workdirsAdd': '添加',
   'agentSettings.workdirsRemove': '移除',
+  'agentSettings.workdirsGlobalTag': '来自全局',
   'agentSettings.workdirsPathInvalid': '路径需为绝对路径或 ~ 形态',
   'agentSettings.workdirsDuplicate': '该工作目录已在列表中',
-  'agentSettings.workdirsInheritConflict':
-    '「继承全局」不能与 agent 级工作目录共存——请先移除全部工作目录，或选择具体安全组',
+  'agentSettings.workdirsDuplicateGlobal': '该工作目录已由全局工作目录授予（见「来自全局」）',
   'agentSettings.workdirsHint':
-    '添加的目录会授予 agent 对这些路径的读写权限（并入允许根），新会话生效；保存写入 agent 级 effectPolicy.transactionRoots。若 agent 尚无独立策略，保存会把安全组固化为 agent 级，此后不再跟随全局收紧（保存前会确认）。',
-  'agentSettings.workdirsPinConfirm':
-    '添加工作目录需要建立 agent 级安全策略：安全组将固化为「{mode}」——该 agent 此后不再跟随全局安全组的收紧。继续？',
-  'agentSettings.workdirsOwnPolicyNote': '当前 agent 使用独立安全策略（不跟随全局安全组变化）',
-  'agentSettings.inheritGlobalConfirm':
-    '「继承全局」将删除该 agent 的整段独立策略（包括面板未展示的安全旋钮）。继续？',
+    '添加的目录授予 agent 对这些路径的读写权限（追加授权，新会话生效）；agent 级目录与全局工作目录并集生效，删空即回到仅跟随全局。写入 agent 级 effectPolicy.transactionRoots，安全组等其余旋钮逐键跟随全局。',
+  'agentSettings.workdirsOwnPolicyNote': '该 agent 配置了独立策略键（逐键覆盖全局）',
   'agentSettings.saving': '保存中…',
   'agentSettings.saveConfig': '保存配置',
   'agentSettings.templateIdPrompt': '模板 id（字母/数字/._-，如 my-coder）：',
@@ -326,9 +323,10 @@ export const en: Record<keyof typeof zh, string> = {
   'agentSettings.idLabel': 'id (read-only) · edit identity and how it addresses you in the persona (AGENTS.md) below',
   'agentSettings.modelLabel': 'Model (provider/model or level name)',
   'agentSettings.effectModeLabel': 'Security group (tool effect-surface policy)',
-  'agentSettings.inheritGlobalTitle': 'Remove agent-level config and follow the global effectPolicy',
+  'agentSettings.inheritGlobalTitle': 'Security group follows global (clears only the mode key; other keys unaffected)',
   'agentSettings.inheritGlobal': 'Inherit global',
-  'agentSettings.inheritGlobalDesc': 'Write no agent-level policy; follow the global config.',
+  'agentSettings.inheritGlobalDesc': 'No agent-level security group; this key follows global. Other keys unaffected.',
+  'agentSettings.inheritGlobalTarget': 'Current global security group: {{mode}}',
   'agentSettings.inheritGlobalRisk': 'Inherit',
   'agentSettings.toolsAllow': 'Tool allow (comma-separated; empty = unrestricted)',
   'agentSettings.toolsDeny': 'Tool deny (comma-separated)',
@@ -338,18 +336,15 @@ export const en: Record<keyof typeof zh, string> = {
   'agentSettings.workdirsPlaceholder': '/absolute/path (~/path grants all of home)',
   'agentSettings.workdirsAdd': 'Add',
   'agentSettings.workdirsRemove': 'Remove',
+  'agentSettings.workdirsGlobalTag': 'from global',
   'agentSettings.workdirsPathInvalid': 'Path must be absolute or in ~ form',
   'agentSettings.workdirsDuplicate': 'This working directory is already in the list',
-  'agentSettings.workdirsInheritConflict':
-    '"Inherit global" cannot coexist with agent-level working directories — remove them all or pick a specific security group',
+  'agentSettings.workdirsDuplicateGlobal':
+    'This working directory is already granted by a global working directory (see "from global")',
   'agentSettings.workdirsHint':
-    'Added directories grant the agent read/write access to those paths (merged into allow roots); applies to new sessions. Saved to agent-level effectPolicy.transactionRoots. If the agent has no own policy yet, saving pins the security group at agent level — it will no longer follow global tightening (you will be asked to confirm).',
-  'agentSettings.workdirsPinConfirm':
-    'Adding a working directory requires an agent-level security policy: the security group will be pinned to "{mode}" — this agent will no longer follow global security-group tightening. Continue?',
+    'Added directories grant the agent read/write access to those paths (additive grants; applies to new sessions). Agent-level directories union with global working directories — clearing the list returns to following global only. Saved to agent-level effectPolicy.transactionRoots; other knobs (security group etc.) follow global per key.',
   'agentSettings.workdirsOwnPolicyNote':
-    'This agent uses its own security policy (does not follow global security-group changes)',
-  'agentSettings.inheritGlobalConfirm':
-    '"Inherit global" removes this agent\'s entire own policy (including knobs not shown in this panel). Continue?',
+    'This agent has its own policy keys (per-key overrides of global)',
   'agentSettings.saving': 'Saving…',
   'agentSettings.saveConfig': 'Save config',
   'agentSettings.templateIdPrompt': 'Template id (letters/digits/._-, e.g. my-coder):',

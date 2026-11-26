@@ -27,6 +27,7 @@ import type { AgentDefinition, ModelConfig } from '@octopi-agent/engine/harness/
 import type { ChannelAdapter, ChannelMessage, ChannelReply } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/channel-types.js';
 import type { GitStatusSnapshot } from '@octopi-agent/engine/harness/extension/plugin-ecosystem/tools/git-status-snapshot.js';
 import type { EffectPolicyConfig, ProcessIsolationProfile } from '@octopi-agent/engine';
+import { mergeEffectPolicy } from '@octopi-agent/engine';
 import { expandHomePath } from '@octopi-agent/engine/paths.js';
 import { KNOWLEDGE_SOURCE_KINDS } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { SessionArchiveService, type ArchiveEntryInfo } from '@octopi-agent/engine/integration/storage/archives/service.js';
@@ -1823,10 +1824,14 @@ export class Gateway {
     const agentId = session.primaryAgentId ?? session.agentId;
     // 策略来源唯一权威：运行时注册表（registerAgent → buildAgent）。config.agents
     // 影子查找已清理（P2）：注册表条目（AgentDefinition）自带 effectPolicy/workspace，
-    // 全局 config.effectPolicy 仅作缺省兜底。`~` 形态统一展开后输出。
+    // 逐键兜底合并全局缺省（2026-11-26 拍板；transactionRoots 并集）。`~` 形态统一展开后输出。
+    // MAJ-5 租户隔离（F-1）：registry 派生的 agent 自成一套，不兜底、不并集全局根。
     const agentDef = this.agents.get(agentId);
-    const eff: EffectPolicyConfig | undefined =
-      agentDef?.effectPolicy ?? (this.config.effectPolicy as EffectPolicyConfig | undefined);
+    const eff: EffectPolicyConfig | undefined = mergeEffectPolicy(
+      this.config.effectPolicy as EffectPolicyConfig | undefined,
+      agentDef?.effectPolicy,
+      { agentStandalone: agentDef?.effectPolicyStandalone === true },
+    );
     const workspaceRaw = agentDef?.workspace?.trim() || undefined;
     const workspace = workspaceRaw ? expandHomePath(workspaceRaw) : undefined;
     const extra = (eff?.transactionRoots ?? [])

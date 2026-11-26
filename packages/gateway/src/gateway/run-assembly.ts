@@ -242,6 +242,7 @@ export class RunAssembly {
       wireAgentBuilder,
       resolveSecurityConfig,
     } = await import('@octopi-agent/engine/harness/agent/wire-agent-builder.js');
+    const { mergeEffectPolicy } = await import('@octopi-agent/engine');
 
     const builder = new AgentBuilder()
       .store(this.deps.store)
@@ -280,8 +281,14 @@ export class RunAssembly {
       tools: agent.tools,
       maxSessionRights: agent.maxSessionRights,
       effectPolicy:
-        (agent as { effectPolicy?: import('@octopi-agent/engine').EffectPolicyConfig }).effectPolicy ??
-        cfg.effectPolicy,
+        mergeEffectPolicy(
+          cfg.effectPolicy,
+          (agent as { effectPolicy?: import('@octopi-agent/engine').EffectPolicyConfig }).effectPolicy,
+          // MAJ-5 租户隔离（F-1）：registry 派生的 agent 自成一套，平台顶层旋钮与
+          // 并集根都不得泄漏给租户 agent
+          { agentStandalone: agent.effectPolicyStandalone === true },
+        ) ?? undefined,
+      effectPolicyStandalone: agent.effectPolicyStandalone === true,
       toolIsolation: cfg.toolIsolation,
       sessionIdleExpiryMs: cfg.session?.idleExpiryMs,
       modelCallTimeouts:

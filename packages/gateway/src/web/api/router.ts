@@ -2393,7 +2393,7 @@ export class WebApiRouter {
         if (!body?.agent || typeof body.agent !== 'object') {
           return this.json(res, 400, { ok: false, error: 'agent object is required' });
         }
-        if (this.refuseUnauthenticatedSecurityWrite(res, body.agent as Record<string, unknown>)) {
+        if (this.refuseUnauthenticatedSecurityWrite(res, body.agent as Record<string, unknown>, { isCreate: true })) {
           return true;
         }
         const result = await apply.createAgent({
@@ -2416,7 +2416,7 @@ export class WebApiRouter {
           if (!body?.agent || typeof body.agent !== 'object') {
             return this.json(res, 400, { ok: false, error: 'agent object is required' });
           }
-          if (this.refuseUnauthenticatedSecurityWrite(res, body.agent as Record<string, unknown>)) {
+          if (this.refuseUnauthenticatedSecurityWrite(res, body.agent as Record<string, unknown>, { isCreate: false })) {
             return true;
           }
           const result = await apply.updateAgent(
@@ -2556,23 +2556,65 @@ export class WebApiRouter {
    * 连默认 workspace 新建都被拦（WebUI 新建总带 `effectPolicy.mode`）。host 改成别的 =
    * 降权，同样放行。
    *
+   * **判据 = 写入后的生效模式**（评审 F-2 根因收口），不按请求体字面量判——逐语法补丁
+   * 会随每个「未写 mode」的新写法复发（create 缺省、`mode: null`、`effectPolicy: null`
+   * 都只是同一缺口的不同拼法）：create 一律核算（新条目的 mode 由本次写入建立，缺省即
+   * 继承全局）；update 只在 mode 维度被触碰时核算（其他子键不改 mode，mode 不变则无
+   * 提权）。生效模式落 host 一律 503，无论语法。
+   *
+   * **读写面补集同罪**（评审 F-3）：`pathDenylist` / `refuseFinalSymlink` 是读写面的
+   * 拒绝侧/加固侧——删除、清空或替换都可能扩大实际读写面（deny 清单是「允许根即读写面」
+   * 的补集），任何变更（含 `null` 删除）都须署名通道；方向不可静态判定时按最坏方向拦。
+   *
    * @param res - 响应对象（503 时已写响应）
    * @param agentEntry - 待写的 agents[] 条目（create / update 共用）
+   * @param opts - `isCreate`：create 时 mode 维度视为被本次写入建立
    * @returns true = 已响应 503（调用方直接 return）；false = 放行
    */
   private refuseUnauthenticatedSecurityWrite(
     res: ServerResponse,
     agentEntry: Record<string, unknown>,
+    opts: { isCreate: boolean },
   ): boolean {
     // 认证部署：持钥方 = 宿主管理身份，放行
     if (this.approverIdentity) return false;
     const ep = agentEntry.effectPolicy;
     const epObj = ep && typeof ep === 'object' ? (ep as Record<string, unknown>) : undefined;
-    if (epObj?.mode === 'host') {
+    const status = this.gateway.getEffectPolicyStatus();
+    // 全局缺省生效模式（省略 mode = 引擎缺省 workspace）
+    const globalMode = status.configuredMode ?? 'workspace';
+
+    // —— 生效模式判据（F-2）——
+    const touchesMode = ep === null || (epObj !== undefined && 'mode' in epObj);
+    const ownModeAfter =
+      epObj !== undefined && typeof epObj.mode === 'string' ? epObj.mode : undefined;
+    if (opts.isCreate || touchesMode) {
+      const effectiveAfter = ownModeAfter ?? globalMode;
+      if (effectiveAfter === 'host') {
+        if (ownModeAfter === 'host') {
+          this.json(res, 503, {
+            ok: false,
+            error:
+              'security_config_unauthenticated: setting effectPolicy.mode=host (full privilege) requires an authenticated console (configure apiKey); unauthenticated deployments escalate via host restart only',
+          });
+        } else {
+          // 缺省/删键回落到全局 host：与显式设 host 同罪（A2）
+          this.json(res, 503, {
+            ok: false,
+            error:
+              'security_config_unauthenticated: this write would leave the agent running with the global host default (full privilege); set effectPolicy.mode explicitly to a sandboxed mode (workspace|project|untrusted) or use an authenticated console (configure apiKey)',
+          });
+        }
+        return true;
+      }
+    }
+
+    // —— 读写面补集/加固面（F-3）：变更即拒（方向不可静态判定，按最坏方向拦）——
+    if (epObj && ('pathDenylist' in epObj || 'refuseFinalSymlink' in epObj)) {
       this.json(res, 503, {
         ok: false,
         error:
-          'security_config_unauthenticated: setting effectPolicy.mode=host (full privilege) requires an authenticated console (configure apiKey); unauthenticated deployments escalate via host restart only',
+          'security_config_unauthenticated: changing effectPolicy.pathDenylist / refuseFinalSymlink (filesystem access surface, deny side) requires an authenticated console (configure apiKey); unauthenticated deployments change access surface via host restart only',
       });
       return true;
     }

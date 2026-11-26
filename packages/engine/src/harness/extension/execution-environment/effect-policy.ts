@@ -986,6 +986,78 @@ export function normalizeTransactionRoots(paths: string[]): string[] {
 }
 
 /**
+ * Merge a host (global) effectPolicy with an agent-level one using per-key
+ * fallback (逐键兜底，2026-11-26 拍板): a top-level key written by the agent wins as
+ * a unit; a key absent from the agent falls back to the host value. `undefined`
+ * values are treated as unwritten. Nested objects replace wholesale (no deep merge).
+ *
+ * **Nested groups must be rewritten as a whole** (documented give-up, F-4): an
+ * agent that writes `{ undoLimit: { maxEntries: 5 } }` drops the host's
+ * `maxBlobBytes` for that agent; same for `escalation` (writing
+ * `{ policy: 'allowlist' }` without `allow` rules fails closed at resolve time).
+ * There is deliberately no deep merge — rewrite the whole group to keep both.
+ *
+ * `agentStandalone` opts out of host fallback entirely (registry-derived tenant
+ * agents, MAJ-5 恒 workspace 姿态，不继承平台 host): the returned policy is the
+ * agent's own as-is and no host key (including the union list keys) contributes.
+ *
+ * Single-side fast paths return the input object itself — **callers must not
+ * mutate the result** (it may alias the host config).
+ *
+ * Two path-list keys compose by union instead of replace — matching their own
+ * "额外/并入" wording, the additive session-root precedent (`mergeTransactionRoots`),
+ * and the safe direction for each list kind:
+ * - `transactionRoots` (grants): host roots + agent extras both apply, so
+ *   "follow global + own directories" is expressible and "add a directory" never
+ *   silently drops host-granted roots. Give-up: an agent cannot subtract a host
+ *   root (narrow via `pathDenylist` or keep wide roots out of the global policy).
+ * - `pathDenylist` (denials): denials accumulate across layers, so an agent-level
+ *   list can only tighten, never relax a host denial.
+ *
+ * @param host - top-level `config.effectPolicy` (deployment default)
+ * @param agent - `agents[].effectPolicy` (per-agent overrides), if any
+ * @param opts - `agentStandalone`: the agent policy is host-derived and
+ *   self-contained (registry-bridge tenant derivation, MAJ-5) — host contributes
+ *   nothing, including the two union list keys
+ * @returns merged policy; `undefined` only when both sides are absent
+ */
+export function mergeEffectPolicy(
+  host: EffectPolicyConfig | undefined,
+  agent: EffectPolicyConfig | undefined,
+  opts?: { agentStandalone?: boolean },
+): EffectPolicyConfig | undefined {
+  // 自成一套（registry 租户派生，MAJ-5）：宿主任何键都不参与——含两把并集清单键。
+  if (opts?.agentStandalone) return agent;
+  if (!host) return agent;
+  if (!agent) return host;
+  const merged: Record<string, unknown> = { ...host };
+  for (const [key, value] of Object.entries(agent)) {
+    if (value === undefined) continue;
+    if (key === 'transactionRoots' && Array.isArray(value)) {
+      const base = Array.isArray(host.transactionRoots) ? host.transactionRoots : [];
+      merged[key] = mergeTransactionRoots(base, value);
+      continue;
+    }
+    if (key === 'pathDenylist' && Array.isArray(value)) {
+      const base = Array.isArray(host.pathDenylist) ? host.pathDenylist : [];
+      const seen = new Set(base.map((p) => (process.platform === 'win32' ? p.toLowerCase() : p)));
+      merged[key] = [
+        ...base,
+        ...value.filter((p) => {
+          const k = process.platform === 'win32' ? p.toLowerCase() : p;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        }),
+      ];
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged as EffectPolicyConfig;
+}
+
+/**
  * Append session roots to base allowRoots (dedupe; base wins on conflicts).
  *
  * @param baseRoots - roots from effectPolicy / workspace

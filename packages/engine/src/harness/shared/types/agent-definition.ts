@@ -59,8 +59,17 @@ export interface AgentDefinition {
    * handle authorize 时与角色 max / 绑定取交集。
    */
   maxSessionRights?: SessionRights;
-  /** ToolEffectPolicy 运行模式（P3）；agents[].effectPolicy 覆盖顶层 */
+  /** ToolEffectPolicy 运行模式（P3）；agents[].effectPolicy 逐键兜底顶层（写了的键赢、没写的键跟顶层） */
   effectPolicy?: import('../../extension/execution-environment/effect-policy.js').EffectPolicyConfig;
+  /**
+   * effectPolicy 自成一套（宿主派生，registry-bridge MAJ-5 租户隔离）：为 true 时
+   * 该 agent 的 effectPolicy **不与顶层逐键兜底、不并集顶层 transactionRoots/
+   * pathDenylist**——恒 workspace 姿态，不继承平台 host。
+   *
+   * 仅宿主派生路径（registry-bridge）置位；`resolveAgentDefinition` 显式挑字段，
+   * 配置面/definition JSON 无法伪造（白名单 + 字段面双重防伪）。
+   */
+  effectPolicyStandalone?: boolean;
   /** Knowledge 召回姿态（覆盖全局 knowledge.recall） */
   knowledge?: {
     recall?: 'off' | 'hint' | 'hybrid' | 'inject';

@@ -703,7 +703,7 @@ export class ConfigApplyService {
   /**
    * agent 列表视图（注册表唯一权威 + raw 条目补充）
    *
-   * @returns 每个 agent 的 id / persona / model / effectMode / tools / traits / 工作目录（workspace + transactionRoots）+ hash
+   * @returns 每个 agent 的 id / persona / model / effectMode / tools / traits / 工作目录（workspace + transactionRoots）+ 顶层全局根清单 + hash
    */
   getAgentsView(): {
     agents: Array<{
@@ -718,11 +718,15 @@ export class ConfigApplyService {
       transactionRoots: string[];
       hasOwnEffectPolicy: boolean;
     }>;
+    globalTransactionRoots: string[];
+    /** 顶层 effectPolicy.mode 缺省值（「继承全局」的实际去向；F-6 透明展示） */
+    globalEffectMode: string;
     hash: string;
   } {
     const { raw, hash } = this.deps.configAdmin.read();
     const rawAgents = Array.isArray(raw.agents) ? (raw.agents as Array<Record<string, unknown>>) : [];
     const registered = this.deps.gateway.getRegisteredAgents();
+    const topEffectPolicy = (raw.effectPolicy ?? {}) as { transactionRoots?: string[]; mode?: string };
     const agents = registered.map((reg) => {
       const entry = rawAgents.find((a) => a.id === reg.id) ?? {};
       const persona = (entry.persona ?? {}) as { name?: string; description?: string };
@@ -743,7 +747,15 @@ export class ConfigApplyService {
         hasOwnEffectPolicy: entry.effectPolicy != null && typeof entry.effectPolicy === 'object',
       };
     });
-    return { agents, hash };
+    return {
+      agents,
+      globalTransactionRoots: Array.isArray(topEffectPolicy.transactionRoots)
+        ? topEffectPolicy.transactionRoots
+        : [],
+      // 顶层缺省 = 全局生效模式（省略 mode = 引擎缺省 workspace）
+      globalEffectMode: typeof topEffectPolicy.mode === 'string' ? topEffectPolicy.mode : 'workspace',
+      hash,
+    };
   }
 
   /**
@@ -861,19 +873,22 @@ export class ConfigApplyService {
     for (const [key, value] of Object.entries(agentEntry)) {
       if (value === null) {
         delete mergedEntry[key];
-      } else if (
-        (key === 'effectPolicy' || key === 'tools') &&
-        value &&
-        typeof value === 'object' &&
-        mergedEntry[key] &&
-        typeof mergedEntry[key] === 'object'
-      ) {
+      } else if ((key === 'effectPolicy' || key === 'tools') && value && typeof value === 'object') {
         // 字段级浅合并：部分更新只发自己管的字段（UI 即此契约），未提及字段
-        // （如 tools.denyCapabilities 能力黑名单）绝不能被整体替换抹掉（B1：安全收紧项丢失）
-        mergedEntry[key] = {
-          ...(mergedEntry[key] as Record<string, unknown>),
-          ...(value as Record<string, unknown>),
-        };
+        // （如 tools.denyCapabilities 能力黑名单）绝不能被整体替换抹掉（B1：安全收紧项丢失）。
+        // 子键 null = 删该子键（逐键兜底语义：删键 = 该键改回跟随全局缺省）；
+        // 合并后为空对象 = 整键无内容，删键保持「完全跟随全局」干净形态。
+        const base =
+          mergedEntry[key] && typeof mergedEntry[key] === 'object'
+            ? (mergedEntry[key] as Record<string, unknown>)
+            : {};
+        const merged: Record<string, unknown> = { ...base };
+        for (const [sub, subValue] of Object.entries(value as Record<string, unknown>)) {
+          if (subValue === null) delete merged[sub];
+          else merged[sub] = subValue;
+        }
+        if (Object.keys(merged).length === 0) delete mergedEntry[key];
+        else mergedEntry[key] = merged;
       } else {
         mergedEntry[key] = value;
       }

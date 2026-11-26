@@ -952,7 +952,8 @@ async function startGatewayBlocking(configPath: string | undefined, args: CliArg
   const config = loadConfig(configPath);
   // ops P3 §4.1/拍板 #5：声明了提权就必须真的拿得到——启动期探测，失败拒绝启动，
   // 禁止降级静默运行（allowlist 二进制 TOCTOU 护栏一并在此兜底）。
-  // 覆盖面 = 顶层 + 每 agent（agent 的 effectPolicy 整体覆盖顶层，漏了就是死码）。
+  // 覆盖面 = 顶层 + 每 agent 自带 escalation 的（逐键兜底：agent 未写 escalation 的
+  // 跟顶层兜底，顶层已扫；写了的按自己的规则跑，漏扫就是死码）。
   {
     const { probeEscalationReadiness, escalationWritableRoots } = await import(
       '@octopi-agent/engine/harness/extension/execution-environment/privileged-exec.js'

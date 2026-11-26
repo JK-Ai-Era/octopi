@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRegistryAgentBridge } from '../src/registry-bridge.js';
 import type { AgentRecord } from '@octopi-agent/engine/harness/governance/registry/types.js';
+import { mergeEffectPolicy, resolveEffectiveEffectPolicy } from '@octopi-agent/engine';
+import type { EffectPolicyConfig } from '@octopi-agent/engine';
 
 const RAW_CONFIG = {
   models: {
@@ -86,6 +88,33 @@ describe('registry-bridge', () => {
     // 缺省恒 workspace（secure-by-default；不继承平台 host）
     const def = await bridge().materialize(record());
     expect((def as { effectPolicy?: { mode?: string } }).effectPolicy).toEqual({ mode: 'workspace' });
+  });
+
+  it('F-1 租户隔离：standalone 标记 + 平台 host 旋钮不泄漏给租户生效策略', async () => {
+    const def = await bridge().materialize(record());
+    // 宿主派生的标记（config/definition 无法伪造：resolveAgentDefinition 显式挑字段）
+    expect((def as { effectPolicyStandalone?: boolean }).effectPolicyStandalone).toBe(true);
+
+    // 平台顶层带 host 旋钮（放宽围栏 + 全局根）——逐键兜底下这些会泄漏给 `{mode:'workspace'}`
+    const platformHost: EffectPolicyConfig = {
+      mode: 'host',
+      pathContainment: 'none',
+      toolIsolation: 'none',
+      shellEscape: 'allow',
+      transactionRoots: ['/platform-root'],
+      pathDenylist: ['**/platform-secret/**'],
+    };
+    const effective = mergeEffectPolicy(platformHost, def.effectPolicy, {
+      agentStandalone: def.effectPolicyStandalone === true,
+    });
+    // 生效策略仍 workspace 预设：宿主旋钮一个都不进（含并集清单键）
+    expect(effective).toEqual({ mode: 'workspace' });
+    const resolved = resolveEffectiveEffectPolicy(effective!, '/base/ws');
+    expect(resolved.mode).toBe('workspace');
+    expect(resolved.pathContainment).toBe('strict');
+    expect(resolved.toolIsolation).toBe('session-subdir');
+    expect(resolved.shellEscape).toBe('deny');
+    expect(resolved.allowRoots).toEqual(['/base/ws']);
   });
 
   it('治理/能力键 fail-loud（maxSessionRights/delegation/channelBindings/knowledge…）', async () => {

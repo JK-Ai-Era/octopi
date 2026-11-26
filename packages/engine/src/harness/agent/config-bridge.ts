@@ -23,6 +23,7 @@ import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import type { ModelProvider } from '@octopi-agent/core/interfaces/model-provider.js';
 import { AgentBuilder } from './builder.js';
+import { mergeEffectPolicy } from '../extension/execution-environment/effect-policy.js';
 import type { SessionAwareRunner } from '../run/runner.js';
 import {
   resolveSecurityConfig,
@@ -308,7 +309,14 @@ async function buildAgent(
     skills: agentConfig.skills,
     tools: agentConfig.tools,
     maxSessionRights: agentConfig.maxSessionRights,
-    effectPolicy: agentConfig.effectPolicy ?? shared.effectPolicy,
+    // 逐键兜底（2026-11-26 拍板）：agent 写了的键赢、没写的键跟宿主默认；
+    // transactionRoots 并集（宿主根 + agent 追加根）
+    effectPolicy:
+      mergeEffectPolicy(shared.effectPolicy, agentConfig.effectPolicy, {
+        // config 面 agent 无 MAJ-5 派生标记（resolveAgentDefinition 不挑该字段，
+        // registry 租户 agent 不走本路径）——恒为 undefined，兜底照旧
+        agentStandalone: (agentConfig as { effectPolicyStandalone?: boolean }).effectPolicyStandalone === true,
+      }) ?? undefined,
     toolIsolation: shared.toolIsolation,
     sessionIdleExpiryMs: shared.sessionIdleExpiryMs,
     modelCallTimeouts: shared.modelCallConfig,

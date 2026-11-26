@@ -50,8 +50,10 @@ async function call(
   return { handled, status, body: payload };
 }
 
-function makeRouter(opts: { approverIdentity?: string }) {
-  const gatewayStub = {};
+function makeRouter(opts: { approverIdentity?: string; globalMode?: string }) {
+  const gatewayStub = {
+    getEffectPolicyStatus: () => ({ configuredMode: opts.globalMode }),
+  };
   const applyStub = {
     createAgent: vi.fn(async () => ({ hash: 'h', applied: 'next-run', affectedAgents: [] })),
     updateAgent: vi.fn(async () => ({ hash: 'h', applied: 'next-run', affectedAgents: [] })),
@@ -64,7 +66,7 @@ function makeRouter(opts: { approverIdentity?: string }) {
   return { router, applyStub };
 }
 
-describe('console 无认证部署提权闸（只拦升到 mode=host）', () => {
+describe('console 无认证部署提权闸（判据 = 写入后生效模式）', () => {
   it('无认证 + POST 升到 mode=host → 503，createAgent 不被调', async () => {
     const { router, applyStub } = makeRouter({});
     const r = await call(router, 'POST', '/api/v1/config/agents', {
@@ -151,6 +153,112 @@ describe('console 无认证部署提权闸（只拦升到 mode=host）', () => {
     const { router, applyStub } = makeRouter({ approverIdentity: 'owner' });
     const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
       agent: { id: 'x', effectPolicy: { transactionRoots: ['/proj/a'] } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(200);
+    expect(applyStub.updateAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('无认证 + 删 mode 键（mode:null）且全局缺省 host → 503（回落全权同罪）', async () => {
+    const { router, applyStub } = makeRouter({ globalMode: 'host' });
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', effectPolicy: { mode: null } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(503);
+    expect(r.body?.error).toMatch(/security_config_unauthenticated/);
+    expect(applyStub.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it('无认证 + effectPolicy:null 且全局缺省 host → 503（删整段回落全权同罪）', async () => {
+    const { router, applyStub } = makeRouter({ globalMode: 'host' });
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', effectPolicy: null },
+      hash: 'h',
+    });
+    expect(r.status).toBe(503);
+    expect(applyStub.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it('无认证 + 删 mode 键但全局缺省非 host → 放行（回落 workspace 不是提权）', async () => {
+    const { router, applyStub } = makeRouter({ globalMode: 'workspace' });
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', effectPolicy: { mode: null } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(200);
+    expect(applyStub.updateAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('F-2 主锚：create 不带 effectPolicy + 全局 host → 503（缺省即造出 host agent）', async () => {
+    const { router, applyStub } = makeRouter({ globalMode: 'host' });
+    const r = await call(router, 'POST', '/api/v1/config/agents', {
+      agent: { id: 'evil', model: 'standard' },
+      hash: 'h',
+    });
+    expect(r.status).toBe(503);
+    expect(r.body?.error).toMatch(/security_config_unauthenticated/);
+    expect(r.body?.error).toMatch(/global host default/);
+    expect(applyStub.createAgent).not.toHaveBeenCalled();
+  });
+
+  it('F-2：create 只写子键不写 mode + 全局 host → 503（同一缺口的另一拼法）', async () => {
+    const { router, applyStub } = makeRouter({ globalMode: 'host' });
+    const r = await call(router, 'POST', '/api/v1/config/agents', {
+      agent: { id: 'evil', model: 'standard', effectPolicy: { shellEscape: 'allow' } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(503);
+    expect(applyStub.createAgent).not.toHaveBeenCalled();
+  });
+
+  it('F-2：create 带 mode:workspace + 全局 host → 放行（显式沙箱 = 降权）', async () => {
+    const { router, applyStub } = makeRouter({ globalMode: 'host' });
+    const r = await call(router, 'POST', '/api/v1/config/agents', {
+      agent: { id: 'x', model: 'standard', effectPolicy: { mode: 'workspace' } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(200);
+    expect(applyStub.createAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('F-2：create 不带 effectPolicy + 全局 workspace → 放行（缺省不是提权）', async () => {
+    const { router, applyStub } = makeRouter({ globalMode: 'workspace' });
+    const r = await call(router, 'POST', '/api/v1/config/agents', {
+      agent: { id: 'x', model: 'standard' },
+      hash: 'h',
+    });
+    expect(r.status).toBe(200);
+    expect(applyStub.createAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('F-3：update 删 pathDenylist（null）→ 503（拒绝清单是读写面补集）', async () => {
+    const { router, applyStub } = makeRouter({});
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', effectPolicy: { pathDenylist: null } },
+      hash: 'h',
+    });
+    expect(r.status).toBe(503);
+    expect(r.body?.error).toMatch(/security_config_unauthenticated/);
+    expect(applyStub.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it('F-3：update 写 pathDenylist / refuseFinalSymlink → 503（方向不可静态判定）', async () => {
+    for (const patch of [{ pathDenylist: ['**/.env'] }, { refuseFinalSymlink: false }, { refuseFinalSymlink: null }]) {
+      const { router, applyStub } = makeRouter({});
+      const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+        agent: { id: 'x', effectPolicy: patch },
+        hash: 'h',
+      });
+      expect(r.status).toBe(503);
+      expect(applyStub.updateAgent).not.toHaveBeenCalled();
+    }
+  });
+
+  it('F-3：认证部署 + pathDenylist 变更 → 放行（署名通道可改读写面）', async () => {
+    const { router, applyStub } = makeRouter({ approverIdentity: 'owner' });
+    const r = await call(router, 'PUT', '/api/v1/config/agents/x', {
+      agent: { id: 'x', effectPolicy: { pathDenylist: ['**/.env'] } },
       hash: 'h',
     });
     expect(r.status).toBe(200);

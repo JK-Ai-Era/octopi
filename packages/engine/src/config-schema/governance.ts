@@ -65,7 +65,7 @@ export const TenancyConfigSchema = z.object({
 /**
  * `effectPolicy` — ToolEffectPolicy 运行模式（P3）
  *
- * 命名预设展开正交旋钮；agents[].effectPolicy 优先于顶层。
+ * 命名预设展开正交旋钮；agents[].effectPolicy 逐键兜底顶层（agent 写了的键赢、没写的键跟顶层）。
  * 注意：与 `agents[].tools`（工具 allow/deny）无关。
  * **省略 `mode` = engine 缺省 workspace（secure-by-default）**；
  * 评估/本机全能力请在配置里显式 `"mode": "host"`（example 即如此；init 缺省 project）。

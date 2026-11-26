@@ -206,7 +206,10 @@ export function AgentSettingsPanel() {
     if (!agent) return;
     const modelObj = agent.model as { provider?: string; model?: string } | undefined;
     const modelStr = modelObj?.provider ? `${modelObj.provider}/${modelObj.model}` : String(modelObj?.model ?? '');
-    const effectMode = (agent.effectMode as EffectMode) ?? 'workspace';
+    // effectModeSource 非 agent = 该键跟随全局：表单停在「继承全局」，不把全局
+    // 值虚显示成 agent 级选择（逐键兜底后各键独立跟随）
+    const effectMode =
+      agent.effectModeSource === 'agent' ? ((agent.effectMode as EffectMode) ?? 'workspace') : '';
     const transactionRoots = [...agent.transactionRoots];
     setInitial({ effectMode, model: modelStr, transactionRoots });
     setForm({
@@ -328,6 +331,11 @@ export function AgentSettingsPanel() {
       setError(t('agentSettings.workdirsDuplicate'));
       return;
     }
+    // F-9：全局根已在「来自全局」只读行展示，再加可编辑行会双显（并集去重后语义重复）
+    if ((view?.globalTransactionRoots ?? []).includes(path)) {
+      setError(t('agentSettings.workdirsDuplicateGlobal'));
+      return;
+    }
     setError(null);
     setForm((p) => ({ ...p, transactionRoots: [...p.transactionRoots, path] }));
     setNewWorkdir('');
@@ -335,24 +343,7 @@ export function AgentSettingsPanel() {
 
   const saveAgent = async () => {
     if (!selected || selected === '__new__') return;
-    // 「继承全局」= 删除 agent 级 effectPolicy 整段（对象级覆盖语义）；与 agent 级
-    // 工作目录互斥——删键会连 transactionRoots 一起删，无法表达「跟随全局 + 自带根」
-    if (!form.effectMode && form.transactionRoots.length > 0) {
-      setError(t('agentSettings.workdirsInheritConflict'));
-      return;
-    }
     const rootsDirty = !sameStringArray(form.transactionRoots, initial.transactionRoots);
-    // 静默固化才要确认（F3 反向后果：固化 = 该 agent 脱离全局安全组的后续收紧）：
-    // 本次显式改安全组 = 用户已表态，不追加弹窗
-    const silentPin = rootsDirty && !selectedHasOwnEffectPolicy && form.transactionRoots.length > 0
-      && form.effectMode === initial.effectMode;
-    if (silentPin && !window.confirm(t('agentSettings.workdirsPinConfirm', { mode: form.effectMode }))) {
-      return;
-    }
-    // 「继承全局」删整段（含面板未展示的安全旋钮）——显式确认（F7）
-    if (!form.effectMode && selectedHasOwnEffectPolicy && !window.confirm(t('agentSettings.inheritGlobalConfirm'))) {
-      return;
-    }
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -362,21 +353,20 @@ export function AgentSettingsPanel() {
       const patch: Record<string, unknown> = {
         tools: { allow: splitList(form.allow), deny: splitList(form.deny) },
       };
-      // #6 安全组 dirty：未改动不发（防全局模式被固化到 agent）；改「继承全局」发 null 删键
+      // 逐键兜底（2026-11-26 拍板）：mode 不写 = 跟随全局，写工作目录不再牵动安全组
+      // （无需固化/确认）。#6 dirty：未改动不发。
       if (form.effectMode !== initial.effectMode || rootsDirty) {
-        if (!form.effectMode) {
-          // 继承全局：删整段（工作目录必为空——顶部校验已挡互斥）
-          patch.effectPolicy = null;
-        } else {
-          const effectPolicy: Record<string, unknown> = {};
-          // 例外：给无 agent 级策略的 agent 建段（首个工作目录）时不带 mode 会让运行
-          // 模式从「继承全局」静默漂到引擎缺省 workspace——随建段固化当前生效安全组
-          if (form.effectMode !== initial.effectMode || (rootsDirty && !selectedHasOwnEffectPolicy)) {
-            effectPolicy.mode = form.effectMode;
-          }
-          if (rootsDirty) effectPolicy.transactionRoots = form.transactionRoots;
-          patch.effectPolicy = effectPolicy;
+        const effectPolicy: Record<string, unknown> = {};
+        if (form.effectMode !== initial.effectMode) {
+          // 改「继承全局」= 删 mode 子键（该键改回跟随全局；其余子键——含隐藏旋钮——不动）
+          effectPolicy.mode = form.effectMode ? form.effectMode : null;
         }
+        // F-5：清空 = 删键（改回跟随全局；不留 `{transactionRoots: []}` 空壳——
+        // 否则 hasOwnEffectPolicy 持续为真，与「删空即回到仅跟随全局」文案矛盾）
+        if (rootsDirty) {
+          effectPolicy.transactionRoots = form.transactionRoots.length ? form.transactionRoots : null;
+        }
+        patch.effectPolicy = effectPolicy;
       }
       // #7 模型 dirty：未改动不发（防对象形态被字符串降级）
       if (form.model.trim() && form.model.trim() !== initial.model) {
@@ -686,6 +676,12 @@ export function AgentSettingsPanel() {
                     title={t('agentSettings.inheritGlobalTitle')}
                   >
                     <strong>{t('agentSettings.inheritGlobal')}</strong>
+                    {/* F-6：透明展示「继承全局」的实际去向——global=host 时这是提权选项 */}
+                    <span className="small muted">
+                      {t('agentSettings.inheritGlobalTarget', {
+                        mode: view?.globalEffectMode ?? 'workspace',
+                      })}
+                    </span>
                     <span className="small muted">{t('agentSettings.inheritGlobalDesc')}</span>
                     <span className="small">{t('agentSettings.inheritGlobalRisk')}</span>
                   </button>
@@ -713,6 +709,14 @@ export function AgentSettingsPanel() {
                     {t('agentSettings.workdirsBase', { path: selectedAgent.workspace })}
                   </div>
                 )}
+                {(view?.globalTransactionRoots ?? []).map((p) => (
+                  <div key={`global:${p}`} className="set-file-create">
+                    <code className="small" style={{ flex: 1, wordBreak: 'break-all', whiteSpace: 'normal' }}>
+                      {p}
+                    </code>
+                    <span className="small muted">{t('agentSettings.workdirsGlobalTag')}</span>
+                  </div>
+                ))}
                 {form.transactionRoots.map((p) => (
                   <div key={p} className="set-file-create">
                     <code className="small" style={{ flex: 1, wordBreak: 'break-all', whiteSpace: 'normal' }}>

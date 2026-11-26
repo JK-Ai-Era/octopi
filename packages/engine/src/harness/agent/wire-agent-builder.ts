@@ -208,6 +208,8 @@ export interface AgentWireSpec {
   tools?: import('@octopi-agent/core/types.js').ToolPolicy;
   maxSessionRights?: SessionAwareRunnerConfig['agentMaxSessionRights'];
   effectPolicy?: EffectPolicyConfig;
+  /** effectPolicy 自成一套（MAJ-5 租户隔离，registry 派生）：不与宿主默认兜底 */
+  effectPolicyStandalone?: boolean;
   toolIsolation?: HarnessConfig['toolIsolation'];
   sessionIdleExpiryMs?: number;
   modelCallTimeouts?: ModelCallConfig;
@@ -295,7 +297,7 @@ export async function wireAgentBuilder(
 
   // ── EffectPolicy (P3) ──
   if (spec.effectPolicy) {
-    builder.effectPolicy(spec.effectPolicy);
+    builder.effectPolicy(spec.effectPolicy, { standalone: spec.effectPolicyStandalone === true });
   }
 
   // ── Runner：标准字段 + 宿主附加 ──

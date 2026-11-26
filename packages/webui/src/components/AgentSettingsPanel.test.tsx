@@ -2,14 +2,15 @@
 /**
  * AgentSettingsPanel —「工作目录」编辑回归锚。
  *
- * 语义背景：agent 级 effectPolicy 是**对象级覆盖**全局（`agentDef.effectPolicy`
- * 整段优先，缺省才回落 `config.effectPolicy`），工作目录写在
- * `effectPolicy.transactionRoots`。因此：
- * 1. 未改动保存不得携带 effectPolicy（防把全局策略固化到 agent，#6 回归锚）。
- * 2. 已有 agent 级策略：加/减根只发 `transactionRoots`（二级合并保留 mode 等旋钮）。
- * 3. 尚无 agent 级策略：建段时必须带当前生效安全组——否则运行模式会从「继承全局」
- *    静默漂到引擎缺省 workspace。
- * 4. 「继承全局」（删整段）与 agent 级工作目录互斥——删键会连根一起删。
+ * 语义背景（逐键兜底，2026-11-26 拍板）：agent 级 effectPolicy 与全局逐键合并——
+ * agent 写了的键赢、没写的键跟全局缺省；`transactionRoots` 两层并集（追加授权）。
+ * 「继承全局」= 仅删 `mode` 子键（子键 null = 删键），不再互斥/不再整段删。因此：
+ * 1. 未改动保存不得携带 effectPolicy（#6 回归锚）。
+ * 2. 加/减根只发 `transactionRoots`（二级合并保留 mode 等旋钮，安全组不动）。
+ * 3. 尚无 agent 级策略加根：只发 `transactionRoots`，**不固化 mode**（逐键兜底
+ *    天然防 F2/F3 漂移，也不触发确认弹窗）。
+ * 4. 「继承全局」与 agent 级工作目录可共存：发 `{ mode: null, transactionRoots }`
+ *    （此前整段覆盖语义下不可表达的组合）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
@@ -29,7 +30,12 @@ interface AgentRecord {
   hasOwnEffectPolicy?: boolean;
 }
 
-let agentsView: { agents: AgentRecord[]; hash: string };
+let agentsView: {
+  agents: AgentRecord[];
+  globalTransactionRoots: string[];
+  globalEffectMode: string;
+  hash: string;
+};
 /** PUT /config/agents/:id 的请求体（断言「写入了什么」） */
 let puts: Array<{ id: string; agent: Record<string, unknown> }> = [];
 
@@ -74,6 +80,8 @@ beforeEach(() => {
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   agentsView = {
     hash: 'h1',
+    globalEffectMode: 'workspace',
+    globalTransactionRoots: [],
     agents: [
       {
         id: 'a1',
@@ -110,7 +118,7 @@ describe('AgentSettingsPanel — 工作目录', () => {
     expect('effectPolicy' in puts[0]!.agent).toBe(false);
   });
 
-  it('已有 agent 级策略：加/减根只发 transactionRoots（不带 mode）', async () => {
+  it('加/减根只发 transactionRoots（安全组不动）', async () => {
     render(<AgentSettingsPanel />);
     await selectAgent('a1');
 
@@ -130,7 +138,7 @@ describe('AgentSettingsPanel — 工作目录', () => {
     expect(puts[0]!.agent.effectPolicy).toEqual({ transactionRoots: ['/proj/b'] });
   });
 
-  it('尚无 agent 级策略：建段写入工作目录时固化当前生效安全组（防模式漂移）', async () => {
+  it('尚无 agent 级策略加根：只发 transactionRoots，不固化 mode、不弹确认（逐键兜底防 F2/F3）', async () => {
     agentsView.agents[0]!.effectMode = 'host';
     agentsView.agents[0]!.effectModeSource = 'global';
     agentsView.agents[0]!.transactionRoots = [];
@@ -144,22 +152,31 @@ describe('AgentSettingsPanel — 工作目录', () => {
     fireEvent.click(screen.getByText('添加'));
     fireEvent.click(screen.getByText('保存配置'));
     await waitFor(() => expect(puts.length).toBe(1));
-    expect(puts[0]!.agent.effectPolicy).toEqual({ mode: 'host', transactionRoots: ['/proj/x'] });
-    // F3 锚：静默固化必须经显式确认（告知脱离全局安全组跟随）
-    expect(vi.mocked(window.confirm)).toHaveBeenCalledTimes(1);
+    // 逐键兜底：mode 不写即跟随全局——既不漂移也不触发安全写闸
+    expect(puts[0]!.agent.effectPolicy).toEqual({ transactionRoots: ['/proj/x'] });
+    expect(vi.mocked(window.confirm)).not.toHaveBeenCalled();
   });
 
-  it('「继承全局」与 agent 级工作目录互斥：保存被挡且不发请求', async () => {
+  it('「继承全局」与 agent 级工作目录可共存：发 mode:null + transactionRoots（F-d 锚）', async () => {
     render(<AgentSettingsPanel />);
     await selectAgent('a1');
 
     fireEvent.click(screen.getByText('继承全局'));
+    fireEvent.change(screen.getByPlaceholderText('/absolute/path（~/path = 授予整个 home）'), {
+      target: { value: '/proj/b' },
+    });
+    fireEvent.click(screen.getByText('添加'));
     fireEvent.click(screen.getByText('保存配置'));
-    expect(screen.getByText(/不能与 agent 级工作目录共存/)).toBeTruthy();
-    expect(puts.length).toBe(0);
+    await waitFor(() => expect(puts.length).toBe(1));
+    // 子键 null = 删 mode 键（跟随全局）；工作目录保留
+    expect(puts[0]!.agent.effectPolicy).toEqual({
+      mode: null,
+      transactionRoots: ['/proj/a', '/proj/b'],
+    });
+    expect(vi.mocked(window.confirm)).not.toHaveBeenCalled();
   });
 
-  it('清空全部根显式发空数组（与「未改动不发」必须区分）', async () => {
+  it('清空全部根改发 null 删键（与「未改动不发」必须区分；F-5：不留空壳）', async () => {
     render(<AgentSettingsPanel />);
     await selectAgent('a1');
 
@@ -167,7 +184,7 @@ describe('AgentSettingsPanel — 工作目录', () => {
     fireEvent.click(within(row).getByText('移除'));
     fireEvent.click(screen.getByText('保存配置'));
     await waitFor(() => expect(puts.length).toBe(1));
-    expect(puts[0]!.agent.effectPolicy).toEqual({ transactionRoots: [] });
+    expect(puts[0]!.agent.effectPolicy).toEqual({ transactionRoots: null });
   });
 
   it('保存后快照刷新：删根保存→加回同根→保存，第二次仍发 effectPolicy（F4 回归锚）', async () => {
@@ -190,7 +207,7 @@ describe('AgentSettingsPanel — 工作目录', () => {
     expect(puts[1]!.agent.effectPolicy).toEqual({ transactionRoots: ['/proj/a'] });
   });
 
-  it('「继承全局」+ 空根 → effectPolicy: null（删整段），并弹确认', async () => {
+  it('「继承全局」空根：只发 mode:null（F7 锚——不动其余键，不再整段删）', async () => {
     render(<AgentSettingsPanel />);
     await selectAgent('a1');
 
@@ -199,7 +216,7 @@ describe('AgentSettingsPanel — 工作目录', () => {
     fireEvent.click(screen.getByText('继承全局'));
     fireEvent.click(screen.getByText('保存配置'));
     await waitFor(() => expect(puts.length).toBe(1));
-    expect(puts[0]!.agent.effectPolicy).toBeNull();
-    expect(vi.mocked(window.confirm)).toHaveBeenCalledTimes(1);
+    expect(puts[0]!.agent.effectPolicy).toEqual({ mode: null, transactionRoots: null });
+    expect(vi.mocked(window.confirm)).not.toHaveBeenCalled();
   });
 });
