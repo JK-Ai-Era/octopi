@@ -391,7 +391,8 @@ describe('SqliteConceptGraph', () => {
     expect(full.nodes.length).toBe(1);
     expect(full.nodes[0].name).toBe('PostgreSQL');
     expect(full.nodes[0].kind).toBe('entity');
-    expect(full.nodes[0].status).toBe('shadow');
+    // R7′：满票出生即 active
+    expect(full.nodes[0].status).toBe('active');
   });
 
   it('should merge case-insensitive same-name with compatible fingerprint', async () => {

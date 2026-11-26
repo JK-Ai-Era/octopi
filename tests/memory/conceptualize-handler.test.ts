@@ -59,7 +59,7 @@ function basePayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe('conceptualize handler contextSlice', () => {
-  it('payload 自带 contextSlice 时直接采用并成功入库', async () => {
+  it('payload 自带 contextSlice 时直接采用并入库（1 票进出生候选区，满票转正）', async () => {
     const requests: SubsystemLLMPortChatRequest[] = [];
     const store = new InMemoryConceptGraph();
     const out = await conceptualizeHandler(
@@ -72,9 +72,19 @@ describe('conceptualize handler contextSlice', () => {
     expect(requests).toHaveLength(1);
     expect(userText(requests[0])).toContain('contextSlice: [user] 咱们用 sessionId 租约');
     expect(out.act?.status).toBe('success');
+    // R7′ 复现计票：1 票不直接出生，入出生候选区
     const graph = await store.getFullGraph();
-    expect(graph.nodes).toHaveLength(1);
-    expect(graph.nodes[0].name).toBe('会话租约');
+    expect(graph.nodes).toHaveLength(0);
+    const candidates = await store.listBirthCandidates();
+    expect(candidates.some((c) => c.name === '会话租约')).toBe(true);
+    // 第二票（不同 memoryId）→ 满票转正出生
+    await store.admitConcept({
+      name: '会话租约',
+      kind: 'construct',
+      memoryIds: ['mem-2'],
+    });
+    const born = await store.getFullGraph();
+    expect(born.nodes.some((n) => n.name === '会话租约')).toBe(true);
   });
 
   it('缺 contextSlice 时从 sessionStore 回补 ±N 窗口', async () => {

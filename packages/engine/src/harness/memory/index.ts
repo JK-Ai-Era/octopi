@@ -49,6 +49,7 @@ export type {
   ConceptEdge,
   ConceptGraph,
   MergeCandidate,
+  BirthCandidate,
   EdgeAux,
   AdmitConceptInput,
   AdmitConceptResult,

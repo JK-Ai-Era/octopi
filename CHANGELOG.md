@@ -140,6 +140,33 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.135.0 (2026-11-27)
+
+### feat(memory): 概念出生改「复现计票」+ 出生候选区（R7′ commit 1）
+
+**行为变更（认知层产生侧，架构性）**：概念出生从「1 条高价值 kind 命题即出生」改为
+**复现计票**——任何 kind 一律 ≥2 票（不同 memoryIds）才出生；1 票入 `concept_birth_candidates`
+出生候选区（同名同 kind 桶合并计票，同 memoryId 幂等），满 2 票自动转正；TTL 14 天固定
+出生窗口，到期仍 <2 票即遗忘（consolidate 每轮调 `expireBirthCandidates` 清理）。
+
+- **出生即 active**（原 shadow）：计票出生/定义出生的节点立即可召回，`frequency` = 票数
+  （无票调用回退计次语义）；R5「shadow 永冻」死锁从产生侧开始拆除
+- **entity/problem 不再绝育**：kind 不得作为出生旁路（原「1 条 + method/constraint/construct
+  直生」口子删除）
+- **定义直生通道**（`birthChannel='definition'`）：定义/口径类命题 1 票直生（跳过计票门槛），
+  必须带 ≥1 memoryId（无支撑会被 decay GC 清掉，门控显式拒绝）
+- **裂变预算**：Conceptualizer 单命题最多提 2 个候选（原 6），超限显式 `budget_node` 拒绝
+  （不再静默丢弃）
+- **契约**（`ConceptGraphStore`，编译级变更）：`AdmitConceptAction += candidate_parked`、
+  `AdmitConceptInput.birthChannel`、新 `BirthCandidate` 类型与 `listBirthCandidates` /
+  `expireBirthCandidates`、`ConceptGraphStats.birthCandidates`
+- 端点尚在候选区的边如实归因 `endpoint_not_admitted`（原误报 `cue_mismatch`）；
+  consolidate 输出带 `birthExpired=` 与 conceptualize 信号带 `parked=` 计数
+- 独立评审（fresh-eyes）7 major 全部修复：TTL 调用方接线、候选键按 (name_key, kind) 分桶、
+  转正原子性（先出生后删候选，失败 `birth_deferred` 保票不丢）、转正保留首票 description/domain、
+  frequency 派生口径、归因修正、vacuous 测试修正
+- 测试：6139 passed / 9 skipped（590 文件）；build 绿
+
 ## v0.134.0 (2026-11-27)
 
 ### feat(gateway,engine): host agent 认证面收口（A2 扩围，2026-11-27 拍板）

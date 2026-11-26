@@ -10,7 +10,6 @@
 import type {
   AdmitConceptInput,
   ConceptGateReason,
-  ConceptKind,
   ConceptRelationType,
   EdgeBasis,
   EvidenceClass,
@@ -33,6 +32,9 @@ const SECRET_LIKE = /(?:api[_-]?key|secret|password|token)\s*[:=]\s*\S{8,}/i;
 const STOPWORD = /^(?:the|a|an|this|that|it|is|are|was|were|and|or|of|to|in|for)$/i;
 const CJK = /[一-鿿]/;
 
+/** 出生候选固定出生窗口（TTL）：到期仍 <2 票即遗忘（不随投票续期——压缩不了就忘）。两 store 同源引用。 */
+export const BIRTH_CANDIDATE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
 /** 归一化空白，用于 cue ⊆ evidence 子串校验 */
 export function normalizeForCue(text: string): string {
   return text.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -42,12 +44,12 @@ export function normalizeForCue(text: string): string {
  * 概念结构门控。
  *
  * @param input - 候选概念
- * @param options - capacityAdmitStop 时禁止新生
+ * @param options - capacityAdmitStop 时禁止新生；skipMdl 跳过计票门槛（定义直生通道）
  * @returns 是否准入与 reason code
  */
 export function evaluateConceptGate(
   input: AdmitConceptInput,
-  options?: { capacityAdmitStop?: boolean },
+  options?: { capacityAdmitStop?: boolean; skipMdl?: boolean },
 ): ConceptGateOutcome {
   const name = (input.name ?? '').trim();
   if (!name) return { ok: false, reason: 'empty_name' };
@@ -65,13 +67,22 @@ export function evaluateConceptGate(
     return { ok: false, reason: 'pseudo_concept', message: 'name too short' };
   }
 
+  // 复现计票门槛（MDL）：≥2 票（不同命题）才直接出生；1 票走出生候选区，
+  // 不限 kind（entity/problem 同权——2026-11-26 R7′：kind 不得成为出生旁路）
   const support = input.supportCount ?? input.memoryIds?.length ?? 0;
-  const highValueKind: ConceptKind[] = ['method', 'constraint', 'construct'];
-  if (support < 2 && !(support >= 1 && highValueKind.includes(input.kind))) {
+  if (support < 2 && !options?.skipMdl) {
     return {
       ok: false,
       reason: 'mdl_insufficient',
       message: `support=${support} kind=${input.kind}`,
+    };
+  }
+  // 定义直生（skipMdl）也必须有证据归属：无票概念会被 decay 无支撑 GC 清掉，出生即死
+  if (options?.skipMdl && support < 1) {
+    return {
+      ok: false,
+      reason: 'mdl_insufficient',
+      message: 'definition birth requires ≥1 memoryId',
     };
   }
 

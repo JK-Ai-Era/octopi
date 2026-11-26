@@ -2,7 +2,7 @@
  * Cognition 形成管线 — 门控 / 合并 / 持证边 / 衰减 / 扩散激活
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   InMemoryConceptGraph,
   AgentDatabase,
@@ -31,15 +31,23 @@ describe('cognition-gates', () => {
     ).toBe('secret_like');
   });
 
-  it('mdl: needs ≥2 support unless method/constraint/construct with 1', () => {
+  it('mdl: recurrence voting — 1 vote parks for any kind (no kind bypass)', () => {
+    // R7′：kind 不得成为出生旁路——1 票任何 kind 一律候选区
     expect(
       evaluateConceptGate({ name: 'PostgreSQL', kind: 'entity', supportCount: 1 }).reason,
     ).toBe('mdl_insufficient');
     expect(
-      evaluateConceptGate({ name: '退避重试', kind: 'method', supportCount: 1 }).ok,
-    ).toBe(true);
+      evaluateConceptGate({ name: '退避重试', kind: 'method', supportCount: 1 }).reason,
+    ).toBe('mdl_insufficient');
     expect(
       evaluateConceptGate({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 }).ok,
+    ).toBe(true);
+    // 定义直生通道（birthChannel='definition'）跳过计票门槛
+    expect(
+      evaluateConceptGate(
+        { name: 'run', kind: 'construct', supportCount: 1, birthChannel: 'definition' },
+        { skipMdl: true },
+      ).ok,
     ).toBe(true);
   });
 
@@ -178,7 +186,7 @@ describe('conceptualizer', () => {
     expect(r.nodes).toHaveLength(0);
   });
 
-  it('admits nodes and demotes unlicensed causes to related', async () => {
+  it('1-vote nodes park in birth candidates; unlicensed causes demote to related', async () => {
     const store = new InMemoryConceptGraph();
     const r = await conceptualizeAndAdmit(
       {
@@ -206,10 +214,14 @@ describe('conceptualizer', () => {
       store,
     );
 
-    expect(r.nodes.filter((n) => n.admit.action !== 'rejected').length).toBe(2);
+    // R7′ 复现计票：1 票入候选区，不进图（曾为「非 rejected 恒真」的 vacuous 断言）
+    expect(r.nodes.every((n) => n.admit.action === 'candidate_parked')).toBe(true);
+    expect((await store.getFullGraph()).nodes).toHaveLength(0);
     const edge = r.edges[0];
     expect(edge).toBeTruthy();
     expect(edge!.license.relationType).toBe('related');
+    // 端点尚在候选区：如实归因，不冒充 cue 问题
+    expect(edge!.license.reason).toBe('endpoint_not_admitted');
   });
 });
 
@@ -422,9 +434,14 @@ describe.each([
     expect(hit.nodes.some((n) => n.name === 'Near')).toBe(true);
   });
 
-  it('promote makes nodes retrievable (default status filter)', async () => {
+  it('born active is retrievable; demote hides and promote restores (default status filter)', async () => {
     const a = await store.admitConcept({ name: 'Hidden', kind: 'construct', supportCount: 2 });
+    // 出生即 active（R7′/R5′）：满票出生立即可召回
     let hit = await store.spreadingActivate(['Hidden']);
+    expect(hit.nodes).toHaveLength(1);
+
+    await store.demote([a.id!], 'shadow');
+    hit = await store.spreadingActivate(['Hidden']);
     expect(hit.nodes).toHaveLength(0);
 
     await store.promote([a.id!], 'active');
@@ -456,11 +473,130 @@ describe.each([
       evidenceText: 'ActiveNode is part of ShadowNode',
     });
     await store.promote([a.id!], 'active');
-    // b 保持 shadow
+    // b 出生即 active；显式降 shadow 验证扩散不进 shadow 邻居
+    await store.demote([b.id!], 'shadow');
 
     const hit = await store.spreadingActivate(['ActiveNode'], { depth: 2, tau: 0.01 });
     expect(hit.nodes.some((n) => n.name === 'ActiveNode')).toBe(true);
     expect(hit.nodes.some((n) => n.name === 'ShadowNode')).toBe(false);
+  });
+
+  it('R7′ recurrence voting: 1 vote parks, 2nd vote births; same-memory vote is idempotent', async () => {
+    // 1 票 → 出生候选区（不进图）
+    const r1 = await store.admitConcept({ name: '复现计票', kind: 'method', memoryIds: ['m1'] });
+    expect(r1.action).toBe('candidate_parked');
+    expect((await store.getFullGraph()).nodes).toHaveLength(0);
+    expect((await store.listBirthCandidates()).some((c) => c.name === '复现计票')).toBe(true);
+
+    // 同一命题重复提案（同 memoryId）→ 幂等，不凑第二票
+    const r2 = await store.admitConcept({ name: '复现计票', kind: 'method', memoryIds: ['m1'] });
+    expect(r2.action).toBe('candidate_parked');
+    expect((await store.getFullGraph()).nodes).toHaveLength(0);
+
+    // 不同 memoryId 第二票 → 满票转正出生；出生即 active、票数与支撑并集
+    const r3 = await store.admitConcept({ name: '复现计票', kind: 'method', memoryIds: ['m2'] });
+    expect(r3.action).toBe('created');
+    const born = await store.getFullGraph();
+    expect(born.nodes).toHaveLength(1);
+    expect(born.nodes[0]!.memoryIds.sort()).toEqual(['m1', 'm2']);
+    expect(born.nodes[0]!.status).toBe('active');
+    expect(born.nodes[0]!.frequency).toBe(2);
+    expect(await store.listBirthCandidates()).toHaveLength(0);
+    // 出生即 active → 立即可召回
+    const hit = await store.spreadingActivate(['复现计票']);
+    expect(hit.nodes.some((n) => n.name === '复现计票')).toBe(true);
+  });
+
+  it('R7′ birth candidate TTL: expired single-vote candidates are forgotten', async () => {
+    await store.admitConcept({ name: '一次性教训', kind: 'constraint', memoryIds: ['m1'] });
+    expect(await store.listBirthCandidates()).toHaveLength(1);
+    const removed = await store.expireBirthCandidates(Date.now() + 15 * 24 * 60 * 60 * 1000);
+    expect(removed).toBe(1);
+    expect(await store.listBirthCandidates()).toHaveLength(0);
+  });
+
+  it('R7′ entity/problem kind births by voting (no kind bypass)', async () => {
+    const r1 = await store.admitConcept({ name: 'PostgreSQL', kind: 'entity', memoryIds: ['m1'] });
+    expect(r1.action).toBe('candidate_parked');
+    const r2 = await store.admitConcept({ name: 'PostgreSQL', kind: 'entity', memoryIds: ['m2'] });
+    expect(r2.action).toBe('created');
+    expect((await store.getFullGraph()).nodes[0]!.kind).toBe('entity');
+  });
+
+  it('R7′ same-name different-kind candidates vote in separate buckets (M2)', async () => {
+    const r1 = await store.admitConcept({ name: '口径词', kind: 'construct', memoryIds: ['m1'] });
+    const r2 = await store.admitConcept({ name: '口径词', kind: 'constraint', memoryIds: ['m2'] });
+    expect(r1.action).toBe('candidate_parked');
+    expect(r2.action).toBe('candidate_parked');
+    // 两桶各 1 票互不合并；kind 不被最后一票篡改
+    const candidates = await store.listBirthCandidates();
+    expect(candidates.filter((c) => c.name === '口径词')).toHaveLength(2);
+    expect((await store.getFullGraph()).nodes).toHaveLength(0);
+  });
+
+  it('R7′ birth failure keeps votes in candidate (birth_deferred, no silent loss) (M3)', async () => {
+    await store.admitConcept({ name: '容量压测', kind: 'construct', memoryIds: ['m1'] });
+    // 第二票转正时人为制造出生失败（模拟 capacity_admit_stop）
+    const orig = store.admitConcept.bind(store);
+    const spy = vi.spyOn(store, 'admitConcept').mockImplementation(async (input) => {
+      if ((input.supportCount ?? 0) >= 2) {
+        return { action: 'rejected', reason: 'capacity_admit_stop', message: 'nodes full' };
+      }
+      return orig(input);
+    });
+    const r2 = await store.admitConcept({ name: '容量压测', kind: 'construct', memoryIds: ['m2'] });
+    expect(r2.action).toBe('candidate_parked');
+    expect(r2.message).toContain('birth_deferred');
+    // 票没丢：候选仍在、票已并入
+    const parked = (await store.listBirthCandidates()).find((c) => c.name === '容量压测');
+    expect(parked?.memoryIds.sort()).toEqual(['m1', 'm2']);
+    // 容量恢复后满票转正成功
+    spy.mockRestore();
+    const r3 = await store.admitConcept({ name: '容量压测', kind: 'construct', memoryIds: ['m3'] });
+    expect(r3.action).toBe('created');
+    expect((await store.getFullGraph()).nodes[0]!.memoryIds.sort()).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('R7′ promotion keeps first-vote description/domain when 2nd vote lacks them (M4)', async () => {
+    await store.admitConcept({
+      name: '活口径',
+      kind: 'construct',
+      memoryIds: ['m1'],
+      description: '首票释义',
+      domain: ['d1'],
+    });
+    const r2 = await store.admitConcept({ name: '活口径', kind: 'construct', memoryIds: ['m2'] });
+    expect(r2.action).toBe('created');
+    const node = (await store.getFullGraph()).nodes[0]!;
+    expect(node.description).toBe('首票释义');
+    expect(node.domain).toContain('d1');
+  });
+
+  it('R7′ two distinct memoryIds in one call birth directly (votes = memoryIds) (m1)', async () => {
+    const r = await store.admitConcept({
+      name: '一次两票',
+      kind: 'method',
+      memoryIds: ['m1', 'm2'],
+      supportCount: 1,
+    });
+    expect(r.action).toBe('created');
+    expect((await store.getFullGraph()).nodes[0]!.memoryIds.sort()).toEqual(['m1', 'm2']);
+  });
+
+  it('R7′ definition channel births at 1 vote; without memoryIds it is rejected (m2)', async () => {
+    const r = await store.admitConcept({
+      name: 'run',
+      kind: 'construct',
+      memoryIds: ['m1'],
+      birthChannel: 'definition',
+      description: '一次 Agent.run() 执行',
+    });
+    expect(r.action).toBe('created');
+    expect((await store.getFullGraph()).nodes[0]!.status).toBe('active');
+
+    const bad = await store.admitConcept({ name: 'turn', kind: 'construct', birthChannel: 'definition' });
+    expect(bad.action).toBe('rejected');
+    expect(bad.reason).toBe('mdl_insufficient');
   });
 
   it('multi-evidence across admitEdge calls licenses causes', async () => {

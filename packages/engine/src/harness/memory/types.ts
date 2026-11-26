@@ -555,13 +555,13 @@ export interface EdgeAux {
   createdAt: number;
 }
 
-export type AdmitConceptAction = 'created' | 'merged' | 'merge_candidate' | 'rejected';
+export type AdmitConceptAction = 'created' | 'merged' | 'merge_candidate' | 'candidate_parked' | 'rejected';
 
 export interface AdmitConceptResult {
   action: AdmitConceptAction;
   /** created / merged 时的节点 id */
   id?: string;
-  /** merge_candidate 时的候选 id */
+  /** merge_candidate 与 candidate_parked 时的候选 id */
   candidateId?: string;
   reason?: ConceptGateReason;
   message?: string;
@@ -589,6 +589,7 @@ export type ConceptGateReason =
   | 'budget_node'
   | 'budget_edge'
   | 'cue_mismatch'
+  | 'endpoint_not_admitted'
   | 'multi_evidence_required'
   | 'cooccur_no_escalation'
   | 'demoted_related'
@@ -606,6 +607,31 @@ export interface AdmitConceptInput {
   memoryIds?: string[];
   /** 提出该概念的命题条数（MDL）；缺省用 memoryIds.length */
   supportCount?: number;
+  /** 出生通道：`definition`=定义直生（定义权即出生权，跳过计票门槛）；缺省 `theme`=复现计票（≥2 票出生） */
+  birthChannel?: 'definition' | 'theme';
+}
+
+/**
+ * 概念出生候选（复现计票区）——1 票暂存，满 2 票转正出生；TTL 到期未满则遗忘。
+ * 票 = 不同 memoryIds（同命题重复提案幂等去重）；votes 冗余列，以 memoryIds.size 为准。
+ */
+export interface BirthCandidate {
+  id: string;
+  /** 归一名（normName，匹配键） */
+  nameKey: string;
+  /** 展示名（首见名） */
+  name: string;
+  kind: ConceptKind;
+  description?: string;
+  domain: string[];
+  /** 兄弟面别名（同主题异名归并后保留） */
+  aliases: string[];
+  /** 票源命题 */
+  memoryIds: string[];
+  createdAt: number;
+  updatedAt: number;
+  /** TTL 到期仍 <2 票 → 遗忘 */
+  expiresAt: number;
 }
 
 export interface AdmitEdgeInput {
@@ -645,6 +671,8 @@ export interface ConceptGraphStats {
   byKind: Record<ConceptKind, number>;
   openMergeCandidates: number;
   causalCandidates: number;
+  /** 出生候选区在册（未满票、未到期） */
+  birthCandidates: number;
 }
 
 export interface DecayResult {
@@ -671,6 +699,10 @@ export interface ConceptGraphStore {
     note?: string;
   }): Promise<void>;
   listMergeCandidates(limit?: number): Promise<MergeCandidate[]>;
+  /** 出生候选区（复现计票）：列出在 TTL 内的 1 票候选 */
+  listBirthCandidates(limit?: number): Promise<BirthCandidate[]>;
+  /** 清理 TTL 到期仍未满 2 票的出生候选（遗忘）；返回清理数 */
+  expireBirthCandidates(now?: number): Promise<number>;
   resolveMerge(
     id: string,
     action: 'merge' | 'keep_split' | 'drop',

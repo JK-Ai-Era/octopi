@@ -358,8 +358,9 @@ async function handler(
     config,
   );
 
-  // 2. 衰减 + 无支撑 GC（store 内）
+  // 2. 衰减 + 无支撑 GC + 出生候选 TTL 遗忘（R7′：压缩不了就忘）
   const decay = await store.applyDecay();
+  const birthExpired = await store.expireBirthCandidates();
 
   // 3. 晋升：memoryIds 支撑 ≥ promoteMinSupport 的 shadow 节点（裁决合并后重新计支撑）
   const graph = await store.getFullGraph();
@@ -400,6 +401,7 @@ async function handler(
           role: 'system',
           content:
             `cognition.steward.consolidated decayed=${decay.decayedEdges} gcNodes=${decay.gcNodes} ` +
+            `birthExpired=${birthExpired} ` +
             `promoted=${toPromote.length} ${adjudicationLine} ` +
             `capacity=${capacity} nodes=${stats.nodes} edges=${stats.edges} ` +
             `skipped=[${SKIPPED_STEPS.join(',')}]`,

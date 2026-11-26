@@ -229,6 +229,8 @@ async function handler(
   );
 
   const created = result.nodes.filter((n) => n.admit.action === 'created' || n.admit.action === 'merged').length;
+  // R7′ 复现计票：1 票入候选区——与「LLM 没提案」区分开（运维可见）
+  const parked = result.nodes.filter((n) => n.admit.action === 'candidate_parked').length;
   const edgesIn = result.edges.filter((e) => e.admit && e.admit.action !== 'rejected').length;
 
   return {
@@ -239,7 +241,7 @@ async function handler(
       messages: [
         {
           role: 'system',
-          content: `cognition.steward.conceptualized nodes=${created} edges=${edgesIn} rejected=${result.rejected.length}`,
+          content: `cognition.steward.conceptualized nodes=${created} parked=${parked} edges=${edgesIn} rejected=${result.rejected.length}`,
         },
       ],
     },
@@ -250,6 +252,7 @@ async function handler(
         data: {
           memoryId,
           nodes: created,
+          parked,
           edges: edgesIn,
           rejected: result.rejected,
         },

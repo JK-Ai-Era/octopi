@@ -302,6 +302,23 @@ export class AgentDatabase {
         created_at INTEGER NOT NULL
       );
 
+      -- ── 概念出生候选（复现计票区：1 票暂存、满 2 票转正、TTL 到期遗忘）──
+      -- 候选按 (name_key, kind) 分桶：同名不同 kind 各自计票（义项冲突交出生侧裁决）
+      CREATE TABLE IF NOT EXISTS concept_birth_candidates (
+        id          TEXT PRIMARY KEY,
+        name_key    TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        kind        TEXT NOT NULL DEFAULT 'construct',
+        description TEXT,
+        domain      TEXT NOT NULL DEFAULT '[]',
+        aliases     TEXT NOT NULL DEFAULT '[]',
+        memory_ids  TEXT NOT NULL DEFAULT '[]',
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL,
+        expires_at  INTEGER NOT NULL,
+        UNIQUE(name_key, kind)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_concepts_name ON concepts(name);
       CREATE INDEX IF NOT EXISTS idx_concepts_status ON concepts(status);
       CREATE INDEX IF NOT EXISTS idx_concepts_kind ON concepts(kind);
@@ -310,6 +327,8 @@ export class AgentDatabase {
       CREATE INDEX IF NOT EXISTS idx_edges_type ON concept_edges(relation_type);
       CREATE INDEX IF NOT EXISTS idx_edges_status ON concept_edges(status);
       CREATE INDEX IF NOT EXISTS idx_merge_candidates_status ON concept_merge_candidates(status);
+      CREATE INDEX IF NOT EXISTS idx_birth_candidates_key ON concept_birth_candidates(name_key);
+      CREATE INDEX IF NOT EXISTS idx_birth_candidates_expires ON concept_birth_candidates(expires_at);
 
       -- ── Wisdom 表（maxim）──旧 content 形态在 migrateWisdomSchema 一次性拆除
       CREATE TABLE IF NOT EXISTS wisdom (
@@ -419,6 +438,7 @@ export class AgentDatabase {
       'concept_edges',
       'concept_merge_candidates',
       'concept_edges_aux',
+      'concept_birth_candidates',
       'wisdom',
       'knowledge_sources',
     ];

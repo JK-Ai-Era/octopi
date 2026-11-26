@@ -14,6 +14,7 @@ import type {
   AdmitConceptResult,
   AdmitEdgeInput,
   AdmitEdgeResult,
+  BirthCandidate,
   ConceptEdge,
   ConceptGraph,
   ConceptGraphStats,
@@ -34,7 +35,7 @@ import {
   hebbianStrengthen,
   nextEdgeStrength,
 } from './cognition-decay.js';
-import { evaluateConceptGate, licenseEdge } from './cognition-gates.js';
+import { BIRTH_CANDIDATE_TTL_MS, evaluateConceptGate, licenseEdge } from './cognition-gates.js';
 import { createSeedMatcher, normName } from './cognition-seeds.js';
 
 function daysBetween(a: number, b: number): number {
@@ -45,6 +46,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
   private nodes = new Map<string, ConceptNode>();
   private edges = new Map<string, ConceptEdge>();
   private mergeCandidates = new Map<string, MergeCandidate>();
+  private birthCandidates = new Map<string, BirthCandidate>();
   private causalCandidates: Array<{
     id: string;
     sourceId: string;
@@ -60,10 +62,16 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
   }
 
   async admitConcept(input: AdmitConceptInput): Promise<AdmitConceptResult> {
+    const isDefinition = input.birthChannel === 'definition';
     const gate = evaluateConceptGate(input, {
       capacityAdmitStop: this.capacityStop,
+      skipMdl: isDefinition,
     });
     if (!gate.ok) {
+      // 票不够（非定义直生）→ 出生候选区投票；满 2 票转正（R7′ 复现计票）
+      if (gate.reason === 'mdl_insufficient') {
+        return this.parkOrPromoteBirthCandidate(input);
+      }
       return { action: 'rejected', reason: gate.reason, message: gate.message };
     }
 
@@ -78,11 +86,13 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
         continue;
       }
       // 指纹兼容 → 合并
-      sameName.frequency += 1;
       sameName.updatedAt = Date.now();
       for (const mid of input.memoryIds ?? []) {
         if (!sameName.memoryIds.includes(mid)) sameName.memoryIds.push(mid);
       }
+      // frequency = 票数派生（与 insertNode 同口径）；无票调用回退计次
+      sameName.frequency =
+        sameName.memoryIds.length > 0 ? sameName.memoryIds.length : sameName.frequency + 1;
       for (const d of input.domain ?? []) {
         if (!sameName.domain.includes(d)) sameName.domain.push(d);
       }
@@ -106,20 +116,122 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
   private insertNode(input: AdmitConceptInput): string {
     const id = `cpt_${randomUUID().slice(0, 8)}`;
     const now = Date.now();
+    const memIds = [...new Set(input.memoryIds ?? [])];
     this.nodes.set(id, {
       id,
       name: input.name.trim(),
       kind: input.kind,
       description: input.description,
-      frequency: 1,
-      memoryIds: [...new Set(input.memoryIds ?? [])],
+      // 出生即 active（R7′/R5′）；frequency = 票数
+      frequency: Math.max(1, memIds.length),
+      memoryIds: memIds,
       domain: [...new Set(input.domain ?? [])],
-      status: 'shadow',
+      status: 'active',
       embedding: null,
       createdAt: now,
       updatedAt: now,
     });
     return id;
+  }
+
+  /**
+   * 复现计票（R7′）：1 票入出生候选区，满 2 票转正出生（与 SqliteConceptGraph 同构）。
+   * 候选按 (nameKey, kind) 分桶；TTL 为固定出生窗口，到期仍 <2 票即遗忘。
+   */
+  private async parkOrPromoteBirthCandidate(input: AdmitConceptInput): Promise<AdmitConceptResult> {
+    const now = Date.now();
+    const nameKey = normName(input.name);
+    const incoming = new Set(input.memoryIds ?? []);
+    if (incoming.size === 0) {
+      return { action: 'rejected', reason: 'mdl_insufficient', message: 'no vote (empty memoryIds)' };
+    }
+
+    // 过期票作废，新票重新起算窗口
+    for (const [id, c] of this.birthCandidates) {
+      if (c.nameKey === nameKey && c.kind === input.kind && c.expiresAt <= now) {
+        this.birthCandidates.delete(id);
+      }
+    }
+
+    const existing = [...this.birthCandidates.values()].find(
+      (c) => c.nameKey === nameKey && c.kind === input.kind,
+    );
+    const memIds = new Set([...(existing?.memoryIds ?? []), ...incoming]);
+    const domains = new Set([...(existing?.domain ?? []), ...(input.domain ?? [])]);
+
+    // 满票转正：先出生、成功后才删候选（失败票回写候选，不静默丢票——fail loud）
+    if (memIds.size >= 2) {
+      const result = await this.admitConcept({
+        ...input,
+        description: input.description ?? existing?.description ?? undefined,
+        domain: [...domains],
+        memoryIds: [...memIds],
+        supportCount: memIds.size,
+      });
+      if (result.action === 'rejected') {
+        if (existing) {
+          existing.memoryIds = [...memIds];
+          existing.domain = [...domains];
+          if (input.description && !existing.description) existing.description = input.description;
+          existing.updatedAt = now;
+          return {
+            action: 'candidate_parked',
+            candidateId: existing.id,
+            reason: result.reason,
+            message: `birth_deferred: ${result.message ?? ''} votes=${memIds.size}`,
+          };
+        }
+        return result;
+      }
+      if (existing) this.birthCandidates.delete(existing.id);
+      return result;
+    }
+
+    if (existing) {
+      existing.memoryIds = [...memIds];
+      for (const d of domains) {
+        if (!existing.domain.includes(d)) existing.domain.push(d);
+      }
+      if (input.description && !existing.description) existing.description = input.description;
+      existing.updatedAt = now;
+      return { action: 'candidate_parked', candidateId: existing.id, reason: 'ok', message: `votes=${memIds.size}` };
+    }
+
+    const id = `cbc_${randomUUID().slice(0, 8)}`;
+    this.birthCandidates.set(id, {
+      id,
+      nameKey,
+      name: input.name.trim(),
+      kind: input.kind,
+      description: input.description,
+      domain: [...domains],
+      aliases: [],
+      memoryIds: [...incoming],
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: now + BIRTH_CANDIDATE_TTL_MS,
+    });
+    return { action: 'candidate_parked', candidateId: id, reason: 'ok', message: 'votes=1' };
+  }
+
+  async listBirthCandidates(limit = 100): Promise<BirthCandidate[]> {
+    // 只列未过期（在册 = 未满票、未到期）
+    return [...this.birthCandidates.values()]
+      .filter((c) => c.expiresAt > Date.now())
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit)
+      .map((c) => ({ ...c, domain: [...c.domain], aliases: [...c.aliases], memoryIds: [...c.memoryIds] }));
+  }
+
+  async expireBirthCandidates(now = Date.now()): Promise<number> {
+    let removed = 0;
+    for (const [id, c] of this.birthCandidates) {
+      if (c.expiresAt <= now) {
+        this.birthCandidates.delete(id);
+        removed++;
+      }
+    }
+    return removed;
   }
 
   /** 义项指纹冲突：仅 kind 不同。domain 是多值标签不参与义项判定（同名同 kind 合并且 domain 取并集） */
@@ -569,6 +681,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
         (c) => c.status === 'open',
       ).length,
       causalCandidates: this.causalCandidates.length,
+      birthCandidates: this.birthCandidates.size,
     };
   }
 }

@@ -13,6 +13,7 @@ import type {
   AdmitConceptResult,
   AdmitEdgeInput,
   AdmitEdgeResult,
+  BirthCandidate,
   ConceptEdge,
   ConceptGraph,
   ConceptGraphStats,
@@ -33,7 +34,12 @@ import {
   hebbianStrengthen,
   nextEdgeStrength,
 } from '../cognition-decay.js';
-import { evaluateConceptGate, licenseEdge, normalizeForCue } from '../cognition-gates.js';
+import {
+  BIRTH_CANDIDATE_TTL_MS,
+  evaluateConceptGate,
+  licenseEdge,
+  normalizeForCue,
+} from '../cognition-gates.js';
 import { createSeedMatcher, normName } from '../cognition-seeds.js';
 import { AgentDatabase } from './agent-db.js';
 import type { EmbeddingProvider } from './embedding.js';
@@ -57,6 +63,20 @@ export interface SqliteConceptGraphOptions {
   decayFloor?: number;
   /** causes 最少独立命题（默认 2） */
   causesMinIndependentMemories?: number;
+}
+
+interface BirthCandidateRow {
+  id: string;
+  name_key: string;
+  name: string;
+  kind: string;
+  description: string | null;
+  domain: string;
+  aliases: string;
+  memory_ids: string;
+  created_at: number;
+  updated_at: number;
+  expires_at: number;
 }
 
 function daysBetween(a: number, b: number): number {
@@ -191,8 +211,16 @@ export class SqliteConceptGraph implements ConceptGraphStore {
   }
 
   async admitConcept(input: AdmitConceptInput): Promise<AdmitConceptResult> {
-    const gate = evaluateConceptGate(input, { capacityAdmitStop: this.capacityStop });
+    const isDefinition = input.birthChannel === 'definition';
+    const gate = evaluateConceptGate(input, {
+      capacityAdmitStop: this.capacityStop,
+      skipMdl: isDefinition,
+    });
     if (!gate.ok) {
+      // 票不够（非定义直生）→ 出生候选区投票；满 2 票转正（R7′ 复现计票）
+      if (gate.reason === 'mdl_insufficient') {
+        return this.parkOrPromoteBirthCandidate(input);
+      }
       return { action: 'rejected', reason: gate.reason, message: gate.message };
     }
 
@@ -215,11 +243,13 @@ export class SqliteConceptGraph implements ConceptGraphStore {
 
       const memIds = new Set([...node.memoryIds, ...(input.memoryIds ?? [])]);
       const domains = new Set([...node.domain, ...(input.domain ?? [])]);
+      // frequency = 票数派生（与 insertConcept 同口径）；无票调用回退计次，不破坏 supportCount 表意的调用方
+      const mergedFreq = memIds.size > 0 ? memIds.size : node.frequency + 1;
       this.db.raw
         .prepare(
-          'UPDATE concepts SET frequency = frequency + 1, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
+          'UPDATE concepts SET frequency = ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
         )
-        .run(JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, Date.now(), node.id);
+        .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, Date.now(), node.id);
       return { action: 'merged', id: node.id, reason: 'ok' };
     }
 
@@ -277,6 +307,124 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     return { action: 'created', id, reason: 'ok' };
   }
 
+  /**
+   * 复现计票（R7′）：1 票入出生候选区，满 2 票转正出生。
+   * 票 = 不同 memoryIds（同命题重复提案幂等去重）；候选按 (name_key, kind) 分桶——
+   * 同名不同 kind 各自计票（义项指纹冲突交出生侧 merge_candidate 机制）。
+   * TTL 为固定出生窗口（不随投票续期）：到期仍 <2 票即遗忘（压缩不了就忘）。
+   */
+  private async parkOrPromoteBirthCandidate(input: AdmitConceptInput): Promise<AdmitConceptResult> {
+    const now = Date.now();
+    const nameKey = normName(input.name);
+    const incoming = new Set(input.memoryIds ?? []);
+    if (incoming.size === 0) {
+      return { action: 'rejected', reason: 'mdl_insufficient', message: 'no vote (empty memoryIds)' };
+    }
+
+    // 清掉本桶过期候选（过期票作废，新票重新起算窗口）
+    this.db.raw
+      .prepare('DELETE FROM concept_birth_candidates WHERE name_key = ? AND kind = ? AND expires_at <= ?')
+      .run(nameKey, input.kind, now);
+
+    const rows = this.db.raw
+      .prepare(
+        'SELECT * FROM concept_birth_candidates WHERE name_key = ? AND kind = ? ORDER BY created_at ASC, id ASC',
+      )
+      .all(nameKey, input.kind) as unknown as BirthCandidateRow[];
+
+    const row = rows[0];
+    const memIds = new Set([...(row ? safeJsonArray(row.memory_ids) : []), ...incoming]);
+    const domains = new Set([...(row ? safeJsonArray(row.domain) : []), ...(input.domain ?? [])]);
+
+    // 满票转正：先出生、成功后才删候选（失败票回写候选，不静默丢票——fail loud）
+    if (memIds.size >= 2) {
+      const result = await this.admitConcept({
+        ...input,
+        description: input.description ?? row?.description ?? undefined,
+        domain: [...domains],
+        memoryIds: [...memIds],
+        supportCount: memIds.size,
+      });
+      if (result.action === 'rejected') {
+        // 出生失败（如 capacity_admit_stop）：票并入候选保留，等容量释放后重试
+        if (row) {
+          this.db.raw
+            .prepare(
+              'UPDATE concept_birth_candidates SET memory_ids = ?, domain = ?, description = COALESCE(?, description), updated_at = ? WHERE id = ?',
+            )
+            .run(JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, now, row.id);
+          return {
+            action: 'candidate_parked',
+            candidateId: row.id,
+            reason: result.reason,
+            message: `birth_deferred: ${result.message ?? ''} votes=${memIds.size}`,
+          };
+        }
+        return result;
+      }
+      if (row) this.db.raw.prepare('DELETE FROM concept_birth_candidates WHERE id = ?').run(row.id);
+      return result;
+    }
+
+    if (row) {
+      this.db.raw
+        .prepare(
+          'UPDATE concept_birth_candidates SET memory_ids = ?, domain = ?, description = COALESCE(?, description), updated_at = ? WHERE id = ?',
+        )
+        .run(JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, now, row.id);
+      return { action: 'candidate_parked', candidateId: row.id, reason: 'ok', message: `votes=${memIds.size}` };
+    }
+
+    const id = AgentDatabase.generateId('cbc');
+    this.db.raw
+      .prepare(
+        `INSERT INTO concept_birth_candidates (id, name_key, name, kind, description, domain, aliases, memory_ids, created_at, updated_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        nameKey,
+        input.name.trim(),
+        input.kind,
+        input.description ?? null,
+        JSON.stringify([...domains]),
+        JSON.stringify([...incoming]),
+        now,
+        now,
+        now + BIRTH_CANDIDATE_TTL_MS,
+      );
+    return { action: 'candidate_parked', candidateId: id, reason: 'ok', message: 'votes=1' };
+  }
+
+  async listBirthCandidates(limit = 100): Promise<BirthCandidate[]> {
+    // 只列未过期（在册 = 未满票、未到期）
+    const rows = this.db.raw
+      .prepare(
+        'SELECT * FROM concept_birth_candidates WHERE expires_at > ? ORDER BY updated_at DESC, id ASC LIMIT ?',
+      )
+      .all(Date.now(), limit) as unknown as BirthCandidateRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      nameKey: row.name_key,
+      name: row.name,
+      kind: (row.kind as ConceptKind) ?? 'construct',
+      description: row.description ?? undefined,
+      domain: safeJsonArray(row.domain),
+      aliases: safeJsonArray(row.aliases),
+      memoryIds: safeJsonArray(row.memory_ids),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      expiresAt: row.expires_at,
+    }));
+  }
+
+  async expireBirthCandidates(now = Date.now()): Promise<number> {
+    const info = this.db.raw
+      .prepare('DELETE FROM concept_birth_candidates WHERE expires_at <= ?')
+      .run(now);
+    return Number(info.changes ?? 0);
+  }
+
   /** 义项指纹冲突：仅 kind 不同。domain 是多值标签不参与义项判定（同名同 kind 合并且 domain 取并集） */
   private fingerprintConflict(existing: ConceptNode, input: AdmitConceptInput): string | null {
     if (existing.kind !== input.kind) return `kind:${existing.kind}≠${input.kind}`;
@@ -286,17 +434,20 @@ export class SqliteConceptGraph implements ConceptGraphStore {
   private insertConcept(input: AdmitConceptInput, vec: number[] | null): string {
     const id = AgentDatabase.generateId('cpt');
     const now = Date.now();
+    // 出生即 active（R7′/R5′：计票出生与定义出生都是「挣来的记住」，不再是 shadow 永冻）
+    const memIds = [...new Set(input.memoryIds ?? [])];
     this.db.raw
       .prepare(
         `INSERT INTO concepts (id, name, kind, description, frequency, memory_ids, domain, status, embedding, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 1, ?, ?, 'shadow', ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
       )
       .run(
         id,
         input.name.trim(),
         input.kind,
         input.description ?? null,
-        JSON.stringify([...new Set(input.memoryIds ?? [])]),
+        Math.max(1, memIds.length),
+        JSON.stringify(memIds),
         JSON.stringify([...new Set(input.domain ?? [])]),
         vec ? serializeEmbedding(vec) : null,
         now,
@@ -959,6 +1110,11 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         .prepare(`SELECT COUNT(*) AS c FROM concept_edges_aux WHERE kind = 'causal_candidate'`)
         .get() as { c: number }
     ).c;
+    const birth = (
+      this.db.raw
+        .prepare('SELECT COUNT(*) AS c FROM concept_birth_candidates WHERE expires_at > ?')
+        .get(Date.now()) as { c: number }
+    ).c;
 
     return {
       nodes,
@@ -967,6 +1123,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       byKind,
       openMergeCandidates: openMerge,
       causalCandidates: causal,
+      birthCandidates: birth,
     };
   }
 }

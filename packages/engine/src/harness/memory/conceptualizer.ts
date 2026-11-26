@@ -69,7 +69,7 @@ export interface ConceptualizerResult {
   rejected: Array<{ name: string; reason: string }>;
 }
 
-const MAX_NODES = 6;
+const MAX_NODES = 2;
 const MAX_EDGES = 12;
 
 function asString(v: unknown): string {
@@ -195,7 +195,11 @@ export async function conceptualizeAndAdmit(
   const nodes: ConceptualizerNodeOut[] = [];
 
   for (const item of rawNodes.slice(0, MAX_NODES * 2)) {
-    if (nodes.length >= MAX_NODES) break;
+    if (nodes.length >= MAX_NODES) {
+      // 裂变预算显式拒绝（fail loud）：被丢提案不再静默消失
+      rejected.push({ name: asString((item as Record<string, unknown>)?.name), reason: 'budget_node' });
+      continue;
+    }
     if (!item || typeof item !== 'object') continue;
     const o = item as Record<string, unknown>;
     const name = asString(o.name);
@@ -219,15 +223,16 @@ export async function conceptualizeAndAdmit(
       memoryIds: [input.memoryId],
       supportCount: supportBase,
     });
-    if (!gate.ok) {
+    // 票不够（mdl_insufficient）不是拒绝：交 store 入出生候选区投票（R7′ 复现计票）
+    if (!gate.ok && gate.reason !== 'mdl_insufficient') {
       rejected.push({ name, reason: gate.reason });
       continue;
     }
 
     let admit: AdmitConceptResult = {
       action: 'rejected',
-      reason: gate.reason,
-      message: 'store not provided',
+      reason: gate.reason ?? 'mdl_insufficient',
+      message: gate.message ?? 'store not provided',
     };
     if (store) {
       admit = await store.admitConcept({
@@ -238,6 +243,9 @@ export async function conceptualizeAndAdmit(
         memoryIds: [input.memoryId],
         supportCount: supportBase,
       });
+    } else if (!gate.ok) {
+      // gate-only 模式如实回传门控结论（1 票会 park，不是 created）
+      admit = { action: 'candidate_parked', reason: gate.reason, message: 'store not provided (gate-only)' };
     } else {
       admit = { action: 'created', reason: 'ok' };
     }
@@ -287,11 +295,12 @@ export async function conceptualizeAndAdmit(
       const sourceId = nameToId.get(fromName.toLowerCase());
       const targetId = nameToId.get(toName.toLowerCase());
       if (!sourceId || !targetId) {
+        // 端点未出生（1 票候选区是常态）：如实归因，不冒充 cue 问题
         edgeOut.license = {
           ...license,
           status: 'rejected',
-          reason: 'cue_mismatch',
-          message: 'endpoint concept not admitted',
+          reason: 'endpoint_not_admitted',
+          message: 'endpoint concept not admitted (may be parked in birth candidates)',
         };
       } else if (license.status === 'candidate_only') {
         await store.addCausalCandidate({
