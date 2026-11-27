@@ -140,6 +140,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.135.4 (2026-11-27)
+
+### feat(memory): 约束边一等公民——边释义贯通 + 约束句识别契约（R7′ commit 4）
+
+- **边释义贯通**：`ConceptualizerEdgeOut` 新增 `description`（一句关系释义）；LLM 输出边的
+  `description` 解析后透传 `admitEdge`（持久化与召回渲染全链路已通，本 commit 补上产出端
+  断点）；缺省不猜不渲染
+- **提示词契约（公理②「约束是边不是从句」落地）**：命题中的约束/口径关系句（「X 不得…」
+  「…仅当…」「…必须先于…」「…⇒…」「…唯一仲裁…」）必须产出为边并带释义——不得只写进
+  节点 description 埋掉；关系类型按语义映射（不得→opposes、依赖/先后→causes、组成→
+  part_of、演进→evolves_to），拿不准 related 但释义照写；edge schema 补 `description` 字段
+- **弱 related 语义写实**（既有契约确认）：`related`/`cooccur` 边永远 shadow/candidate_only
+  不进强渲染、不得因强度升格——「入候选」分支已成立，文档写明
+- 测试：6163 passed / 9 skipped（边释义持久化+召回可达、缺省不猜回归，双实现）
+
 ## v0.135.3 (2026-11-27)
 
 ### fix(memory): commit 3 独立评审修复（1 blocker + 4 major + 7 minor）

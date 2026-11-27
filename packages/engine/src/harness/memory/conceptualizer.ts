@@ -66,6 +66,8 @@ export interface ConceptualizerEdgeOut {
   fromName: string;
   toName: string;
   requestedType: ConceptRelationType;
+  /** 一句关系释义（约束边一等公民：约束以边+释义表达，不埋节点文本） */
+  description?: string;
   license: EdgeLicenseOutcome;
   admit?: AdmitEdgeResult;
 }
@@ -365,6 +367,8 @@ export async function conceptualizeAndAdmit(
     const requestedType = parseRelation(o.relationType ?? o.relation) ?? 'related';
     const evidenceClass = parseEvidenceClass(o.evidenceClass) ?? 'cooccur';
     const cue = asString(o.cue);
+    // 约束边一等公民：边的一句关系释义（缺省不入库不渲染，不猜）
+    const description = asString(o.description);
 
     const license = licenseEdge({
       relationType: requestedType,
@@ -379,6 +383,7 @@ export async function conceptualizeAndAdmit(
       fromName,
       toName,
       requestedType,
+      description: description || undefined,
       license,
     };
 
@@ -412,6 +417,7 @@ export async function conceptualizeAndAdmit(
           targetId,
           relationType: license.relationType,
           strength: license.status === 'active' ? 0.7 : 0.4,
+          description: description || undefined,
           basis: {
             memoryIds: [input.memoryId],
             cue,

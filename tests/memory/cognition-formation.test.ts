@@ -884,6 +884,52 @@ describe.each([
     expect(node.memoryIds.sort()).toEqual(['m1', 'm2', 'm3']);
   });
 
+  it('R7′ edge description persists through admitEdge (constraint edges first-class)', async () => {
+    const a = await store.admitConcept({ name: 'MutexLease', kind: 'construct', supportCount: 2 });
+    const b = await store.admitConcept({ name: 'Session', kind: 'entity', supportCount: 2 });
+    const res = await store.admitEdge({
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'part_of',
+      strength: 0.7,
+      description: '租约是会话级互斥的持有凭证',
+      basis: {
+        memoryIds: ['m1'],
+        cue: '会话租约是 Session 级互斥租约',
+        evidenceClass: 'mereonymy',
+        licensedAt: Date.now(),
+      },
+      evidenceText: '会话租约是 Session 级互斥租约。',
+    });
+    expect(res.action).toBe('active');
+    const edge = (await store.getFullGraph()).edges.find((e) => e.id === res.edgeId);
+    expect(edge?.description).toBe('租约是会话级互斥的持有凭证');
+    // 召回渲染可达
+    const hit = await store.spreadingActivate(['MutexLease']);
+    expect(hit.edges.find((e) => e.id === res.edgeId)?.description).toBe('租约是会话级互斥的持有凭证');
+  });
+
+  it('R7′ edge without description stays valid (no guess, render omits)', async () => {
+    const a = await store.admitConcept({ name: 'Source', kind: 'construct', supportCount: 2 });
+    const b = await store.admitConcept({ name: 'Sink', kind: 'construct', supportCount: 2 });
+    const res = await store.admitEdge({
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'causes',
+      strength: 0.7,
+      basis: {
+        memoryIds: ['m1', 'm2'],
+        cue: 'Source 导致 Sink',
+        evidenceClass: 'causal',
+        licensedAt: Date.now(),
+      },
+      evidenceText: 'Source 导致 Sink。',
+    });
+    expect(res.action).toBe('active');
+    const edge = (await store.getFullGraph()).edges.find((e) => e.id === res.edgeId);
+    expect(edge?.description).toBeUndefined();
+  });
+
   it('multi-evidence across admitEdge calls licenses causes', async () => {
     const a = await store.admitConcept({ name: 'CauseA', kind: 'construct', supportCount: 2 });
     const b = await store.admitConcept({ name: 'EffectB', kind: 'construct', supportCount: 2 });

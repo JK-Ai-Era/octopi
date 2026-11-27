@@ -23,6 +23,7 @@
       "fromName": "会话租约",
       "toName": "Session",
       "relationType": "part_of",
+      "description": "一句关系释义（这条边在说什么）",
       "evidenceClass": "mereonymy",
       "cue": "证据中的原句片段"
     }
@@ -47,6 +48,7 @@
 - `relationType`：causes / part_of / opposes / similar_to / evolves_to / related
 - `evidenceClass`：causal / mereonymy / negation / analogy / evolution / cooccur
 - **强关系必须给 cue**（证据原句片段）；无把握时只用 `related` + `cooccur`
+- **约束是边不是从句**：命题中的约束/口径关系句（「X 不得…」「…仅当…」「…必须先于…」「…⇒…」「…唯一仲裁…」）**必须产出为边**并带 `description` 一句关系释义——不得只写进节点 description 里埋掉；关系类型按语义选（不得/禁止→`opposes`、依赖/先后/蕴含→`causes`、组成→`part_of`、演进→`evolves_to`），拿不准用 `related` 但释义照写
 - 禁止假因果：非因果证据不得标 causes
 - 两个义项不同时**禁止合并成一个 name**；宁可拆开
 - 没有值得记的概念返回 `{"nodes":[],"edges":[],"rejected":[]}`
