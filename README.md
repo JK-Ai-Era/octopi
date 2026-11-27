@@ -468,7 +468,7 @@ owned, budgeted pipeline**:
   and the redesign made it structurally impossible.
 - **Cache-aware metering** — `inputUncached / inputCached / inputCacheWrite`
   are first-class quantities; fabricating cache by subtraction is forbidden.
-- **A taxonomy of failure** — Loop · Thrash · Drift · Stall · Blowup · Burn —
+- **A taxonomy of failure** — Spin · Thrash · Drift · Stall · Blowup · Burn —
   with a recovery escalation ladder: `inject_hint → stronger hint → truncate →
   stop`. Three consecutive recoveries of the same failure kind end the run.
 - **The reliability toolbox**: planning-only retry, empty-response retry, no-op

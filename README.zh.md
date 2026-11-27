@@ -330,7 +330,7 @@ Information ──蒸馏──► Memory ──织网──► Cognition ──�
 
 - **预算 ⊥ 守卫，这是设计判断。** 资源上限不是行为异常。账本**只记录、永不杀进程**；策略是部署方 opt-in；控制优雅降级：`observe → warn → compact → wrap-up → stop`。引擎不会因为 token 名义和就腰斩一个健康的多工具任务——这个 bug 真的杀过运行（31 轮被虚幻的"2M tokens"拦腰斩断），重构后它在结构上不可能再发生。
 - **Cache-aware 计量**——`inputUncached / inputCached / inputCacheWrite` 是一等物理量；禁止用减法编造 cache。
-- **失败的分类学**——Loop · Thrash · Drift · Stall · Blowup · Burn——配恢复升级阶梯：`inject_hint → 更硬的 hint → 截断 → 停止`。同一失败形态连续三次恢复无效，运行必停。
+- **失败的分类学**——Spin · Thrash · Drift · Stall · Blowup · Burn——配恢复升级阶梯：`inject_hint → 更硬的 hint → 截断 → 停止`。同一失败形态连续三次恢复无效，运行必停。
 - **可靠性工具箱**：planning-only 重试、空响应重试、No-op 检测、工具循环检测（Rabin–Karp 指纹）、熔断器、两层 TaskSupervisor（规则检测 → LLM 审查）。
 - **激活——刺激变成受监督的运行。** 定时、事件、升级、agent 信号、webhook 被*编译*成运行（Trigger → Dispatch → Coalesce），带去重和唯一会话互斥——没有第二个执行队列。两次用户消息之间，事情会*发生*。
 - **自主子系统**，五维模型——`Sense + Think + Act + Signal + Boundary`——声明式目录（`SUBSYSTEM.md` + `config.yaml` + `handler.ts`）。出厂四个：`memory-steward`、`wisdom-steward`、`cognition-steward`、`safety-guard`。steward 们就是基质越长越大还保持干净的原因。

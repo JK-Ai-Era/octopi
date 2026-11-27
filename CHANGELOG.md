@@ -146,6 +146,21 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.14 (2026-11-28)
+
+### refactor(run-guard)!: rename RunFailureKind 'loop' to 'spin' — resolve collision with agentLoop structural meaning
+
+- **BREAKING**（对消费 `failureKind === 'loop'` 字面量的下游）：失败形态 taxonomy 中
+  「原地打转」的英文标签 `loop` → `spin`（"spin one's wheels" = 原地打转，与中文名逐字对应）。
+  动因：`loop` 在 agent 语境的结构义（`agentLoop` 执行循环、事件循环、tool-loop 检测）与
+  失败义多处撞车；`RunFailureKind` JSDoc 已注明更名缘由
+- 同步改齐：`default-run-guard` 规则产出（external_critical / repeated_identical_call）与
+  注释、`default-security-guard` 归口注释、测试 4 文件（mock 词表与断言）、README 中英
+  六词表（Spin · Thrash · Drift · Stall · Blowup · Burn）
+- 结构义 `loop` 全部保留：`src/loop`（Layer 1）、architecture 层名、`loop-watchdog`、
+  tool-loop 检测；历史记录（changelog/、arch/）不改写，旧文中的 `loop` 为更名前标签
+- 验证：全量 6231 tests passed（598 文件）；五包 build（tsc strict）绿
+
 ## v0.136.13 (2026-11-28)
 
 ### fix(knowledge/registry): R5 残余双收口——附件管线租户断言 + GET /agents 读身份过滤

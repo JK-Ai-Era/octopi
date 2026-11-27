@@ -112,7 +112,7 @@ describe('adaptLoopEvent bridge map', () => {
     const stopped = adapt({
       type: 'run_guard_stopped',
       timestamp: 1,
-      data: { reason: 'loop', userMessage: 'stopped' },
+      data: { reason: 'spin', userMessage: 'stopped' },
     });
     expect(stopped?.type).toBe('run_guard.stopped');
 

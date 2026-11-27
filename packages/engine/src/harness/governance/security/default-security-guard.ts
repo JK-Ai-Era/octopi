@@ -551,7 +551,7 @@ export class DefaultSecurityGuard {
   checkBehavior(ctx: BehaviorContext): SecurityCheckResult {
     const violations: SecurityViolation[] = [];
 
-    // 1-2. 死循环 / 连续失败 — **已上收 RunGuard**（failureKind loop/blowup）
+    // 1-2. 死循环 / 连续失败 — **已上收 RunGuard**（failureKind spin/blowup）
     // 保留字段兼容，不在此产生 security 裁决，避免与 Guard 双闸。
     // 若外部仍依赖 checkBehavior 发现 loop，应改为消费 RunGuard verdict / loop 事件。
 

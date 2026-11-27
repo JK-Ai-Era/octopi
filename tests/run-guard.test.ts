@@ -387,8 +387,8 @@ describe('DefaultRunGuard', () => {
       const recoveryHistory = Array.from({ length: 3 }, (_, i) => ({
         steps: i + 1,
         actionType: 'inject_hint' as const,
-        reason: 'loop',
-        failureKind: 'loop' as const,
+        reason: 'spin',
+        failureKind: 'spin' as const,
         timestamp: Date.now(),
       }));
       const ctx = createContext({
@@ -399,7 +399,7 @@ describe('DefaultRunGuard', () => {
       const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('stop');
-      expect(verdict.failureKind).toBe('loop');
+      expect(verdict.failureKind).toBe('spin');
       expect(verdict.userMessage).toBeDefined();
     });
 
@@ -408,8 +408,8 @@ describe('DefaultRunGuard', () => {
       const recoveryHistory = Array.from({ length: 2 }, (_, i) => ({
         steps: i + 1,
         actionType: 'inject_hint' as const,
-        reason: 'loop',
-        failureKind: 'loop' as const,
+        reason: 'spin',
+        failureKind: 'spin' as const,
         timestamp: Date.now(),
       }));
       const ctx = createContext({
@@ -434,7 +434,7 @@ describe('DefaultRunGuard', () => {
       const verdict = await runGuard.checkpoint(ctx);
 
       expect(verdict.action).toBe('recover');
-      expect(verdict.failureKind).toBe('loop');
+      expect(verdict.failureKind).toBe('spin');
     });
   });
 

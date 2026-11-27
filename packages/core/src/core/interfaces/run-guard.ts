@@ -128,7 +128,8 @@ export type RecoveryAction =
 
 /** 失败形态 taxonomy（与 tool-loop / Security 对齐的共享词汇） */
 export type RunFailureKind =
-  | 'loop'
+  /** 原地打转（无进展重复调用）；原名 'loop'，2026-11 更名以免与 agentLoop 执行循环的结构义冲突 */
+  | 'spin'
   | 'thrash'
   | 'drift'
   | 'stall'

@@ -156,7 +156,7 @@ describe('① 循环判据：同名 ≠ 循环', () => {
     const guard = new DefaultRunGuard({ enableLLMReview: false });
     const verdict = await guard.checkpoint(c.buildContext({}));
     expect(verdict.action).toBe('recover');
-    expect(verdict.failureKind).toBe('loop');
+    expect(verdict.failureKind).toBe('spin');
   });
 
   it('loopDetection 关闭时指标仍喂给 RunGuard（集成：走 runAgentWithReliability）', async () => {
@@ -269,12 +269,12 @@ describe('② 停止必须可见：桥接捕获原因', () => {
   it('userMessage 缺失时仍保留 stopReason（不得丢失可见性）', () => {
     const state = newState();
     adaptLoopEvent(
-      { type: 'run_guard_stopped', timestamp: 1, data: { reason: 'loop' } },
+      { type: 'run_guard_stopped', timestamp: 1, data: { reason: 'spin' } },
       meta,
       state,
     );
     expect(state.stopReason).toBe('behavior_stopped');
-    expect(state.stopDetail).toBe('loop');
+    expect(state.stopDetail).toBe('spin');
   });
 
   it('budget_exceeded（旧形状）→ policy_stopped + 可读原因', () => {

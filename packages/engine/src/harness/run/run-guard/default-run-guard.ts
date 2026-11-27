@@ -264,7 +264,7 @@ export class DefaultRunGuard implements RunGuard {
     const m = ctx.metrics;
     const results: RuleCheckResult[] = [];
 
-    // 外部高危信号（tool-loop critical 等）→ 立即按 loop 处理
+    // 外部高危信号（tool-loop critical 等）→ 立即按 spin 处理
     const criticalSignals = (ctx.externalSignals ?? []).filter(s => s.level === 'critical');
     if (criticalSignals.length > 0) {
       results.push({
@@ -272,7 +272,7 @@ export class DefaultRunGuard implements RunGuard {
         severity: 'high',
         rule: 'external_critical',
         description: criticalSignals.map(s => `[${s.source}] ${s.detail}`).join('; '),
-        failureKind: 'loop',
+        failureKind: 'spin',
         suggestedRecovery: [
           {
             type: 'inject_hint',
@@ -305,7 +305,7 @@ export class DefaultRunGuard implements RunGuard {
         severity: 'high',
         rule: 'repeated_identical_call',
         description: `连续 ${identicalCalls} 次相同调用（同一工具、同一参数、同一结果），无进展`,
-        failureKind: 'loop',
+        failureKind: 'spin',
         suggestedRecovery: [{ type: 'inject_hint', hint: '你的调用参数与结果都没有变化，说明这个方法无法推进。请改变做法，或向用户报告当前阻塞点。' }],
       });
     }

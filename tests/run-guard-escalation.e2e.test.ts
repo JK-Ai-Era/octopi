@@ -39,7 +39,7 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
     for (let i = 0; i < 3; i++) {
       const v = await guard.checkpoint(ctxWithHistory(collector, history));
       expect(v.action).toBe('recover');
-      expect(v.failureKind).toBe('loop');
+      expect(v.failureKind).toBe('spin');
       const actions =
         v.recoveryActions && v.recoveryActions.length > 0
           ? v.recoveryActions
@@ -58,7 +58,7 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
     // 第 4 次仍 loop → stop（同一 failureKind 连续 3 次 recover 后升级）
     const stop = await guard.checkpoint(ctxWithHistory(collector, history));
     expect(stop.action).toBe('stop');
-    expect(stop.failureKind).toBe('loop');
+    expect(stop.failureKind).toBe('spin');
     expect(stop.userMessage).toBeTruthy();
   });
 
@@ -188,8 +188,8 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
       {
         steps: 10,
         actionType: 'inject_hint',
-        reason: 'loop hint',
-        failureKind: 'loop',
+        reason: 'spin hint',
+        failureKind: 'spin',
         timestamp: Date.now(),
       },
     ];
