@@ -146,7 +146,24 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.136.12 (2026-11-28)
+## v0.136.13 (2026-11-28)
+
+### fix(knowledge/registry): R5 残余双收口——附件管线租户断言 + GET /agents 读身份过滤
+
+- **附件管线租户断言**（T3d 残余②）：`makeAttachmentSearchable` 的附件源落**会话 agent 的
+  归属租户域**（`agentOwnershipTenant` 单源；config agent = DEFAULT 存量域），不再无
+  claim 落 DEFAULT——多租户下他租户 agent 检索不到本租户附件。宿主管线豁免资格
+  （`fenceExemptGranted`）显式声明语义不变（拍板 2a）；`createKnowledgeSource` 围栏豁免
+  条件对齐 MAJOR-3a 语义（平台 admin ∨ 宿主管线显式声明）
+- **GET /agents 读身份收口**（§9.1-17）：host 面/平台 admin = 全量（运维语义不变）；
+  注册用户 = 本租户 agents（`agentOwnershipTenant` 归属单源），**不得枚举他租户
+  agent id**；无效 token → 401
+- 回归测试 5 例（附件 claim=agent 归属域 + 豁免资格 + canonical；agents 列表 host/admin/
+  租户用户/无效 token 四态）；变异检查 2 项（断过滤/断附件 claim）均恰好对应锚变红；
+  全量 6231 tests passed（598 文件）；build+lint 绿
+- 至此 R5 家族登记残余全部收口（§9.1-15/16/17/18/19 + T3d 残余①②③已闭环）
+
+
 
 ### feat(knowledge): MAJOR-3a 读取复判——围栏强度不再依赖「所有写面都接对」
 

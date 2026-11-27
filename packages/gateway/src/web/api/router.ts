@@ -428,9 +428,21 @@ export class WebApiRouter {
       }
 
       if (relativePath === '/agents' && method === 'GET') {
+        // §9.1-17 读身份收口（R5 残余）：host 面/平台 admin = 全量（运维语义不变）；
+        // 注册用户 = 本租户 agents（agentOwnershipTenant 归属单源），不得枚举他租户 agent id
+        const agentsViewer = this.resolveRequestUser(req);
+        if (agentsViewer === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        const agents = this.gateway.getRegisteredAgents();
+        if (agentsViewer === 'host' || agentsViewer.isPlatformAdmin) {
+          return this.json(res, 200, { ok: true, data: agents });
+        }
         return this.json(res, 200, {
           ok: true,
-          data: this.gateway.getRegisteredAgents(),
+          data: agents.filter(
+            (a) => this.gateway.agentOwnershipTenant(a.id) === agentsViewer.tenantId,
+          ),
         });
       }
 

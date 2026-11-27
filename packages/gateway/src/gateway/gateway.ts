@@ -4965,11 +4965,17 @@ export class Gateway {
       }
     }
     const abs = svc.resolveAbsolutePath(sessionId, attachmentId);
+    // 租户断言（R5 残余收口，arch/multi-tenancy.md T3d 残余②）：附件源落**会话 agent 的
+    // 归属租户域**（agentOwnershipTenant 单源；config agent = DEFAULT 存量域），不再无
+    // claim 落 DEFAULT——多租户下他租户 agent 检索不到本租户附件
+    const session = await this.store.load(sessionId);
+    const agentId = session?.primaryAgentId ?? session?.agentId;
+    const ownerTenant = agentId ? this.agentOwnershipTenant(agentId) : undefined;
     const source = await this.createKnowledgeSource(
       {
       kind: 'file',
       // 写入形态闸要求 canonical（location.ts assertStableCanonicalLocation）；
-      // 本管线是无 writer 内部调用（不走围栏），自行 canonical 化
+      // 本管线是宿主管线（显式豁免资格，见下），自行 canonical 化
       location: resolveCanonicalLocation(abs),
       scopeRef: { level: 'session', key: sessionId },
       displayName: item.name,
@@ -4978,7 +4984,7 @@ export class Gateway {
       },
       // 拍板 2a（2026-11-28）：附件=用户导入自己的外部文件（存于 sessions/attachments，
       // 内容非内部态机密）——宿主管线显式声明豁免资格，行级 fenceExempt 落标可查
-      undefined,
+      ownerTenant ? { tenantId: ownerTenant, isPlatformAdmin: false } : undefined,
       { fenceExemptGranted: true },
     );
     const re = await this.reindexKnowledgeSource(source.id, { full: true, watch: false });
@@ -5323,7 +5329,11 @@ export class Gateway {
     // 无 writer 的内部调用方（附件/恢复管线）不走围栏——宿主管线，非用户外部输入。
     if (writer) {
       const fence = isKnowledgeLocationAllowed(
-        { tenantId: writer.tenantId, fenceExempt: writer.isPlatformAdmin },
+        // 豁免资格（MAJOR-3a 同语义）：平台 admin 或宿主管线显式声明（opts.fenceExemptGranted）
+        {
+          tenantId: writer.tenantId,
+          fenceExempt: writer.isPlatformAdmin || opts?.fenceExemptGranted === true,
+        },
         input.kind,
         input.location,
       );

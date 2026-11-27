@@ -34,7 +34,7 @@ function makeGateway(opts?: {
     };
   const client = {
     createProject: record('createProject'),
-    createSource: record('createSource'),
+    createSource: record('createSource', { id: 'ks_new', status: 'ready' }),
     patchSource: record('patchSource'),
     deleteSource: record('deleteSource'),
     deleteProject: record('deleteProject', opts?.deleteProjectResult ?? { removed: true }),
@@ -301,4 +301,33 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
       args: ['a1', 's-1', { tenantId: 'acme' }],
     });
   });
+
+describe('附件管线租户断言（R5 残余②：附件源落会话 agent 归属租户域）', () => {
+  it('makeAttachmentSearchable：claim=agent 归属租户 + 宿主管线豁免资格；location canonical', async () => {
+    const { gateway, calls } = makeGateway({ agentTenants: { 'agent-x': 'tenant-a' } });
+    const g = gateway as unknown as Record<string, unknown>;
+    g.store = { load: async () => ({ primaryAgentId: 'agent-x' }) };
+    g.getAttachmentService = async () => ({
+      get: () => ({ status: 'new', name: 'doc.md', mime: 'text/markdown', sizeBytes: 3, kind: 'file' }),
+      resolveAbsolutePath: () => '/data/att/doc.md',
+      markSearchable: () => ({ status: 'new', searchableSourceId: 'ks_att' }),
+    });
+    gateway.reindexKnowledgeSource = async () => ({ status: 'ready' }) as never;
+
+    const out = await gateway.makeAttachmentSearchable('sess-1', 'att-1');
+    expect(out.status).toBe('ready');
+    const call = calls.find((c) => c.method === 'createSource');
+    expect(call).toBeTruthy();
+    const [input, claim] = call!.args as [
+      { location: string; kind: string },
+      { tenantId: string; fenceExemptGranted: boolean },
+    ];
+    expect(input.kind).toBe('file');
+    expect(input.location).toBe(resolveCanonicalLocation('/data/att/doc.md'));
+    // 租户断言：落会话 agent 的归属租户域（不再无 claim 落 DEFAULT）
+    expect(claim.tenantId).toBe('tenant-a');
+    // 宿主管线显式豁免资格（拍板 2a），行级 fenceExempt 落标
+    expect(claim.fenceExemptGranted).toBe(true);
+  });
+});
 });
