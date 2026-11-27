@@ -254,15 +254,28 @@ export class KnowledgeClient {
     );
   }
 
+  /**
+   * 管理面可见性操作（项目挂载/源屏蔽）。
+   *
+   * @param agentId - 目标 agent
+   * @param op - 可见性操作
+   * @param body - projectKey（挂载）或 sourceId（屏蔽）
+   * @param opts - 租户断言：token=platform 时上行归属域。**缺省 ≠ DEFAULT**，而是实例
+   *   provider（run 内=run 归属、run 外=无断言 → 写域降级 DEFAULT）——管理面调用必须
+   *   显式断言目标 agent 归属域，否则行落错域（agent 看不见 = 假成功）
+   */
   visibility(
     agentId: string,
     op: 'assignProject' | 'unassignProject' | 'hide' | 'unhide',
     body: { projectKey?: string; sourceId?: string },
+    opts?: { tenantId?: string },
   ): Promise<unknown> {
-    return this.request('POST', `/v1/principals/${encodeURIComponent(agentId)}/visibility`, {
-      op,
-      ...body,
-    });
+    return this.request(
+      'POST',
+      `/v1/principals/${encodeURIComponent(agentId)}/visibility`,
+      { op, ...body },
+      this.tenantHeaders(opts?.tenantId),
+    );
   }
 
   listProjects(): Promise<Array<Record<string, unknown>>> {

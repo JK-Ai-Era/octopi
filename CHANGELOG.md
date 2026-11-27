@@ -140,6 +140,30 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.7 (2026-11-28)
+
+### fix(knowledge): 管理面挂载写路径按 agent 归属租户断言——修复跨租户「假成功」（F1）
+
+- 根因：webui 管理面挂载（gateway `setKnowledgeVisibility` → `client.visibility()`）不带
+  租户断言，写域降级 DEFAULT（T3a 护栏语义）——visibility 行落错域：勾选显示「已挂载」
+  而 agent 的 run 永远看不见；且写身份非 agent 归属域，§6「挂载不出租户」验不出越域
+- 修复：`client.visibility()` 增租户断言（对齐 `setAgentVisibility`/`createProject` 既有
+  机制）；gateway 经 registry 解析目标 agent 归属租户（非 registry agent = 存量 default
+  域）断言写入。越域挂载由既有 `projectGate*` 写侧防绕过闸按断言身份 fail-loud
+  （单源判定，不复制可见性规则）；列表面不动（§9.1 宿主面全量列表 = 正确语义）
+- 残行补偿：撤销（unassign/unhide）对非 default 归属 agent 追加一次 DEFAULT 域撤销，
+  防断言收口前的残行让复选框「取消不掉」（只清 legacy 域残行；补偿失败不翻转主操作，告警点名）
+- 写路由租户闸（独立评审 MAJ-1 放大面收口）：`POST /agents/:id/knowledge/visibility`
+  在 X-Registry-Token 在场时按身份收口，registry agent 跨租户改挂载/屏蔽 → 403
+  `registry_cross_tenant_agent`（与 createSession 归属闸同形；无头 = 宿主面语义不变）
+- 同族缺口登记（未修，防误读为完成态，arch/multi-tenancy.md §9.1-15/16/17）：
+  ①session overlay 直写路径仍无断言；②管理面项目/源供给仍 DEFAULT 域（控制台无法为
+  租户 agent 供给项目/源，租户供给须走 registry 受管面）；③`GET /agents` 无身份过滤（枚举面）
+- 回归测试：`tests/harness/knowledge-visibility-tenant.test.ts`（越域 fail-loud / 域落点
+  按域撤销实证 / platform 公共跨租户 / 失败不留行）、`tests/gateway/knowledge-visibility-tenant.test.ts`
+  （registry 归属解析 / 残行补偿 / 全链路真 client 断言头上行实证）；变异检查（去掉断言头）精确复现假成功并变红
+- 验证：全量 6190 tests passed；`npm run lint` 通过；arch/check-sync 绿
+
 ## v0.136.6 (2026-11-28)
 
 ### fix(webui): 知识项目挂载勾选记账到被勾行 agent——修复「无论选哪个只落第一个 agent」

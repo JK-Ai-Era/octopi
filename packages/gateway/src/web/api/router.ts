@@ -1830,6 +1830,29 @@ export class WebApiRouter {
             error: 'op must be assignProject|unassignProject|hide|unhide',
           });
         }
+        // 管理面写路由租户闸（arch/multi-tenancy.md §9.1，T3c/评审 MAJ-1）：X-Registry-Token
+        // 在场则按身份收口——registry 托管 agent 不得跨租户改挂载/屏蔽（与建会话同口径 403）；
+        // 无该头 = 宿主面（apiKey 闸已验），存量语义不变。config agent（registry 无记录）
+        // 是宿主服务面，不在此闸内（与 createSession 归属闸同形）。
+        const visibilityIdentity = this.resolveRequestUser(req);
+        if (visibilityIdentity === 'invalid') {
+          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+        }
+        const visibilityUser = visibilityIdentity === 'host' ? null : visibilityIdentity;
+        if (visibilityUser) {
+          const target = this.gateway
+            .getRegistry()
+            ?.getAgent(
+              knowledgeVisibilityMatch[1] as import('@octopi-agent/engine/harness/governance/registry/types.js').AgentId,
+            );
+          if (target && target.tenantId !== visibilityUser.tenantId && !visibilityUser.isPlatformAdmin) {
+            return this.json(res, 403, {
+              ok: false,
+              error:
+                "registry_cross_tenant_agent: cannot change knowledge visibility for another tenant's agent",
+            });
+          }
+        }
         try {
           await this.gateway.setKnowledgeVisibility({
             op,

@@ -4318,8 +4318,7 @@ export class Gateway {
     const sessionId = options.sessionId ?? `${options.agentId}-web-${Date.now()}`;
     // MIN-5 归属盖章：显式 tenantId 优先（身份层），否则锚 agent 归属（registry agent
     // = 租户资产；config agent = DEFAULT 存量域）——「跑在 A、归属 default」的错位从源头堵
-    const agentTenant = this.registry?.getAgent(options.agentId as import('@octopi-agent/engine/harness/governance/registry/types.js').AgentId)?.tenantId;
-    const tenantId = (options.tenantId ?? agentTenant ?? DEFAULT_TENANT_ID) as import('@octopi-agent/core/types.js').TenantId;
+    const tenantId = (options.tenantId ?? this.agentOwnershipTenant(options.agentId)) as import('@octopi-agent/core/types.js').TenantId;
     // MAJ-6 存在性闸：已存在的会话绝不覆盖重写（jsonl 整文件重写=清空正文+过户归属）。
     // 同 agent 同归属 = 幂等创建（重试友好，返回既有）；不一致 = fail-loud（防会话劫持）
     const existing = await this.store.load(sessionId);
@@ -5353,10 +5352,48 @@ export class Gateway {
     sourceId?: string;
   }): Promise<void> {
     const client = await this.getKnowledgeClient();
-    await client.visibility(action.agentId, action.op, {
-      projectKey: action.projectKey,
-      sourceId: action.sourceId,
-    });
+    // 写域 = 目标 agent 归属租户（arch/multi-tenancy.md §6，T3c）：visibility 行是「写入物」，
+    // 必须落 agent 归属域，其 run 才可见——否则行落 DEFAULT 域、勾选显示已挂载而 agent
+    // 永远看不见（假成功）。§6「挂载不出租户」由知识面写侧防绕过闸（projectGate*）按此
+    // 身份 fail-loud（单源判定，勿在 gateway 复制可见性规则）。
+    const tenantId = this.agentOwnershipTenant(action.agentId);
+    // 幽灵 id 告警（评审 MIN-3）：既非 registry 也非运行时的 agent id = 疑似笔误/幽灵写，
+    // 行落 DEFAULT 域无人可见（假成功形状）——点名告警，不静默造垃圾
+    if (!this.registry?.getAgent(action.agentId as AgentId) && !this.agents.has(action.agentId)) {
+      console.warn(
+        `[Gateway] knowledge visibility target "${action.agentId}" is neither a registry nor a runtime agent — writing DEFAULT-domain rows`,
+      );
+    }
+    await client.visibility(
+      action.agentId,
+      action.op,
+      { projectKey: action.projectKey, sourceId: action.sourceId },
+      { tenantId },
+    );
+    // 残行补偿（T3c）：租户断言收口前，管理面写入无断言、一律落 DEFAULT 域——对非 default
+    // 归属 agent，那些是「面板显示已挂载/已屏蔽但 agent 看不见」的 legacy 残行，按域撤销清不掉。
+    // 补偿只清 DEFAULT 域 legacy 残行（agent 本域行已由上一步按域操作）；失败不翻转主操作
+    // 结果（主撤销已生效），告警点名残行可能残留——不假报「取消失败」，也不静默吞。
+    const isRevoke = action.op === 'unassignProject' || action.op === 'unhide';
+    if (isRevoke && tenantId !== DEFAULT_TENANT_ID) {
+      try {
+        await client.visibility(
+          action.agentId,
+          action.op,
+          { projectKey: action.projectKey, sourceId: action.sourceId },
+          { tenantId: DEFAULT_TENANT_ID },
+        );
+      } catch (err) {
+        console.warn(
+          `[Gateway] legacy-row compensation for ${action.op} on "${action.agentId}" failed (main revoke already applied; DEFAULT-domain residue may remain): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /** agent 归属租户（arch/multi-tenancy.md §5/§6 单源）：registry 是归属权威；config agent = DEFAULT 存量域 */
+  agentOwnershipTenant(agentId: string): string {
+    return this.registry?.getAgent(agentId as AgentId)?.tenantId ?? DEFAULT_TENANT_ID;
   }
 
   /**
