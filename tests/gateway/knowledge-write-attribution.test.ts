@@ -108,7 +108,7 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
     await gateway.createKnowledgeSource(input, ACME);
     expect(calls.pop()).toEqual({
       method: 'createSource',
-      args: [input, { tenantId: 'acme' }],
+      args: [input, { tenantId: 'acme', fenceExemptGranted: false }],
     });
 
     const projectInput = {
@@ -119,7 +119,7 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
     await gateway.createKnowledgeSource(projectInput, ACME);
     expect(calls.pop()).toEqual({
       method: 'createSource',
-      args: [projectInput, { tenantId: 'acme' }],
+      args: [projectInput, { tenantId: 'acme', fenceExemptGranted: false }],
     });
   });
 
@@ -149,7 +149,7 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
     await pub.gateway.createKnowledgeSource(pubInput, ADMIN);
     expect(pub.calls.pop()).toEqual({
       method: 'createSource',
-      args: [pubInput, { tenantId: PLATFORM_TENANT_ID }],
+      args: [pubInput, { tenantId: PLATFORM_TENANT_ID, fenceExemptGranted: true }],
     });
   });
 
@@ -162,14 +162,14 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
     await gateway.updateKnowledgeSource('s-tenant', { name: 'n' } as never, ACME);
     expect(calls.pop()).toEqual({
       method: 'patchSource',
-      args: ['s-tenant', { name: 'n' }, { tenantId: 'acme' }],
+      args: ['s-tenant', { name: 'n' }, { tenantId: 'acme', fenceExemptGranted: false }],
     });
 
     // 平台 admin：按目标行归属域（可管租户/公共资产）
     await gateway.updateKnowledgeSource('s-tenant', { name: 'n' } as never, ADMIN);
     expect(calls.pop()).toEqual({
       method: 'patchSource',
-      args: ['s-tenant', { name: 'n' }, { tenantId: 'acme' }],
+      args: ['s-tenant', { name: 'n' }, { tenantId: 'acme', fenceExemptGranted: true }],
     });
     await gateway.removeKnowledgeSource('s-pub', ADMIN);
     expect(calls.pop()).toEqual({

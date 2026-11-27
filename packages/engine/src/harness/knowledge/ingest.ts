@@ -18,7 +18,12 @@ import {
   textAdapter,
   type KnowledgeChunkDraft,
 } from './adapters.js';
-import { KNOWLEDGE_SOURCE_KINDS, isLocalPathKind, resolveCanonicalLocation } from './location.js';
+import {
+  KNOWLEDGE_SOURCE_KINDS,
+  isKnowledgeLocationAllowed,
+  isLocalPathKind,
+  resolveCanonicalLocation,
+} from './location.js';
 import { looksLikeHtml } from './html.js';
 import { hashContent, KnowledgeIndexStore } from './index-store.js';
 import {
@@ -409,6 +414,27 @@ export class KnowledgeIngest extends EventEmitter {
    * @param source - 知识源
    * @param path - 请求路径（本地绝对路径，或外源逻辑键）
    */
+  /**
+   * 源级 error 幂等落库（评审 MINOR-9 形态）：同文案去重、不覆盖用户手动停用（disabled）
+   * 状态、仅首见时发 progress。location_drift / location_forbidden 两个稳定态共用。
+   */
+  private markSourceError(
+    sourceId: string,
+    source: KnowledgeSource,
+    message: string,
+    emitStatus: string,
+  ): void {
+    const prev = source.errors ?? [];
+    const dup = prev.some((e) => e.message === message);
+    this.sources.update(sourceId, {
+      ...(source.status === 'disabled' ? {} : { status: 'error' }),
+      errors: dup ? prev : [...prev, { message, at: Date.now() }].slice(-5),
+    });
+    if (!dup) {
+      this.emitProgress({ type: 'error', sourceId, status: emitStatus, detail: message });
+    }
+  }
+
   private sourceOwnsPath(source: KnowledgeSource, path: string): boolean {
     if (source.kind === 'url' || source.kind === 'connector') {
       return Boolean(this.index.getFile(source.id, path));
@@ -421,6 +447,18 @@ export class KnowledgeIngest extends EventEmitter {
       throw new Error(
         `location_drift: registered path no longer resolves to itself (${source.location} -> ${rootNow}); refusing to read`,
       );
+    }
+    // MAJOR-3a 读取复判（行上豁免标记放行内部态：宿主管线/运维源；其余内部态拒读）
+    const allowed = isKnowledgeLocationAllowed(
+      {
+        tenantId: source.tenantId ?? 'default',
+        fenceExempt: source.fenceExempt === true,
+      },
+      source.kind,
+      source.location,
+    );
+    if (!allowed.allowed) {
+      throw new Error(`location_forbidden: ${allowed.reason}; refusing to read`);
     }
     const root = resolve(source.location);
     const target = resolve(path);
@@ -492,17 +530,32 @@ export class KnowledgeIngest extends EventEmitter {
       const resolved = resolveCanonicalLocation(source.location);
       if (resolved !== source.location) {
         // 文案两句（评审 MINOR-9）：用户可执行动作 + 运维 hint
-        const msg = `location_drift: registered path no longer resolves to itself (${source.location} -> ${resolved}). Delete the source or restore the original path; ops: run octopi doctor --fix data to canonicalize legacy rows`;
-        const prev = source.errors ?? [];
-        const dup = prev.some((e) => e.message === msg);
-        this.sources.update(sourceId, {
-          // 漂移是稳定态：同文案去重（幂等，不每轮刷屏），且不覆盖用户手动停用的状态（MINOR-9）
-          ...(source.status === 'disabled' ? {} : { status: 'error' }),
-          errors: dup ? prev : [...prev, { message: msg, at: Date.now() }].slice(-5),
-        });
-        if (!dup) {
-          this.emitProgress({ type: 'error', sourceId, status: 'location_drift', detail: msg });
-        }
+        this.markSourceError(
+          sourceId,
+          source,
+          `location_drift: registered path no longer resolves to itself (${source.location} -> ${resolved}). Delete the source or restore the original path; ops: run octopi doctor --fix data to canonicalize legacy rows`,
+          'location_drift',
+        );
+        return;
+      }
+      // MAJOR-3a 读取复判（2026-11-28 拍板 (a)，零信任兜底）：围栏强度不再等于「所有写面
+      // 都接对」——读取时刻按**行上豁免标记**复判内部态（标记由 writer-service
+      // deriveFenceExempt 派生）。兜住：存量内部态行、未来漏接的写面、附件管线（显式带标）。
+      const verdict = isKnowledgeLocationAllowed(
+        {
+          tenantId: source.tenantId ?? 'default',
+          fenceExempt: source.fenceExempt === true,
+        },
+        source.kind,
+        source.location,
+      );
+      if (!verdict.allowed) {
+        this.markSourceError(
+          sourceId,
+          source,
+          `location_forbidden: ${verdict.reason}`,
+          'location_forbidden',
+        );
         return;
       }
     }

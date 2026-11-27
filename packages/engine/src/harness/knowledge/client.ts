@@ -137,8 +137,16 @@ export class KnowledgeClient {
     );
   }
 
-  createSource(input: Record<string, unknown>, opts?: { tenantId?: string }): Promise<Record<string, unknown>> {
-    return this.request('POST', '/v1/sources', input, this.tenantHeaders(opts?.tenantId));
+  createSource(
+    input: Record<string, unknown>,
+    opts?: { tenantId?: string; fenceExemptGranted?: boolean },
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      'POST',
+      '/v1/sources',
+      input,
+      this.tenantHeaders(opts?.tenantId, opts?.fenceExemptGranted),
+    );
   }
 
   /**
@@ -162,13 +170,13 @@ export class KnowledgeClient {
   patchSource(
     sourceId: string,
     patch: Record<string, unknown>,
-    opts?: { tenantId?: string },
+    opts?: { tenantId?: string; fenceExemptGranted?: boolean },
   ): Promise<Record<string, unknown>> {
     return this.request(
       'PATCH',
       `/v1/sources/${encodeURIComponent(sourceId)}`,
       patch,
-      this.tenantHeaders(opts?.tenantId),
+      this.tenantHeaders(opts?.tenantId, opts?.fenceExemptGranted),
     );
   }
 
@@ -479,9 +487,16 @@ export class KnowledgeClient {
   }
 
   /** 租户断言头（T3，arch/multi-tenancy.md §6）：token=platform 时上行 run 归属域 */
-  private tenantHeaders(tenantId?: string): Record<string, string> | undefined {
+  private tenantHeaders(
+    tenantId?: string,
+    fenceExemptGranted?: boolean,
+  ): Record<string, string> | undefined {
     const t = tenantId ?? this.tenantProvider?.();
-    return t ? { 'x-octopi-tenant': t } : undefined;
+    const headers: Record<string, string> = {};
+    if (t) headers['x-octopi-tenant'] = t;
+    // R5/MAJOR-3a 豁免资格（受信链内声明）：写服务据此推导行级 fenceExempt 标记
+    if (fenceExemptGranted) headers['x-octopi-fence-exempt'] = '1';
+    return Object.keys(headers).length > 0 ? headers : undefined;
   }
 
   getVisibility(agentId: string): Promise<{

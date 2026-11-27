@@ -36,6 +36,8 @@ export interface AuthContext {
   sessionId?: string;
   /** 是否携带显式租户断言（x-octopi-tenant）；归属打标与越域拒区分「显式」与「回落」 */
   claimed?: boolean;
+  /** R5/MAJOR-3a 围栏豁免资格（x-octopi-fence-exempt）：登记面/宿主管线受信链声明 */
+  fenceExemptGranted?: boolean;
   /**
    * 写路径归属域（arch/multi-tenancy.md §6 / T3a 收尾护栏）：
    * 读口 tenantId 可为 platform（broker 全量视图），但写必须落具体租户域——
@@ -162,6 +164,7 @@ export class KnowledgeHttpApp {
       tenantId: ctx.writeTenantId ?? ctx.tenantId,
       gatewayId: ctx.gatewayId,
       claimed: ctx.claimed,
+      fenceExemptGranted: ctx.fenceExemptGranted === true,
     };
   }
 
@@ -907,6 +910,7 @@ export class KnowledgeHttpApp {
     const hit = matchKnowledgeToken(this.opts.tokens, req.headers.authorization);
     if (!hit) return null;
     // 租户断言（T3）：x-octopi-tenant 上行；重复头/越域断言按未认证拒（fail-loud，不回落）
+    const fenceExemptHeader = req.headers['x-octopi-fence-exempt'];
     const claim = req.headers['x-octopi-tenant'];
     if (Array.isArray(claim)) return null;
     const resolved = resolveTenantClaim(hit.tenantId, claim ? claim : undefined);
@@ -920,6 +924,7 @@ export class KnowledgeHttpApp {
       gatewayId: hit.gatewayId,
       claimed: Boolean(claim),
       writeTenantId,
+      fenceExemptGranted: fenceExemptHeader === '1',
     };
   }
 }

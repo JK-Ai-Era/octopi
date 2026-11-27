@@ -146,7 +146,30 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.136.11 (2026-11-28)
+## v0.136.12 (2026-11-28)
+
+### feat(knowledge): MAJOR-3a 读取复判——围栏强度不再依赖「所有写面都接对」
+
+- 大哥拍板 (1a)(2a)：ingest 读取时刻复判内部态（零信任兜底）+ 附件管线显式豁免标记。
+  行级 `fence_exempt` 标记（schema 列）语义 = **登记面资格 ∧ 指向内部态**：
+  - 资格（`WriteIdentity.fenceExemptGranted`，受信链 gateway→client→writer-service，
+    头 `x-octopi-fence-exempt`）只有登记面可声明：host 面/平台 admin（`writer.isPlatformAdmin`）
+    或宿主管线（`makeAttachmentSearchable` 显式，拍板 2a）；**绝不接受 wire 声明**
+  - ∧ 内部态（`deriveFenceExempt` 单源推导）收窄标记：外部行恒 0——资格者登记的行日后被
+    换向到内部态时，drift 闸 + 无标记复判双重拦截，不因「登记过」白送豁免
+  - `location` 变更即重算（admin 把内部态源改到外部 → 标记收回）
+- **ingest 读取复判**（`ingestSource` + `sourceOwnsPath` 全读取路径）：按行上标记跑
+  `isKnowledgeLocationAllowed`，denied → 源级 error `location_forbidden`（幂等去重、
+  不覆盖 disabled）。兜住：存量内部态行（升迁后首检即报，引导删除/经豁免重新登记）、
+  未来漏接的写面、绕写面直写库的行
+- 实现中自我纠错（如实记录）：初版「派生式」（fenceExempt=无豁免判定 denied）会让所有
+  内部态行（含恶意直写行）自动带标、复判全放行——标记必须含**登记面资格**一项，故走
+  受信链传 `fenceExemptGranted` 而非从 location 纯派生
+- 回归测试 2 例（无标记拒/带标放行为锚；派生矩阵：无资格恒 0、资格∧内部态=1、改指向
+  重算、无资格不得借 update 洗豁免）；变异检查 2 项（断复判段/断资格分支）均恰好对应
+  锚变红；全量 6226 tests passed（597 文件）；build+lint 绿
+
+
 
 ### feat(knowledge): 知识源 location 租户围栏——R5 收口（内部态禁入 + 形态闸 + 漂移闸下沉读取点）
 

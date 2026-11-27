@@ -4965,7 +4965,8 @@ export class Gateway {
       }
     }
     const abs = svc.resolveAbsolutePath(sessionId, attachmentId);
-    const source = await this.createKnowledgeSource({
+    const source = await this.createKnowledgeSource(
+      {
       kind: 'file',
       // 写入形态闸要求 canonical（location.ts assertStableCanonicalLocation）；
       // 本管线是无 writer 内部调用（不走围栏），自行 canonical 化
@@ -4974,7 +4975,12 @@ export class Gateway {
       displayName: item.name,
       description: `会话附件 · ${item.name}`,
       sync: { strategy: 'manual', enabled: true },
-    });
+      },
+      // 拍板 2a（2026-11-28）：附件=用户导入自己的外部文件（存于 sessions/attachments，
+      // 内容非内部态机密）——宿主管线显式声明豁免资格，行级 fenceExempt 落标可查
+      undefined,
+      { fenceExemptGranted: true },
+    );
     const re = await this.reindexKnowledgeSource(source.id, { full: true, watch: false });
     const marked = await svc.markSearchable(sessionId, attachmentId, source.id);
     return { attachment: marked, sourceId: source.id, status: re.status };
@@ -5302,6 +5308,7 @@ export class Gateway {
   async createKnowledgeSource(
     input: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSourceInput,
     writer?: { tenantId: string; isPlatformAdmin: boolean },
+    opts?: { fenceExemptGranted?: boolean },
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource> {
     const allowedKinds = new Set(KNOWLEDGE_SOURCE_KINDS);
     const allowedLevels = new Set(['global', 'project', 'session']);
@@ -5361,10 +5368,12 @@ export class Gateway {
         claim = project.tenantId;
       }
     }
-    const src = await client.createSource(
-      input as unknown as Record<string, unknown>,
-      claim ? { tenantId: claim } : undefined,
-    );
+    const src = await client.createSource(input as unknown as Record<string, unknown>, {
+      ...(claim ? { tenantId: claim } : {}),
+      // R5/MAJOR-3a 豁免资格（受信链）：host 面/平台 admin 或宿主管线（opts 内部声明）；
+      // 写服务据此推导行级 fenceExempt 标记（∧ 指向内部态）
+      fenceExemptGranted: writer?.isPlatformAdmin === true || opts?.fenceExemptGranted === true,
+    });
     return src as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource;
   }
 
@@ -5403,7 +5412,10 @@ export class Gateway {
     const updated = await client.patchSource(
       id,
       patch as unknown as Record<string, unknown>,
-      claim ? { tenantId: claim } : undefined,
+      {
+        ...(claim ? { tenantId: claim } : {}),
+        fenceExemptGranted: writer?.isPlatformAdmin === true,
+      },
     );
     return updated as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource;
   }

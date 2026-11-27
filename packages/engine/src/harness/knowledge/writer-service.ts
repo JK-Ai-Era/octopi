@@ -18,7 +18,7 @@ import {
 } from './describe.js';
 import { assembleDescribeSample, DESCRIBE_SAMPLE_MAX_CHARS } from './describe-sample.js';
 import { scanSecretShapes } from './secret-scan.js';
-import { assertStableCanonicalLocation } from './location.js';
+import { assertStableCanonicalLocation, deriveFenceExempt } from './location.js';
 import type { KnowledgeSource, KnowledgeSourceInput, KnowledgeSourceKind } from './types.js';
 import type { KnowledgeJobControlState } from './job-control-state.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
@@ -33,6 +33,11 @@ export interface WriteIdentity {
   gatewayId: string;
   /** 是否携带显式租户断言（x-octopi-tenant）；归属打标区分「显式」与「token 域回落」 */
   claimed?: boolean;
+  /**
+   * R5 围栏豁免资格（MAJOR-3a）：登记面（host 面/平台 admin）或宿主管线显式声明，
+   * 经受信链传入。落库时与「指向内部态」合取推导行级 fenceExempt 标记（deriveFenceExempt）。
+   */
+  fenceExemptGranted?: boolean;
 }
 
 export interface WriteAbortStats {
@@ -412,6 +417,14 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     const src = this.sources.register(input as unknown as KnowledgeSourceInput, {
       tenantId: ownerTenant,
       registeredBy: identity.gatewayId,
+      // MAJOR-3a 豁免标记（派生式单源）：指向内部态的行标 1（host 面/平台 admin 豁免登记或
+      // 宿主管线），ingest 读取复判按行上标记放行；服务端推导，绝不接受 wire 声明
+      fenceExempt: deriveFenceExempt(
+        identity.fenceExemptGranted === true,
+        ownerTenant,
+        input.kind as KnowledgeSourceKind,
+        input.location as string,
+      ),
     });
     this.db.raw
       .prepare(
@@ -446,11 +459,17 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     // location 变更同样过写入口形态闸（与 registerSource 同一契约，评审 BLOCKER-1/MAJOR-5）
     if (typeof patch.location === 'string') {
       const existing = this.sources.get(sourceId);
+      const kind = (existing?.kind ?? 'directory') as KnowledgeSourceKind;
+      const canonical = assertStableCanonicalLocation(kind, patch.location as string);
       patch = {
         ...patch,
-        location: assertStableCanonicalLocation(
-          (existing?.kind ?? 'directory') as KnowledgeSourceKind,
-          patch.location as string,
+        location: canonical,
+        // 改指向即重算豁免标记（MAJOR-3a）：admin 把内部态源改到外部 → 标记收回
+        fenceExempt: deriveFenceExempt(
+          identity.fenceExemptGranted === true,
+          existing?.tenantId ?? 'default',
+          kind,
+          canonical,
         ),
       };
     }

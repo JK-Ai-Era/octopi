@@ -1,3 +1,4 @@
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 /**
  * Knowledge Service embedding 接线：models.embedding → Service → embed_source
  */
@@ -26,7 +27,7 @@ function stubEmbedder(): EmbeddingProvider {
 
 describe('Knowledge Service embedding wiring', () => {
   it('注册后 parse 并写入向量（stub provider）', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kn-emb-'));
+    const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-emb-')));
     await writeFile(join(root, 'a.md'), 'embed me please unique-phrase\n', 'utf8');
     const svc = await startKnowledgeService({
       dbPath: ':memory:',

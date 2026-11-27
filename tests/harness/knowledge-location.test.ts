@@ -6,6 +6,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   normalizeSourceLocation,
   resolveCanonicalLocation,
@@ -149,5 +152,62 @@ describe('写入口接线（register / update）', () => {
     ).resolves.toBeNull();
     await write.dispose();
     store.database.close();
+  });
+
+  it('MAJOR-3a 豁免标记派生（资格 ∧ 内部态）：无资格恒 0；资格∧内部态=1；改指向重算', async () => {
+    const prevHome = process.env.OCTOPI_HOME;
+    const home = resolveCanonicalLocation(mkdtempSync(join(tmpdir(), 'kn-fencederive-')));
+    const outside = resolveCanonicalLocation(mkdtempSync(join(tmpdir(), 'kn-fenceout-')));
+    const sessions = join(home, 'sessions');
+    mkdirSync(sessions, { recursive: true });
+    mkdirSync(join(outside, 'docs'), { recursive: true });
+    process.env.OCTOPI_HOME = home;
+    try {
+      const { store, write } = await openWrite();
+      const mk = (location: string, name: string) => ({
+        kind: 'directory' as const,
+        location,
+        scopeRef: { level: 'global' as const, key: 'global' },
+        displayName: name,
+        sync: { enabled: false, strategy: 'manual' as const },
+      });
+      // 无资格落内部态 → 0（ingest 复判将拒——行为锚在 ingest 测试）
+      const a = await write.registerSource(identity, mk(resolveCanonicalLocation(sessions), 'a'));
+      expect(store.get(a.id)!.fenceExempt).toBe(false);
+      // 资格者落内部态 → 1（运维口子/宿主管线）
+      const b = await write.registerSource(
+        { ...identity, fenceExemptGranted: true },
+        mk(resolveCanonicalLocation(sessions), 'b'),
+      );
+      expect(store.get(b.id)!.fenceExempt).toBe(true);
+      // 资格者落外部 → 0（∧ 内部态收窄：外部行不带豁免，换向时照拒）
+      const c = await write.registerSource(
+        { ...identity, fenceExemptGranted: true },
+        mk(join(outside, 'docs'), 'c'),
+      );
+      expect(store.get(c.id)!.fenceExempt).toBe(false);
+      // 改指向重算：b（内部态,1）→ 外部 = 0
+      await write.updateSource({ ...identity, fenceExemptGranted: true }, b.id, {
+        location: join(outside, 'docs'),
+      });
+      expect(store.get(b.id)!.fenceExempt).toBe(false);
+      // 改指向重算：c（外部,0）→ 内部态 = 1
+      await write.updateSource({ ...identity, fenceExemptGranted: true }, c.id, {
+        location: resolveCanonicalLocation(sessions),
+      });
+      expect(store.get(c.id)!.fenceExempt).toBe(true);
+      // 无资格者改指向内部态 → 仍 0（资格缺失不得借道 update 洗豁免）
+      await write.updateSource(identity, a.id, {
+        location: resolveCanonicalLocation(sessions),
+      });
+      expect(store.get(a.id)!.fenceExempt).toBe(false);
+      await write.dispose();
+      store.database.close();
+    } finally {
+      if (prevHome === undefined) delete process.env.OCTOPI_HOME;
+      else process.env.OCTOPI_HOME = prevHome;
+      rmSync(home, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

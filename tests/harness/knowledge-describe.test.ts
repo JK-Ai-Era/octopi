@@ -1,3 +1,4 @@
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 /**
  * LLM describe 端口（B 方案，2026-11-02）— Service 侧素材/写入口/归因
  *
@@ -458,7 +459,7 @@ describe('REST 往返（startKnowledgeService ↔ KnowledgeClient，真 ingest�
   it(
     '写入口回写/抽样封锁/pending 查询过真 HTTP 契约',
     async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kn-desc-'));
+    const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-desc-')));
     const cleanDir = join(root, 'clean');
     const leakDir = join(root, 'leak');
     const { mkdir } = await import('node:fs/promises');

@@ -180,6 +180,38 @@ export function isKnowledgeLocationAllowed(
  * @returns 原样返回（自洽 canonical 形态）
  * @throws Error(code='location_must_be_canonical') 形态不自洽（非 canonical 输入或判定后换向）
  */
+/**
+ * 派生源行的围栏豁免标记（评审 MAJOR-3a，2026-11-28 拍板）：
+ * `fenceExempt = 登记面资格 ∧ 行指向运行时内部态`。
+ *
+ * - **资格**（exemptionGranted）只有登记面知道：host 面/平台 admin 豁免身份，或宿主管线
+ *   （附件检索）显式声明——经受信链（gateway→client→writer-service）传入，绝不接受 wire
+ *   声明（用户 input 无此通道）。
+ * - **∧ 内部态**（无豁免判定 denied）收窄标记：外部行恒 0——即使资格者登记的行后来被换向
+ *   到内部态，drift 闸 + 无标记复判双重拦截，不因「登记过」而白送豁免。
+ *
+ * ingest 读取复判按行上标记放行；写入口（writer-service）落库时推导。
+ *
+ * @param exemptionGranted - 登记面资格（writer.isPlatformAdmin 或宿主管线显式）
+ * @param ownerTenantId - 行的归属租户域（落库域）
+ * @param kind - 源类型（非本地类不受围栏 → 恒 false）
+ * @param canonicalLocation - 已过写入形态闸的 canonical location
+ * @returns true = 该行指向内部态且登记面有豁免资格 → 读取复判放行
+ */
+export function deriveFenceExempt(
+  exemptionGranted: boolean,
+  ownerTenantId: string,
+  kind: KnowledgeSourceKind,
+  canonicalLocation: string,
+): boolean {
+  if (!exemptionGranted || !isLocalPathKind(kind)) return false;
+  return !isKnowledgeLocationAllowed(
+    { tenantId: ownerTenantId, fenceExempt: false },
+    kind,
+    canonicalLocation,
+  ).allowed;
+}
+
 export function assertStableCanonicalLocation(
   kind: KnowledgeSourceKind,
   rawLocation: string,

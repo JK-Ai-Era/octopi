@@ -166,6 +166,7 @@ export class KnowledgeDatabase {
         generated_description_source TEXT,
         catalog_priority      INTEGER,
         hidden_from_catalog   INTEGER NOT NULL DEFAULT 0,
+        fence_exempt          INTEGER NOT NULL DEFAULT 0,
         last_polled_at        INTEGER,
         created_at            INTEGER NOT NULL,
         updated_at            INTEGER NOT NULL
@@ -294,6 +295,7 @@ export class KnowledgeDatabase {
       { name: 'network_json', ddl: `network_json TEXT` },
       { name: 'discover_json', ddl: `discover_json TEXT` },
       { name: 'auth_ref', ddl: `auth_ref TEXT` },
+      { name: 'fence_exempt', ddl: `fence_exempt INTEGER NOT NULL DEFAULT 0` },
       { name: 'last_polled_at', ddl: `last_polled_at INTEGER` },
       {
         name: 'generated_description_source',

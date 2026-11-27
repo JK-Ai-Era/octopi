@@ -1,3 +1,4 @@
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 /**
  * KnowledgeClient ↔ startKnowledgeService 端到端
  */
@@ -10,7 +11,7 @@ import { KnowledgeClient } from '@octopi-agent/engine/harness/knowledge/client.j
 
 describe('KnowledgeClient + serve', () => {
   it('health / createSource / search / delete', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kn-cli-'));
+    const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-cli-')));
     await writeFile(join(root, 'a.md'), 'client search target phrase\n', 'utf8');
 
     const svc = await startKnowledgeService({

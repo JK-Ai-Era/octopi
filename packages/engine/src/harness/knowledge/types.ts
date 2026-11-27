@@ -106,6 +106,14 @@ export interface KnowledgeSource {
   generatedDescriptionSource?: KnowledgeGeneratedDescriptionSource;
   catalogPriority?: number;
   hiddenFromCatalog?: boolean;
+  /** 归属租户域（写归属打标；读侧租户闸执法列） */
+  tenantId?: string;
+  /**
+   * R5 围栏豁免标记（评审 MAJOR-3a，2026-11-28 拍板）：行指向运行时内部态但经 host 面/
+   * 平台 admin 豁免登记（或宿主管线如附件检索）。ingest 读取复判按此标记放行。
+   * 派生式单源：`fenceExempt = !无豁免围栏判定通过`（writer-service 落库口推导，勿手传）。
+   */
+  fenceExempt?: boolean;
   /** CredentialStore 凭证名（密钥不进本库） */
   authRef?: string;
   /** 外源网络策略 */
@@ -143,6 +151,7 @@ export type KnowledgeSourcePatch = Partial<
     | 'sync'
     | 'catalogPriority'
     | 'hiddenFromCatalog'
+    | 'fenceExempt'
     | 'status'
     | 'coverage'
     | 'errors'

@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { mkdtemp, writeFile, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -433,5 +434,60 @@ describe('R5 漂移闸行为（独立评审 MAJOR-3/4/6 锚）', () => {
     await swapRoot(docs);
     // queued parse/reprocess 的共用归属闸（sourceOwnsPath）必须拒绝换向 root
     await expect(ctx.ingest.reprocessFiles(src.id, [file])).rejects.toThrow(/location_drift/);
+  });
+});
+
+describe('MAJOR-3a 读取复判（2026-11-28 拍板 (a)）', () => {
+  let ctx: Awaited<ReturnType<typeof makeWorkspace>>;
+
+  afterEach(async () => {
+    await ctx?.cleanup();
+  });
+
+  it('内部态行：无豁免标记 → location_forbidden 拒读不入索引；带标 → 放行', async () => {
+    ctx = await makeWorkspace();
+    const prevHome = process.env.OCTOPI_HOME;
+    const home = resolveCanonicalLocation(mkdtempSync(join(tmpdir(), 'octopi-kn-fence-')));
+    const sessions = join(home, 'sessions');
+    mkdirSync(sessions, { recursive: true });
+    await writeFile(join(sessions, 's.md'), '# S\n\nsecretzz content\n', 'utf8');
+    process.env.OCTOPI_HOME = home;
+    try {
+      // 无豁免标记（存量行 / 绕写面直写库）→ 复判拒
+      const bad = ctx.store.register({
+        kind: 'directory',
+        location: sessions,
+        scopeRef: { level: 'global', key: 'global' },
+        displayName: 'bad',
+      });
+      expect(bad.fenceExempt).toBe(false);
+      await ctx.ingest.ingestSource(bad.id, { full: true });
+      await ctx.ingest.idle();
+      const row = ctx.store.get(bad.id)!;
+      expect(row.status).toBe('error');
+      expect((row.errors ?? []).some((e) => /location_forbidden/.test(e.message))).toBe(true);
+      expect(ctx.ingest.indexStore.search('secretzz', { sourceIds: [bad.id] }).length).toBe(0);
+
+      // 带豁免标记（运维豁免登记 / 宿主管线）→ 放行入索引
+      const ok = ctx.store.register(
+        {
+          kind: 'directory',
+          location: sessions,
+          scopeRef: { level: 'global', key: 'global' },
+          displayName: 'ok',
+        },
+        { fenceExempt: true },
+      );
+      await ctx.ingest.ingestSource(ok.id, { full: true });
+      await ctx.ingest.idle();
+      expect(ctx.store.get(ok.id)!.status).not.toBe('error');
+      expect(
+        ctx.ingest.indexStore.search('secretzz', { sourceIds: [ok.id] }).length,
+      ).toBeGreaterThan(0);
+    } finally {
+      if (prevHome === undefined) delete process.env.OCTOPI_HOME;
+      else process.env.OCTOPI_HOME = prevHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

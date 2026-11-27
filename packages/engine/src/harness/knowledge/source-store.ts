@@ -119,6 +119,8 @@ function rowToSource(row: Record<string, unknown>): KnowledgeSource {
       key: String(row.scope_key),
     },
     sync: { ...DEFAULT_SYNC, ...sync },
+    tenantId: String(row.tenant_id ?? 'default'),
+    fenceExempt: Number(row.fence_exempt ?? 0) === 1,
     status: String(row.status) as KnowledgeSource['status'],
     coverage: row.coverage == null ? undefined : Number(row.coverage),
     errors: errors?.length ? errors : undefined,
@@ -175,7 +177,7 @@ export class KnowledgeSourceStore {
    */
   register(
     input: KnowledgeSourceInput,
-    opts?: { tenantId?: string; registeredBy?: string; visibility?: string },
+    opts?: { tenantId?: string; registeredBy?: string; visibility?: string; fenceExempt?: boolean },
   ): KnowledgeSource {
     const now = Date.now();
     const id = input.id ?? `ks_${randomUUID().slice(0, 12)}`;
@@ -189,6 +191,9 @@ export class KnowledgeSourceStore {
       location: isLocalPathKind(input.kind) ? resolveCanonicalLocation(input.location) : input.location,
       scopeRef,
       sync: { ...DEFAULT_SYNC, ...input.sync },
+      tenantId: opts?.tenantId ?? 'default',
+      // 豁免标记只认 opts（服务端推导，writer-service deriveFenceExempt）——绝不从 input 取
+      fenceExempt: opts?.fenceExempt === true,
       status: input.status ?? 'pending',
       displayName,
       description: input.description,
@@ -256,6 +261,7 @@ export class KnowledgeSourceStore {
       ...(patch.hiddenFromCatalog !== undefined
         ? { hiddenFromCatalog: patch.hiddenFromCatalog }
         : {}),
+      ...(patch.fenceExempt !== undefined ? { fenceExempt: patch.fenceExempt } : {}),
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.coverage !== undefined ? { coverage: patch.coverage } : {}),
       ...(patch.errors !== undefined ? { errors: patch.errors } : {}),
@@ -1270,9 +1276,9 @@ export class KnowledgeSourceStore {
           id, kind, location, scope_level, scope_key, sync_json, status, coverage,
           errors_json, display_name, description, generated_description,
           generated_description_source,
-          catalog_priority, hidden_from_catalog, auth_ref, network_json, discover_json,
+          catalog_priority, hidden_from_catalog, fence_exempt, auth_ref, network_json, discover_json,
           last_polled_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           kind=excluded.kind,
           location=excluded.location,
@@ -1288,6 +1294,7 @@ export class KnowledgeSourceStore {
           generated_description_source=excluded.generated_description_source,
           catalog_priority=excluded.catalog_priority,
           hidden_from_catalog=excluded.hidden_from_catalog,
+          fence_exempt=excluded.fence_exempt,
           auth_ref=excluded.auth_ref,
           network_json=excluded.network_json,
           discover_json=excluded.discover_json,
@@ -1310,6 +1317,7 @@ export class KnowledgeSourceStore {
         source.generatedDescriptionSource ?? null,
         source.catalogPriority ?? null,
         source.hiddenFromCatalog ? 1 : 0,
+        source.fenceExempt ? 1 : 0,
         source.authRef ?? null,
         source.network ? JSON.stringify(source.network) : null,
         source.discover ? JSON.stringify(source.discover) : null,

@@ -3223,7 +3223,11 @@ export class WebApiRouter {
             displayName: body.name,
             ...(typeof body.description === 'string' ? { description: body.description } : {}),
           },
-          { tenantId: ownerTenant },
+          {
+            tenantId: ownerTenant,
+            // R5/MAJOR-3a 豁免资格（受信链）：平台 admin 可豁免登记内部态源（运维口子）
+            fenceExemptGranted: user.isPlatformAdmin === true,
+          },
         );
         knowledgeId = String(created.id);
       } catch (err) {
