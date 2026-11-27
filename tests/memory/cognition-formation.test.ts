@@ -31,6 +31,17 @@ describe('cognition-gates', () => {
     ).toBe('secret_like');
   });
 
+  it('naming hygiene: identifier names rejected, plain terms and proper nouns pass', () => {
+    // 代码标识符形态 → identifier_name（可作 alias）
+    expect(evaluateConceptGate({ name: 'markerKeyOf', kind: 'method', supportCount: 2 }).reason).toBe('identifier_name');
+    expect(evaluateConceptGate({ name: 'ReliabilityConfig.planningRetry', kind: 'construct', supportCount: 2 }).reason).toBe('identifier_name');
+    expect(evaluateConceptGate({ name: 'session_id', kind: 'construct', supportCount: 2 }).reason).toBe('identifier_name');
+    // 通名与专名放行
+    expect(evaluateConceptGate({ name: 'run', kind: 'construct', supportCount: 2 }).ok).toBe(true);
+    expect(evaluateConceptGate({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 }).ok).toBe(true);
+    expect(evaluateConceptGate({ name: '会话租约', kind: 'construct', supportCount: 2 }).ok).toBe(true);
+  });
+
   it('mdl: recurrence voting — 1 vote parks for any kind (no kind bypass)', () => {
     // R7′：kind 不得成为出生旁路——1 票任何 kind 一律候选区
     expect(
@@ -242,6 +253,50 @@ describe('conceptualizer', () => {
     // definition 标记 → birthChannel='definition' → 1 票直生（不进候选区）
     expect(r.nodes[0]!.admit.action).toBe('created');
     expect((await store.getFullGraph()).nodes[0]!.status).toBe('active');
+  });
+
+  it('R7′ identifier+Chinese mixed name splits: Chinese name, identifier alias', async () => {
+    const store = new InMemoryConceptGraph();
+    const r = await conceptualizeAndAdmit(
+      {
+        nodes: [{ name: 'historyPrependRef 瞬态闸门', kind: 'construct', description: 'prepend 期间抑制钉底' }],
+      },
+      {
+        proposition: 'prepend 期间抑制钉底',
+        memoryId: 'm1',
+        memoryType: 'method',
+        evidence: 'prepend 期间抑制钉底',
+        contextSlice: 'historyPrependRef acts as a gate.',
+      },
+      store,
+    );
+    expect(r.nodes[0]!.name).toBe('瞬态闸门');
+    expect(r.nodes[0]!.aliases).toContain('historyPrependRef');
+    expect(r.rejected.some((x) => x.reason === 'identifier_name')).toBe(false);
+  });
+
+  it('R7′ sibling facets merge in-batch: contained name folds into shorter as alias', async () => {
+    const store = new InMemoryConceptGraph();
+    const r = await conceptualizeAndAdmit(
+      {
+        nodes: [
+          { name: '浏览器确认闸三档取值', kind: 'constraint', description: '三档枚举' },
+          { name: '浏览器确认闸', kind: 'construct', description: '确认闸族' },
+        ],
+      },
+      {
+        proposition: '确认闸三档取值',
+        memoryId: 'm1',
+        memoryType: 'norm',
+        evidence: '确认闸三档取值',
+        contextSlice: 'confirm gates have three levels.',
+      },
+      store,
+    );
+    // 双向包含对（同批）→ 短名主名、长名入别名，只出一个节点
+    expect(r.nodes).toHaveLength(1);
+    expect(r.nodes[0]!.name).toBe('浏览器确认闸');
+    expect(r.nodes[0]!.aliases).toContain('浏览器确认闸三档取值');
   });
 
   it('1-vote nodes park in birth candidates; unlicensed causes demote to related', async () => {
@@ -735,6 +790,28 @@ describe.each([
     });
     expect(bad.action).toBe('rejected');
     expect(bad.reason).toBe('definition_requires_description');
+  });
+
+  it('R7′ aliases persist at birth and union on merge', async () => {
+    await store.admitConcept({
+      name: '确认闸',
+      kind: 'construct',
+      memoryIds: ['m1', 'm2'],
+      aliases: ['confirmGate', '确认闸三档取值'],
+    });
+    let node = (await store.getFullGraph()).nodes[0]!;
+    expect(node.aliases).toContain('confirmGate');
+    // 合并时别名并集
+    await store.admitConcept({
+      name: '确认闸',
+      kind: 'construct',
+      memoryIds: ['m3'],
+      aliases: ['文档级确认闸'],
+    });
+    node = (await store.getFullGraph()).nodes[0]!;
+    expect(node.aliases).toContain('confirmGate');
+    expect(node.aliases).toContain('文档级确认闸');
+    expect(node.aliases).toContain('确认闸三档取值');
   });
 
   it('multi-evidence across admitEdge calls licenses causes', async () => {

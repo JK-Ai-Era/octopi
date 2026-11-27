@@ -44,6 +44,34 @@ export function normalizeForCue(text: string): string {
 }
 
 /**
+ * 代码标识符形态判定（命名卫生门）：camelCase / snake_case / kebab / 带标识符符号的纯 ASCII 名
+ * 禁做概念 name（可作 alias）。中文、含空格英文短语、首字母大写专名（PostgreSQL）放行。
+ */
+export function isIdentifierName(raw: string): boolean {
+  const t = raw.trim();
+  if (CJK.test(t) || /\s/.test(t)) return false;
+  if (/[._/()$-]/.test(t)) return true;
+  if (/_/.test(t)) return true;
+  // 首小写驼峰（markerKeyOf、ensureAgentDirs）；纯小写单词（run）放行
+  return /^[a-z][a-zA-Z0-9]*$/.test(t) && /[A-Z]/.test(t);
+}
+
+/**
+ * 「标识符 + 中文注释」混合名清洗：name 取中文主体（≥2 字），开头的标识符提为 alias。
+ * 纯中文/纯短语名原样返回。
+ */
+export function splitIdentifierMixed(raw: string): { name: string; alias?: string } {
+  const t = raw.trim();
+  if (!CJK.test(t)) return { name: t };
+  const m = t.match(/^([A-Za-z_$][\w$.()$/]*)\s+(\S[\s\S]*)$/);
+  if (m) {
+    const rest = m[2]!.trim();
+    if (rest.length >= 2 && CJK.test(rest)) return { name: rest, alias: m[1] };
+  }
+  return { name: t };
+}
+
+/**
  * 概念结构门控。
  *
  * @param input - 候选概念
@@ -69,6 +97,10 @@ export function evaluateConceptGate(
   if (name.length < 2 && !CJK.test(name)) {
     return { ok: false, reason: 'pseudo_concept', message: 'name too short' };
   }
+  // 命名卫生（在 secret/pseudo 安全检查之后）：代码标识符形态禁做 name（可作 alias）
+  if (isIdentifierName(name)) {
+    return { ok: false, reason: 'identifier_name', message: name };
+  }
 
   // 复现计票门槛（MDL）：≥2 票（不同命题）才直接出生；1 票走出生候选区，
   // 不限 kind（entity/problem 同权——2026-11-26 R7′：kind 不得成为出生旁路）
@@ -80,8 +112,8 @@ export function evaluateConceptGate(
       message: `support=${support} kind=${input.kind}`,
     };
   }
-  // 定义直生（skipMdl）也必须有证据归属：无票概念会被 decay 无支撑 GC 清掉，出生即死
-  if (options?.skipMdl && support < 1) {
+  // 定义直生（birthChannel='definition'）也必须有证据归属：无票概念会被 decay 无支撑 GC 清掉，出生即死
+  if (options?.skipMdl && input.birthChannel === 'definition' && support < 1) {
     return {
       ok: false,
       reason: 'mdl_insufficient',
@@ -89,7 +121,7 @@ export function evaluateConceptGate(
     };
   }
   // 定义直生必须带口径正文：空 description 的 definition 只是主题标签，不得拿免票权（F1）
-  if (options?.skipMdl && !input.description?.trim()) {
+  if (options?.skipMdl && input.birthChannel === 'definition' && !input.description?.trim()) {
     return {
       ok: false,
       reason: 'definition_requires_description',

@@ -40,6 +40,9 @@
 ## 规则
 
 - 概念是**可复用判别单元**（entity/construct/method/problem/constraint），不是每个名词
+- **教训从句不是概念**：命题尾部的「教训/注意/别忘了」类从句、单次事件的复盘注记，不产出概念
+- 概念名用中文通名/短语（`会话租约`、`退避重试`）；**代码标识符不做名**（`markerKeyOf`、`xx.ts`），
+  如需指称代码实体，写进 description 或 domain
 - **定义句标记 `definition: true`**：命题在定义/纠正/钉口径时（「X 指…」「这里的 X 不是…而是…」「口径定为…」），该节点是内部口径词典条目，`description` 必须是**完整的口径原文**（后续新口径会覆盖旧口径）；一般主题概念不要标（它们走复现计票）
 - `relationType`：causes / part_of / opposes / similar_to / evolves_to / related
 - `evidenceClass`：causal / mereonymy / negation / analogy / evolution / cooccur

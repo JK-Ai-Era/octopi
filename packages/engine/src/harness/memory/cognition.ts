@@ -68,12 +68,17 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
 
   async admitConcept(input: AdmitConceptInput): Promise<AdmitConceptResult> {
     const isDefinition = input.birthChannel === 'definition';
+    // 同名已出生概念（同 kind）收新票 = 合并支撑，不是延迟出生——候选区只为未出生者
+    const nameKey = normName(input.name);
+    const sameNameBorn = [...this.nodes.values()].some(
+      (n) => normName(n.name) === nameKey && n.kind === input.kind,
+    );
     const gate = evaluateConceptGate(input, {
       capacityAdmitStop: this.capacityStop,
-      skipMdl: isDefinition,
+      skipMdl: isDefinition || sameNameBorn,
     });
     if (!gate.ok) {
-      // 票不够（非定义直生）→ 出生候选区投票；满 2 票转正（R7′ 复现计票）
+      // 票不够（非定义直生、且无同名已出生概念）→ 出生候选区投票；满 2 票转正（R7′ 复现计票）
       if (gate.reason === 'mdl_insufficient') {
         return this.parkOrPromoteBirthCandidate(input);
       }
@@ -100,6 +105,10 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
         sameName.memoryIds.length > 0 ? sameName.memoryIds.length : sameName.frequency + 1;
       for (const d of input.domain ?? []) {
         if (!sameName.domain.includes(d)) sameName.domain.push(d);
+      }
+      for (const a of input.aliases ?? []) {
+        if (!sameName.aliases) sameName.aliases = [];
+        if (!sameName.aliases.includes(a)) sameName.aliases.push(a);
       }
       if (input.birthChannel === 'definition' && input.description) {
         // 活口径（R7′）：定义新口径胜，旧口径入版本链（最近旧版在前，cap 5）。
@@ -140,6 +149,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       // 出生即 active（R7′/R5′）；frequency = 票数
       frequency: Math.max(1, memIds.length),
       memoryIds: memIds,
+      aliases: input.aliases?.length ? [...new Set(input.aliases)] : undefined,
       domain: [...new Set(input.domain ?? [])],
       status: 'active',
       embedding: null,
@@ -180,6 +190,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
         ...input,
         description: input.description ?? existing?.description ?? undefined,
         domain: [...domains],
+        aliases: [...new Set([...(existing?.aliases ?? []), ...(input.aliases ?? [])])],
         memoryIds: [...memIds],
         supportCount: memIds.size,
       });
@@ -220,7 +231,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       kind: input.kind,
       description: input.description,
       domain: [...domains],
-      aliases: [],
+      aliases: [...new Set(input.aliases ?? [])],
       memoryIds: [...incoming],
       createdAt: now,
       updatedAt: now,

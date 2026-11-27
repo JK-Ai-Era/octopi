@@ -20,8 +20,10 @@ import { CONCEPT_KINDS, CONCEPT_RELATION_TYPES } from './types.js';
 import {
   evaluateConceptGate,
   licenseEdge,
+  splitIdentifierMixed,
   type EdgeLicenseOutcome,
 } from './cognition-gates.js';
+import { normName } from './cognition-seeds.js';
 
 /** 概念化输入包 — 语境切片是消歧必需品 */
 export interface ConceptualizerInput {
@@ -54,6 +56,8 @@ export interface ConceptualizerNodeOut {
   supportCount: number;
   /** 出生通道（观测：定义直生与复现计票可区分） */
   birthChannel?: 'definition' | 'theme';
+  /** 兄弟面/标识符别名（命名清洗与归并的产物） */
+  aliases?: string[];
   admit: AdmitConceptResult;
 }
 
@@ -196,15 +200,39 @@ export async function conceptualizeAndAdmit(
   const rawNodes = Array.isArray(parsed.nodes) ? parsed.nodes : [];
   const nodes: ConceptualizerNodeOut[] = [];
 
-  for (const item of rawNodes.slice(0, MAX_NODES * 2)) {
+  // 命名清洗 + 同批兄弟面归并（R7′ commit 3）：
+  // ①「标识符+中文」混合名 → 中文主体为 name、标识符提为 alias（命名卫生）；
+  // ②同一命题裂出的双向包含对（含同名）→ 短名为主名、长名入别名（兄弟面归并）。
+  const cleaned = rawNodes.slice(0, MAX_NODES * 2).flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const o = item as Record<string, unknown>;
+    const split = splitIdentifierMixed(asString(o.name));
+    return [{ o, name: split.name, aliases: split.alias ? [split.alias] : [] }];
+  });
+  const merged: typeof cleaned = [];
+  outer: for (const c of cleaned) {
+    for (const m of merged) {
+      const a = normName(m.name);
+      const b = normName(c.name);
+      if (a.length < 2 || b.length < 2) continue;
+      if (!(a === b || a.includes(b) || b.includes(a))) continue;
+      const shorter = a.length <= b.length ? m : c;
+      const longer = shorter === m ? c : m;
+      shorter.aliases.push(longer.name, ...longer.aliases);
+      if (shorter === c) merged[merged.indexOf(m)] = c;
+      continue outer;
+    }
+    merged.push(c);
+  }
+
+  for (const item of merged) {
     if (nodes.length >= MAX_NODES) {
       // 裂变预算显式拒绝（fail loud）：被丢提案不再静默消失
-      rejected.push({ name: asString((item as Record<string, unknown>)?.name), reason: 'budget_node' });
+      rejected.push({ name: item.name, reason: 'budget_node' });
       continue;
     }
-    if (!item || typeof item !== 'object') continue;
-    const o = item as Record<string, unknown>;
-    const name = asString(o.name);
+    const o = item.o;
+    const name = item.name;
     const rawKind = asString(o.kind);
     const kind = parseKind(o.kind);
     if (rawKind && !kind) {
@@ -260,6 +288,7 @@ export async function conceptualizeAndAdmit(
         kind: resolvedKind,
         description,
         domain,
+        aliases: item.aliases,
         memoryIds: [input.memoryId],
         supportCount: supportBase,
         birthChannel,
@@ -279,6 +308,7 @@ export async function conceptualizeAndAdmit(
       domain,
       supportCount: supportBase,
       birthChannel: birthChannel ?? 'theme',
+      aliases: item.aliases,
       admit,
     });
   }

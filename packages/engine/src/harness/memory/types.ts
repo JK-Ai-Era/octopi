@@ -512,6 +512,8 @@ export interface ConceptNode {
   description?: string;
   /** 活口径版本链：定义类命题覆盖 description 时被替换的旧口径（最近旧版在前，cap 5） */
   descriptionHistory?: ConceptDescriptionRevision[];
+  /** 兄弟面别名（同主题异名归并、标识符原名） */
+  aliases?: string[];
   frequency: number;
   memoryIds: string[];
   /** 论域标签（多值；不参与义项判定——义项只看 kind，合并时取并集） */
@@ -603,6 +605,7 @@ export type ConceptGateReason =
   | 'cue_mismatch'
   | 'endpoint_not_admitted'
   | 'definition_requires_description'
+  | 'identifier_name'
   | 'multi_evidence_required'
   | 'cooccur_no_escalation'
   | 'demoted_related'
@@ -617,6 +620,8 @@ export interface AdmitConceptInput {
   description?: string;
   /** 论域标签（多值；不参与义项判定，合并时取并集） */
   domain?: string[];
+  /** 兄弟面别名（同主题异名归并后保留；标识符原名等） */
+  aliases?: string[];
   memoryIds?: string[];
   /** 提出该概念的命题条数（MDL）；缺省用 memoryIds.length */
   supportCount?: number;

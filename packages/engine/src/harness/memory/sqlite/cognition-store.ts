@@ -108,6 +108,7 @@ interface ConceptRow {
   kind: string;
   description: string | null;
   description_history: string;
+  aliases: string;
   frequency: number;
   memory_ids: string;
   domain: string;
@@ -174,6 +175,10 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         const parsed = safeJsonRevisions(row.description_history);
         return parsed.length > 0 ? parsed : undefined;
       })(),
+      aliases: (() => {
+        const a = safeJsonArray(row.aliases);
+        return a.length > 0 ? a : undefined;
+      })(),
       frequency: row.frequency,
       memoryIds: safeJsonArray(row.memory_ids),
       domain: safeJsonArray(row.domain),
@@ -220,19 +225,23 @@ export class SqliteConceptGraph implements ConceptGraphStore {
 
   async admitConcept(input: AdmitConceptInput): Promise<AdmitConceptResult> {
     const isDefinition = input.birthChannel === 'definition';
+    // 同名已出生概念（同 kind）收新票 = 合并支撑，不是延迟出生——候选区只为未出生者
+    const nameKey = normName(input.name);
+    const sameNameBorn = (
+      this.db.raw.prepare('SELECT name, kind FROM concepts').all() as Array<{ name: string; kind: string }>
+    ).some((r) => normName(r.name) === nameKey && r.kind === input.kind);
     const gate = evaluateConceptGate(input, {
       capacityAdmitStop: this.capacityStop,
-      skipMdl: isDefinition,
+      skipMdl: isDefinition || sameNameBorn,
     });
     if (!gate.ok) {
-      // 票不够（非定义直生）→ 出生候选区投票；满 2 票转正（R7′ 复现计票）
+      // 票不够（非定义直生、且无同名已出生概念）→ 出生候选区投票；满 2 票转正（R7′ 复现计票）
       if (gate.reason === 'mdl_insufficient') {
         return this.parkOrPromoteBirthCandidate(input);
       }
       return { action: 'rejected', reason: gate.reason, message: gate.message };
     }
 
-    const nameKey = normName(input.name);
     // 注意：SQLite LOWER() 仅折 ASCII，与 JS toLowerCase 的 Unicode 折叠有别（CJK 无碍）——
     // 归一根治（name_key 列）见 arch/open-problems OP-9R 遗留
     const existing = this.db.raw
@@ -251,6 +260,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
 
       const memIds = new Set([...node.memoryIds, ...(input.memoryIds ?? [])]);
       const domains = new Set([...node.domain, ...(input.domain ?? [])]);
+      const aliases = new Set([...(node.aliases ?? []), ...(input.aliases ?? [])]);
       // frequency = 票数派生（与 insertConcept 同口径）；无票调用回退计次，不破坏 supportCount 表意的调用方
       const mergedFreq = memIds.size > 0 ? memIds.size : node.frequency + 1;
       if (input.birthChannel === 'definition' && input.description) {
@@ -262,15 +272,15 @@ export class SqliteConceptGraph implements ConceptGraphStore {
           : (node.descriptionHistory ?? []);
         this.db.raw
           .prepare(
-            'UPDATE concepts SET frequency = ?, memory_ids = ?, domain = ?, description = ?, description_history = ?, updated_at = ? WHERE id = ?',
+            'UPDATE concepts SET frequency = ?, memory_ids = ?, domain = ?, aliases = ?, description = ?, description_history = ?, updated_at = ? WHERE id = ?',
           )
-          .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description, JSON.stringify(history), Date.now(), node.id);
+          .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), JSON.stringify([...aliases]), input.description, JSON.stringify(history), Date.now(), node.id);
       } else {
         this.db.raw
           .prepare(
-            'UPDATE concepts SET frequency = ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
+            'UPDATE concepts SET frequency = ?, memory_ids = ?, domain = ?, aliases = ?, description = COALESCE(description, ?), updated_at = ? WHERE id = ?',
           )
-          .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, Date.now(), node.id);
+          .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), JSON.stringify([...aliases]), input.description ?? null, Date.now(), node.id);
       }
       return { action: 'merged', id: node.id, reason: 'ok' };
     }
@@ -364,6 +374,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         ...input,
         description: input.description ?? row?.description ?? undefined,
         domain: [...domains],
+        aliases: [...new Set([...(row ? safeJsonArray(row.aliases) : []), ...(input.aliases ?? [])])],
         memoryIds: [...memIds],
         supportCount: memIds.size,
       });
@@ -401,7 +412,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     this.db.raw
       .prepare(
         `INSERT INTO concept_birth_candidates (id, name_key, name, kind, description, domain, aliases, memory_ids, created_at, updated_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -410,6 +421,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         input.kind,
         input.description ?? null,
         JSON.stringify([...domains]),
+        JSON.stringify([...new Set(input.aliases ?? [])]),
         JSON.stringify([...incoming]),
         now,
         now,
@@ -460,14 +472,15 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     const memIds = [...new Set(input.memoryIds ?? [])];
     this.db.raw
       .prepare(
-        `INSERT INTO concepts (id, name, kind, description, frequency, memory_ids, domain, status, embedding, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+        `INSERT INTO concepts (id, name, kind, description, description_history, aliases, frequency, memory_ids, domain, status, embedding, created_at, updated_at)
+         VALUES (?, ?, ?, ?, '[]', ?, ?, ?, ?, 'active', ?, ?, ?)`,
       )
       .run(
         id,
         input.name.trim(),
         input.kind,
         input.description ?? null,
+        JSON.stringify([...new Set(input.aliases ?? [])]),
         Math.max(1, memIds.length),
         JSON.stringify(memIds),
         JSON.stringify([...new Set(input.domain ?? [])]),

@@ -140,6 +140,24 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.135.2 (2026-11-27)
+
+### feat(memory): 命名卫生门 + 兄弟面别名归并 + 支撑票路由修正（R7′ commit 3）
+
+- **命名卫生门**：代码标识符形态（camelCase/snake/kebab/带标识符符号的纯 ASCII 名）禁做
+  concept name（reason `identifier_name`，可作 alias）；中文、含空格短语、首字母大写专名
+  （PostgreSQL）放行；「标识符+中文」混合名清洗为中文主体（`historyPrependRef 瞬态闸门` →
+  `瞬态闸门` + alias `historyPrependRef`）。判定与清洗为单源共享函数（cognition-gates）
+- **兄弟面别名归并**：同一命题裂出的双向包含对（含同名）归并为一个候选——短名主名、长名入
+  `aliases`（`浏览器确认闸` ⊃ `浏览器确认闸三档取值`）；`ConceptNode.aliases` 全链贯通
+  （出生持久、合并并集、候选区转正并入，两后端同构，空归一 undefined）
+- **支撑票路由修正**：同名已出生概念（同 kind）收新票走合并路径（票数不设门槛），不再被
+  候选区截胡——候选区只为未出生者服务（延迟出生语义收紧密）
+- 门控检查顺序修正：secret/pseudo 安全检查优先于命名卫生（identifier 门不得抢报安全问题）；
+  定义通道的「必带正文/必带票」检查限定 `birthChannel='definition'`（合并路径不再误伤）
+- 提示词契约补「教训从句不是概念」+ 概念名用中文通名规则（代码实体写进 description/domain）
+- 测试：6153 passed / 9 skipped（590 文件）；build 绿
+
 ## v0.135.1 (2026-11-27)
 
 ### feat(memory): 定义句识别 + 活口径版本链（R7′ commit 2）

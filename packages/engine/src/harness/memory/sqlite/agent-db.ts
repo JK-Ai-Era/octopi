@@ -182,8 +182,13 @@ export class AgentDatabase {
       try {
         const cols = this.db.prepare('PRAGMA table_info(concepts)').all() as Array<{ name: string }>;
         // 新库（表尚不存在）：CREATE TABLE IF NOT EXISTS 将带新列建表，无需 ALTER
-        if (cols.length > 0 && !cols.some((c) => c.name === 'description_history')) {
-          this.db.exec(`ALTER TABLE concepts ADD COLUMN description_history TEXT NOT NULL DEFAULT '[]'`);
+        if (cols.length > 0) {
+          const missing = ['description_history', 'aliases'].filter(
+            (c) => !cols.some((col) => col.name === c),
+          );
+          for (const c of missing) {
+            this.db.exec(`ALTER TABLE concepts ADD COLUMN ${c} TEXT NOT NULL DEFAULT '[]'`);
+          }
         }
       } catch (e) {
         // PRAGMA/ALTER 失败必须显式冒泡：吞掉会让缺列库在首次定义覆盖时才炸
@@ -275,6 +280,7 @@ export class AgentDatabase {
         kind        TEXT NOT NULL DEFAULT 'construct',
         description TEXT,
         description_history TEXT NOT NULL DEFAULT '[]',
+        aliases     TEXT NOT NULL DEFAULT '[]',
         frequency   INTEGER NOT NULL DEFAULT 1,
         memory_ids  TEXT NOT NULL DEFAULT '[]',
         domain      TEXT NOT NULL DEFAULT '[]',
