@@ -140,6 +140,23 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.3 (2026-11-27)
+
+### feat(context): R6 行级装箱截断——整行原子、成组取舍、in-band 省略标注
+
+CognitionLayer 截断从字符切片改为行级装箱（R6 拍板规格收尾）：
+
+- **整行原子（永不切半）**：装箱单位=完整行；取代 `truncateToBudget` 字符切片（会切半行）
+- **连通子图成组按激活分取舍**：弱边也绑成员资格；关系行与卡片同组同进退（不拆散
+  邻域）；组序按组内最优节点的扩散激活序
+- **尾部 in-band 标注**：「（已省略 N 个概念 / M 条关系）」+ manifest `dropped` 双记，
+  丢弃不静默
+- **单行超软顶保完整**：首行例外准入（软顶让位于行完整性）；装不下任何完整行即层
+  empty（`null`，不产出残片）；零预算 → empty
+- 契约同步：docs/context-layer-contracts（中英）§8.2、arch §8.2 格式说明
+- 测试：6180 passed / 9 skipped（整行原子/组取舍/in-band 标注/零预算/超软顶行为锁定）；
+  build 绿
+
 ## v0.136.2 (2026-11-27)
 
 ### fix(context): R5′ 独立评审修复（3 major + 5 minor）——渲染信任边界与召回精度

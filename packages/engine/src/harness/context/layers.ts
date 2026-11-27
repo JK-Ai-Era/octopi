@@ -494,40 +494,115 @@ export class CognitionLayer extends BaseLayer {
 
 const nameOf = new Map(graph.nodes.map((n) => [n.id, n.name]));
 
-    // 关系行（强边，约束边一等公民带释义）；弱边（related/shadow）只作邻域成员资格，不伪造成因果格式
-    const strong: string[] = [];
+    // 行构造（R6 格式）：概念卡 + 关系行；name/释义单行化（换行不得伪造注入行）
+    const cardLine = new Map<string, string>();
+    for (const n of graph.nodes) {
+      const desc = n.description ? `：${singleLineGloss(n.description)}` : '';
+      cardLine.set(n.id, `- ${singleLine(n.name)}（${n.kind}）${desc}`);
+    }
+    const relationLines: Array<{ sourceId: string; targetId: string; line: string }> = [];
     for (const edge of graph.edges) {
       const source = nameOf.get(edge.sourceId);
       const target = nameOf.get(edge.targetId);
       if (!source || !target) continue;
+      // 弱边（related/shadow）只作邻域成员资格，不伪造成因果格式
       if (edge.relationType === 'related' || edge.status === 'shadow') continue;
       const desc = edge.description ? ` (${singleLineGloss(edge.description)})` : '';
-      strong.push(`- ${singleLine(source)} —[${edge.relationType}]→ ${singleLine(target)}${desc}`);
+      relationLines.push({
+        sourceId: edge.sourceId,
+        targetId: edge.targetId,
+        line: `- ${singleLine(source)} —[${edge.relationType}]→ ${singleLine(target)}${desc}`,
+      });
     }
 
-    // 概念卡（R6 格式）：名字（kind）：description——术语触发的定义卡与影响面邻域一视同仁，
-    // 语义本体（kind/description）不丢弃；废除裸名折叠行（「相关：…」零信息量病根）。
-    // 卡片预算（m3）：邻域无上限最坏 40 卡挤爆层预算——cap 后丢弃数记入 dropped
-    const CARD_CAP = 16;
-    const cards: string[] = [];
-    for (const n of graph.nodes.slice(0, CARD_CAP)) {
-      const desc = n.description ? `：${singleLineGloss(n.description)}` : '';
-      cards.push(`- ${singleLine(n.name)}（${n.kind}）${desc}`);
+    // ── R6 行级装箱截断 ──
+    // 原子单位 = 整行（永不切半）；连通子图成组（弱边也绑成员资格）按激活分取舍；
+    // 尾部 in-band 标注省略数；单行超软顶保完整（首行例外准入）；
+    // 装不下任何完整行即层 empty。
+    const parent = new Map(graph.nodes.map((n) => [n.id, n.id]));
+    const find = (x: string): string => {
+      let r = x;
+      while (parent.get(r) !== r) r = parent.get(r)!;
+      return r;
+    };
+    for (const e of graph.edges) {
+      if (!parent.has(e.sourceId) || !parent.has(e.targetId)) continue;
+      const a = find(e.sourceId);
+      const b = find(e.targetId);
+      if (a !== b) parent.set(a, b);
     }
-    const droppedCards = Math.max(0, graph.nodes.length - CARD_CAP);
-    const retainedIds = new Set(graph.nodes.slice(0, CARD_CAP).map((n) => n.id));
 
-    const lines = [...cards, ...(strong.length ? ['', ...strong] : [])];
+    interface PackedGroup {
+      lines: string[];
+      concepts: number;
+      relations: number;
+      rank: number;
+      nodeIds: string[];
+    }
+    const groups = new Map<string, PackedGroup>();
+    const groupOf = (id: string): PackedGroup => {
+      const root = find(id);
+      let g = groups.get(root);
+      if (!g) {
+        g = { lines: [], concepts: 0, relations: 0, rank: Number.POSITIVE_INFINITY, nodeIds: [] };
+        groups.set(root, g);
+      }
+      return g;
+    };
+    graph.nodes.forEach((n, i) => {
+      const g = groupOf(n.id);
+      g.lines.push(cardLine.get(n.id)!);
+      g.concepts += 1;
+      g.nodeIds.push(n.id);
+      g.rank = Math.min(g.rank, i);
+    });
+    for (const r of relationLines) {
+      const g = groupOf(r.sourceId);
+      g.lines.push(r.line);
+      g.relations += 1;
+    }
+
+    const sorted = [...groups.values()].sort((a, b) => a.rank - b.rank);
+    const picked: PackedGroup[] = [];
+    let omittedConcepts = 0;
+    let omittedRelations = 0;
+    if (ctx.tokenBudget <= 0) return null;
+    const maxChars = Math.max(80, ctx.tokenBudget * 2);
+    let used = '# 相关概念\n\n'.length;
+    let admitted = 0;
+    for (const g of sorted) {
+      const block = g.lines.join('\n');
+      const blockLen = block.length + (admitted > 0 ? 1 : 0);
+      const fits = used + blockLen <= maxChars;
+      // 首行保完整（单行超软顶不切半）：尚未准入任何行且本组是单行 → 无条件准入
+      const firstLineGrace = admitted === 0 && g.lines.length === 1;
+      if (fits || firstLineGrace) {
+        picked.push(g);
+        used += blockLen;
+        admitted += g.lines.length;
+      } else {
+        omittedConcepts += g.concepts;
+        omittedRelations += g.relations;
+      }
+    }
+    if (admitted === 0) return null;
+
+    const cards = picked.flatMap((g) => g.lines.slice(0, g.concepts));
+    const relations = picked.flatMap((g) => g.lines.slice(g.concepts));
+    const lines = [...cards];
+    if (relations.length) lines.push('', ...relations);
+    if (omittedConcepts + omittedRelations > 0) {
+      lines.push('', `（已省略 ${omittedConcepts} 个概念 / ${omittedRelations} 条关系）`);
+    }
 
     const text = `# 相关概念\n\n${lines.join('\n')}`;
-    const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
-    return this.content(truncated, {
-      // m4：sources 只报实际保留的概念（与上屏内容一致，不报全量）；
-      // m3：卡片截断记账（与预算截断注记并列，不静默丢）
-      dropped: [dropped, droppedCards > 0 ? `cards_dropped=${droppedCards}` : undefined]
-        .filter(Boolean)
-        .join('; ') || undefined,
-      sources: graph.nodes.filter((n) => retainedIds.has(n.id)).map((n) => n.id),
+    return this.content(text, {
+      // 丢弃不静默：in-band 标注 + manifest dropped 双记
+      dropped:
+        omittedConcepts + omittedRelations > 0
+          ? `已省略 ${omittedConcepts} 个概念 / ${omittedRelations} 条关系`
+          : undefined,
+      sources: picked.flatMap((g) => g.nodeIds),
     });
   }
 }

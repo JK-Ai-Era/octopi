@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { createDefaultSystemPromptAssembler } from '@octopi-agent/engine/harness/context/system-prompt-assembler.js';
 import { DefaultContextAssembler } from '@octopi-agent/engine/harness/context/assembler.js';
-import { WisdomLayer } from '@octopi-agent/engine/harness/context/layers.js';
+import { WisdomLayer, CognitionLayer } from '@octopi-agent/engine/harness/context/layers.js';
 import type { LayerAssembleContext } from '@octopi-agent/engine/harness/context/layer-types.js';
 import type { WisdomInjectPick } from '@octopi-agent/engine/harness/memory/types.js';
 import { InMemoryConceptGraph } from '@octopi-agent/engine/harness/memory/cognition.js';
@@ -393,5 +393,97 @@ describe('WisdomLayer applied 记账', () => {
     expect(out!.sources).toContain('w1');
     expect(out!.sources).not.toContain('w2');
     expect(out!.dropped).toBeTruthy();
+  });
+});
+
+describe('CognitionLayer R6 行级装箱截断', () => {
+  /** 两组连通子图：组1 = Alpha—Beta（含强边），组2 = Gamma—Delta（含强边） */
+  async function buildTwoGroupStore() {
+    const graph = new InMemoryConceptGraph();
+    const alpha = await graph.admitConcept({ name: 'Alpha', kind: 'construct', description: '甲组件', supportCount: 2 });
+    const beta = await graph.admitConcept({ name: 'Beta', kind: 'construct', description: '乙组件', supportCount: 2 });
+    const gamma = await graph.admitConcept({ name: 'Gamma', kind: 'construct', description: '丙组件', supportCount: 2 });
+    const delta = await graph.admitConcept({ name: 'Delta', kind: 'construct', description: '丁组件', supportCount: 2 });
+    const edge = {
+      relationType: 'part_of' as const,
+      strength: 0.9,
+      basis: {
+        memoryIds: ['m1', 'm2'],
+        cue: 'part of',
+        evidenceClass: 'mereonymy' as const,
+        licensedAt: Date.now(),
+      },
+      evidenceText: 'part of',
+    };
+    await graph.admitEdge({ ...edge, sourceId: alpha.id!, targetId: beta.id!, description: '甲是乙的组成' });
+    await graph.admitEdge({ ...edge, sourceId: gamma.id!, targetId: delta.id!, description: '丙是丁的组成' });
+    return graph;
+  }
+
+  it('整行原子 + 尾部 in-band 标注省略数；关系行与卡片同组同进退', async () => {
+    const graph = await buildTwoGroupStore();
+    const layer = new CognitionLayer({ store: graph });
+    // tokenBudget=55 → maxChars=110：放得下组 1（约 60 字），放不下组 2
+    const out = await layer.assemble({
+      sessionId: 's',
+      messages: [],
+      query: 'Alpha Beta Gamma Delta',
+      tokenBudget: 55,
+      systemBudget: 500,
+    } satisfies LayerAssembleContext);
+    expect(out).not.toBeNull();
+    const text = out!.text;
+    // 组 1 全进（卡片 + 关系行同进）
+    expect(text).toContain('Alpha（construct）：甲组件');
+    expect(text).toContain('Beta（construct）：乙组件');
+    expect(text).toContain('Alpha —[part_of]→ Beta (甲是乙的组成)');
+    // 组 2 全出（卡片 + 关系行同退）
+    expect(text).not.toContain('Gamma');
+    expect(text).not.toContain('Delta');
+    // 尾部 in-band 标注省略数
+    expect(text).toContain('（已省略 2 个概念 / 1 条关系）');
+    // manifest 双记
+    expect(out!.dropped).toBe('已省略 2 个概念 / 1 条关系');
+    // 每行完整（结构检查：内容行均以 '- ' 起始，无半行残段）
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      if (line.startsWith('#') || line.startsWith('（')) continue;
+      expect(line.startsWith('- ')).toBe(true);
+    }
+  });
+
+  it('零预算 → 层 empty（null，不产出残片）', async () => {
+    const graph = await buildTwoGroupStore();
+    const layer = new CognitionLayer({ store: graph });
+    const out = await layer.assemble({
+      sessionId: 's',
+      messages: [],
+      query: 'Alpha',
+      tokenBudget: 0,
+      systemBudget: 500,
+    } satisfies LayerAssembleContext);
+    expect(out).toBeNull();
+  });
+
+  it('单行超软顶保完整：孤点单行组不切半（首行例外准入）', async () => {
+    const graph = new InMemoryConceptGraph();
+    const longName = '超'.repeat(300);
+    await graph.admitConcept({ name: longName, kind: 'construct', description: '超长孤点', supportCount: 2 });
+    const layer = new CognitionLayer({ store: graph });
+    const out = await layer.assemble({
+      sessionId: 's',
+      messages: [],
+      query: '超长孤点',
+      tokenBudget: 5,
+      systemBudget: 100,
+    } satisfies LayerAssembleContext);
+    expect(out).not.toBeNull();
+    // 整行完整进入（永不切半）
+    expect(out!.text).toContain(`- ${longName}（construct）：超长孤点`);
+    for (const line of out!.text.split('\n')) {
+      if (!line.trim()) continue;
+      if (line.startsWith('#') || line.startsWith('（')) continue;
+      expect(line.startsWith('- ')).toBe(true);
+    }
   });
 });

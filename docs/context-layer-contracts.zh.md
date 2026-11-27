@@ -133,7 +133,7 @@ interface ContextLayer {
 | `PluginRuntimeSnapshotLayer` | Plugin Collect 贡献作为预算内 Runtime 快照（`<plugin-contribution>`，XML 转义防伪造成兄弟标签） | systemPrompt 覆写——贡献绝不打补丁进 system prompt |
 | `KnowledgeLayer` | `KnowledgeCatalogProvider` → Tier 0 catalog 格式化 | 内容检索 / embedding（归 Knowledge 服务） |
 | `MemoryLayer` | `retrieve({text, limit, minSimilarity})` + 置信注入过滤（shadow/deleted 排除） | 衰减策略调参（曲线在 `memory/decay-policy.ts`，由 govern 执行） |
-| `CognitionLayer` | `spreadingActivate` + 召回双模式渲染：概念卡（`名字（kind）：description`）+ 强关系行（`A —[rel]→ B (关系一句话)`）；术语触发定义卡 + 1–2 跳影响面邻域；弱边只作成员资格（无「相关：…」折叠行）；释义/名字单行化；语义种子显式开启（`semanticSeedCount` 缺省 0=暂关，等 OP-9R） | 共现升格、假因果写入（归 cognition-gates） |
+| `CognitionLayer` | `spreadingActivate` + 召回双模式渲染：概念卡（`名字（kind）：description`）+ 强关系行（`A —[rel]→ B (关系一句话)`）；术语触发定义卡 + 1–2 跳影响面邻域；弱边只作成员资格（无「相关：…」折叠行）；释义/名字单行化；行级装箱截断（整行原子、连通子图成组按激活分取舍、尾部 in-band「已省略 N 个概念 / M 条关系」标注）；语义种子显式开启（`semanticSeedCount` 缺省 0=暂关，等 OP-9R） | 共现升格、假因果写入（归 cognition-gates） |
 | `WisdomLayer` | 小核心 + 场景匹配 + trial 轮转（`trialMaxItems` / `includeTrial`）+ maxim 排版；`onInjected` → `touchApplied` 记 S1 applied（只记 core/scenario 命中，trial 不入账） | embedding/llm 匹配（归后续） |
 | `createDefaultLayers` | 只注册有依赖的层 | 自动发现 |
 
