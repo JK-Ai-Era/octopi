@@ -140,6 +140,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.5 (2026-11-27)
+
+### fix(test): CI lint TS18048——runtimeSnapshot 可空收窄
+
+- `tests/harness/wisdom-cognition-layer.test.ts` m6 断言强化用例中 `result.runtimeSnapshot`
+  未收窄即 `.split`，CI typecheck-tests 报 TS18048；改 `(result.runtimeSnapshot ?? '')`
+- 流程教训：提交前检查加入 `npm run lint`（typecheck-tests 只在 lint 链里跑，
+  仅跑 build 不覆盖测试类型面）
+- 验证：lint 0 new errors；19 tests passed
+
 ## v0.136.4 (2026-11-27)
 
 ### fix(context): R6 独立评审修复（1 blocker + 4 major）——「永不切半」端到端成立

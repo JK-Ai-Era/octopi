@@ -124,7 +124,7 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
     expect(result.runtimeSnapshot).not.toMatch(/\n\s*- injected/);
     expect(result.runtimeSnapshot).not.toMatch(/第一行\n/);
     // 超长释义截到 200 字符以内（单行原子）
-    const glossLine = result.runtimeSnapshot
+    const glossLine = (result.runtimeSnapshot ?? '')
       .split('\n')
       .find((l) => l.includes('第一行'))!;
     expect(glossLine.length).toBeLessThan(300);
