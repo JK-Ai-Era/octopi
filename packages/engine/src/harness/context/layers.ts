@@ -27,6 +27,7 @@ import {
   LAYER_ORDER,
   LAYER_PRIORITY,
 } from './layer-types.js';
+import { HeuristicTokenEstimator } from './token-estimator.js';
 import type { MemoryStore, ConceptGraphStore } from '../memory/types.js';
 import { deriveQuerySeeds, normName } from '../memory/cognition-seeds.js';
 import { formatWisdomBody } from '../memory/wisdom-formation.js';
@@ -533,83 +534,120 @@ const nameOf = new Map(graph.nodes.map((n) => [n.id, n.name]));
     }
 
     interface PackedGroup {
-      lines: string[];
-      concepts: number;
-      relations: number;
+      cards: Array<{ id: string; line: string }>;
+      rels: string[];
       rank: number;
-      nodeIds: string[];
     }
     const groups = new Map<string, PackedGroup>();
     const groupOf = (id: string): PackedGroup => {
       const root = find(id);
       let g = groups.get(root);
       if (!g) {
-        g = { lines: [], concepts: 0, relations: 0, rank: Number.POSITIVE_INFINITY, nodeIds: [] };
+        g = { cards: [], rels: [], rank: Number.POSITIVE_INFINITY };
         groups.set(root, g);
       }
       return g;
     };
     graph.nodes.forEach((n, i) => {
       const g = groupOf(n.id);
-      g.lines.push(cardLine.get(n.id)!);
-      g.concepts += 1;
-      g.nodeIds.push(n.id);
+      g.cards.push({ id: n.id, line: cardLine.get(n.id)! });
       g.rank = Math.min(g.rank, i);
     });
     for (const r of relationLines) {
-      const g = groupOf(r.sourceId);
-      g.lines.push(r.line);
-      g.relations += 1;
+      // source/target 必同组（union-find 跑全边），groupOf(source) 即组
+      groupOf(r.sourceId).rels.push(r.line);
     }
 
     const sorted = [...groups.values()].sort((a, b) => a.rank - b.rank);
-    const picked: PackedGroup[] = [];
+    if (ctx.tokenBudget <= 0) return null;
+
+    // 装箱以**统一 TokenEstimator** 计量（M1：层内启发式与装配预算不得两套口径）；
+    // 台账实测最终渲染全文（header/分隔/标注都计入——M2 不漏渲染期字面量）；
+    // 标注常驻预留（数字位数上界），终文恒 ≤ tokenBudget
+    const estimator = new HeuristicTokenEstimator();
+    const renderText = (cs: string[], rs: string[], note?: string): string => {
+      const lines = [...cs];
+      if (rs.length) lines.push('', ...rs);
+      if (note) lines.push('', note);
+      return `# 相关概念\n\n${lines.join('\n')}`;
+    };
+    const fitsIn = (cs: string[], rs: string[]): boolean =>
+      estimator.estimateText(renderText(cs, rs, '（已省略 0000 个概念 / 0000 条关系）')) <=
+      ctx.tokenBudget;
+
+    // 取舍语义：组原子优先（连通子图成组按激活分取舍）；组装不下时**行级兜底**
+    //（M4 降级路径：单种子查询是单分量，纯组原子会退化全有/全无——组内前缀保序准入，
+    // 停在首个装不下的行，组间继续尝试）。首行保完整（单行超软顶不切半）。
+    const cLines: string[] = [];
+    const rLines: string[] = [];
+    const admittedIds: string[] = [];
     let omittedConcepts = 0;
     let omittedRelations = 0;
-    if (ctx.tokenBudget <= 0) return null;
-    const maxChars = Math.max(80, ctx.tokenBudget * 2);
-    let used = '# 相关概念\n\n'.length;
-    let admitted = 0;
-    for (const g of sorted) {
-      const block = g.lines.join('\n');
-      const blockLen = block.length + (admitted > 0 ? 1 : 0);
-      const fits = used + blockLen <= maxChars;
-      // 首行保完整（单行超软顶不切半）：尚未准入任何行且本组是单行 → 无条件准入
-      const firstLineGrace = admitted === 0 && g.lines.length === 1;
-      if (fits || firstLineGrace) {
-        picked.push(g);
-        used += blockLen;
-        admitted += g.lines.length;
+    const admitCard = (card: { id: string; line: string }, free: boolean): void => {
+      if (free || fitsIn([...cLines, card.line], rLines)) {
+        cLines.push(card.line);
+        admittedIds.push(card.id);
       } else {
-        omittedConcepts += g.concepts;
-        omittedRelations += g.relations;
+        omittedConcepts += 1;
+      }
+    };
+    for (const g of sorted) {
+      const nothingYet = cLines.length + rLines.length === 0;
+      if (fitsIn([...cLines, ...g.cards.map((c) => c.line)], [...rLines, ...g.rels])) {
+        for (const c of g.cards) admitCard(c, false);
+        rLines.push(...g.rels);
+        continue;
+      }
+      // 行级兜底：卡在前、关系在后（组内序），前缀保序、停在首个装不下的行
+      let stopped = false;
+      for (const c of g.cards) {
+        const free = nothingYet && cLines.length === 0 && rLines.length === 0;
+        if (stopped && !free) {
+          omittedConcepts += 1;
+          continue;
+        }
+        if (free || fitsIn([...cLines, c.line], rLines)) {
+          cLines.push(c.line);
+          admittedIds.push(c.id);
+        } else {
+          stopped = true;
+          omittedConcepts += 1;
+        }
+      }
+      for (const rel of g.rels) {
+        if (stopped) {
+          omittedRelations += 1;
+          continue;
+        }
+        if (fitsIn(cLines, [...rLines, rel])) {
+          rLines.push(rel);
+        } else {
+          stopped = true;
+          omittedRelations += 1;
+        }
       }
     }
-    if (admitted === 0) return null;
+    if (cLines.length + rLines.length === 0) return null;
 
-    const cards = picked.flatMap((g) => g.lines.slice(0, g.concepts));
-    const relations = picked.flatMap((g) => g.lines.slice(g.concepts));
-    const lines = [...cards];
-    if (relations.length) lines.push('', ...relations);
-    if (omittedConcepts + omittedRelations > 0) {
-      lines.push('', `（已省略 ${omittedConcepts} 个概念 / ${omittedRelations} 条关系）`);
-    }
-
-    const text = `# 相关概念\n\n${lines.join('\n')}`;
+    const hasOmission = omittedConcepts + omittedRelations > 0;
+    const note = hasOmission
+      ? `（已省略 ${omittedConcepts} 个概念 / ${omittedRelations} 条关系）`
+      : undefined;
+    const text = renderText(cLines, rLines, note);
     return this.content(text, {
       // 丢弃不静默：in-band 标注 + manifest dropped 双记
-      dropped:
-        omittedConcepts + omittedRelations > 0
-          ? `已省略 ${omittedConcepts} 个概念 / ${omittedRelations} 条关系`
-          : undefined,
-      sources: picked.flatMap((g) => g.nodeIds),
+      dropped: hasOmission
+        ? `已省略 ${omittedConcepts} 个概念 / ${omittedRelations} 条关系`
+        : undefined,
+      sources: admittedIds,
     });
   }
 }
 
-/** 行内原子（M1）：name/边端点单行化——换行不得伪造注入行（保留字间空格） */
+/** 行内原子（M1）：name/边端点单行化——换行不得伪造注入行（保留字间空格）；超 120 字截断带省略号 */
 function singleLine(text: string): string {
-  return text.replace(/[\r\n\u2028\u2029]+/g, ' ').replace(/[^\S\r\n]+/g, ' ').trim();
+  const flat = text.replace(/[\r\n\u2028\u2029]+/g, ' ').replace(/[^\S\r\n]+/g, ' ').trim();
+  return flat.length > 120 ? `${flat.slice(0, 120)}…` : flat;
 }
 
 /** 释义单行化 + 200 字符上限（截断带省略号标记，不产生看似完整的残缺释义） */

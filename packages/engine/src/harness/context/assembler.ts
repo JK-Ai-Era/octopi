@@ -64,8 +64,11 @@ const MAX_FINGERPRINT_SESSIONS = 256;
 const MIN_REMAINING_TOKENS = 40;
 
 /**
- * 用统一 TokenEstimator 将文本截到 maxTokens 内
- *（二分字符长度；避免层内 chars/token 启发式与装配预算不一致）
+ * 用统一 TokenEstimator 将文本截到 maxTokens 内——**行级原子**（永不切半行）：
+ * 按整行前缀装箱（严格 ≤ maxTokens，预算硬契约优先于任何 grace）；
+ * 尾部丢弃行数以「（装配截断：已省略尾部 N 行）」in-band 标注 + dropped 注记双记账。
+ * 标注预留预算按 N 的位数上界（行数 ≤ 文本长度）估，保证总额恒 ≤ maxTokens；
+ * 装不下任何完整行 → 整体弃（空 + 记账，不产出残片）。
  */
 export function truncateTextToTokens(
   text: string,
@@ -74,19 +77,29 @@ export function truncateTextToTokens(
 ): { text: string; dropped?: string } {
   if (maxTokens <= 0) return { text: '', dropped: 'zero budget' };
   if (estimator.estimateText(text) <= maxTokens) return { text };
-  let lo = 0;
-  let hi = text.length;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (estimator.estimateText(text.slice(0, mid)) <= maxTokens) {
-      lo = mid;
+  const lines = text.split('\n');
+  // 预留 = 换行分隔符 + 标注（N 的位数上界）——台账含渲染期字面量，总额恒 ≤ maxTokens
+  const noteReserve = estimator.estimateText(
+    `\n（装配截断：已省略尾部 ${'9'.repeat(String(lines.length).length)} 行）`,
+  );
+  const budget = maxTokens - noteReserve;
+  const kept: string[] = [];
+  for (const line of lines) {
+    const candidate = kept.length ? `${kept.join('\n')}\n${line}` : line;
+    if (estimator.estimateText(candidate) <= budget) {
+      kept.push(line);
     } else {
-      hi = mid - 1;
+      break;
     }
   }
+  const omitted = lines.length - kept.length;
+  if (kept.length === 0) {
+    return { text: '', dropped: `omitted ${omitted} line(s): no complete line fits ~${maxTokens} tokens` };
+  }
+  const note = `（装配截断：已省略尾部 ${omitted} 行）`;
   return {
-    text: text.slice(0, lo),
-    dropped: `truncated to ${lo} chars (~${maxTokens} tokens)`,
+    text: `${kept.join('\n')}\n${note}`,
+    dropped: `truncated: omitted ${omitted} trailing line(s) to fit ~${maxTokens} tokens`,
   };
 }
 
@@ -267,7 +280,8 @@ export class DefaultContextAssembler implements ContextAssembler {
             ...content,
             text: cut.text,
             tokens: estimator.estimateText(cut.text),
-            dropped: content.dropped ?? cut.dropped,
+            // 双记账合并：层内丢弃注记与装配截断注记都保留（B1：观测面与上屏一致）
+            dropped: [content.dropped, cut.dropped].filter(Boolean).join('; ') || undefined,
           };
         }
       }
@@ -288,7 +302,8 @@ export class DefaultContextAssembler implements ContextAssembler {
               ...content,
               text: cut.text,
               tokens: estimator.estimateText(cut.text),
-              dropped: content.dropped ?? cut.dropped,
+              // 双记账合并：层内丢弃注记与装配截断注记都保留
+              dropped: [content.dropped, cut.dropped].filter(Boolean).join('; ') || undefined,
             };
             accepted.set(layer.id, { content, layer });
             used += content.tokens;

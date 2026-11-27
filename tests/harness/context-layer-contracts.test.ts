@@ -190,18 +190,20 @@ describe('DefaultContextAssembler', () => {
     expect(memory?.included !== true || (memory?.tokens ?? 0) < 80).toBe(true);
   });
 
-  it('配置 layerShares 的层即使总量有空也被硬顶截断', async () => {
+  it('配置 layerShares 的层即使总量有空也被硬顶截断（行级原子）', async () => {
     const assembler = new DefaultContextAssembler({
       structureReserve: 0,
       layerShares: { skill: 0.05 },
     });
+    // 多行内容：硬顶按整行前缀截（永不切半行）
+    const skillLines = Array.from({ length: 20 }, (_, i) => `S${i} ${'S'.repeat(18)}`);
     const result = await assembler.assemble({
       sessionId: 's1',
       messages: [userMsg('q')],
       systemBudget: 1000,
       layers: [
         stubLayer('persona', { text: 'P'.repeat(20), priority: 100, droppable: false }),
-        stubLayer('skill', { text: 'S'.repeat(400), priority: 60, droppable: true }),
+        stubLayer('skill', { text: skillLines.join('\n'), priority: 60, droppable: true }),
       ],
     });
 
@@ -209,6 +211,12 @@ describe('DefaultContextAssembler', () => {
     expect(skill?.included).toBe(true);
     expect(skill?.budgetTokens).toBe(Math.floor(1000 * 0.05));
     expect(skill!.tokens).toBeLessThanOrEqual(50);
+    // 行级原子：上屏内容每行都是原完整行（或装配截断标注），无半行
+    const body = result.systemPrompt.split('<layer name="Skill">\n')[1]?.split('\n</layer>')[0] ?? '';
+    for (const line of body.split('\n')) {
+      if (!line.trim()) continue;
+      expect(skillLines.includes(line.trim()) || line.startsWith('（装配截断')).toBe(true);
+    }
   });
 
   it('单层 assemble 失败不拖垮整体', async () => {
