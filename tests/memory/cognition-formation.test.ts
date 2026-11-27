@@ -326,6 +326,110 @@ describe('conceptualizer', () => {
     expect(r.rejected.some((x) => x.reason === 'merged_into_sibling')).toBe(true);
   });
 
+  it('B1 regression: causes edges accumulate via store (no candidate short-circuit)', async () => {
+    const store = new InMemoryConceptGraph();
+    const nodes = [
+      { name: '限流', kind: 'method' as const, description: '限流指按配额放行', definition: true },
+      { name: '背压', kind: 'construct' as const, description: '背压指限流触发的上游传导', definition: true },
+    ];
+    const mk = (memoryId: string) => ({
+      nodes,
+      edges: [
+        {
+          fromName: '限流',
+          toName: '背压',
+          relationType: 'causes',
+          evidenceClass: 'causal',
+          cue: '限流触发背压',
+          description: '限流是背压的直接诱因',
+        },
+      ],
+    });
+    const input = (memoryId: string) => ({
+      proposition: '限流触发背压',
+      memoryId,
+      memoryType: 'norm' as const,
+      memoryStatus: 'active' as const,
+      evidence: '限流触发背压',
+      contextSlice: '限流触发背压的机制说明。',
+    });
+    // 第一命题：单证据 → 候选（预期语义），释义随候选保留
+    const r1 = await conceptualizeAndAdmit(mk('m1'), input('m1'), store);
+    expect(r1.edges[0]!.admit?.action).toBe('candidate_only');
+    expect((await store.listCausalCandidates())[0]!.description).toBe('限流是背压的直接诱因');
+    // 第二命题：store 累积同 pair 证据后持证出生（修复前永远 candidate_only）
+    const r2 = await conceptualizeAndAdmit(mk('m2'), input('m2'), store);
+    expect(r2.edges[0]!.admit?.action).toBe('active');
+    const edge = (await store.getFullGraph()).edges.find((e) => e.relationType === 'causes');
+    expect(edge?.description).toBe('限流是背压的直接诱因');
+  });
+
+  it('M2 boundary: edges to un-born endpoints are rejected with endpoint_not_admitted', async () => {
+    const store = new InMemoryConceptGraph();
+    const r = await conceptualizeAndAdmit(
+      {
+        nodes: [
+          { name: '缓存击穿', kind: 'problem', description: '热点键失效引发的瞬时穿透' },
+          { name: '互斥重建', kind: 'method', description: '单飞重建热点缓存' },
+        ],
+        edges: [
+          {
+            fromName: '缓存击穿',
+            toName: '互斥重建',
+            relationType: 'causes',
+            evidenceClass: 'causal',
+            cue: '缓存击穿导致互斥重建',
+            description: '击穿触发重建',
+          },
+        ],
+      },
+      {
+        proposition: '缓存击穿导致互斥重建',
+        memoryId: 'm1',
+        memoryType: 'fact',
+        evidence: '缓存击穿导致互斥重建',
+        contextSlice: '缓存击穿导致互斥重建。',
+      },
+      store,
+    );
+    // 1 票主题节点停在候选区 → 端点未出生：显式拒绝、不留边（复现挣来）
+    expect(r.edges[0]!.license.reason).toBe('endpoint_not_admitted');
+    expect(r.edges[0]!.admit).toBeUndefined();
+    expect((await store.getFullGraph()).edges).toHaveLength(0);
+    // 释义保留在产出结果供观测（不入库）
+    expect(r.edges[0]!.description).toBe('击穿触发重建');
+  });
+
+  it('m6: whitespace-only gloss is undefined; secret-like gloss is dropped', async () => {
+    const store = new InMemoryConceptGraph();
+    const r = await conceptualizeAndAdmit(
+      {
+        nodes: [
+          { name: '组件甲', kind: 'construct', description: '甲', definition: true },
+          { name: '组件乙', kind: 'construct', description: '乙', definition: true },
+        ],
+        edges: [
+          { fromName: '组件甲', toName: '组件乙', relationType: 'part_of', evidenceClass: 'mereonymy', cue: '甲是乙的组成', description: '   ' },
+          { fromName: '组件乙', toName: '组件甲', relationType: 'part_of', evidenceClass: 'mereonymy', cue: '乙包含甲', description: 'api_key: abcdefgh12345' },
+        ],
+      },
+      {
+        proposition: '甲是乙的组成部分',
+        memoryId: 'm1',
+        memoryType: 'norm',
+        memoryStatus: 'active',
+        evidence: '甲是乙的组成',
+        contextSlice: '甲是乙的组成部分。',
+      },
+      store,
+    );
+    expect(r.edges[0]!.description).toBeUndefined();
+    expect(r.edges[1]!.description).toBeUndefined();
+    // 密钥形态释义不入库
+    const stored = (await store.getFullGraph()).edges;
+    for (const e of stored) expect(e.description).toBeUndefined();
+  });
+
   it('R7′ proper nouns are not split: 「LLM 提供方」 keeps full name (M-4 regression)', async () => {
     const store = new InMemoryConceptGraph();
     const r = await conceptualizeAndAdmit(
@@ -928,6 +1032,55 @@ describe.each([
     expect(res.action).toBe('active');
     const edge = (await store.getFullGraph()).edges.find((e) => e.id === res.edgeId);
     expect(edge?.description).toBeUndefined();
+  });
+
+  it('R7′ causal candidate keeps relation gloss (M1: promotion has a recovery source)', async () => {
+    const a = await store.admitConcept({ name: 'Backpressure', kind: 'construct', supportCount: 2 });
+    const b = await store.admitConcept({ name: 'RateLimit', kind: 'method', supportCount: 2 });
+    const res = await store.admitEdge({
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'causes',
+      strength: 0.7,
+      description: '背压由限流触发向上游传导',
+      basis: {
+        memoryIds: ['m1'],
+        cue: '限流触发背压',
+        evidenceClass: 'causal',
+        licensedAt: Date.now(),
+      },
+      evidenceText: '限流触发背压。',
+    });
+    expect(res.action).toBe('candidate_only');
+    const cands = await store.listCausalCandidates();
+    expect(cands).toHaveLength(1);
+    expect(cands[0]!.description).toBe('背压由限流触发向上游传导');
+  });
+
+  it('R7′ existing edge fills missing description but never overwrites (M3)', async () => {
+    const a = await store.admitConcept({ name: 'LeaseHolder', kind: 'construct', supportCount: 2 });
+    const b = await store.admitConcept({ name: 'Lease', kind: 'construct', supportCount: 2 });
+    const pair = {
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'part_of' as const,
+      basis: {
+        memoryIds: ['m1'],
+        cue: '持有者是租约的组成部分',
+        evidenceClass: 'mereonymy' as const,
+        licensedAt: Date.now(),
+      },
+      evidenceText: '持有者是租约的组成部分。',
+    };
+    const first = await store.admitEdge({ ...pair, strength: 0.5 });
+    expect(first.action).toBe('active');
+    expect((await store.getFullGraph()).edges[0]!.description).toBeUndefined();
+    // 空缺补入
+    await store.admitEdge({ ...pair, strength: 0.6, description: '首个释义' });
+    expect((await store.getFullGraph()).edges[0]!.description).toBe('首个释义');
+    // 已有不覆盖（首释义稳定，不因重复观察漂移）
+    await store.admitEdge({ ...pair, strength: 0.7, description: '另一个释义' });
+    expect((await store.getFullGraph()).edges[0]!.description).toBe('首个释义');
   });
 
   it('multi-evidence across admitEdge calls licenses causes', async () => {

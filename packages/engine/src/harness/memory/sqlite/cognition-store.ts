@@ -24,6 +24,7 @@ import type {
   ConceptRelationType,
   ConceptStatus,
   DecayResult,
+  EdgeAux,
   EdgeBasis,
   MergeCandidate,
   SpreadingActivateOptions,
@@ -609,6 +610,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         targetId: input.targetId,
         memoryIds: input.basis.memoryIds,
         cue: input.basis.cue,
+        description: input.description,
         note: license.message,
       });
       return {
@@ -653,11 +655,12 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       const edge = this.rowToEdge(existing);
       const memIds = new Set([...edge.basis.memoryIds, ...basis.memoryIds]);
       const mergedBasis = { ...edge.basis, memoryIds: [...memIds], cue: basis.cue || edge.basis.cue };
+      // 释义补全（M3）：空缺时补入，已有不覆盖（首释义稳定，不因重复观察漂移）
       this.db.raw
         .prepare(
-          'UPDATE concept_edges SET strength = MAX(strength, ?), basis = ?, status = CASE WHEN ? = \'active\' THEN \'active\' ELSE status END, updated_at = ? WHERE id = ?',
+          'UPDATE concept_edges SET strength = MAX(strength, ?), basis = ?, description = COALESCE(description, ?), status = CASE WHEN ? = \'active\' THEN \'active\' ELSE status END, updated_at = ? WHERE id = ?',
         )
-        .run(input.strength, JSON.stringify(mergedBasis), status, now, existing.id);
+        .run(input.strength, JSON.stringify(mergedBasis), input.description ?? null, status, now, existing.id);
       return {
         action: license.status === 'demoted' ? 'demoted' : status,
         edgeId: existing.id,
@@ -699,22 +702,51 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     targetId: string;
     memoryIds: string[];
     cue: string;
+    description?: string;
     note?: string;
   }): Promise<void> {
     const edgeKey = `${input.sourceId}->${input.targetId}`;
     this.db.raw
       .prepare(
-        `INSERT INTO concept_edges_aux (id, edge_key, kind, memory_ids, cue, note, created_at)
-         VALUES (?, ?, 'causal_candidate', ?, ?, ?, ?)`,
+        `INSERT INTO concept_edges_aux (id, edge_key, kind, memory_ids, cue, description, note, created_at)
+         VALUES (?, ?, 'causal_candidate', ?, ?, ?, ?, ?)`,
       )
       .run(
         AgentDatabase.generateId('causal'),
         edgeKey,
         JSON.stringify(input.memoryIds ?? []),
         normalizeForCue(input.cue),
+        input.description ?? null,
         input.note ?? null,
         Date.now(),
       );
+  }
+
+  async listCausalCandidates(limit = 50): Promise<EdgeAux[]> {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM concept_edges_aux WHERE kind = 'causal_candidate' ORDER BY created_at ASC LIMIT ?`,
+      )
+      .all(limit) as Array<{
+      id: string;
+      edge_key: string;
+      kind: string;
+      memory_ids: string;
+      cue: string;
+      description: string | null;
+      note: string | null;
+      created_at: number;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      edgeKey: r.edge_key,
+      kind: 'causal_candidate' as const,
+      memoryIds: safeJsonArray(r.memory_ids),
+      cue: r.cue,
+      description: r.description ?? undefined,
+      note: r.note ?? undefined,
+      createdAt: r.created_at,
+    }));
   }
 
   async listMergeCandidates(limit = 50): Promise<MergeCandidate[]> {

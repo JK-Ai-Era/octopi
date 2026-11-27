@@ -565,6 +565,8 @@ export interface EdgeAux {
   kind: 'causal_candidate';
   memoryIds: string[];
   cue: string;
+  /** 一句关系释义（约束边释义在候选期不丢，转正时有恢复来源） */
+  description?: string;
   note?: string;
   createdAt: number;
 }
@@ -714,8 +716,12 @@ export interface ConceptGraphStore {
     targetId: string;
     memoryIds: string[];
     cue: string;
+    /** 一句关系释义（候选期保留，转正时有恢复来源） */
+    description?: string;
     note?: string;
   }): Promise<void>;
+  /** 列出因果候选（旁路假设），与 listBirthCandidates/listMergeCandidates 对称 */
+  listCausalCandidates(limit?: number): Promise<EdgeAux[]>;
   listMergeCandidates(limit?: number): Promise<MergeCandidate[]>;
   /** 出生候选区（复现计票）：列出在 TTL 内的 1 票候选 */
   listBirthCandidates(limit?: number): Promise<BirthCandidate[]>;

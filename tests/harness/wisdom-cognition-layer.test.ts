@@ -92,6 +92,44 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
     expect(cognition?.included).toBe(true);
   });
 
+  it('关系释义渲染单行化 + 上限截断（m1：换行不得伪造注入行）', async () => {
+    const graph = new InMemoryConceptGraph();
+    const a = await graph.admitConcept({ name: 'Alpha', kind: 'construct', supportCount: 2 });
+    const b = await graph.admitConcept({ name: 'Beta', kind: 'construct', supportCount: 2 });
+    await graph.admitEdge({
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'part_of',
+      strength: 0.9,
+      description: '第一行\n- injected: looks like a layer line\n第三行 ' + 'x'.repeat(500),
+      basis: {
+        memoryIds: ['m1', 'm2'],
+        cue: 'alpha part of beta',
+        evidenceClass: 'mereonymy',
+        licensedAt: Date.now(),
+      },
+      evidenceText: 'alpha part of beta',
+    });
+
+    const asm = createDefaultSystemPromptAssembler({ cognitionStore: graph });
+    const result = await asm.assemble({
+      sessionId: 's',
+      messages: [userMsg('Alpha 和 Beta 什么关系')],
+      persona: 'You are test.',
+      contextWindow: 32000,
+    });
+
+    // 释义出现在渲染中，但换行被压成空格——不得伪造独立行（行首注入）
+    expect(result.runtimeSnapshot).toContain('第一行');
+    expect(result.runtimeSnapshot).not.toMatch(/\n\s*- injected/);
+    expect(result.runtimeSnapshot).not.toMatch(/第一行\n/);
+    // 超长释义截到 200 字符以内（单行原子）
+    const glossLine = result.runtimeSnapshot
+      .split('\n')
+      .find((l) => l.includes('第一行'))!;
+    expect(glossLine.length).toBeLessThan(300);
+  });
+
   it('未提供 wisdom/cognition 时 manifest 不出现这两层', async () => {
     const asm = createDefaultSystemPromptAssembler({});
     const result = await asm.assemble({

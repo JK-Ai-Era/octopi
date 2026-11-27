@@ -140,13 +140,42 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.135.5 (2026-11-27)
+
+### fix(memory): commit 4 独立评审修复（1 blocker + 5 major + 5 minor）+ 复审新真 bug B2
+
+fresh-eyes 独立评审对 v0.135.4 报 1 blocker / 5 major / 7 minor，逐条对码核实后修复；
+修复过程中复审暴露并修复新真 bug B2：
+
+- **B1（blocker）causes 约束边复活**：conceptualizer 不再前置短路 `candidate_only`——统一走
+  `store.admitEdge`，由 store 累积同 pair 跨命题证据（`collectPairMemoryIds` 读边+候选）后
+  持证转正；提示词写明「causes 单命题只入候选、复现转正」为预期语义
+- **B2（复审新发现）降级类型不再泄漏**：pre-license 会把未持证 causes 降级成 `related`，
+  原实现把**降级后的类型**传给 store 复审——store 永远只见 related、累积证据永无转正机会；
+  改传 `requestedType`，store 自己的 licenseEdge 随证据单调放行，是唯一裁决点
+- **M1 候选期释义不丢**：`EdgeAux`/`concept_edges_aux` 加 `description`（旧库 PRAGMA 判列
+  安全 ALTER）；`addCausalCandidate` 契约与两实现透传；新增 `listCausalCandidates` 读路径
+  （转正步的恢复来源，与 listBirthCandidates/listMergeCandidates 对称）
+- **M2 显式边界**：端点未出生（1 票候选区常态）的边显式拒绝（`endpoint_not_admitted`），
+  释义留产出结果观测不入库——「复现挣来」：端点出生后的再次观察重建该边；测试锁定
+- **M3 既有边释义补全**：两实现 UPDATE/merge 时空缺补入、已有不覆盖（首释义稳定）；
+  存量 NULL 边在重复观察时可补上
+- **M4 真路径测试**：B1/M2/m6 回归全部走 `conceptualizeAndAdmit` 真路径（不再只直调
+  store）；渲染层加单行化/截断断言
+- **M5 提示词对齐公理**：「拿不准降级 related（候选态、不进强渲染）；释义照写、复现升格
+  后可见」——不再暗示 related 释义即刻可见
+- minor：渲染释义单行化 + 200 字符上限（换行不得伪造注入行）；释义密钥形态不入库
+  （`isSecretLike` 单源导出）；relationType↔evidenceClass 成对规则入提示词；CHANGELOG
+  overclaim 修正；空白/密钥释义断言
+- 测试：6171 passed / 9 skipped；build 绿
+
 ## v0.135.4 (2026-11-27)
 
 ### feat(memory): 约束边一等公民——边释义贯通 + 约束句识别契约（R7′ commit 4）
 
 - **边释义贯通**：`ConceptualizerEdgeOut` 新增 `description`（一句关系释义）；LLM 输出边的
-  `description` 解析后透传 `admitEdge`（持久化与召回渲染全链路已通，本 commit 补上产出端
-  断点）；缺省不猜不渲染
+  `description` 解析后透传 `admitEdge`（存储与召回渲染链路就绪；候选路径与既有边补全见
+  v0.135.5 评审修复）；缺省不猜不渲染
 - **提示词契约（公理②「约束是边不是从句」落地）**：命题中的约束/口径关系句（「X 不得…」
   「…仅当…」「…必须先于…」「…⇒…」「…唯一仲裁…」）必须产出为边并带释义——不得只写进
   节点 description 埋掉；关系类型按语义映射（不得→opposes、依赖/先后→causes、组成→

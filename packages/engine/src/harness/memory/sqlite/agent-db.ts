@@ -190,6 +190,13 @@ export class AgentDatabase {
             this.db.exec(`ALTER TABLE concepts ADD COLUMN ${c} TEXT NOT NULL DEFAULT '[]'`);
           }
         }
+        // concept_edges_aux.description：候选期保留边释义（M1），纯增量列同规则补列
+        const auxCols = this.db
+          .prepare('PRAGMA table_info(concept_edges_aux)')
+          .all() as Array<{ name: string }>;
+        if (auxCols.length > 0 && !auxCols.some((col) => col.name === 'description')) {
+          this.db.exec(`ALTER TABLE concept_edges_aux ADD COLUMN description TEXT`);
+        }
       } catch (e) {
         // PRAGMA/ALTER 失败必须显式冒泡：吞掉会让缺列库在首次定义覆盖时才炸
         throw new Error(`concept description_history migration failed: ${(e as Error).message}`);
@@ -318,13 +325,14 @@ export class AgentDatabase {
       );
 
       CREATE TABLE IF NOT EXISTS concept_edges_aux (
-        id         TEXT PRIMARY KEY,
-        edge_key   TEXT NOT NULL,
-        kind       TEXT NOT NULL,
-        memory_ids TEXT NOT NULL DEFAULT '[]',
-        cue        TEXT NOT NULL DEFAULT '',
-        note       TEXT,
-        created_at INTEGER NOT NULL
+        id          TEXT PRIMARY KEY,
+        edge_key    TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        memory_ids  TEXT NOT NULL DEFAULT '[]',
+        cue         TEXT NOT NULL DEFAULT '',
+        description TEXT,
+        note        TEXT,
+        created_at  INTEGER NOT NULL
       );
 
       -- ── 概念出生候选（复现计票区：1 票暂存、满 2 票转正、TTL 到期遗忘）──

@@ -24,6 +24,7 @@ import type {
   ConceptRelationType,
   ConceptStatus,
   DecayResult,
+  EdgeAux,
   EdgeBasis,
   MergeCandidate,
   SpreadingActivateOptions,
@@ -58,6 +59,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
     targetId: string;
     memoryIds: string[];
     cue: string;
+    description?: string;
     note?: string;
     createdAt: number;
   }> = [];
@@ -357,6 +359,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
         targetId: input.targetId,
         memoryIds: input.basis.memoryIds,
         cue: input.basis.cue,
+        description: input.description,
         note: license.message,
       });
       return {
@@ -388,6 +391,8 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       const [, edge] = existingKey;
       edge.strength = Math.max(edge.strength, input.strength);
       edge.updatedAt = now;
+      // 释义补全（M3）：空缺时补入，已有不覆盖（首释义稳定，不因重复观察漂移）
+      if (!edge.description && input.description) edge.description = input.description;
       for (const mid of input.basis.memoryIds) {
         if (!edge.basis.memoryIds.includes(mid)) edge.basis.memoryIds.push(mid);
       }
@@ -433,6 +438,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
     targetId: string;
     memoryIds: string[];
     cue: string;
+    description?: string;
     note?: string;
   }): Promise<void> {
     this.causalCandidates.push({
@@ -440,6 +446,19 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       ...input,
       createdAt: Date.now(),
     });
+  }
+
+  async listCausalCandidates(limit = 50): Promise<EdgeAux[]> {
+    return this.causalCandidates.slice(0, limit).map((c) => ({
+      id: c.id,
+      edgeKey: `${c.sourceId}->${c.targetId}`,
+      kind: 'causal_candidate' as const,
+      memoryIds: [...c.memoryIds],
+      cue: c.cue,
+      description: c.description,
+      note: c.note,
+      createdAt: c.createdAt,
+    }));
   }
 
   async listMergeCandidates(limit = 50): Promise<MergeCandidate[]> {

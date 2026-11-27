@@ -498,7 +498,9 @@ export class CognitionLayer extends BaseLayer {
         weakNames.add(target);
         continue;
       }
-      const desc = edge.description ? ` (${edge.description})` : '';
+      const desc = edge.description
+        ? ` (${edge.description.replace(/\s+/g, ' ').trim().slice(0, 200)})`
+        : '';
       strong.push(`- ${source} —[${edge.relationType}]→ ${target}${desc}`);
     }
 

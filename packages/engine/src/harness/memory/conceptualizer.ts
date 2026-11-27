@@ -21,6 +21,7 @@ import {
   evaluateConceptGate,
   licenseEdge,
   splitIdentifierMixed,
+  isSecretLike,
   type EdgeLicenseOutcome,
 } from './cognition-gates.js';
 import { normName } from './cognition-seeds.js';
@@ -367,8 +368,9 @@ export async function conceptualizeAndAdmit(
     const requestedType = parseRelation(o.relationType ?? o.relation) ?? 'related';
     const evidenceClass = parseEvidenceClass(o.evidenceClass) ?? 'cooccur';
     const cue = asString(o.cue);
-    // 约束边一等公民：边的一句关系释义（缺省不入库不渲染，不猜）
-    const description = asString(o.description);
+    // 约束边一等公民：边的一句关系释义；缺省不猜不渲染，密钥形态不入库
+    const gloss = asString(o.description);
+    const description = gloss && !isSecretLike(gloss) ? gloss : undefined;
 
     const license = licenseEdge({
       relationType: requestedType,
@@ -383,7 +385,7 @@ export async function conceptualizeAndAdmit(
       fromName,
       toName,
       requestedType,
-      description: description || undefined,
+      description,
       license,
     };
 
@@ -391,33 +393,27 @@ export async function conceptualizeAndAdmit(
       const sourceId = nameToId.get(fromName.toLowerCase());
       const targetId = nameToId.get(toName.toLowerCase());
       if (!sourceId || !targetId) {
-        // 端点未出生（1 票候选区是常态）：如实归因，不冒充 cue 问题
+        // 端点未出生（1 票候选区是常态）：显式边界——首观察且端点未出生的边被丢弃
+        // （复现挣来：端点出生后的再次观察会重建）；释义保留在 edgeOut 供观测，不入库
         edgeOut.license = {
           ...license,
           status: 'rejected',
           reason: 'endpoint_not_admitted',
           message: 'endpoint concept not admitted (may be parked in birth candidates)',
         };
-      } else if (license.status === 'candidate_only') {
-        await store.addCausalCandidate({
-          sourceId,
-          targetId,
-          memoryIds: [input.memoryId],
-          cue,
-          note: license.message,
-        });
-        edgeOut.admit = {
-          action: 'candidate_only',
-          reason: license.reason,
-          message: license.message,
-        };
       } else {
+        // 统一走 store.admitEdge：store 内部累积同 pair 跨命题证据（collectPairMemoryIds）
+        // 并自路由候选——此处不得前置短路 candidate_only，否则单命题 causes 永远攒不齐
+        // 2 票、也绕过累积通道（B1）。
+        // 传 requestedType 而非 license.relationType（B2）：pre-license 会把未持证 causes
+        // 降级成 related，若把降级类型传下去，store 复审永远只见到 related、累积证据永无
+        // 转正机会；store 自己的 licenseEdge 随累积证据单调放行，是唯一裁决点
         const admit = await store.admitEdge({
           sourceId,
           targetId,
-          relationType: license.relationType,
+          relationType: requestedType,
           strength: license.status === 'active' ? 0.7 : 0.4,
-          description: description || undefined,
+          description,
           basis: {
             memoryIds: [input.memoryId],
             cue,

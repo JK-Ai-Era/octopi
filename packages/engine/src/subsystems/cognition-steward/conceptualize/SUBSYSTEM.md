@@ -47,9 +47,13 @@
 - **定义句标记 `definition: true`**：命题在定义/纠正/钉口径时（「X 指…」「这里的 X 不是…而是…」「口径定为…」），该节点是内部口径词典条目，`description` 必须是**完整的口径原文**（后续新口径会覆盖旧口径）；一般主题概念不要标（它们走复现计票）
 - `relationType`：causes / part_of / opposes / similar_to / evolves_to / related
 - `evidenceClass`：causal / mereonymy / negation / analogy / evolution / cooccur
+- **relationType 与 evidenceClass 必须成对**：opposes↔negation、causes↔causal、part_of↔mereonymy、evolves_to↔evolution、similar_to↔analogy、related↔cooccur——错配会被许可静默降级为 related
 - **强关系必须给 cue**（证据原句片段）；无把握时只用 `related` + `cooccur`
-- **约束是边不是从句**：命题中的约束/口径关系句（「X 不得…」「…仅当…」「…必须先于…」「…⇒…」「…唯一仲裁…」）**必须产出为边**并带 `description` 一句关系释义——不得只写进节点 description 里埋掉；关系类型按语义选（不得/禁止→`opposes`、依赖/先后/蕴含→`causes`、组成→`part_of`、演进→`evolves_to`），拿不准用 `related` 但释义照写
-- 禁止假因果：非因果证据不得标 causes
+- **约束是边不是从句**：命题中的约束/口径关系句（「X 不得…」「…仅当…」「…必须先于…」「…⇒…」「…唯一仲裁…」）**必须产出为边**并带 `description` 一句关系释义——不得只写进节点 description 里埋掉：
+  - 不得/禁止 → `opposes`；依赖/先后/蕴含 → `causes`；组成 → `part_of`；演进 → `evolves_to`
+  - `causes` 单命题只入候选（复现 ≥2 条独立记忆后转正）——这是「复现挣来」预期语义，不是缺陷
+  - 拿不准时降级 `related`（候选态、不进强渲染）；释义照写，复现升格后可见
+- 禁止假因果：非因果证据不得标 causes（映射规则只服务真因果/依赖语义）
 - 两个义项不同时**禁止合并成一个 name**；宁可拆开
 - 没有值得记的概念返回 `{"nodes":[],"edges":[],"rejected":[]}`
 - kind 只能是 entity / construct / method / problem / constraint

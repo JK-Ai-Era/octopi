@@ -29,6 +29,11 @@ export interface ConceptGateOutcome {
 }
 
 const SECRET_LIKE = /(?:api[_-]?key|secret|password|token)\s*[:=]\s*\S{8,}/i;
+
+/** 密钥形态判定（单源）：概念名/描述与边释义共用 */
+export function isSecretLike(text: string): boolean {
+  return SECRET_LIKE.test(text);
+}
 const STOPWORD = /^(?:the|a|an|this|that|it|is|are|was|were|and|or|of|to|in|for)$/i;
 const CJK = /[一-鿿]/;
 
