@@ -146,6 +146,36 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.9 (2026-11-28)
+
+### fix(knowledge): 管理面创建链按写者租户落域——回到「用户建的项目/源挂用户所属租户」设计
+
+- 背景（设计核对结论）：「用户建的项目/源默认挂用户所属租户、公共项目复选框暂缓」是既定设计；
+  偏差在实现——控制台创建链没接用户身份，私有项目/源恒落 DEFAULT 域（T3a 护栏语义），
+  租户用户的资产落错域、也供给不了自己的租户 agent
+- 修复：router 新增 `resolveWriter` 单源（X-Registry-Token 在场 = 用户所属租户；host 面
+  无头 = DEFAULT 存量域；坏凭证 401 fail-loud）→ 建/改/删项目与源全链按写者租户断言落域；
+  project 级源仍继承项目登记行归属域（M1 不变）
+- 公共项目 = platform 共享面仅 host 面/平台 admin（`registry_forbidden`，与 registry 面
+  「scope=platform 仅平台 admin」同语义）；「新建→公共」复选框继续暂缓，但 API 不洞开
+- §9.1-15 收口：session overlay 三条（set/replace/clear）按目标 agent 归属域断言 +
+  clear legacy 残行补偿；封存清理路径收编统一 clear 入口；agent 写路由归属闸抽
+  `gateAgentWrite` 单源（F1 visibility 路由与 overlay 三写路由共用）
+- 独立评审（del-20b4aef7，fix-then-ship）处置：R1 域继承冒用他域 claim → 建源授权
+  （项目行按写者读身份解析，platform 项目仅平台 admin，读不到 fail-loud）；R2 管理面
+  读/检索口收口（项目/源列表、检索、overlay 四条 GET 按读身份收口，admin/host = platform
+  全量、普通用户 = 本租户）；R3 host 运维豁免不丢（管理写域与调用者域拆开）；R6 写错误
+  映射 403/404/409；R7 删项目诚实回报 removed；R8 replace 残行补偿
+- 待拍板（arch/multi-tenancy.md §9.1-18/19）：存量 DEFAULT 资产的迁移/兼容策略；
+  用户建源 location 的租户围栏（是否限 workspace 内路径）
+- 残余语义（如实记录，arch/multi-tenancy.md T3d）：平台 admin 带 registry token 的控制台
+  会话新建落其个人租户，存量 config agent（DEFAULT 域）挂不了——设计语义如此；
+  附件/session 级源创建管线仍无断言（随附件管线另行审视）
+- 回归测试：`tests/gateway/knowledge-write-attribution.test.ts`（落域断言/源继承项目域/
+  overlay 断言/clear 补偿）、`tests/knowledge-admin-write-attribution.test.ts`（HTTP 面
+  归属/public 闸/overlay 归属闸）；变异检查（断掉归属传参）精确复现并变红
+- 验证：全量 6200 tests passed；`npm run lint` 通过；arch/check-sync 绿
+
 ## v0.136.8 (2026-11-28)
 
 ### chore(changelog): 补 roll 账——已完结 minor 段 v0.130–v0.135 归档

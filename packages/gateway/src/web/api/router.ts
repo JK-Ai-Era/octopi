@@ -13,7 +13,7 @@ import { assertSafeConfigName } from '@octopi-agent/engine/config-admin/name-gua
 import { listProviderAccessModes, listProviderPresets } from '@octopi-agent/engine/config-admin/model-presets.js';
 import { KNOWLEDGE_SOURCE_KINDS } from '@octopi-agent/engine/harness/knowledge/location.js';
 import type { AgentId, BindingId, SessionPolicy, User } from '@octopi-agent/engine/harness/governance/registry/types.js';
-import { DEFAULT_TENANT_ID } from '@octopi-agent/core/types.js';
+import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import { OnboardingService, OnboardingStepInvalidError } from './onboarding.js';
 
 export interface WebApiRouterOptions {
@@ -1359,8 +1359,14 @@ export class WebApiRouter {
 
       const knowledgeProjectsMatch = relativePath.match(/^\/agents\/([^/]+)\/knowledge\/projects$/);
       if (knowledgeProjectsMatch && method === 'GET') {
+        // 读身份收口（评审 R2）：token 在场按身份收口（admin/host = platform 全量视图，
+        // 普通用户 = 本租户）；无头 = 宿主面全量语义不变
+        const projectReader = this.resolveWriter(req, res);
+        if (!projectReader) return true; // 响应已回
         try {
-          const projects = await this.gateway.listKnowledgeProjects();
+          const projects = await this.gateway.listKnowledgeProjects(
+            projectReader.isPlatformAdmin ? PLATFORM_TENANT_ID : projectReader.tenantId,
+          );
           return this.json(res, 200, { ok: true, data: projects });
         } catch (err) {
           return this.json(res, 503, {
@@ -1375,31 +1381,52 @@ export class WebApiRouter {
         if (!projectKey) {
           return this.json(res, 400, { ok: false, error: 'projectKey is required' });
         }
-        await this.gateway.createKnowledgeProject(
-          projectKey,
-          typeof body?.displayName === 'string' ? body.displayName : undefined,
+        // 写归属（§6，2026-11-28 拍板）：用户建的项目落用户所属租户；host 面 = DEFAULT 存量域。
+        // 公共项目 = platform 共享面资产，仅 host 面/平台 admin（复选框暂缓、API 同边界；
+        // registry 面同语义「scope=platform 仅平台 admin」）
+        const projectWriter = this.resolveWriter(req, res);
+        if (!projectWriter) return true; // 响应已回
+        const projectVisibility =
           body?.visibility === 'public' || body?.visibility === 'private'
             ? body.visibility
-            : undefined,
-        );
-        return this.json(res, 201, { ok: true, data: { projectKey } });
+            : undefined;
+        if (projectVisibility === 'public' && !projectWriter.isPlatformAdmin) {
+          return this.json(res, 403, {
+            ok: false,
+            error: 'registry_forbidden: public projects require platform admin',
+          });
+        }
+        try {
+          await this.gateway.createKnowledgeProject(
+            projectKey,
+            typeof body?.displayName === 'string' ? body.displayName : undefined,
+            projectVisibility,
+            projectWriter.tenantId,
+          );
+          return this.json(res, 201, { ok: true, data: { projectKey } });
+        } catch (err) {
+          return this.sendKnowledgeWriteError(res, err);
+        }
       }
 
       const knowledgeProjectMatch = relativePath.match(
         /^\/agents\/([^/]+)\/knowledge\/projects\/([^/]+)$/,
       );
       if (knowledgeProjectMatch && method === 'DELETE') {
+        // 写归属（§6，2026-11-28 拍板）：按写者租户删自己的项目
+        const projectDelWriter = this.resolveWriter(req, res);
+        if (!projectDelWriter) return true; // 响应已回
         try {
-          const removed = await this.gateway.removeKnowledgeProject(knowledgeProjectMatch[2]);
+          const removed = await this.gateway.removeKnowledgeProject(
+            knowledgeProjectMatch[2],
+            projectDelWriter,
+          );
           return this.json(res, 200, {
             ok: true,
             data: { projectKey: knowledgeProjectMatch[2], removed },
           });
         } catch (err) {
-          return this.json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          return this.sendKnowledgeWriteError(res, err);
         }
       }
 
@@ -1407,12 +1434,17 @@ export class WebApiRouter {
       if (knowledgeSearchMatch && method === 'GET') {
         const q = url.searchParams.get('q')?.trim() ?? '';
         if (!q) return this.json(res, 400, { ok: false, error: 'q is required' });
+        // 读身份收口（评审 R2）：token 在场按身份收口（admin/host = platform 全量视图，
+        // 普通用户 = 本租户）；无头 = 宿主面全量语义不变
+        const searchReader = this.resolveWriter(req, res);
+        if (!searchReader) return true; // 响应已回
         const sessionId = url.searchParams.get('sessionId') ?? undefined;
         const limitRaw = Number(url.searchParams.get('limit') ?? '');
         const result = await this.gateway.searchKnowledge(q, {
           agentId: knowledgeSearchMatch[1],
           sessionId,
           limit: Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 20) : 8,
+          readTenantId: searchReader.isPlatformAdmin ? PLATFORM_TENANT_ID : searchReader.tenantId,
         });
         return this.json(res, 200, {
           ok: true,
@@ -1441,11 +1473,23 @@ export class WebApiRouter {
         if (!sessionId) {
           return this.json(res, 400, { ok: false, error: 'sessionId is required' });
         }
+        // 读身份收口（评审 R2）：同检索路由
+        const overlayReader = this.resolveWriter(req, res);
+        if (!overlayReader) return true; // 响应已回
         const items = await this.gateway.getKnowledgeSessionVisibility(
           knowledgeSessionVisMatch[1],
           sessionId,
+          overlayReader.isPlatformAdmin ? PLATFORM_TENANT_ID : overlayReader.tenantId,
         );
         return this.json(res, 200, { ok: true, data: items });
+      }
+      // overlay 写路由归属闸（arch/multi-tenancy.md §9.1-15 收口，与 visibility 写路由同闸）：
+      // registry 托管 agent 不得跨租户改 overlay；无该头 = 宿主面语义不变
+      if (
+        knowledgeSessionVisMatch &&
+        (method === 'PUT' || method === 'POST' || method === 'DELETE')
+      ) {
+        if (!this.gateAgentWrite(req, res, knowledgeSessionVisMatch[1])) return true; // 响应已回
       }
       if (knowledgeSessionVisMatch && method === 'PUT') {
         const body = await this.readBody(req);
@@ -1559,12 +1603,20 @@ export class WebApiRouter {
             error: 'sessionId is required when scopeLevel=session',
           });
         }
+        // 读身份收口（评审 R2）：token 在场按身份收口（admin/host = platform 全量视图，
+        // 普通用户 = 本租户）；无头 = 宿主面全量语义不变
+        const sourceReader = this.resolveWriter(req, res);
+        if (!sourceReader) return true; // 响应已回
         try {
-          const sources = await this.gateway.listKnowledgeSources(knowledgeSourcesMatch[1], {
-            sessionId,
-            scopeLevel: scopeLevel ?? undefined,
-            projectKey,
-          });
+          const sources = await this.gateway.listKnowledgeSources(
+            knowledgeSourcesMatch[1],
+            {
+              sessionId,
+              scopeLevel: scopeLevel ?? undefined,
+              projectKey,
+            },
+            sourceReader.isPlatformAdmin ? PLATFORM_TENANT_ID : sourceReader.tenantId,
+          );
           return this.json(res, 200, { ok: true, data: sources });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -1591,14 +1643,15 @@ export class WebApiRouter {
               'kind(workspace|directory|file|url|connector), location, scopeRef.level(global|project|session), scopeRef.key are required',
           });
         }
+        // 写归属（§6，2026-11-28 拍板）：用户建的源落用户所属租户（project 级源在 gateway
+        // 侧继承项目登记行的归属域）
+        const sourceWriter = this.resolveWriter(req, res);
+        if (!sourceWriter) return true; // 响应已回
         try {
-          const source = await this.gateway.createKnowledgeSource(body);
+          const source = await this.gateway.createKnowledgeSource(body, sourceWriter);
           return this.json(res, 201, { ok: true, data: source });
         } catch (err) {
-          return this.json(res, 400, {
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          return this.sendKnowledgeWriteError(res, err);
         }
       }
 
@@ -1717,14 +1770,38 @@ export class WebApiRouter {
       }
       if (knowledgeSourceMatch && method === 'PATCH') {
         const body = await this.readBody(req);
-        const updated = await this.gateway.updateKnowledgeSource(knowledgeSourceMatch[2], body ?? {});
-        if (!updated) return this.json(res, 404, { ok: false, error: 'source not found' });
-        return this.json(res, 200, { ok: true, data: updated });
+        // 写归属（§6，2026-11-28 拍板）：按写者租户管自己的源（admin/host 按目标行域）
+        const sourcePatchWriter = this.resolveWriter(req, res);
+        if (!sourcePatchWriter) return true; // 响应已回
+        try {
+          const updated = await this.gateway.updateKnowledgeSource(
+            knowledgeSourceMatch[2],
+            body ?? {},
+            sourcePatchWriter,
+          );
+          if (!updated) return this.json(res, 404, { ok: false, error: 'source not found' });
+          return this.json(res, 200, { ok: true, data: updated });
+        } catch (err) {
+          return this.sendKnowledgeWriteError(res, err);
+        }
       }
       if (knowledgeSourceMatch && method === 'DELETE') {
-        const removed = await this.gateway.removeKnowledgeSource(knowledgeSourceMatch[2]);
-        if (!removed) return this.json(res, 404, { ok: false, error: 'source not found' });
-        return this.json(res, 200, { ok: true, data: { id: knowledgeSourceMatch[2], removed: true } });
+        // 写归属（§6，2026-11-28 拍板）：按写者租户删自己的源（admin/host 按目标行域）
+        const sourceDelWriter = this.resolveWriter(req, res);
+        if (!sourceDelWriter) return true; // 响应已回
+        try {
+          const removed = await this.gateway.removeKnowledgeSource(
+            knowledgeSourceMatch[2],
+            sourceDelWriter,
+          );
+          if (!removed) return this.json(res, 404, { ok: false, error: 'source not found' });
+          return this.json(res, 200, {
+            ok: true,
+            data: { id: knowledgeSourceMatch[2], removed: true },
+          });
+        } catch (err) {
+          return this.sendKnowledgeWriteError(res, err);
+        }
       }
 
       const knowledgeReindexMatch = relativePath.match(
@@ -1830,29 +1907,9 @@ export class WebApiRouter {
             error: 'op must be assignProject|unassignProject|hide|unhide',
           });
         }
-        // 管理面写路由租户闸（arch/multi-tenancy.md §9.1，T3c/评审 MAJ-1）：X-Registry-Token
-        // 在场则按身份收口——registry 托管 agent 不得跨租户改挂载/屏蔽（与建会话同口径 403）；
-        // 无该头 = 宿主面（apiKey 闸已验），存量语义不变。config agent（registry 无记录）
-        // 是宿主服务面，不在此闸内（与 createSession 归属闸同形）。
-        const visibilityIdentity = this.resolveRequestUser(req);
-        if (visibilityIdentity === 'invalid') {
-          return this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
-        }
-        const visibilityUser = visibilityIdentity === 'host' ? null : visibilityIdentity;
-        if (visibilityUser) {
-          const target = this.gateway
-            .getRegistry()
-            ?.getAgent(
-              knowledgeVisibilityMatch[1] as import('@octopi-agent/engine/harness/governance/registry/types.js').AgentId,
-            );
-          if (target && target.tenantId !== visibilityUser.tenantId && !visibilityUser.isPlatformAdmin) {
-            return this.json(res, 403, {
-              ok: false,
-              error:
-                "registry_cross_tenant_agent: cannot change knowledge visibility for another tenant's agent",
-            });
-          }
-        }
+        // 管理面写路由租户闸（arch/multi-tenancy.md §9.1，T3c/评审 MAJ-1）：与建会话同口径，
+        // 规则单源 gateAgentWrite
+        if (!this.gateAgentWrite(req, res, knowledgeVisibilityMatch[1])) return true; // 响应已回
         try {
           await this.gateway.setKnowledgeVisibility({
             op,
@@ -2599,6 +2656,78 @@ export class WebApiRouter {
     const token = typeof header === 'string' ? header.trim() : '';
     if (!token) return 'host';
     return this.gateway.getRegistry()?.resolveToken(token) ?? 'invalid';
+  }
+
+  /**
+   * 写者归属（arch/multi-tenancy.md §6 写归属；2026-11-28 拍板：用户建的项目/源落用户所属
+   * 租户）：X-Registry-Token 在场 = 用户身份租户；无头 = 宿主面 DEFAULT 存量域。
+   * 坏凭证 401 fail-loud（不静默落 default）。
+   *
+   * @param req - 请求（读 x-registry-token 头）
+   * @param res - 响应（坏凭证时回 401）
+   * @returns 写者归属租户 + 是否平台 admin；null = 响应已回，调用方应 return true
+   */
+  private resolveWriter(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): { tenantId: string; isPlatformAdmin: boolean } | null {
+    const identity = this.resolveRequestUser(req);
+    if (identity === 'invalid') {
+      this.json(res, 401, { ok: false, error: 'unauthorized: invalid X-Registry-Token' });
+      return null;
+    }
+    if (identity === 'host') {
+      // 宿主面（apiKey 闸已验）：落 DEFAULT 存量域；全能身份（§9.1 全量管理语义）
+      return { tenantId: DEFAULT_TENANT_ID, isPlatformAdmin: true };
+    }
+    return { tenantId: identity.tenantId, isPlatformAdmin: identity.isPlatformAdmin };
+  }
+
+  /**
+   * agent 目标写路由归属闸（arch/multi-tenancy.md §9.1-3 同族；T3c/评审 MAJ-1）：
+   * X-Registry-Token 在场时，registry 托管 agent 不得跨租户写（403
+   * `registry_cross_tenant_agent`，与建会话同口径）；无该头 = 宿主面（apiKey 闸已验），
+   * 存量语义不变。config agent（registry 无记录）是宿主服务面，不在此闸内。
+   *
+   * @param req - 请求
+   * @param res - 响应
+   * @param agentId - 路径上的目标 agent
+   * @returns true = 放行；false = 响应已回，调用方应 return true
+   */
+  private gateAgentWrite(req: IncomingMessage, res: ServerResponse, agentId: string): boolean {
+    const writer = this.resolveWriter(req, res);
+    if (!writer) return false;
+    const target = this.gateway
+      .getRegistry()
+      ?.getAgent(agentId as import('@octopi-agent/engine/harness/governance/registry/types.js').AgentId);
+    if (target && target.tenantId !== writer.tenantId && !writer.isPlatformAdmin) {
+      this.json(res, 403, {
+        ok: false,
+        error: "registry_cross_tenant_agent: cannot manage another tenant's agent",
+      });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 知识管理写错误映射（评审 R6：服务端 403/404 不拍平成 500）：
+   * 归属/越权 → 403；not found → 404；exists/非空 → 409；其余校验错 → 400。
+   *
+   * @param res - 响应
+   * @param err - 上游错误（message 含分类线索；client 暂不透传 code）
+   * @returns 恒 true（响应已回）
+   */
+  private sendKnowledgeWriteError(res: ServerResponse, err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = /not[_ ]found|not found/i.test(message)
+      ? 404
+      : /_exists|not empty|non-empty/i.test(message)
+        ? 409
+        : /owner|forbidden|cross_tenant/i.test(message)
+          ? 403
+          : 400;
+    return this.json(res, status, { ok: false, error: message });
   }
 
   private async readBody(req: IncomingMessage, maxBytesOverride?: number): Promise<any> {

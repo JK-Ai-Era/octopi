@@ -2476,8 +2476,8 @@ export class Gateway {
           }
           if (agentId) {
             try {
-              const client = await this.getKnowledgeClient();
-              await client.clearSessionVisibility(agentId, sessionId);
+              // 走统一入口：agent 归属域断言 + 残行补偿（§9.1-15 收口同规则）
+              await this.clearKnowledgeSessionVisibility(agentId, sessionId);
             } catch (err) {
               console.warn(
                 `[Gateway] clear knowledge session visibility failed (${sessionId}): ${err instanceof Error ? err.message : String(err)}`,
@@ -5276,6 +5276,7 @@ export class Gateway {
       scopeLevel?: 'global' | 'project' | 'session';
       projectKey?: string;
     },
+    readTenantId?: string,
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource[]> {
     const client = await this.getKnowledgeClient();
     await client.ensurePrincipal(agentId).catch(() => undefined);
@@ -5283,6 +5284,7 @@ export class Gateway {
       ...(opts?.scopeLevel ? { scopeLevel: opts.scopeLevel } : {}),
       ...(opts?.projectKey ? { projectKey: opts.projectKey } : {}),
       ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+      ...(readTenantId ? { tenantId: readTenantId } : {}),
     });
     return raw as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource[];
   }
@@ -5292,6 +5294,7 @@ export class Gateway {
    */
   async createKnowledgeSource(
     input: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSourceInput,
+    writer?: { tenantId: string; isPlatformAdmin: boolean },
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource> {
     const allowedKinds = new Set(KNOWLEDGE_SOURCE_KINDS);
     const allowedLevels = new Set(['global', 'project', 'session']);
@@ -5305,14 +5308,32 @@ export class Gateway {
       throw new Error(`invalid scopeRef.level: ${input.scopeRef?.level}`);
     }
     const client = await this.getKnowledgeClient();
-    // 评审 M1：project 域源继承其项目登记行的归属域（显式 claim，非静默放大）——否则公共
-    // 项目下的源落 DEFAULT 域，项目跨域闸按源域解析时永远够不到 platform 共享面
-    let claim: string | undefined;
+    // 落域 = 写者租户（大哥 2026-11-28 拍板）；project 域源继承其项目登记行的归属域
+    // （显式 claim，非静默放大——评审 M1）。
+    // 归属授权（评审 R1）：域继承不得冒用他域 claim——项目行按**写者读身份**解析（本域
+    // 优先、他域私有不可见），platform 公共项目仅平台 admin 可写；读不到 = 不存在/他域
+    // 私有 → fail-loud，不静默影子建档
+    let claim: string | undefined = writer ? writer.tenantId : undefined;
     if (input.scopeRef.level === 'project') {
+      const readScope = writer
+        ? writer.isPlatformAdmin
+          ? PLATFORM_TENANT_ID
+          : writer.tenantId
+        : undefined;
       const project = (await client
-        .getProject(input.scopeRef.key)
+        .getProject(input.scopeRef.key, readScope ? { tenantId: readScope } : undefined)
         .catch(() => null)) as { tenantId?: string } | null;
-      if (project?.tenantId) claim = project.tenantId;
+      if (writer) {
+        if (!project?.tenantId) {
+          throw new Error(`knowledge_project_not_found: ${input.scopeRef.key}`);
+        }
+        claim = project.tenantId;
+        if (claim === PLATFORM_TENANT_ID && !writer.isPlatformAdmin) {
+          throw new Error('registry_forbidden: platform project sources require platform admin');
+        }
+      } else if (project?.tenantId) {
+        claim = project.tenantId;
+      }
     }
     const src = await client.createSource(
       input as unknown as Record<string, unknown>,
@@ -5327,19 +5348,45 @@ export class Gateway {
   async updateKnowledgeSource(
     id: string,
     patch: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSourcePatch,
+    writer?: { tenantId: string; isPlatformAdmin: boolean },
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource | null> {
     const client = await this.getKnowledgeClient();
-    const updated = await client.patchSource(id, patch as unknown as Record<string, unknown>);
+    // 管理写域（评审 R3：资产域与调用者域拆开）：admin/host 按目标行归属域（运维豁免不丢），
+    // 普通用户按本域，归属由服务端 assertSourceWritable 把关
+    const claim = writer ? await this.manageClaimForSource(id, writer) : undefined;
+    const updated = await client.patchSource(
+      id,
+      patch as unknown as Record<string, unknown>,
+      claim ? { tenantId: claim } : undefined,
+    );
     return updated as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource;
   }
 
   /**
    * 卸载知识源 —— 经 Knowledge Service（解绑 + purge）
    */
-  async removeKnowledgeSource(id: string): Promise<boolean> {
+  async removeKnowledgeSource(
+    id: string,
+    writer?: { tenantId: string; isPlatformAdmin: boolean },
+  ): Promise<boolean> {
     const client = await this.getKnowledgeClient();
-    await client.deleteSource(id);
+    const claim = writer ? await this.manageClaimForSource(id, writer) : undefined;
+    await client.deleteSource(id, claim ? { tenantId: claim } : undefined);
     return true;
+  }
+
+  /**
+   * 管理面改/删源的写域（评审 R3：资产域与调用者域拆开）：平台 admin/host 按目标行归属域
+   * 操作（platform 运维豁免不丢）；普通用户按本域，归属由服务端 assertSourceWritable 把关。
+   */
+  private async manageClaimForSource(
+    sourceId: string,
+    writer: { tenantId: string; isPlatformAdmin: boolean },
+  ): Promise<string> {
+    if (!writer.isPlatformAdmin) return writer.tenantId;
+    const client = await this.getKnowledgeClient();
+    const src = (await client.getSource(sourceId).catch(() => null)) as { tenantId?: string } | null;
+    return src?.tenantId ?? DEFAULT_TENANT_ID;
   }
 
   /**
@@ -5409,7 +5456,7 @@ export class Gateway {
   /**
    * 项目登记视图（先建项目再挂源）
    */
-  async listKnowledgeProjects(): Promise<
+  async listKnowledgeProjects(readTenantId?: string): Promise<
     Array<{
       projectKey: string;
       displayName?: string;
@@ -5418,7 +5465,7 @@ export class Gateway {
     }>
   > {
     const client = await this.getKnowledgeClient();
-    const rows = await client.listProjects();
+    const rows = await client.listProjects(readTenantId ? { tenantId: readTenantId } : undefined);
     return rows as unknown as Array<{
       projectKey: string;
       displayName?: string;
@@ -5431,21 +5478,41 @@ export class Gateway {
     projectKey: string,
     displayName?: string,
     visibility?: 'public' | 'private',
+    tenantId?: string,
   ): Promise<void> {
     const client = await this.getKnowledgeClient();
+    // 落域 = 写者租户（大哥 2026-11-28 拍板：用户建的项目/源默认挂用户所属租户）。
     // 公共项目 = platform 共享面资产：显式断言 claim 'platform' 落 platform 域
     // （arch/multi-tenancy.md §6「跨租户共享唯一合法形态」；无断言的写会降级 DEFAULT 域，
     //  永不放大成 platform 共享）
     await client.createProject(
       { projectKey, displayName, visibility },
-      visibility === 'public' ? PLATFORM_TENANT_ID : undefined,
+      visibility === 'public' ? PLATFORM_TENANT_ID : tenantId,
     );
   }
 
-  async removeKnowledgeProject(projectKey: string): Promise<boolean> {
+  async removeKnowledgeProject(
+    projectKey: string,
+    writer?: { tenantId: string; isPlatformAdmin: boolean },
+  ): Promise<boolean> {
     const client = await this.getKnowledgeClient();
-    await client.deleteProject(projectKey);
-    return true;
+    // 管理写域（评审 R3）：admin/host 按目标行归属域删（跨域/公共项目可管）；普通用户按
+    // 本域删自己的行。removed 如实回报（评审 R7）：跨域/不存在 = false，不假报成功。
+    let claim: string | undefined;
+    if (writer) {
+      claim = writer.tenantId;
+      if (writer.isPlatformAdmin) {
+        const row = (await client.getProject(projectKey).catch(() => null)) as {
+          tenantId?: string;
+        } | null;
+        claim = row?.tenantId ?? DEFAULT_TENANT_ID;
+      }
+    }
+    const result = (await client.deleteProject(
+      projectKey,
+      claim ? { tenantId: claim } : undefined,
+    )) as { removed?: boolean } | null;
+    return result?.removed === true;
   }
 
   /**
@@ -5656,13 +5723,14 @@ export class Gateway {
    */
   async searchKnowledge(
     query: string,
-    opts: { agentId: string; sessionId?: string; limit?: number },
+    opts: { agentId: string; sessionId?: string; limit?: number; readTenantId?: string },
   ): Promise<import('@octopi-agent/engine/harness/knowledge/retriever.js').HybridSearchResult> {
     const client = await this.getKnowledgeClient();
     await client.ensurePrincipal(opts.agentId).catch(() => undefined);
     const data = await client.search(opts.agentId, query, {
       sessionId: opts.sessionId,
       limit: opts.limit,
+      tenantId: opts.readTenantId,
     });
     return data as unknown as import('@octopi-agent/engine/harness/knowledge/retriever.js').HybridSearchResult;
   }
@@ -5673,10 +5741,15 @@ export class Gateway {
   async getKnowledgeSessionVisibility(
     agentId: string,
     sessionId: string,
+    readTenantId?: string,
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityItem[]> {
     const client = await this.getKnowledgeClient();
     await client.ensurePrincipal(agentId).catch(() => undefined);
-    const rows = await client.sessionVisibility(agentId, sessionId);
+    const rows = await client.sessionVisibility(
+      agentId,
+      sessionId,
+      readTenantId ? { tenantId: readTenantId } : undefined,
+    );
     return rows as unknown as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityItem[];
   }
 
@@ -5686,12 +5759,18 @@ export class Gateway {
     item: import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityInput,
   ): Promise<void> {
     const client = await this.getKnowledgeClient();
-    await client.setSessionVisibility(agentId, {
-      sessionId,
-      targetType: item.targetType,
-      targetId: item.targetId,
-      op: item.op,
-    });
+    // overlay 行是「写入物」，落 agent 归属域（arch/multi-tenancy.md §6，§9.1-15 收口，
+    // 与 setKnowledgeVisibility 同规则）
+    await client.setSessionVisibility(
+      agentId,
+      {
+        sessionId,
+        targetType: item.targetType,
+        targetId: item.targetId,
+        op: item.op,
+      },
+      { tenantId: this.agentOwnershipTenant(agentId) },
+    );
   }
 
   async replaceKnowledgeSessionVisibility(
@@ -5700,12 +5779,27 @@ export class Gateway {
     items: readonly import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSessionVisibilityInput[],
   ): Promise<void> {
     const client = await this.getKnowledgeClient();
-    // Service 侧 PUT replace（先清后写），不在 Gateway 循环 upsert
+    const tenantId = this.agentOwnershipTenant(agentId);
+    // Service 侧 PUT replace（先清后写），不在 Gateway 循环 upsert；落域同 set（§9.1-15）
     await client.replaceSessionVisibility(
       agentId,
       sessionId,
       items.map((i) => ({ targetType: i.targetType, targetId: i.targetId, op: i.op })),
+      { tenantId },
     );
+    // 残行补偿（评审 R8，与 clear 同规则）：replace 只清断言域——legacy DEFAULT overlay 行
+    // 随一次 DEFAULT 域 clear 清掉（不重写）。失败不翻转主操作，告警点名。
+    if (tenantId !== DEFAULT_TENANT_ID) {
+      try {
+        await client.clearSessionVisibility(agentId, sessionId, undefined, {
+          tenantId: DEFAULT_TENANT_ID,
+        });
+      } catch (err) {
+        console.warn(
+          `[Gateway] legacy-row compensation for replaceSessionVisibility on "${agentId}" failed (main replace already applied; DEFAULT-domain residue may remain): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   async clearKnowledgeSessionVisibility(
@@ -5717,7 +5811,21 @@ export class Gateway {
     },
   ): Promise<void> {
     const client = await this.getKnowledgeClient();
-    await client.clearSessionVisibility(agentId, sessionId, target);
+    const tenantId = this.agentOwnershipTenant(agentId);
+    await client.clearSessionVisibility(agentId, sessionId, target, { tenantId });
+    // 残行补偿（T3c 同款）：断言收口前的 DEFAULT 域 legacy overlay 行按域清不掉；撤销是
+    // 纯减可见方向，追加一次 DEFAULT 域清理。失败不翻转主操作（主清理已生效），告警点名。
+    if (tenantId !== DEFAULT_TENANT_ID) {
+      try {
+        await client.clearSessionVisibility(agentId, sessionId, target, {
+          tenantId: DEFAULT_TENANT_ID,
+        });
+      } catch (err) {
+        console.warn(
+          `[Gateway] legacy-row compensation for clearSessionVisibility on "${agentId}" failed (main clear already applied; DEFAULT-domain residue may remain): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   /**

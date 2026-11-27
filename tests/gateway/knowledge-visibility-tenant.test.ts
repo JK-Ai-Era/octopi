@@ -147,4 +147,55 @@ describe('setKnowledgeVisibility 租户断言（T3c）', () => {
       await svc.close();
     }
   });
+
+  it('全链路 R1：域继承授权——他域私有项目 fail-loud（不冒用他域 claim），本域项目落本域', async () => {
+    const svc = await startKnowledgeService({
+      dbPath: ':memory:',
+      port: 0,
+      tokens: [{ token: 't1', tenantId: 'platform', gatewayId: 'gw1' }],
+      autoRegisterPrincipals: true,
+    });
+    const client = new KnowledgeClient({
+      baseUrl: `http://127.0.0.1:${svc.port}`,
+      token: 't1',
+      timeoutMs: 5000,
+    });
+    try {
+      const { gateway } = makeGateway({ 'a1': 'acme' }, client);
+      await client.createProject({ projectKey: 'p-acme', visibility: 'private' }, 'acme');
+      await client.createProject({ projectKey: 'p-def', visibility: 'private' }); // DEFAULT 域
+
+      const writer = { tenantId: 'acme', isPlatformAdmin: false };
+      const input = (key: string) =>
+        ({
+          kind: 'file',
+          location: `/tmp/${key}.md`,
+          scopeRef: { level: 'project', key },
+        }) as never;
+
+      // 他域私有项目：按写者身份解析为不可见 → fail-loud，源绝不落进他域项目
+      await expect(gateway.createKnowledgeSource(input('p-def'), writer)).rejects.toThrow(
+        /knowledge_project_not_found/,
+      );
+
+      // 本域项目：成功且落写者域（acme 身份可见、DEFAULT 身份不可见）
+      const created = (await gateway.createKnowledgeSource(
+        input('p-acme'),
+        writer,
+      )) as unknown as { id: string };
+      expect(created.id).toBeTruthy();
+      const seenFromAcme = (await client.listSources({
+        projectKey: 'p-acme',
+        tenantId: 'acme',
+      })) as unknown as Array<{ id: string }>;
+      expect(seenFromAcme.map((s) => s.id)).toContain(created.id);
+      const seenFromDefault = (await client.listSources({
+        projectKey: 'p-acme',
+        tenantId: 'default',
+      })) as unknown as unknown[];
+      expect(seenFromDefault).toHaveLength(0);
+    } finally {
+      await svc.close();
+    }
+  });
 });

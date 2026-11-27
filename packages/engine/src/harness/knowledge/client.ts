@@ -119,29 +119,39 @@ export class KnowledgeClient {
     scopeLevel?: 'global' | 'project' | 'session';
     projectKey?: string;
     sessionId?: string;
+    tenantId?: string;
   }): Promise<Array<Record<string, unknown>>> {
     const qs = new URLSearchParams();
     if (opts?.scopeLevel) qs.set('scopeLevel', opts.scopeLevel);
     if (opts?.projectKey) qs.set('projectKey', opts.projectKey);
     if (opts?.sessionId) qs.set('sessionId', opts.sessionId);
     const q = qs.toString();
-    return this.request('GET', `/v1/sources${q ? `?${q}` : ''}`, undefined, undefined, {
-      read: true,
-    });
+    return this.request(
+      'GET',
+      `/v1/sources${q ? `?${q}` : ''}`,
+      undefined,
+      this.tenantHeaders(opts?.tenantId),
+      {
+        read: true,
+      },
+    );
   }
 
   createSource(input: Record<string, unknown>, opts?: { tenantId?: string }): Promise<Record<string, unknown>> {
     return this.request('POST', '/v1/sources', input, this.tenantHeaders(opts?.tenantId));
   }
 
-  /** 单项目登记行（含归属域/可见性；管理面域继承用）。未登记/不可见 → null */
-  async getProject(projectKey: string): Promise<Record<string, unknown> | null> {
+  /**
+   * 单项目登记行（含归属域/可见性；管理面域继承用）。未登记/不可见 → null。
+   * opts.tenantId = 读身份收口（评审 R1/R2）：按该域视角解析（本域优先），他域私有行不可见。
+   */
+  async getProject(projectKey: string, opts?: { tenantId?: string }): Promise<Record<string, unknown> | null> {
     try {
       return await this.request(
         'GET',
         `/v1/projects/${encodeURIComponent(projectKey)}`,
         undefined,
-        undefined,
+        this.tenantHeaders(opts?.tenantId),
         { read: true },
       );
     } catch {
@@ -278,8 +288,10 @@ export class KnowledgeClient {
     );
   }
 
-  listProjects(): Promise<Array<Record<string, unknown>>> {
-    return this.request('GET', '/v1/projects');
+  listProjects(opts?: { tenantId?: string }): Promise<Array<Record<string, unknown>>> {
+    return this.request('GET', '/v1/projects', undefined, this.tenantHeaders(opts?.tenantId), {
+      read: true,
+    });
   }
 
   createProject(
@@ -294,8 +306,13 @@ export class KnowledgeClient {
     return this.request('POST', '/v1/projects', input, this.tenantHeaders(tenantId));
   }
 
-  deleteProject(projectKey: string): Promise<unknown> {
-    return this.request('DELETE', `/v1/projects/${encodeURIComponent(projectKey)}`);
+  deleteProject(projectKey: string, opts?: { tenantId?: string }): Promise<unknown> {
+    return this.request(
+      'DELETE',
+      `/v1/projects/${encodeURIComponent(projectKey)}`,
+      undefined,
+      this.tenantHeaders(opts?.tenantId),
+    );
   }
 
   getSource(sourceId: string): Promise<Record<string, unknown>> {
@@ -483,12 +500,13 @@ export class KnowledgeClient {
   sessionVisibility(
     agentId: string,
     sessionId: string,
+    opts?: { tenantId?: string },
   ): Promise<Array<Record<string, unknown>>> {
     return this.request(
       'GET',
       `/v1/principals/${encodeURIComponent(agentId)}/session-visibility?sessionId=${encodeURIComponent(sessionId)}`,
       undefined,
-      undefined,
+      this.tenantHeaders(opts?.tenantId),
       { read: true },
     );
   }
@@ -537,11 +555,14 @@ export class KnowledgeClient {
     agentId: string,
     sessionId: string,
     items: Array<{ targetType: 'project' | 'source'; targetId: string; op: 'include' | 'exclude' }>,
+    opts?: { tenantId?: string },
   ): Promise<unknown> {
-    return this.request('PUT', `/v1/principals/${encodeURIComponent(agentId)}/session-visibility`, {
-      sessionId,
-      items,
-    });
+    return this.request(
+      'PUT',
+      `/v1/principals/${encodeURIComponent(agentId)}/session-visibility`,
+      { sessionId, items },
+      this.tenantHeaders(opts?.tenantId),
+    );
   }
 
   clearSessionVisibility(
