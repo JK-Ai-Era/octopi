@@ -200,6 +200,6 @@ describe('Guard recover → escalate stop（e2e 式）', () => {
     const prompt = (chat.mock.calls[0][0] as { messages: Array<{ content: string }> })
       .messages[0].content;
     expect(prompt).toContain('最近恢复尝试');
-    expect(prompt).toContain('loop hint');
+    expect(prompt).toContain('spin hint');
   });
 });

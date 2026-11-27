@@ -146,6 +146,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.15 (2026-11-28)
+
+### fix(test): align run-guard-escalation assertion with renamed 'spin hint' fixture
+
+- v0.136.14 改名时 fixture 自由文本 `reason: 'loop hint'` 已改 `'spin hint'`，但
+  `toContain('loop hint')` 断言漏改（改名扫描只覆盖带引号独立字面量，漏了子串形态），CI 红；
+  本提交补齐断言，run-guard-escalation 8 tests 绿
+- 全仓 `loop` 复扫：失败义残留清零（其余均为结构义 src/loop、loop_end hook、loopDetection、
+  loop-watchdog 等，保留）
+
 ## v0.136.14 (2026-11-28)
 
 ### refactor(run-guard)!: rename RunFailureKind 'loop' to 'spin' — resolve collision with agentLoop structural meaning
