@@ -130,8 +130,10 @@ describe('围栏判定的健壮性（独立评审 BLOCKER-2 / MINOR-8 / MAJOR-5�
     try {
       const real = resolveCanonicalLocation(join(outside, 'docs'));
       mkdirSync(real, { recursive: true });
-      // 词法变体（`..` 尾段）= 非 canonical 形态 → 拒（同一形态规则也覆盖「判定后被换向」）
-      const lexical = join(outside, 'x', '..', 'docs');
+      // 词法变体 = 非 canonical 形态 → 拒（同一形态规则也覆盖「判定后被换向」）。
+      // 字符串拼接保留 `..`（join 会折叠）；构造与平台 alias 无关，Linux/macOS 同行为
+      // （本地曾用 join+macOS alias 误造绿，CI Linux 揭穿——勿再依赖 alias 构造）
+      const lexical = `${outside}/x/../docs`;
       expect(() => assertStableCanonicalLocation('directory', lexical)).toThrow(/location_must_be_canonical/);
       // canonical 自洽 → 原样返回（判定与落库同一字符串）
       expect(assertStableCanonicalLocation('directory', real)).toBe(real);

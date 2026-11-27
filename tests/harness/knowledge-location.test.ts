@@ -121,9 +121,10 @@ describe('写入口接线（register / update）', () => {
       scopeRef: { level: 'global', key: 'global' },
       sync: { enabled: false, strategy: 'manual' },
     });
-    // 形态闸（MAJOR-5）：非 canonical（引号包裹 + alias 形态）拒——写面不替调用方改写
+    // 形态闸（MAJOR-5）：非 canonical（引号包裹 + 词法变体）拒——写面不替调用方改写。
+    // `..` 用字符串拼接保留（join 折叠）；与平台 alias 无关，Linux/macOS 同行为
     await expect(
-      write.updateSource(identity, dir.id, { location: '  "/tmp/kn-b"  ' }),
+      write.updateSource(identity, dir.id, { location: '  "/tmp/kn-b/x/../kn-b2"  ' }),
     ).rejects.toThrow(/location_must_be_canonical/);
     // canonical 形态放行并原样落库（R5 漂移闸依赖登记形态 canonical）
     await write.updateSource(identity, dir.id, { location: resolveCanonicalLocation('/tmp/kn-b') });

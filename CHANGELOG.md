@@ -146,7 +146,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.136.15 (2026-11-28)
+## v0.136.16 (2026-11-28)
+
+### test(knowledge): 形态闸用例改平台无关构造——修 CI Linux 假绿
+
+- CI（Linux）暴露两处「macOS alias 偶然绿」的假构造：`join(outside,'x','..','docs')`
+  被 `path.join` 折叠成 canonical 形态（macOS 靠 `/var`↔`/private/var` alias 才非自洽），
+  Linux 上 `/tmp` 自洽 → 形态闸用例不抛而红
+- 修法：非 canonical 形态改**字符串拼接保留 `..`**（不被 join 折叠）——构造与平台
+  alias 无关，Linux/macOS 同行为；形态闸本身无改动（行为契约不变）
+- 教训（第三次栽同类，已记忆）：测试构造路径形态勿依赖平台 alias（macOS）/大小写
+  （win32）/join 折叠差异——CI 的另一平台会揭穿假绿
+
+
 
 ### fix(test): align run-guard-escalation assertion with renamed 'spin hint' fixture
 
