@@ -18,7 +18,7 @@ import {
 } from './describe.js';
 import { assembleDescribeSample, DESCRIBE_SAMPLE_MAX_CHARS } from './describe-sample.js';
 import { scanSecretShapes } from './secret-scan.js';
-import { normalizeSourceLocation } from './location.js';
+import { assertStableCanonicalLocation } from './location.js';
 import type { KnowledgeSource, KnowledgeSourceInput, KnowledgeSourceKind } from './types.js';
 import type { KnowledgeJobControlState } from './job-control-state.js';
 import type { DocumentCapabilityConfig } from '../capabilities/document/factory.js';
@@ -389,9 +389,11 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     delete input.registered_by;
     delete input.tenantId;
     delete input.tenant_id;
-    // location 归一化 + 词法校验（写入口唯一真相）：去包裹引号/空白，本地源必须绝对路径。
+    // location 形态闸（写入口唯一真相，评审 MAJOR-5）：去包裹引号/空白 + 本地源必须
+    // 已是 canonical 形态（登记面传 isKnowledgeLocationAllowed 裁决出的 canonical；形态
+    // 不自洽 = 非 canonical 输入或判定后被换向 → 拒，不替调用方 resolve=不洗白）。
     // 不在此 stat：盘上是否存在由 ingest 负责，缺失要落成源级 error 而不是拒绝登记。
-    input.location = normalizeSourceLocation(
+    input.location = assertStableCanonicalLocation(
       input.kind as KnowledgeSourceKind,
       typeof input.location === 'string' ? input.location : '',
     );
@@ -441,12 +443,12 @@ export class LocalKnowledgeWriteService implements KnowledgeWriteService {
     // 源不存在：先走 404，别让 location 归一化把「没这个源」报成 400
     if (!row) return null;
     this.assertSourceWritable(identity, row, sourceId);
-    // location 变更同样过写入口归一化（与 registerSource 同一契约）
+    // location 变更同样过写入口形态闸（与 registerSource 同一契约，评审 BLOCKER-1/MAJOR-5）
     if (typeof patch.location === 'string') {
       const existing = this.sources.get(sourceId);
       patch = {
         ...patch,
-        location: normalizeSourceLocation(
+        location: assertStableCanonicalLocation(
           (existing?.kind ?? 'directory') as KnowledgeSourceKind,
           patch.location as string,
         ),

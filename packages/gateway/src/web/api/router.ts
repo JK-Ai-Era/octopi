@@ -14,6 +14,7 @@ import { listProviderAccessModes, listProviderPresets } from '@octopi-agent/engi
 import { KNOWLEDGE_SOURCE_KINDS } from '@octopi-agent/engine/harness/knowledge/location.js';
 import type { AgentId, BindingId, SessionPolicy, User } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
+import { isKnowledgeLocationAllowed } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { OnboardingService, OnboardingStepInvalidError } from './onboarding.js';
 
 export interface WebApiRouterOptions {
@@ -3184,7 +3185,27 @@ export class WebApiRouter {
           error: 'registry_forbidden: platform sources are managed by platform admin',
         });
       }
+      const allowedKinds = new Set<string>(KNOWLEDGE_SOURCE_KINDS);
       const kind = typeof body.kind === 'string' && body.kind ? body.kind : 'directory';
+      // kind 白名单（评审 NIT-12）：与 agent 面同边界，未校验串不得进围栏判定
+      if (!allowedKinds.has(kind)) {
+        return this.json(res, 400, { ok: false, error: `invalid kind: ${kind}` });
+      }
+      // R5 location 租户围栏（arch/multi-tenancy.md §9.1-19；单源判定）：外部世界可引；
+      // 运行时内部态禁入（本租户 workspace 例外）；平台 admin 豁免。realpath 防软链绕过。
+      // 只裁决不抛异常（评审 MINOR-8）：forbidden → 403、location_invalid → 400，错误前缀带码。
+      const fence = isKnowledgeLocationAllowed(
+        { tenantId: user.tenantId, fenceExempt: user.isPlatformAdmin },
+        kind as Parameters<typeof isKnowledgeLocationAllowed>[1],
+        body.location,
+      );
+      if (!fence.allowed) {
+        const forbidden = fence.code === 'location_forbidden';
+        return this.json(res, forbidden ? 403 : 400, {
+          ok: false,
+          error: `${forbidden ? 'knowledge_location_forbidden' : 'location_invalid'}: ${fence.reason}`,
+        });
+      }
       const ownerTenant = ownerTenantOf(scope);
       const client = await this.gateway.getKnowledgeClient();
       let knowledgeId: string;
@@ -3192,7 +3213,8 @@ export class WebApiRouter {
         const created = await client.createSource(
           {
             kind,
-            location: body.location,
+            // MAJOR-5：落库用裁决 canonical（判定与落库同一字符串，反判定后换向 TOCTOU）
+            location: fence.canonical,
             // 缺省 = 本租户公共（§6）；body 可给 project/session 级（挂载库语义）
             scopeRef:
               body.scopeRef?.level === 'project' || body.scopeRef?.level === 'session'

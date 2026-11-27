@@ -21,6 +21,10 @@ import { join } from 'node:path';
 import { getOctopiHome } from '@octopi-agent/engine/paths.js';
 import { agentOwnershipTenantOf } from '@octopi-agent/engine/harness/governance/registry/service.js';
 import type { RegistryService } from '@octopi-agent/engine/harness/governance/registry/service.js';
+import {
+  isKnowledgeLocationAllowed,
+  resolveCanonicalLocation,
+} from '@octopi-agent/engine/harness/knowledge/location.js';
 import { knowledgeDbPath } from './data.js';
 import type { DataFixResult } from './data.js';
 
@@ -190,6 +194,32 @@ function scanAttribution(db: QueryableDb, ctx: AttributionContext): ScanResult {
   return { misaligned, skipped, checked };
 }
 
+/** 存量 location 非 canonical 行（升级前登记；ingest 漂移闸会误伤，KN016 归一） */
+function scanLocationForms(
+  db: QueryableDb,
+): Array<{ id: string; location: string; canonical: string; kind: string; tenantId: string }> {
+  const rows = db.raw
+    .prepare(
+      `SELECT id, location, kind, tenant_id FROM knowledge_sources WHERE kind IN ('workspace', 'directory', 'file')`,
+    )
+    .all() as Array<Record<string, string>>;
+  const out: Array<{ id: string; location: string; canonical: string; kind: string; tenantId: string }> = [];
+  for (const row of rows) {
+    const location = row['location'] ?? '';
+    const canonical = resolveCanonicalLocation(location);
+    if (canonical !== location) {
+      out.push({
+        id: row['id'] ?? '',
+        location,
+        canonical,
+        kind: row['kind'] ?? 'directory',
+        tenantId: row['tenant_id'] ?? '',
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * 归属归一化检测（只读）。
  *
@@ -269,6 +299,18 @@ export async function detectKnowledgeAttribution(): Promise<DataFixResult['findi
         fixable: false,
       });
     }
+    const formRows = scanLocationForms(db);
+    if (formRows.length > 0) {
+      findings.push({
+        id: 'KN016',
+        domain: 'data',
+        severity: 'warn',
+        message: `knowledge location: ${formRows.length} source location(s) not in canonical form — ingest drift check errors them until normalized (pre-upgrade rows)`,
+        hint: 'run doctor --fix data to canonicalize locations',
+        fixable: true,
+        group: 'data',
+      });
+    }
     if (findings.length === 0) {
       findings.push({
         id: 'KN012',
@@ -309,9 +351,14 @@ export async function applyKnowledgeAttributionFixes(options: {
   const registry = await loadRegistry();
   try {
     const scan = scanAttribution(db, { registry, sessionAgent: resolveSessionAgentId });
-    if (scan.misaligned.length === 0 && scan.skipped.length === 0) return { findings, notes };
+    const formRows = scanLocationForms(db);
+    if (scan.misaligned.length === 0 && scan.skipped.length === 0 && formRows.length === 0) {
+      return { findings, notes };
+    }
     let moved = 0;
     let dropped = 0;
+    let canonicalized = 0;
+    const forbidden: Array<{ id: string; canonical: string }> = [];
     if (!options.dryRun) db.raw.exec('BEGIN');
     try {
       for (const row of scan.misaligned) {
@@ -335,6 +382,29 @@ export async function applyKnowledgeAttributionFixes(options: {
         if (exists) dropped += 1;
         else moved += 1;
       }
+      // KN016：存量 location 归 canonical 形态（策略无关；只统一形态，不改指向内容）。
+      // 无豁免内部态判定（评审 MINOR-7，反「洗白」）：改写目标解析进运行时内部态 = 把
+      // 非法指向正式写进登记快照 → 拒改并报 KN017（引导删除/重建；确需内部态的运维源
+      // 走 host/admin 豁免重新登记）。改写成功同时复位 status/errors（漂移 error 态不残留）。
+      for (const row of formRows) {
+        const verdict = isKnowledgeLocationAllowed(
+          { tenantId: row.tenantId, fenceExempt: false },
+          row.kind as Parameters<typeof isKnowledgeLocationAllowed>[1],
+          row.canonical,
+        );
+        if (!verdict.allowed) {
+          forbidden.push({ id: row.id, canonical: row.canonical });
+          continue;
+        }
+        if (!options.dryRun) {
+          db.raw
+            .prepare(
+              `UPDATE knowledge_sources SET location = ?, status = 'pending', errors_json = '[]' WHERE id = ?`,
+            )
+            .run(row.canonical, row.id);
+        }
+        canonicalized += 1;
+      }
       if (!options.dryRun) db.raw.exec('COMMIT');
     } catch (err) {
       if (!options.dryRun) db.raw.exec('ROLLBACK');
@@ -347,11 +417,21 @@ export async function applyKnowledgeAttributionFixes(options: {
       });
       return { findings, notes };
     }
+    if (forbidden.length > 0) {
+      findings.push({
+        id: 'KN017',
+        domain: 'data',
+        severity: 'warn',
+        message: `location_forbidden: ${forbidden.length} source location(s) resolve into runtime internals — not auto-fixable (would launder the forbidden target into the registry snapshot): ${forbidden.map((f) => f.canonical).join(', ')}`,
+        hint: 'delete the source, or re-register it via a host/platform-admin (ops) exemption if the internal target is intended',
+        fixable: false,
+      });
+    }
     findings.push({
       id: 'KN012',
       domain: 'data',
       severity: 'ok',
-      message: `${options.dryRun ? '[dry-run] would move' : 'attribution fix: moved'} ${moved} row(s) to owner domain, ${dropped} duplicate residue row(s) ${options.dryRun ? 'would be dropped' : 'dropped'}${scan.skipped.length > 0 ? `, ${scan.skipped.length} skipped` : ''}`,
+      message: `${options.dryRun ? '[dry-run] would move' : 'attribution fix: moved'} ${moved} row(s) to owner domain, ${dropped} duplicate residue row(s) ${options.dryRun ? 'would be dropped' : 'dropped'}, ${canonicalized} location(s) ${options.dryRun ? 'would be canonicalized' : 'canonicalized'}${scan.skipped.length > 0 ? `, ${scan.skipped.length} skipped` : ''}`,
       fixable: false,
     });
     return { findings, notes };

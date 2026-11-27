@@ -7,6 +7,10 @@
  * - 删项目诚实回报 removed（评审 R7）；overlay replace 带 legacy 残行补偿（评审 R8）
  */
 import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import { InMemorySessionStore } from '@octopi-agent/engine/integration/storage/memory.js';
 import { Gateway } from '@octopi-agent/gateway/gateway/gateway.js';
@@ -97,7 +101,7 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
     });
     const input = {
       kind: 'file',
-      location: '/tmp/x.md',
+      location: '/data/x.md',
       scopeRef: { level: 'global', key: 'g1' },
     } as never;
 
@@ -109,7 +113,7 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
 
     const projectInput = {
       kind: 'file',
-      location: '/tmp/y.md',
+      location: '/data/y.md',
       scopeRef: { level: 'project', key: 'p-owned' },
     } as never;
     await gateway.createKnowledgeSource(projectInput, ACME);
@@ -136,7 +140,7 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
     const pub = makeGateway({ projects: { 'p-pub': { tenantId: PLATFORM_TENANT_ID } } });
     const pubInput = {
       kind: 'file',
-      location: '/tmp/pub.md',
+      location: '/data/pub.md',
       scopeRef: { level: 'project', key: 'p-pub' },
     } as never;
     await expect(pub.gateway.createKnowledgeSource(pubInput, ACME)).rejects.toThrow(
@@ -214,6 +218,63 @@ describe('知识创建链写者归属（§6：用户建的项目/源落用户所
     expect(calls.map((c) => (c.args[3] as { tenantId?: string }).tenantId)).toEqual([
       DEFAULT_TENANT_ID,
     ]);
+  });
+
+  it('R5 location 围栏：普通写者内部态路径拒（knowledge_location_forbidden），admin 豁免', async () => {
+    const prevHome = process.env.OCTOPI_HOME;
+    const home = mkdtempSync(join(tmpdir(), 'octopi-gw-fence-'));
+    mkdirSync(join(home, 'sessions'), { recursive: true });
+    process.env.OCTOPI_HOME = home;
+    try {
+      const { gateway } = makeGateway();
+      const internal = {
+        kind: 'directory',
+        location: join(home, 'sessions'),
+        scopeRef: { level: 'global', key: 'global' },
+      } as never;
+      await expect(gateway.createKnowledgeSource(internal, ACME)).rejects.toThrow(
+        /knowledge_location_forbidden/,
+      );
+      await gateway.createKnowledgeSource(internal, ADMIN); // 豁免（运维口子）
+    } finally {
+      if (prevHome === undefined) delete process.env.OCTOPI_HOME;
+      else process.env.OCTOPI_HOME = prevHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('R5 围栏覆盖改 location（评审 BLOCKER-1）：PATCH 内部态拒；裁决 canonical 落库（MAJOR-5）', async () => {
+    const prevHome = process.env.OCTOPI_HOME;
+    const home = mkdtempSync(join(tmpdir(), 'octopi-gw-patch-fence-'));
+    mkdirSync(join(home, 'sessions'), { recursive: true });
+    process.env.OCTOPI_HOME = home;
+    const outside = mkdtempSync(join(tmpdir(), 'octopi-gw-patch-ok-'));
+    try {
+      const { gateway, calls } = makeGateway({ sources: { 'ks1': { tenantId: 'acme' } } });
+
+      // 越权链（评审原文）：普通租户用户 PATCH location 到内部态 → 拒，且不得落库
+      await expect(
+        gateway.updateKnowledgeSource('ks1', { location: join(home, 'sessions') }, ACME),
+      ).rejects.toThrow(/knowledge_location_forbidden/);
+      expect(calls.filter((c) => c.method === 'patchSource')).toHaveLength(0);
+
+      // 合法改 location：落库形态 = 围栏裁决的 canonical
+      await gateway.updateKnowledgeSource('ks1', { location: join(outside, 'docs') }, ACME);
+      const call = calls.find((c) => c.method === 'patchSource');
+      expect(call).toBeTruthy();
+      expect((call!.args[1] as { location: string }).location).toBe(
+        resolveCanonicalLocation(join(outside, 'docs')),
+      );
+
+      // admin 豁免（运维口子）照旧
+      await gateway.updateKnowledgeSource('ks1', { location: join(home, 'sessions') }, ADMIN);
+      expect(calls.filter((c) => c.method === 'patchSource')).toHaveLength(2);
+    } finally {
+      if (prevHome === undefined) delete process.env.OCTOPI_HOME;
+      else process.env.OCTOPI_HOME = prevHome;
+      rmSync(home, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('读口收口（R2）：列表/检索/overlay 读透传读身份', async () => {

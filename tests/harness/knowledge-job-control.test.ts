@@ -2,6 +2,7 @@
  * 中止/继续互斥读数 + 目录不得进 knowledge_files
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +14,7 @@ let root: string;
 let subDir: string;
 
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), 'kn-ctrl-'));
+  root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-ctrl-')));
   subDir = join(root, 'nested-dir');
   await mkdir(subDir);
   await writeFile(join(subDir, 'a.md'), 'hello', 'utf8');

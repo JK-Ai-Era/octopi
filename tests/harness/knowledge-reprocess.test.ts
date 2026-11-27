@@ -1,3 +1,4 @@
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 /**
  * 按路径重做 — Web「重做」不得再抛 not_implemented
  */
@@ -11,7 +12,7 @@ import { KnowledgeDatabase } from '@octopi-agent/engine/harness/knowledge/db.js'
 
 describe('reprocessFiles via write service', () => {
   it('按路径入队 parse 并返回 counts；空 paths/filter 拒绝', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kreproc-'));
+    const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kreproc-')));
     const dir = join(root, 'docs');
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'a.md'), '# a\n\nhello\n', 'utf8');

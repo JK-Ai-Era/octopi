@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
+import { mkdtemp, writeFile, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
@@ -19,7 +20,7 @@ import {
 import { KnowledgeDatabase } from '@octopi-agent/engine/harness/knowledge/db.js';
 
 async function makeWorkspace(): Promise<{ root: string; store: KnowledgeSourceStore; ingest: KnowledgeIngest; cleanup: () => Promise<void> }> {
-  const root = await mkdtemp(join(tmpdir(), 'octopi-kn-'));
+  const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'octopi-kn-')));
   const store = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
   const ingest = new KnowledgeIngest({ sourceStore: store, parseConcurrency: 2 });
   return {
@@ -365,5 +366,72 @@ describe('KnowledgeDatabase index tables', () => {
     expect(stats.jobsQueued).toBe(0);
     expect(stats.jobsRunning).toBe(0);
     db.close();
+  });
+});
+
+describe('R5 漂移闸行为（独立评审 MAJOR-3/4/6 锚）', () => {
+  let ctx: Awaited<ReturnType<typeof makeWorkspace>>;
+
+  afterEach(async () => {
+    await ctx?.cleanup();
+  });
+
+  async function swapRoot(docs: string): Promise<string> {
+    const other = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'octopi-kn-swap-')));
+    await writeFile(join(other, 'secret.md'), '# S\n\nsecretzz content\n', 'utf8');
+    await rm(docs, { recursive: true, force: true });
+    await symlink(other, docs, 'dir');
+    return other;
+  }
+
+  it('root 换向后 ingest 报 location_drift、不读换向目标；同文案幂等不刷屏', async () => {
+    ctx = await makeWorkspace();
+    const docs = join(ctx.root, 'docs');
+    await mkdir(docs, { recursive: true });
+    await writeFile(join(docs, 'a.md'), '# A\n\nalpha content\n', 'utf8');
+    const src = ctx.store.register({
+      kind: 'directory',
+      location: docs,
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'docs',
+    });
+    await ctx.ingest.ingestSource(src.id, { full: true });
+    await ctx.ingest.idle();
+    expect(ctx.ingest.indexStore.search('alpha', { sourceIds: [src.id] }).length).toBeGreaterThan(0);
+
+    await swapRoot(docs);
+    await ctx.ingest.ingestSource(src.id, { full: true });
+    await ctx.ingest.idle();
+    const after = ctx.store.get(src.id)!;
+    expect(after.status).toBe('error');
+    expect((after.errors ?? []).some((e) => /location_drift/.test(e.message))).toBe(true);
+    // 换向目标不得被读进索引
+    expect(ctx.ingest.indexStore.search('secretzz', { sourceIds: [src.id] }).length).toBe(0);
+
+    // 幂等（MINOR-9）：再跑一轮同文案不追加
+    await ctx.ingest.ingestSource(src.id, { full: true });
+    expect(
+      ctx.store.get(src.id)!.errors!.filter((e) => /location_drift/.test(e.message)),
+    ).toHaveLength(1);
+  });
+
+  it('读取闸（MAJOR-4）：换向后 reprocessFiles 在读之前 fail-loud（不读进新 target）', async () => {
+    ctx = await makeWorkspace();
+    const docs = join(ctx.root, 'docs');
+    await mkdir(docs, { recursive: true });
+    const file = join(docs, 'a.md');
+    await writeFile(file, '# A\n\nalpha content\n', 'utf8');
+    const src = ctx.store.register({
+      kind: 'directory',
+      location: docs,
+      scopeRef: { level: 'global', key: 'global' },
+      displayName: 'docs',
+    });
+    await ctx.ingest.ingestSource(src.id, { full: true });
+    await ctx.ingest.idle();
+
+    await swapRoot(docs);
+    // queued parse/reprocess 的共用归属闸（sourceOwnsPath）必须拒绝换向 root
+    await expect(ctx.ingest.reprocessFiles(src.id, [file])).rejects.toThrow(/location_drift/);
   });
 });

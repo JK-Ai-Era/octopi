@@ -1,3 +1,4 @@
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 /**
  * T3a 收尾护栏（arch/multi-tenancy.md §6）：broker token 域下的写归属。
  *
@@ -36,7 +37,7 @@ describe('knowledge 写归属护栏（broker token）', () => {
   let app: ReturnType<typeof createKnowledgeHttpApp>;
 
   beforeEach(async () => {
-    dir = mkdtempSync(join(tmpdir(), 'kn-write-domain-'));
+    dir = resolveCanonicalLocation(mkdtempSync(join(tmpdir(), 'kn-write-domain-')));
     db = await KnowledgeDatabase.create({ dbPath: join(dir, 'knowledge.db') });
     const sources = new KnowledgeSourceStore(db);
     const index = new KnowledgeIndexStore(db);
@@ -181,7 +182,7 @@ describe('knowledge 写归属护栏（broker token）', () => {
       claim: 't-b',
       body: {
         kind: 'directory',
-        location: '/tmp/foreign',
+        location: '/data/foreign',
         scopeRef: { level: 'global', key: 'global' },
         displayName: 'foreign',
       },
@@ -206,7 +207,7 @@ describe('knowledge 写归属护栏（broker token）', () => {
       claim: PLATFORM_TENANT_ID,
       body: {
         kind: 'directory',
-        location: '/tmp/priv-p',
+        location: '/data/priv-p',
         scopeRef: { level: 'project', key: 'priv-p' },
         displayName: 'pp',
       },

@@ -1,3 +1,4 @@
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 /**
  * Knowledge HTTP 面最小契约：鉴权 / health / sources / search
  */
@@ -57,7 +58,7 @@ describe('KnowledgeHttpApp', () => {
 
   it('注册源 + 搜索；gateway 可见性隔离', async () => {
     await withServer(async (base) => {
-      const root = await mkdtemp(join(tmpdir(), 'kn-http-'));
+      const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-http-')));
       const dir = join(root, 'docs');
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, 'a.md'), '# t\n\nhttp shared body\n', 'utf8');
@@ -109,7 +110,7 @@ describe('KnowledgeHttpApp', () => {
 
   it('search 经 retriever；未注册 principal 在 multi 下 403', async () => {
     await withServer(async (base) => {
-      const root = await mkdtemp(join(tmpdir(), 'kn-http2-'));
+      const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-http2-')));
       await writeFile(join(root, 's.md'), 'hello http search phrase\n', 'utf8');
       const created = await fetch(`${base}/v1/sources`, {
         method: 'POST',
@@ -146,7 +147,7 @@ describe('KnowledgeHttpApp', () => {
   it('visibility GET 返回 assignedProjects 与 hiddenSourceIds', async () => {
     await withServer(async (base) => {
       const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
-      const dir = await mkdtemp(join(tmpdir(), 'kn-vis2-'));
+      const dir = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-vis2-')));
       const created = await fetch(`${base}/v1/sources`, {
         method: 'POST',
         headers: h,
@@ -178,7 +179,7 @@ describe('KnowledgeHttpApp', () => {
       expect(before.data.hiddenSourceIds ?? []).not.toContain(src.id);
 
       // hide 仅 global：注册 global 源再 hide
-      const gdir = await mkdtemp(join(tmpdir(), 'kn-vis-g-'));
+      const gdir = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-vis-g-')));
       const g = await fetch(`${base}/v1/sources`, {
         method: 'POST',
         headers: h,
@@ -206,7 +207,7 @@ describe('KnowledgeHttpApp', () => {
   it('GET /v1/sources/:sid 的 jobControl 随中止切换 canAbort/canResume', async () => {
     await withServer(async (base) => {
       const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
-      const dir = await mkdtemp(join(tmpdir(), 'kn-jc-'));
+      const dir = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-jc-')));
       const created = await fetch(`${base}/v1/sources`, {
         method: 'POST',
         headers: h,
@@ -240,7 +241,7 @@ describe('KnowledgeHttpApp', () => {
   it('POST /v1/jobs/resume 全局继续不要求 sourceId', async () => {
     await withServer(async (base) => {
       const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
-      const dir = await mkdtemp(join(tmpdir(), 'kn-resume-all-'));
+      const dir = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-resume-all-')));
       const created = await fetch(`${base}/v1/sources`, {
         method: 'POST',
         headers: h,
@@ -270,7 +271,7 @@ describe('KnowledgeHttpApp', () => {
   it('listSources?sessionId 只保留本会话源；replace 会话可见性先清后写', async () => {
     await withServer(async (base) => {
       const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
-      const dir = await mkdtemp(join(tmpdir(), 'kn-sess-filt-'));
+      const dir = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-sess-filt-')));
       const created = await fetch(`${base}/v1/sources`, {
         method: 'POST',
         headers: h,
@@ -330,8 +331,8 @@ describe('KnowledgeHttpApp', () => {
   it('GET /v1/sources?scopeLevel=global 不含项目源', async () => {
     await withServer(async (base) => {
       const h = { authorization: 'Bearer tok-a', 'content-type': 'application/json' };
-      const dirG = await mkdtemp(join(tmpdir(), 'kn-scope-g-'));
-      const dirP = await mkdtemp(join(tmpdir(), 'kn-scope-p-'));
+      const dirG = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-scope-g-')));
+      const dirP = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-scope-p-')));
       const g = await fetch(`${base}/v1/sources`, {
         method: 'POST',
         headers: h,
@@ -386,7 +387,7 @@ describe('KnowledgeHttpApp', () => {
         headers: h,
         body: JSON.stringify({
           kind: 'directory',
-          location: await mkdtemp(join(tmpdir(), 'kn-vis-')),
+          location: resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-vis-'))),
           scopeRef: { level: 'project', key: 'p1' },
           displayName: 'p1src',
         }),
@@ -428,7 +429,7 @@ describe('KnowledgeHttpApp', () => {
 
   it('注册源即自动索引（无需显式 reindex）', async () => {
     await withServer(async (base) => {
-      const root = await mkdtemp(join(tmpdir(), 'kn-auto-'));
+      const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-auto-')));
       const dir = join(root, 'docs');
       await mkdir(dir, { recursive: true });
       await writeFile(join(dir, 'auto.md'), '# auto\n\nregistered source should index itself\n', 'utf8');

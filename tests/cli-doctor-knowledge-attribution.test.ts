@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -285,6 +286,72 @@ describe('doctor 知识面归属归一化（R4 归属回填）', () => {
       }
     } finally {
       await s.close();
+    }
+  });
+
+  it('KN016 反洗白（评审 MINOR-7）：外部非 canonical 归一并复位状态；内部态拒改报 KN017', async () => {
+    const s = await seed();
+    const extRoot = mkdtempSync(join(tmpdir(), 'octopi-doctor-ext-'));
+    try {
+      mkdirSync(join(extRoot, 'x'), { recursive: true });
+      mkdirSync(join(extRoot, 'docs'), { recursive: true });
+      mkdirSync(join(home, 'x'), { recursive: true });
+      mkdirSync(join(home, 'sessions'), { recursive: true });
+      // 非 canonical 形态（`..` 串接保留，join 会折叠；跨平台可复现）：
+      // 一个解析到 home 外（合法）、一个解析进内部态（拒改）
+      const extRaw = `${extRoot}/x/../docs`;
+      const intRaw = `${home}/x/../sessions`;
+      s.runSql(
+        `INSERT INTO knowledge_sources (id, tenant_id, kind, location, scope_level, scope_key, status, errors_json, display_name, created_at, updated_at)
+         VALUES ('ks-ext', ?, 'directory', ?, 'global', 'global', 'error', '[{"message":"location_drift: old","at":1}]', 'ext', 0, 0)`,
+        s.tenantA,
+        extRaw,
+      );
+      s.runSql(
+        `INSERT INTO knowledge_sources (id, tenant_id, kind, location, scope_level, scope_key, status, errors_json, display_name, created_at, updated_at)
+         VALUES ('ks-int', ?, 'directory', ?, 'global', 'global', 'error', '[]', 'int', 0, 0)`,
+        s.tenantA,
+        intRaw,
+      );
+      const { applyKnowledgeAttributionFixes } = await import(
+        '../src/cli/doctor/knowledge-attribution.js'
+      );
+      const fixed = await applyKnowledgeAttributionFixes({ dryRun: false });
+
+      // KN017：内部态目标拒改（不洗白进登记快照），引导删除/重建
+      const kn017 = fixed.findings.find((f) => f.id === 'KN017');
+      expect(kn017).toBeTruthy();
+      expect(kn017!.message).toMatch(/location_forbidden/);
+      expect(fixed.findings.some((f) => /canonicalized/.test(f.message ?? ''))).toBe(true);
+
+      const { KnowledgeDatabase } = await import(
+        '../packages/engine/src/harness/knowledge/db.js'
+      );
+      const db = await KnowledgeDatabase.create({
+        dbPath: join(home, 'knowledge', 'knowledge.db'),
+        readOnly: true,
+        skipMigrate: true,
+        sqliteVec: false,
+      });
+      try {
+        const ext = db.raw
+          .prepare(`SELECT location, status, errors_json FROM knowledge_sources WHERE id = 'ks-ext'`)
+          .get() as { location: string; status: string; errors_json: string };
+        // 外部行：归一到 canonical（= 归属形态闸的落库契约），status/errors 复位
+        expect(ext.location).toBe(resolveCanonicalLocation(extRaw));
+        expect(ext.status).toBe('pending');
+        expect(ext.errors_json).toBe('[]');
+        const int = db.raw
+          .prepare(`SELECT location FROM knowledge_sources WHERE id = 'ks-int'`)
+          .get() as { location: string };
+        // 内部态行：拒改，原样保留（宁可留非 canonical 也不把非法指向写成快照）
+        expect(int.location).toBe(intRaw);
+      } finally {
+        db.close();
+      }
+    } finally {
+      await s.close();
+      rmSync(extRoot, { recursive: true, force: true });
     }
   });
 });

@@ -39,7 +39,7 @@ describe('cross-gateway isolation', () => {
     // public + 正确 tenant：两 gateway 都能看到 base，才能单独测 overlay 隔离
     const created = await write.registerSource(gwA, {
       kind: 'directory',
-      location: '/tmp/shared',
+      location: '/data/shared',
       scopeRef: { level: 'project', key: 'api' },
       displayName: 'API',
       visibility: 'public',
@@ -95,7 +95,7 @@ describe('cross-gateway isolation', () => {
     const { write, store, db } = await openStack();
     const src = await write.registerSource(gwA, {
       kind: 'directory',
-      location: '/tmp/docs-del',
+      location: '/data/docs-del',
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'del',
       sync: { enabled: false, strategy: 'manual' },
@@ -113,7 +113,7 @@ describe('cross-gateway isolation', () => {
     const { write, db } = await openStack();
     const src = await write.registerSource(gwA, {
       kind: 'directory',
-      location: '/tmp/docs-prog',
+      location: '/data/docs-prog',
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'prog',
       visibility: 'private',
@@ -137,7 +137,7 @@ describe('cross-gateway isolation', () => {
     const { store, write, query, db } = await openStack();
     await write.registerSource(gwA, {
       kind: 'directory',
-      location: '/tmp/docs-cat',
+      location: '/data/docs-cat',
       scopeRef: { level: 'project', key: 'docs' },
       displayName: 'docs',
       visibility: 'public',
@@ -162,7 +162,7 @@ describe('cross-gateway isolation', () => {
     const { store, write, query, db } = await openStack();
     await write.registerSource(gwA, {
       kind: 'directory',
-      location: '/tmp/docs-orphan',
+      location: '/data/docs-orphan',
       scopeRef: { level: 'project', key: 'orphan' },
       displayName: 'orphan',
       visibility: 'public',

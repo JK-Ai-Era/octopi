@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { mkdtemp, writeFile, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,7 +20,7 @@ function user(text: string): Message {
 }
 
 async function setup() {
-  const root = await mkdtemp(join(tmpdir(), 'kn5-'));
+  const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn5-')));
   const store = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
   const ingest = new KnowledgeIngest({ sourceStore: store });
   const dir = join(root, 'docs');

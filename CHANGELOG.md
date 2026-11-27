@@ -146,7 +146,44 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
-## v0.136.10 (2026-11-28)
+## v0.136.11 (2026-11-28)
+
+### feat(knowledge): 知识源 location 租户围栏——R5 收口（内部态禁入 + 形态闸 + 漂移闸下沉读取点）
+
+- 大哥拍板口径：知识=外部世界的信息，围栏划在**运行时内部态**——`~/.octopi/` 树整体禁入
+  knowledge 源（唯一放行 `workspace/<写者租户>/**`），树外全可引；session 导出件（外部
+  导出目录）可引，内部态原路径由规则自动覆盖；host 面（无 X-Registry-Token）与平台
+  admin 豁免（运维口子，如索引 sessions/ 做排查）
+- **写面围栏（带豁免）**：gateway `createKnowledgeSource` **与 `updateKnowledgeSource`**
+  + registry 面 `POST /registry/knowledge-sources`（有调用方权威处）；判定单源
+  `isKnowledgeLocationAllowed(writer, kind, rawLocation)`（`location.ts`，realpath 解析
+  防软链绕过，只裁决不抛异常：`location_forbidden`→403 / `location_invalid`→400）。大小写
+  变体（macOS/Windows）不绕围栏——containment 折叠仅限围栏判定，查找层「大小写变体是
+  不同身份」契约不变（C2′）
+- **写入形态闸（反判定后换向 TOCTOU）**：落库用**裁决出的 canonical**（判定与落库同一
+  字符串）；writer-service 漏斗 `assertStableCanonicalLocation`——本地类 location 必须
+  已是 canonical 且自洽，否则 `location_must_be_canonical` 拒（不替调用方 resolve＝不把
+  换向结果洗白入库）。**行为变化**：直接调写入 API 须传 canonical 形态（登记面已代劳）
+- **完整性闸下沉到读取点**（TOCTOU/软链换向防护）：`sourceOwnsPath` 对本地类源先验
+  `resolveCanonicalLocation(location) === location`，不自洽报 `location_drift` 拒读——
+  walk/queued parse/reprocess 共用一闸；ingest 入口漂移报错同文案幂等去重、不覆盖用户
+  手动停用（disabled）状态
+- 路径身份契约收口（实现中发现）：canonical 形态存储与本库「alias 容忍」身份
+  （`realIdentitySync`；既有契约 C2′「purge 走别名路径不得漏删」）冲突——收口为「登记
+  快照 canonical + 查找/归属层 alias 容忍（`sourceOwnsPath` realpath 优先，软链逃逸仍拒）
+  + 测试夹具 root 统一 canonical 化」
+- doctor KN016 `--fix` 反洗白：改写目标解析进内部态则**拒改**并报 KN017（引导删除/重建，
+  确需内部态的运维源走豁免重新登记）；改写成功一并复位 `status='pending'` 与 errors
+- 独立评审 13 项全处置（fix-then-ship）：2 blocker（PATCH 无闸 / 大小写绕过）+ 4 major
+  （形态闸 TOCTOU / 漂移闸只挡 walk / 测试锚缺失 / ingest 兜底闸**待拍板另批**）+ 4 minor
+  （doctor 洗白 / 错误契约 / 错误刷屏 / 文档夸大）+ 3 nit。回归测试 13 例（围栏基础/大小写
+  变体/裁决契约/形态闸/漂移行为/读取闸/PATCH 围栏/registry 面围栏/doctor 反洗白）；
+  变异检查 3 项（断 create/PATCH 围栏、断读取闸）均恰好对应锚变红；全量 6224 tests
+  passed（597 文件）；build+lint 绿
+- **残余（待拍板）**：ingest 读取时刻是否复判内部态（兜住存量行/未来新写面；涉及运维
+  口子改源级豁免标记与附件管线定位）——见 arch/multi-tenancy.md §9.1-19 残余项
+
+
 
 ### feat(doctor): 知识面归属归一化——R4 归属回填落地（KN012–KN015）
 

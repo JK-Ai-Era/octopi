@@ -2,6 +2,7 @@
  * ingest 看门狗：缺向量且队列空时必须自动续跑
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +13,7 @@ import { KnowledgeIngest } from '@octopi-agent/engine/harness/knowledge/ingest.j
 let root: string;
 
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), 'kn-recon-'));
+  root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'kn-recon-')));
   await writeFile(join(root, 'a.md'), 'hello widgets', 'utf8');
 });
 

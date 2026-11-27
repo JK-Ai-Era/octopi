@@ -18,7 +18,7 @@ import {
   textAdapter,
   type KnowledgeChunkDraft,
 } from './adapters.js';
-import { KNOWLEDGE_SOURCE_KINDS } from './location.js';
+import { KNOWLEDGE_SOURCE_KINDS, isLocalPathKind, resolveCanonicalLocation } from './location.js';
 import { looksLikeHtml } from './html.js';
 import { hashContent, KnowledgeIndexStore } from './index-store.js';
 import {
@@ -413,16 +413,21 @@ export class KnowledgeIngest extends EventEmitter {
     if (source.kind === 'url' || source.kind === 'connector') {
       return Boolean(this.index.getFile(source.id, path));
     }
+    // 漂移闸下沉到每个读取点（评审 MAJOR-4）：queued parse/reprocess 不得读进换向后的
+    // root——登记形态不自洽（含 root 被改名 + 软链顶替）即拒，所有读取路径（runJob 归属
+    // 闸 / parseOne 防御 / reprocessFiles）共用此闸
+    const rootNow = resolveCanonicalLocation(source.location);
+    if (rootNow !== source.location) {
+      throw new Error(
+        `location_drift: registered path no longer resolves to itself (${source.location} -> ${rootNow}); refusing to read`,
+      );
+    }
     const root = resolve(source.location);
     const target = resolve(path);
     const eq = (a: string, b: string) =>
       process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
-    // 词法比较（路径不存在时也拒绝明显越界）
-    if (!eq(root, target)) {
-      const relLex = relative(root, target);
-      if (!relLex || relLex.startsWith('..') || isAbsolute(relLex)) return false;
-    }
-    // realpath 比较（symlink stat 失败回词法结果）
+    // realpath 比较优先（R5 canonical root 与原始写法是同一处的 alias，如 /var vs
+    // /private/var）；软链逃逸仍在此阶段被拒（target 解析出 root 即越界）
     try {
       const rootReal = realpathSync(root);
       const targetReal = realpathSync(target);
@@ -430,7 +435,12 @@ export class KnowledgeIngest extends EventEmitter {
       const rel = relative(rootReal, targetReal);
       return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel);
     } catch {
-      return true; // 词法；文件尚在时交给后续 stat
+      // 两侧 realpath 失败（不存在）回词法比较，拒绝明显越界
+      if (!eq(root, target)) {
+        const relLex = relative(root, target);
+        if (!relLex || relLex.startsWith('..') || isAbsolute(relLex)) return false;
+      }
+      return true;
     }
   }
 
@@ -473,6 +483,28 @@ export class KnowledgeIngest extends EventEmitter {
         ],
       });
       return;
+    }
+    // R5 漂移闸（arch/multi-tenancy.md §9.1-19）：location 登记时已 canonical 化
+    // （normalizeSourceLocation 单源漏斗）——ingest 时解析结果必须仍等于登记形态；
+    // 路径被替换/软链换向（TOCTOU）→ 源级 error（fail-loud），绝不静默读进换向后的目标。
+    // 存量非规范行升级后首检即报，`octopi doctor --fix data` 归一（KN016）。
+    if (isLocalPathKind(source.kind)) {
+      const resolved = resolveCanonicalLocation(source.location);
+      if (resolved !== source.location) {
+        // 文案两句（评审 MINOR-9）：用户可执行动作 + 运维 hint
+        const msg = `location_drift: registered path no longer resolves to itself (${source.location} -> ${resolved}). Delete the source or restore the original path; ops: run octopi doctor --fix data to canonicalize legacy rows`;
+        const prev = source.errors ?? [];
+        const dup = prev.some((e) => e.message === msg);
+        this.sources.update(sourceId, {
+          // 漂移是稳定态：同文案去重（幂等，不每轮刷屏），且不覆盖用户手动停用的状态（MINOR-9）
+          ...(source.status === 'disabled' ? {} : { status: 'error' }),
+          errors: dup ? prev : [...prev, { message: msg, at: Date.now() }].slice(-5),
+        });
+        if (!dup) {
+          this.emitProgress({ type: 'error', sourceId, status: 'location_drift', detail: msg });
+        }
+        return;
+      }
     }
 
     if (this.sourceLocks.has(sourceId)) {

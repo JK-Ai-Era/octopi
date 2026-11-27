@@ -19,6 +19,10 @@
 
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
 import { agentOwnershipTenantOf } from '@octopi-agent/engine/harness/governance/registry/service.js';
+import {
+  isKnowledgeLocationAllowed,
+  resolveCanonicalLocation,
+} from '@octopi-agent/engine/harness/knowledge/location.js';
 import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { AgentId, Binding, TenantId } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { isContextSizeSnapshot } from '@octopi-agent/engine/harness/context/types.js';
@@ -4963,7 +4967,9 @@ export class Gateway {
     const abs = svc.resolveAbsolutePath(sessionId, attachmentId);
     const source = await this.createKnowledgeSource({
       kind: 'file',
-      location: abs,
+      // 写入形态闸要求 canonical（location.ts assertStableCanonicalLocation）；
+      // 本管线是无 writer 内部调用（不走围栏），自行 canonical 化
+      location: resolveCanonicalLocation(abs),
       scopeRef: { level: 'session', key: sessionId },
       displayName: item.name,
       description: `会话附件 · ${item.name}`,
@@ -5305,6 +5311,25 @@ export class Gateway {
     if (!input.location?.trim()) {
       throw new Error('location is required');
     }
+    // R5 location 租户围栏（arch/multi-tenancy.md §9.1-19；单源判定 isKnowledgeLocationAllowed）：
+    // 外部世界可引；运行时内部态禁入（本租户 workspace 例外）；host 面/平台 admin 豁免。
+    // 无 writer 的内部调用方（附件/恢复管线）不走围栏——宿主管线，非用户外部输入。
+    if (writer) {
+      const fence = isKnowledgeLocationAllowed(
+        { tenantId: writer.tenantId, fenceExempt: writer.isPlatformAdmin },
+        input.kind,
+        input.location,
+      );
+      if (!fence.allowed) {
+        // 错误前缀带裁决码（MINOR-8）：knowledge_location_forbidden → 403；
+        // location_invalid → 400（sendKnowledgeWriteError 按前缀映射）
+        throw new Error(
+          `${fence.code === 'location_forbidden' ? 'knowledge_location_forbidden' : 'location_invalid'}: ${fence.reason}`,
+        );
+      }
+      // MAJOR-5：落库用**裁决出的 canonical**（判定与落库同一字符串，反判定后换向 TOCTOU）
+      input = { ...input, location: fence.canonical };
+    }
     if (!allowedLevels.has(input.scopeRef?.level)) {
       throw new Error(`invalid scopeRef.level: ${input.scopeRef?.level}`);
     }
@@ -5352,6 +5377,26 @@ export class Gateway {
     writer?: { tenantId: string; isPlatformAdmin: boolean },
   ): Promise<import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSource | null> {
     const client = await this.getKnowledgeClient();
+    // R5 围栏覆盖「改 location」（评审 BLOCKER-1）：与登记同一单源判定 + 同一错误码；
+    // 裁决 canonical 落库（MAJOR-5，与 create 同契约）。仅 writer 在场（用户面）判定——
+    // 无 writer 的宿主管线（附件/恢复）不走围栏（见 createKnowledgeSource 同注）。
+    if (writer && typeof patch.location === 'string') {
+      const existing = (await client
+        .getSource(id)
+        .catch(() => null)) as { kind?: string } | null;
+      const kind = (existing?.kind ?? 'directory') as import('@octopi-agent/engine/harness/knowledge/types.js').KnowledgeSourceKind;
+      const fence = isKnowledgeLocationAllowed(
+        { tenantId: writer.tenantId, fenceExempt: writer.isPlatformAdmin },
+        kind,
+        patch.location,
+      );
+      if (!fence.allowed) {
+        throw new Error(
+          `${fence.code === 'location_forbidden' ? 'knowledge_location_forbidden' : 'location_invalid'}: ${fence.reason}`,
+        );
+      }
+      patch = { ...patch, location: fence.canonical };
+    }
     // 管理写域（评审 R3：资产域与调用者域拆开）：admin/host 按目标行归属域（运维豁免不丢），
     // 普通用户按本域，归属由服务端 assertSourceWritable 把关
     const claim = writer ? await this.manageClaimForSource(id, writer) : undefined;

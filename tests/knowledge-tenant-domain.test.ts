@@ -41,7 +41,7 @@ async function seedSource(
 ): Promise<string> {
   const created = await stack.write.registerSource({ ...identity, claimed: true }, {
     kind: 'directory',
-    location: `/tmp/${name}`,
+    location: `/data/${name}`,
     scopeRef: { level: 'global', key: 'global' },
     displayName: name,
     visibility: 'private',
@@ -130,7 +130,7 @@ describe('T3：knowledge 租户域', () => {
     // 无 claim：降级 default 域，绝不放大成 platform 共享
     const a = await stack.write.registerSource(broker, {
       kind: 'directory',
-      location: '/tmp/unclaimed',
+      location: '/data/unclaimed',
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'unclaimed',
       sync: { enabled: false, strategy: 'manual' },
@@ -140,7 +140,7 @@ describe('T3：knowledge 租户域', () => {
     // 显式 claim 'platform'：platform 公共库
     const b = await stack.write.registerSource({ ...broker, claimed: true, tenantId: PLATFORM_TENANT_ID }, {
       kind: 'directory',
-      location: '/tmp/claimed-platform',
+      location: '/data/claimed-platform',
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'claimed-platform',
       sync: { enabled: false, strategy: 'manual' },
@@ -150,7 +150,7 @@ describe('T3：knowledge 租户域', () => {
     // 显式 claim 租户
     const c = await stack.write.registerSource({ ...broker, claimed: true, tenantId: 't-a' }, {
       kind: 'directory',
-      location: '/tmp/claimed-a',
+      location: '/data/claimed-a',
       scopeRef: { level: 'global', key: 'global' },
       displayName: 'claimed-a',
       sync: { enabled: false, strategy: 'manual' },

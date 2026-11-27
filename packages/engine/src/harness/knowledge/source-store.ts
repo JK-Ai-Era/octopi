@@ -6,6 +6,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { KnowledgeCatalogItem } from './catalog-types.js';
 import { KnowledgeDatabase } from './db.js';
+import { isLocalPathKind, resolveCanonicalLocation } from './location.js';
 import {
   ownerFunnelAllows,
   projectGateAllows,
@@ -183,7 +184,9 @@ export class KnowledgeSourceStore {
     const source: KnowledgeSource = {
       id: asSourceId(id),
       kind: input.kind,
-      location: input.location,
+      // 落库口 canonical 化（R5 漂移闸前提，location.ts 单源）：所有写者（registerSource/
+      // 直写 store）落的本地路径都归 canonical 形态，ingest 复检才有登记快照可比
+      location: isLocalPathKind(input.kind) ? resolveCanonicalLocation(input.location) : input.location,
       scopeRef,
       sync: { ...DEFAULT_SYNC, ...input.sync },
       status: input.status ?? 'pending',

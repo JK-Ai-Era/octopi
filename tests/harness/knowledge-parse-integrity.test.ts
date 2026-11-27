@@ -2,6 +2,7 @@
  * Parse 完整性 — 半写入不半成品可搜 / gap 补扫 indexing / 入队层 size-mtime 跳过
  */
 import { describe, expect, it, afterEach } from 'vitest';
+import { resolveCanonicalLocation } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -157,7 +158,7 @@ describe('gap 扫描补 indexing + 入队层未变更跳过', () => {
     store: KnowledgeSourceStore;
     ingest: KnowledgeIngest;
   }> {
-    const root = await mkdtemp(join(tmpdir(), 'octopi-kn-integrity-'));
+    const root = resolveCanonicalLocation(await mkdtemp(join(tmpdir(), 'octopi-kn-integrity-')));
     const store = await KnowledgeSourceStore.open({ dbPath: ':memory:' });
     const ingest = new KnowledgeIngest({ sourceStore: store, parseConcurrency: 2 });
     cleanup = async () => {

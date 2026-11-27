@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeSourceLocation,
+  resolveCanonicalLocation,
   stripLocationWrapping,
 } from '@octopi-agent/engine/harness/knowledge/location.js';
 import { KnowledgeSourceStore } from '@octopi-agent/engine/harness/knowledge/source-store.js';
@@ -29,7 +30,8 @@ describe('stripLocationWrapping', () => {
 });
 
 describe('normalizeSourceLocation', () => {
-  it('本地源：Windows 带引号路径去引号并保留原分隔符', () => {
+  // NIT-13：win32 上若该路径/前缀真实存在会被 canonical 化，断言即红——仅非 win32 跑
+  it.skipIf(process.platform === 'win32')('本地源：Windows 带引号路径去引号并保留原分隔符', () => {
     expect(normalizeSourceLocation('directory', '"C:\\Users\\James\\Documents\\云锡"')).toBe(
       'C:\\Users\\James\\Documents\\云锡',
     );
@@ -79,7 +81,8 @@ describe('写入口接线（register / update）', () => {
     return { store, write };
   }
 
-  it('registerSource 落库前剥离包裹引号（用户报的那一例）', async () => {
+  // NIT-13：同上（win32 真实盘符路径会被 canonical 化/形态闸要求自洽）
+  it.skipIf(process.platform === 'win32')('registerSource 落库前剥离包裹引号（用户报的那一例）', async () => {
     const { store, write } = await openWrite();
     const created = await write.registerSource(identity, {
       kind: 'directory',
@@ -107,16 +110,21 @@ describe('写入口接线（register / update）', () => {
     store.database.close();
   });
 
-  it('updateSource 的 location 也过同一归一化；url 源拒绝本地路径', async () => {
+  it('updateSource 的 location 过同一形态闸（MAJOR-5）：canonical 落库、非 canonical 拒；url 源拒绝本地路径', async () => {
     const { store, write } = await openWrite();
     const dir = await write.registerSource(identity, {
       kind: 'directory',
-      location: '/tmp/kn-a',
+      location: resolveCanonicalLocation('/tmp/kn-a'),
       scopeRef: { level: 'global', key: 'global' },
       sync: { enabled: false, strategy: 'manual' },
     });
-    await write.updateSource(identity, dir.id, { location: '  "/tmp/kn-b"  ' });
-    expect(store.get(dir.id)!.location).toBe('/tmp/kn-b');
+    // 形态闸（MAJOR-5）：非 canonical（引号包裹 + alias 形态）拒——写面不替调用方改写
+    await expect(
+      write.updateSource(identity, dir.id, { location: '  "/tmp/kn-b"  ' }),
+    ).rejects.toThrow(/location_must_be_canonical/);
+    // canonical 形态放行并原样落库（R5 漂移闸依赖登记形态 canonical）
+    await write.updateSource(identity, dir.id, { location: resolveCanonicalLocation('/tmp/kn-b') });
+    expect(store.get(dir.id)!.location).toBe(resolveCanonicalLocation('/tmp/kn-b'));
 
     const url = await write.registerSource(identity, {
       kind: 'url',
