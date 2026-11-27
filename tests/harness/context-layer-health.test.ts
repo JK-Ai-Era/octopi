@@ -15,6 +15,20 @@ describe('probeContextLayerHealth', () => {
     expect(wisdom?.registered).toBe(false);
   });
 
+  it('语义种子装配事实为 false 时 cognition 层如实注记 degraded（R4 暂关/能力缺失）', async () => {
+    const health = await probeContextLayerHealth({
+      agentId: 'a1b',
+      semanticSeedsCapable: false,
+    });
+    const cognition = health.layers.find((l) => l.id === 'cognition');
+    expect(cognition?.degraded).toContain('semantic_seeds_unavailable');
+    // 装配事实为 true 或未知时不注记（不冒充能力判定）
+    const capable = await probeContextLayerHealth({ agentId: 'a1c', semanticSeedsCapable: true });
+    expect(capable.layers.find((l) => l.id === 'cognition')?.degraded ?? []).toHaveLength(0);
+    const unknown = await probeContextLayerHealth({ agentId: 'a1d' });
+    expect(unknown.layers.find((l) => l.id === 'cognition')?.degraded ?? []).toHaveLength(0);
+  });
+
   it('memory/wisdom/skill 计数进入 summary', async () => {
     const memoryStore = new InMemoryMemoryStore();
     await memoryStore.store({

@@ -89,6 +89,7 @@ import { DefaultContextEngine } from '../context/default-context-engine.js';
 import { createProviderSummarize } from '../context/summarize.js';
 import { collectToolAgers, collectToolArgAgers } from '../context/tool-result-aging.js';
 import { createDefaultSystemPromptAssembler } from '../context/system-prompt-assembler.js';
+import { DEFAULT_SEMANTIC_SEED_COUNT } from '../context/layers.js';
 import { SessionAwareRunner } from '../run/runner.js';
 import type { SessionAwareRunnerConfig } from '../run/runner.js';
 import { DefaultMcpManager } from '../extension/plugin-ecosystem/mcp/manager.js';
@@ -632,6 +633,8 @@ export class AgentBuilder {
     /** E8：易变快照组 token 预算（缺省不设上限） */
     snapshotBudgetTokens?: number;
     layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
+    /** 语义种子上限（缺省 0=暂关（R4）；>0 显式开启） */
+    cognitionSemanticSeedCount?: number;
   };
   /** 文件式 persona 的 run 时解析器（指纹缓存，改文件下一轮生效） */
   private _personaResolver?: () => Promise<string>;
@@ -1023,9 +1026,19 @@ export class AgentBuilder {
     /** E8：易变快照组 token 预算（缺省不设上限） */
     snapshotBudgetTokens?: number;
     layerShares?: Partial<Record<import('../context/layer-types.js').ContextLayerId, number>>;
+    /** 语义种子上限（缺省 0=暂关（R4）；>0 显式开启） */
+    cognitionSemanticSeedCount?: number;
   }): this {
     this._contextAssemblerConfig = { ...this._contextAssemblerConfig, ...config };
     return this;
+  }
+
+  /** 语义种子装配事实（单源）：store 具能力且配置上限 > 0 才算启用——暂关（R4）与能力缺失都如实注记 */
+  private semanticSeedsCapableFact(): boolean {
+    return (
+      this._cognitionStore?.supportsSemanticSeeds === true &&
+      (this._contextAssemblerConfig?.cognitionSemanticSeedCount ?? DEFAULT_SEMANTIC_SEED_COUNT) > 0
+    );
   }
 
   /** 设置摘要函数（用于 LLM 摘要压缩） */
@@ -1466,6 +1479,8 @@ export class AgentBuilder {
             knowledgeCatalog: this._knowledgeCatalog,
             wisdomStore: this._wisdomStore,
             cognitionStore: this._cognitionStore,
+            // 语义种子装配事实（单源）：暂关/能力缺失都如实注记 degraded，不冒充能力在线
+            semanticSeedsCapable: this.semanticSeedsCapableFact(),
             personaLoaded: Boolean(
               (this._systemPrompt ?? '').trim() ||
                 (this._initialPersonaContent ?? '').trim() ||
@@ -1563,6 +1578,7 @@ export class AgentBuilder {
       wisdomTrialMaxItems: this._wisdomInjection?.trialMaxItems,
       wisdomIncludeTrial: this._wisdomInjection?.trialVisible,
       cognitionStore,
+      cognitionSemanticSeedCount: assemblerCfg?.cognitionSemanticSeedCount,
       systemBudgetRatio: assemblerCfg?.systemBudgetRatio,
       systemBudgetTokens: assemblerCfg?.systemBudgetTokens,
       snapshotBudgetTokens: assemblerCfg?.snapshotBudgetTokens,
@@ -1865,6 +1881,8 @@ export class AgentBuilder {
           knowledgeCatalog: knowledgeCatalogForHealth,
           wisdomStore: wisdomStoreForHealth,
           cognitionStore: cognitionStoreForHealth,
+          // 语义种子装配事实（单源）：暂关/能力缺失都如实注记 degraded
+          semanticSeedsCapable: this.semanticSeedsCapableFact(),
           personaLoaded: personaLoadedForHealth,
         });
       },

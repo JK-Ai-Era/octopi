@@ -266,7 +266,8 @@ describe('CognitionLayer 语义种子接入（D 验收形态）', () => {
     const a = await graph.admitConcept({ name: '上下文切片锚定', kind: 'construct', supportCount: 2 });
     await graph.promote([a.id!], 'active');
 
-    const layer = new CognitionLayer({ store: graph });
+    // R4 暂关后语义种子为显式 opt-in：D 验收形态显式开启
+    const layer = new CognitionLayer({ store: graph, semanticSeedCount: 4 });
     const result = await layer.assemble({
       sessionId: 's',
       messages: [],
@@ -276,6 +277,16 @@ describe('CognitionLayer 语义种子接入（D 验收形态）', () => {
     });
     // 词面种子「认知概念的召回逻辑」打不中「上下文切片锚定」；语义种子把概念名送进扩散激活
     expect(result?.text).toContain('上下文切片锚定');
+
+    // R4 暂关（默认 semanticSeedCount=0）：不显式开启则语义种子不参与召回
+    const optedOff = await new CognitionLayer({ store: graph }).assemble({
+      sessionId: 's',
+      messages: [],
+      query: '认知概念的召回逻辑',
+      tokenBudget: 800,
+      systemBudget: 800,
+    });
+    expect(optedOff).toBeNull();
 
     // 降级：InMemory 无向量 → 纯词面（0 命中返 null，不抛）
     const bare = new InMemoryConceptGraph();

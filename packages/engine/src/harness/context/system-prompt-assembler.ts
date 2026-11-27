@@ -142,7 +142,7 @@ export function createDefaultSystemPromptAssembler(options?: {
   knowledgeGroupByScope?: boolean;
   knowledgeShowProgress?: 'off' | 'bucket' | 'exact';
   cognitionDepth?: number;
-  /** 语义种子上限（缺省 4；0 关闭语义种子） */
+  /** 语义种子上限（缺省 0=暂关（R4），等 OP-9R 后重评；>0 显式开启） */
   cognitionSemanticSeedCount?: number;
   /** 全局宪法；提供则 preamble 固定最前 */
   constitution?: ConstitutionConfig | string | null;

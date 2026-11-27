@@ -140,6 +140,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.1 (2026-11-27)
+
+### chore(context): R4 收尾——语义种子暂关（等 OP-9R），layer-health 如实 degraded
+
+- **语义种子默认暂关**：`semanticSeedCount` 缺省 4 → 0（单源常量
+  `DEFAULT_SEMANTIC_SEED_COUNT`，R4 拍板 2026-11-20：绝对距离带无区分力，无关对与相关对
+  距离域重叠）；显式配置 > 0 可恢复（`contextAssembler({ cognitionSemanticSeedCount })`）
+- **layer-health 如实 degraded**：builder 两个 `contextHealth` 接线点传语义种子装配事实
+  （单源 `semanticSeedsCapableFact()`：store 具能力且配置上限 > 0）——暂关/能力缺失都注记
+  `semantic_seeds_unavailable`，不冒充能力在线；事实未知时不注记
+- 测试：6174 passed / 9 skipped（D 验收形态改显式 opt-in、默认暂关断言、degraded 正反向）
+
 ## v0.136.0 (2026-11-27)
 
 ### feat(context): R5′ 召回双模式——术语触发 + 影响面（R6 格式渲染，废除裸名折叠行）

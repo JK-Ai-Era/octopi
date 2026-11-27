@@ -449,6 +449,13 @@ export class MemoryLayer extends BaseLayer {
 
 // ── Cognition（扩散激活子图；强弱边分列） ──
 
+/**
+ * 语义种子默认上限：0 = 暂关（R4 拍板 2026-11-20：语义种子绝对距离带无区分力，
+ * 无关对与相关对距离域重叠），等 OP-9R（写侧 name+description 嵌入）后重评。
+ * 显式配置 > 0 可恢复。单源常量：CognitionLayer 缺省与 layer-health 装配事实共用。
+ */
+export const DEFAULT_SEMANTIC_SEED_COUNT = 0;
+
 export class CognitionLayer extends BaseLayer {
   private readonly store: ConceptGraphStore;
   private readonly depth: number;
@@ -458,13 +465,13 @@ export class CognitionLayer extends BaseLayer {
     store: ConceptGraphStore;
     depth?: number;
     order?: number;
-    /** 语义种子上限（缺省 4；0 关闭语义种子） */
+    /** 语义种子上限（缺省 DEFAULT_SEMANTIC_SEED_COUNT=0 暂关；>0 显式开启） */
     semanticSeedCount?: number;
   }) {
     super('cognition', { order: options.order, placement: 'snapshot' });
     this.store = options.store;
     this.depth = options.depth ?? 2;
-    this.semanticSeedCount = options.semanticSeedCount ?? 4;
+    this.semanticSeedCount = options.semanticSeedCount ?? DEFAULT_SEMANTIC_SEED_COUNT;
   }
 
   async assemble(ctx: LayerAssembleContext): Promise<LayerContent | null> {
