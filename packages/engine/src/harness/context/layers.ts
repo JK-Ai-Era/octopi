@@ -492,8 +492,7 @@ export class CognitionLayer extends BaseLayer {
     });
     if (!graph.nodes.length) return null;
 
-    const nameOf = new Map(graph.nodes.map((n) => [n.id, n.name]));
-    const gloss = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 200);
+const nameOf = new Map(graph.nodes.map((n) => [n.id, n.name]));
 
     // 关系行（强边，约束边一等公民带释义）；弱边（related/shadow）只作邻域成员资格，不伪造成因果格式
     const strong: string[] = [];
@@ -502,28 +501,46 @@ export class CognitionLayer extends BaseLayer {
       const target = nameOf.get(edge.targetId);
       if (!source || !target) continue;
       if (edge.relationType === 'related' || edge.status === 'shadow') continue;
-      const desc = edge.description ? ` (${gloss(edge.description)})` : '';
-      strong.push(`- ${source} —[${edge.relationType}]→ ${target}${desc}`);
+      const desc = edge.description ? ` (${singleLineGloss(edge.description)})` : '';
+      strong.push(`- ${singleLine(source)} —[${edge.relationType}]→ ${singleLine(target)}${desc}`);
     }
 
     // 概念卡（R6 格式）：名字（kind）：description——术语触发的定义卡与影响面邻域一视同仁，
-    // 语义本体（kind/description）不丢弃；废除裸名折叠行（「相关：…」零信息量病根）
+    // 语义本体（kind/description）不丢弃；废除裸名折叠行（「相关：…」零信息量病根）。
+    // 卡片预算（m3）：邻域无上限最坏 40 卡挤爆层预算——cap 后丢弃数记入 dropped
+    const CARD_CAP = 16;
     const cards: string[] = [];
-    for (const n of graph.nodes) {
-      const desc = n.description ? `：${gloss(n.description)}` : '';
-      cards.push(`- ${n.name}（${n.kind}）${desc}`);
+    for (const n of graph.nodes.slice(0, CARD_CAP)) {
+      const desc = n.description ? `：${singleLineGloss(n.description)}` : '';
+      cards.push(`- ${singleLine(n.name)}（${n.kind}）${desc}`);
     }
+    const droppedCards = Math.max(0, graph.nodes.length - CARD_CAP);
+    const retainedIds = new Set(graph.nodes.slice(0, CARD_CAP).map((n) => n.id));
 
     const lines = [...cards, ...(strong.length ? ['', ...strong] : [])];
-    if (lines.length === 0) return null;
 
     const text = `# 相关概念\n\n${lines.join('\n')}`;
     const { text: truncated, dropped } = this.truncateToBudget(text, ctx.tokenBudget);
     return this.content(truncated, {
-      dropped,
-      sources: graph.nodes.map((n) => n.id),
+      // m4：sources 只报实际保留的概念（与上屏内容一致，不报全量）；
+      // m3：卡片截断记账（与预算截断注记并列，不静默丢）
+      dropped: [dropped, droppedCards > 0 ? `cards_dropped=${droppedCards}` : undefined]
+        .filter(Boolean)
+        .join('; ') || undefined,
+      sources: graph.nodes.filter((n) => retainedIds.has(n.id)).map((n) => n.id),
     });
   }
+}
+
+/** 行内原子（M1）：name/边端点单行化——换行不得伪造注入行（保留字间空格） */
+function singleLine(text: string): string {
+  return text.replace(/[\r\n\u2028\u2029]+/g, ' ').replace(/[^\S\r\n]+/g, ' ').trim();
+}
+
+/** 释义单行化 + 200 字符上限（截断带省略号标记，不产生看似完整的残缺释义） */
+function singleLineGloss(text: string): string {
+  const flat = singleLine(text);
+  return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
 }
 
 // ── Wisdom（静态/半静态） ──

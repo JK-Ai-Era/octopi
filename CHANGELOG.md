@@ -140,13 +140,36 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.2 (2026-11-27)
+
+### fix(context): R5′ 独立评审修复（3 major + 5 minor）——渲染信任边界与召回精度
+
+fresh-eyes 独立评审对 v0.136.0/1 报 0 blocker / 3 major / 7 minor，逐条对码核实后修复：
+
+- **M1 渲染信任边界**：概念卡 `name`/边端点单行化（`singleLine`，换行不得伪造注入行——
+  上批边释义立的规矩补到 name 面）；命名门结构层拒收换行/控制字符名（新 gate reason
+  `name_single_line`，防新增脏数据；渲染兜底防存量）
+- **M2 召回精度**：反向包含匹配按文字系分流——纯拉丁名只认**词边界**（`'truncate'` 不再
+  命中概念 `run`→假定义卡）；CJK 名保持子串包含（无空格直呼语义不变）；拉丁词边界直呼
+  （`MutexLease和会话的关系`）仍命中
+- **M3 文档漂移**：`context-layer-contracts`（中英同批）§2/§8.2 同步 R6 格式与种子暂关；
+  arch §8.2 示例块重写（概念卡+关系行，废「相关：」折叠）；recall-repair 状态行更新 +
+  R4 拍板出处补记
+- minor：未注册层不再注记 degraded（registered 门）；邻域卡片预算 16 + 丢弃记 `dropped`
+  注记（不静默丢）；`sources` 只报实际保留概念；释义截断带省略号（不产生看似完整的残缺
+  定义）；「术语缺席」反向断言强化（断言整层不产出而非文本恰好没有）；CHANGELOG 旋钮
+  措辞如实（部署配置面未开）；死行清理、gloss 上提模块级
+- 测试：6177 passed / 9 skipped（M1 gate+渲染兜底、M2 词边界/CJK 语义、m1 registered 门
+  回归）；build 绿
+
 ## v0.136.1 (2026-11-27)
 
 ### chore(context): R4 收尾——语义种子暂关（等 OP-9R），layer-health 如实 degraded
 
 - **语义种子默认暂关**：`semanticSeedCount` 缺省 4 → 0（单源常量
   `DEFAULT_SEMANTIC_SEED_COUNT`，R4 拍板 2026-11-20：绝对距离带无区分力，无关对与相关对
-  距离域重叠）；显式配置 > 0 可恢复（`contextAssembler({ cognitionSemanticSeedCount })`）
+  距离域重叠）；程序化传参可恢复（`contextAssembler({ cognitionSemanticSeedCount })`；
+  部署配置面未开此旋钮）
 - **layer-health 如实 degraded**：builder 两个 `contextHealth` 接线点传语义种子装配事实
   （单源 `semanticSeedsCapableFact()`：store 具能力且配置上限 > 0）——暂关/能力缺失都注记
   `semantic_seeds_unavailable`，不冒充能力在线；事实未知时不注记

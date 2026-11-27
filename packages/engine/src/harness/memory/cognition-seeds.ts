@@ -67,7 +67,7 @@ export function createSeedMatcher(seeds: readonly string[]): SeedMatcher {
     for (const s of keys) {
       if (nameKey === s) return true;
       if (s.length >= 2 && nameKey.includes(s)) return true;
-      if (nameKey.length >= 2 && s.includes(nameKey)) return true;
+      if (reverseContains(nameKey, s)) return true;
     }
     // 别名同规则命中（M-2：被折叠的长名可召回）
     for (const a of aliases ?? []) {
@@ -76,11 +76,28 @@ export function createSeedMatcher(seeds: readonly string[]): SeedMatcher {
       for (const s of keys) {
         if (ak === s) return true;
         if (s.length >= 2 && ak.includes(s)) return true;
-        if (ak.length >= 2 && s.includes(ak)) return true;
+        if (reverseContains(ak, s)) return true;
       }
     }
     if (!description) return false;
     const descKey = normName(description);
     return keys.some((s) => s.length >= 2 && descKey.includes(s));
   };
+}
+
+const CJK_RANGE = /[\u3400-\u4dbf\u4e00-\u9fff]/;
+
+function escapeRegExp(t: string): string {
+  return t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 反向包含（token 含 name，无空格直呼）：
+ * CJK 名用子串包含（复合词直呼语义）；纯拉丁名只认**词边界**出现——
+ * `'truncate'.includes('run')` 不得命中概念 `run`（M2：误锚升级为假定义卡，错定义比漏召回代价高）。
+ */
+function reverseContains(nameKey: string, s: string): boolean {
+  if (nameKey.length < 2 || !s.includes(nameKey)) return false;
+  if (CJK_RANGE.test(nameKey)) return true;
+  return new RegExp(`(^|[^a-z0-9_])${escapeRegExp(nameKey)}($|[^a-z0-9_])`).test(s);
 }

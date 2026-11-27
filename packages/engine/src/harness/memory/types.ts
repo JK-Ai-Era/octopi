@@ -608,6 +608,7 @@ export type ConceptGateReason =
   | 'endpoint_not_admitted'
   | 'definition_requires_description'
   | 'identifier_name'
+  | 'name_single_line'
   | 'multi_evidence_required'
   | 'cooccur_no_escalation'
   | 'demoted_related'

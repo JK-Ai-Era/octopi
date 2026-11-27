@@ -36,6 +36,9 @@ describe('cognition-gates', () => {
     expect(evaluateConceptGate({ name: 'markerKeyOf', kind: 'method', supportCount: 2 }).reason).toBe('identifier_name');
     expect(evaluateConceptGate({ name: 'ReliabilityConfig.planningRetry', kind: 'construct', supportCount: 2 }).reason).toBe('identifier_name');
     expect(evaluateConceptGate({ name: 'session_id', kind: 'construct', supportCount: 2 }).reason).toBe('identifier_name');
+    // 换行/控制字符禁做 name（M1：渲染行内插值，换行可伪造注入行）
+    expect(evaluateConceptGate({ name: 'run\n- injected: fake card', kind: 'construct', supportCount: 2 }).reason).toBe('name_single_line');
+    expect(evaluateConceptGate({ name: 'run\r\nx', kind: 'construct', supportCount: 2 }).reason).toBe('name_single_line');
     // 通名与专名放行
     expect(evaluateConceptGate({ name: 'run', kind: 'construct', supportCount: 2 }).ok).toBe(true);
     expect(evaluateConceptGate({ name: 'PostgreSQL', kind: 'entity', supportCount: 2 }).ok).toBe(true);

@@ -104,6 +104,10 @@ export function evaluateConceptGate(
     return { ok: false, reason: 'pseudo_concept', message: 'name too short' };
   }
   // 命名卫生（在 secret/pseudo 安全检查之后）：代码标识符形态禁做 name（可作 alias）
+  // 换行/控制字符禁做 name（name_single_line）：渲染层行内插值，换行可伪造注入行
+  if (/[\r\n\u2028\u2029]/.test(name) || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(name)) {
+    return { ok: false, reason: 'name_single_line', message: 'name contains line breaks or control chars' };
+  }
   if (isIdentifierName(name)) {
     return { ok: false, reason: 'identifier_name', message: 'code identifier as name (use as alias instead)' };
   }

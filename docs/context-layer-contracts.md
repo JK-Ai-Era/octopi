@@ -46,7 +46,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 | persona | 20 | **100** | 0.35 | **no** | `PersonaSource` / Runner resolve |
 | skill | 30 | 60 | 0.15 | yes | `SkillManager.formatForPrompt()` |
 | knowledge | 40 | 40 | 0.12 | yes | `KnowledgeCatalogProvider` (Tier 0 catalog) |
-| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate` (+ query-vector semantic seeds) |
+| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate` (semantic seeds opt-in only: `semanticSeedCount` defaults to 0 since v0.136.1) |
 | memory | 60 | 30 | 0.10 | yes | `MemoryStore.retrieve` |
 | runtime | 70 | 80 | 0.10 | yes | session tasks / guidance (`volatileContext`; `injectedContext` is the legacy merged form) |
 
@@ -132,7 +132,7 @@ Design invariants:
 | `PluginRuntimeSnapshotLayer` | Plugin Collect contributions as a budgeted Runtime snapshot (`<plugin-contribution>`, XML-escaped so a plugin cannot forge sibling tags) | systemPrompt override — contributions never patch the system prompt |
 | `KnowledgeLayer` | `KnowledgeCatalogProvider` → Tier 0 catalog formatting | Content retrieval / embedding (Knowledge service) |
 | `MemoryLayer` | `retrieve({text, limit, minSimilarity})` + confidence inject filter (shadow/deleted excluded) | Tuning decay policy (curve in `memory/decay-policy.ts`, executed by govern) |
-| `CognitionLayer` | `spreadingActivate` + strong/weak edge formatting (strong edges `A —[rel]→ B` / weak edges collapsed as "related: …"); semantic seeds from query-vector neighbors (`semanticSeedCount`, degrades to lexical when no vectors) | Co-occurrence promotion, fake-causal writes (cognition-gates) |
+| `CognitionLayer` | `spreadingActivate` + dual-mode recall rendered as concept cards (`name（kind）：description`) and strong relation lines (`A —[rel]→ B (gloss)`); term-triggered definition cards + 1–2 hop blast-radius neighborhood; weak edges contribute membership only (no "related: …" fold line); gloss/name single-lined; semantic seeds opt-in (`semanticSeedCount`, default 0 = off, awaiting OP-9R) | Co-occurrence promotion, fake-causal writes (cognition-gates) |
 | `WisdomLayer` | Small core + scenario match + trial rotation (`trialMaxItems` / `includeTrial`) + maxim layout; `onInjected` → `touchApplied` books S1 applied (core/scenario picks only, never trial) | embedding/llm matching (later) |
 | `createDefaultLayers` | Registers only layers whose dependencies exist | Auto-discovery |
 

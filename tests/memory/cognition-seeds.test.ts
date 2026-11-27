@@ -75,6 +75,19 @@ describe('createSeedMatcher', () => {
     expect(createSeedMatcher(['锁'])('锁', null)).toBe(true);
   });
 
+  it('M2：纯拉丁名反向只认词边界——truncate 不得命中 run', () => {
+    expect(createSeedMatcher(['truncate 逻辑'])('run', '一次 Agent.run() 执行')).toBe(false);
+    expect(createSeedMatcher(['truncate'])('run', null)).toBe(false);
+    expect(createSeedMatcher(['overrun'])('run', null)).toBe(false);
+    // 词边界直呼仍命中：整句 token 中 name 独立成词
+    expect(createSeedMatcher(['mutexlease和会话的关系'])('MutexLease', null)).toBe(true);
+    expect(createSeedMatcher(['run为什么超时'])('run', null)).toBe(true);
+  });
+
+  it('M2：CJK 名反向保持子串包含（无空格直呼语义不变）', () => {
+    expect(createSeedMatcher(['进程模块缓存是保存在哪里的'])('进程模块缓存', null)).toBe(true);
+  });
+
   it('单字种子仅精确命中（防子串误锚）', () => {
     expect(createSeedMatcher(['a'])('bar', null)).toBe(false);
     expect(createSeedMatcher(['a'])('a', null)).toBe(true);

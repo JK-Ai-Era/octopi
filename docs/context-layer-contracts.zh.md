@@ -47,7 +47,7 @@ Constitution + Layer Providers ──► ContextAssembler ──► systemPrompt
 | persona | 20 | **100** | 0.35 | **no** | `PersonaSource` / Runner resolve |
 | skill | 30 | 60 | 0.15 | yes | `SkillManager.formatForPrompt()` |
 | knowledge | 40 | 40 | 0.12 | yes | `KnowledgeCatalogProvider`（Tier 0 catalog） |
-| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate`（+ query 向量语义种子） |
+| cognition | 50 | 20 | 0.06 | yes | `ConceptGraphStore.spreadingActivate`（语义种子仅显式开启：`semanticSeedCount` 自 v0.136.1 缺省 0） |
 | memory | 60 | 30 | 0.10 | yes | `MemoryStore.retrieve` |
 | runtime | 70 | 80 | 0.10 | yes | session tasks / guidance（`volatileContext`；`injectedContext` 为旧合并形态） |
 
@@ -133,7 +133,7 @@ interface ContextLayer {
 | `PluginRuntimeSnapshotLayer` | Plugin Collect 贡献作为预算内 Runtime 快照（`<plugin-contribution>`，XML 转义防伪造成兄弟标签） | systemPrompt 覆写——贡献绝不打补丁进 system prompt |
 | `KnowledgeLayer` | `KnowledgeCatalogProvider` → Tier 0 catalog 格式化 | 内容检索 / embedding（归 Knowledge 服务） |
 | `MemoryLayer` | `retrieve({text, limit, minSimilarity})` + 置信注入过滤（shadow/deleted 排除） | 衰减策略调参（曲线在 `memory/decay-policy.ts`，由 govern 执行） |
-| `CognitionLayer` | `spreadingActivate` + 强弱边格式化（强边 `A —[rel]→ B` / 弱边折叠「相关：…」）；query 向量近邻语义种子（`semanticSeedCount`，无向量时退化纯词面） | 共现升格、假因果写入（归 cognition-gates） |
+| `CognitionLayer` | `spreadingActivate` + 召回双模式渲染：概念卡（`名字（kind）：description`）+ 强关系行（`A —[rel]→ B (关系一句话)`）；术语触发定义卡 + 1–2 跳影响面邻域；弱边只作成员资格（无「相关：…」折叠行）；释义/名字单行化；语义种子显式开启（`semanticSeedCount` 缺省 0=暂关，等 OP-9R） | 共现升格、假因果写入（归 cognition-gates） |
 | `WisdomLayer` | 小核心 + 场景匹配 + trial 轮转（`trialMaxItems` / `includeTrial`）+ maxim 排版；`onInjected` → `touchApplied` 记 S1 applied（只记 core/scenario 命中，trial 不入账） | embedding/llm 匹配（归后续） |
 | `createDefaultLayers` | 只注册有依赖的层 | 自动发现 |
 

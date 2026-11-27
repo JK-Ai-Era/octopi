@@ -16,17 +16,35 @@ describe('probeContextLayerHealth', () => {
   });
 
   it('语义种子装配事实为 false 时 cognition 层如实注记 degraded（R4 暂关/能力缺失）', async () => {
+    const { InMemoryConceptGraph } = await import(
+      '@octopi-agent/engine/harness/memory/cognition.js'
+    );
+    const store = new InMemoryConceptGraph();
     const health = await probeContextLayerHealth({
       agentId: 'a1b',
+      cognitionStore: store,
       semanticSeedsCapable: false,
     });
     const cognition = health.layers.find((l) => l.id === 'cognition');
+    expect(cognition?.registered).toBe(true);
     expect(cognition?.degraded).toContain('semantic_seeds_unavailable');
     // 装配事实为 true 或未知时不注记（不冒充能力判定）
-    const capable = await probeContextLayerHealth({ agentId: 'a1c', semanticSeedsCapable: true });
+    const capable = await probeContextLayerHealth({
+      agentId: 'a1c',
+      cognitionStore: store,
+      semanticSeedsCapable: true,
+    });
     expect(capable.layers.find((l) => l.id === 'cognition')?.degraded ?? []).toHaveLength(0);
-    const unknown = await probeContextLayerHealth({ agentId: 'a1d' });
+    const unknown = await probeContextLayerHealth({ agentId: 'a1d', cognitionStore: store });
     expect(unknown.layers.find((l) => l.id === 'cognition')?.degraded ?? []).toHaveLength(0);
+    // m1：未注册（无 store）的层没有装配事实可言，不注记 degraded
+    const unregistered = await probeContextLayerHealth({
+      agentId: 'a1e',
+      semanticSeedsCapable: false,
+    });
+    const bare = unregistered.layers.find((l) => l.id === 'cognition');
+    expect(bare?.registered).toBe(false);
+    expect(bare?.degraded ?? []).toHaveLength(0);
   });
 
   it('memory/wisdom/skill 计数进入 summary', async () => {

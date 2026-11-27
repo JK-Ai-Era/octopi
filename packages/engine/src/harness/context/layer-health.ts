@@ -217,8 +217,9 @@ export async function probeContextLayerHealth(
       ...(id === 'cognition' && cognitionEdges !== undefined
         ? { extra: { edges: cognitionEdges } }
         : {}),
-      // 显式降级：仅当调用方确知装配缺失时注记（home 探针无装配事实时不得冒充能力判定）
-      ...(id === 'cognition' && deps.semanticSeedsCapable === false
+      // 显式降级：仅当调用方确知装配缺失时注记（home 探针无装配事实时不得冒充能力判定）；
+      // 未注册的层没有装配事实可言，不注记（m1：无 store 时 registered:false 不该带 degraded）
+      ...(id === 'cognition' && registered && deps.semanticSeedsCapable === false
         ? { degraded: ['semantic_seeds_unavailable'] }
         : {}),
     };
