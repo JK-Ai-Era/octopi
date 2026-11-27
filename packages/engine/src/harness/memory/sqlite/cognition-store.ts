@@ -225,13 +225,17 @@ export class SqliteConceptGraph implements ConceptGraphStore {
 
   async admitConcept(input: AdmitConceptInput): Promise<AdmitConceptResult> {
     const isDefinition = input.birthChannel === 'definition';
-    // 同名已出生概念（同 kind）收新票 = 合并支撑，不是延迟出生——候选区只为未出生者
+    // 同名已出生概念（同 kind）收新票 = 合并支撑，不是延迟出生——候选区只为未出生者。
+    // 口径与下方 existing 查找一致（SQL LOWER 谓词，避免 JS/SQLite 双归一化漏判——M-3）。
     const nameKey = normName(input.name);
     const sameNameBorn = (
-      this.db.raw.prepare('SELECT name, kind FROM concepts').all() as Array<{ name: string; kind: string }>
-    ).some((r) => normName(r.name) === nameKey && r.kind === input.kind);
+      this.db.raw
+        .prepare('SELECT 1 AS hit FROM concepts WHERE LOWER(name) = ? AND kind = ? LIMIT 1')
+        .get(nameKey, input.kind) as { hit: number } | undefined
+    )?.hit === 1;
     const gate = evaluateConceptGate(input, {
-      capacityAdmitStop: this.capacityStop,
+      // 合并不新增节点，不受容量门拦（m-14）
+      capacityAdmitStop: this.capacityStop && !sameNameBorn,
       skipMdl: isDefinition || sameNameBorn,
     });
     if (!gate.ok) {
@@ -282,6 +286,7 @@ export class SqliteConceptGraph implements ConceptGraphStore {
           )
           .run(mergedFreq, JSON.stringify([...memIds]), JSON.stringify([...domains]), JSON.stringify([...aliases]), input.description ?? null, Date.now(), node.id);
       }
+      this.clearBirthCandidate(nameKey, input.kind, node.id);
       return { action: 'merged', id: node.id, reason: 'ok' };
     }
 
@@ -320,8 +325,10 @@ export class SqliteConceptGraph implements ConceptGraphStore {
           null,
           [conflicts[0]!.reason],
         );
+        this.clearBirthCandidate(nameKey, input.kind, id);
         return { action: 'merge_candidate', id, candidateId, reason: 'fingerprint_conflict' };
       }
+      this.clearBirthCandidate(nameKey, input.kind, id);
       return { action: 'created', id, reason: 'ok' };
     }
 
@@ -334,8 +341,10 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         null,
         [conflicts[0]!.reason],
       );
+      this.clearBirthCandidate(nameKey, input.kind, id);
       return { action: 'merge_candidate', id, candidateId, reason: 'fingerprint_conflict' };
     }
+    this.clearBirthCandidate(nameKey, input.kind, id);
     return { action: 'created', id, reason: 'ok' };
   }
 
@@ -383,9 +392,9 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         if (row) {
           this.db.raw
             .prepare(
-              'UPDATE concept_birth_candidates SET memory_ids = ?, domain = ?, description = COALESCE(?, description), updated_at = ? WHERE id = ?',
+              'UPDATE concept_birth_candidates SET memory_ids = ?, domain = ?, aliases = ?, description = COALESCE(?, description), updated_at = ? WHERE id = ?',
             )
-            .run(JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, now, row.id);
+            .run(JSON.stringify([...memIds]), JSON.stringify([...domains]), JSON.stringify([...new Set([...safeJsonArray(row.aliases), ...(input.aliases ?? [])])]), input.description ?? null, now, row.id);
           return {
             action: 'candidate_parked',
             candidateId: row.id,
@@ -402,9 +411,9 @@ export class SqliteConceptGraph implements ConceptGraphStore {
     if (row) {
       this.db.raw
         .prepare(
-          'UPDATE concept_birth_candidates SET memory_ids = ?, domain = ?, description = COALESCE(?, description), updated_at = ? WHERE id = ?',
+          'UPDATE concept_birth_candidates SET memory_ids = ?, domain = ?, aliases = ?, description = COALESCE(?, description), updated_at = ? WHERE id = ?',
         )
-        .run(JSON.stringify([...memIds]), JSON.stringify([...domains]), input.description ?? null, now, row.id);
+        .run(JSON.stringify([...memIds]), JSON.stringify([...domains]), JSON.stringify([...new Set([...safeJsonArray(row.aliases), ...(input.aliases ?? [])])]), input.description ?? null, now, row.id);
       return { action: 'candidate_parked', candidateId: row.id, reason: 'ok', message: `votes=${memIds.size}` };
     }
 
@@ -428,6 +437,26 @@ export class SqliteConceptGraph implements ConceptGraphStore {
         now + BIRTH_CANDIDATE_TTL_MS,
       );
     return { action: 'candidate_parked', candidateId: id, reason: 'ok', message: 'votes=1' };
+  }
+
+  /**
+   * 概念出生/合并成功后清同键出生候选（m-6 幽灵候选）：候选攒的票与别名并入概念再删行。
+   */
+  private clearBirthCandidate(nameKey: string, kind: string, bornId: string): void {
+    const rows = this.db.raw
+      .prepare('SELECT * FROM concept_birth_candidates WHERE name_key = ? AND kind = ?')
+      .all(nameKey, kind) as unknown as BirthCandidateRow[];
+    for (const row of rows) {
+      const node = this.db.raw.prepare('SELECT * FROM concepts WHERE id = ?').get(bornId) as ConceptRow | undefined;
+      if (node) {
+        const memIds = new Set([...safeJsonArray(node.memory_ids), ...safeJsonArray(row.memory_ids)]);
+        const aliases = new Set([...safeJsonArray(node.aliases), ...safeJsonArray(row.aliases)]);
+        this.db.raw
+          .prepare('UPDATE concepts SET memory_ids = ?, aliases = ? WHERE id = ?')
+          .run(JSON.stringify([...memIds]), JSON.stringify([...aliases]), bornId);
+      }
+      this.db.raw.prepare('DELETE FROM concept_birth_candidates WHERE id = ?').run(row.id);
+    }
   }
 
   async listBirthCandidates(limit = 100): Promise<BirthCandidate[]> {
@@ -824,6 +853,13 @@ export class SqliteConceptGraph implements ConceptGraphStore {
       const leftHistory = safeJsonRevisions(left.description_history);
       const rightHistory = safeJsonRevisions(right.description_history);
       const rightMemIds = safeJsonArray(right.memory_ids) as string[];
+      // 合并不丢名字：right 的 canonical name 与 aliases 全部并入 left aliases（m-1）
+      const mergedAliases = new Set([
+        ...safeJsonArray(left.aliases),
+        ...safeJsonArray(right.aliases),
+        right.name,
+      ]);
+      mergedAliases.delete(left.name);
       const mergedHistory =
         right.description && right.description !== left.description && left.description
           ? [
@@ -833,8 +869,8 @@ export class SqliteConceptGraph implements ConceptGraphStore {
             ].slice(0, DESCRIPTION_HISTORY_CAP)
           : [...leftHistory, ...rightHistory].slice(0, DESCRIPTION_HISTORY_CAP);
       db.prepare(
-        'UPDATE concepts SET frequency = frequency + ?, memory_ids = ?, domain = ?, description = COALESCE(description, ?), description_history = ?, updated_at = ? WHERE id = ?',
-      ).run(right.frequency, JSON.stringify([...memIds]), JSON.stringify([...domains]), right.description ?? null, JSON.stringify(mergedHistory), Date.now(), left.id);
+        'UPDATE concepts SET frequency = frequency + ?, memory_ids = ?, domain = ?, aliases = ?, description = COALESCE(description, ?), description_history = ?, updated_at = ? WHERE id = ?',
+      ).run(right.frequency, JSON.stringify([...memIds]), JSON.stringify([...domains]), JSON.stringify([...mergedAliases]), right.description ?? null, JSON.stringify(mergedHistory), Date.now(), left.id);
       if (options?.canonicalKind && left.kind !== options.canonicalKind) {
         db.prepare('UPDATE concepts SET kind = ?, updated_at = ? WHERE id = ?').run(
           options.canonicalKind,
@@ -1017,12 +1053,12 @@ export class SqliteConceptGraph implements ConceptGraphStore {
 
     // 反向匹配（token 含 name）无法下推 SQL：轻列扫描 + 共享谓词（cognition-seeds 单源）
     const candidateRows = this.db.raw
-      .prepare(`SELECT id, name, description FROM concepts WHERE status IN (${statusPlace})`)
-      .all(...statuses) as unknown as Array<Pick<ConceptRow, 'id' | 'name' | 'description'>>;
+      .prepare(`SELECT id, name, description, aliases FROM concepts WHERE status IN (${statusPlace})`)
+      .all(...statuses) as unknown as Array<Pick<ConceptRow, 'id' | 'name' | 'description' | 'aliases'>>;
     const seedMatcher = createSeedMatcher(seeds);
     const seedIds: string[] = [];
     for (const r of candidateRows) {
-      if (seedMatcher(r.name, r.description)) seedIds.push(r.id);
+      if (seedMatcher(r.name, r.description, safeJsonArray(r.aliases))) seedIds.push(r.id);
     }
     if (!seedIds.length) return empty;
 

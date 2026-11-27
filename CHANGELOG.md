@@ -140,6 +140,30 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.135.3 (2026-11-27)
+
+### fix(memory): commit 3 独立评审修复（1 blocker + 4 major + 7 minor）
+
+fresh-eyes 独立评审对 v0.135.2 报 1 blocker / 4 major / 14 minor / 6 nit，逐条核实后修复：
+
+- **B-1（blocker）兄弟面归并不再吞定义**：只并**同 kind**（异 kind 是义项，交 merge_candidate
+  裁决）；承接被并方的 definition 标记与口径原文（不再静默丢）；被并名 `merged_into_sibling`
+  审计留痕
+- **M-1 改名后边不断链**：nameToId 登记 canonical 名、清洗前原名与全部别名（假归因
+  `endpoint_not_admitted` 修复）
+- **M-2 aliases 接入召回**：`createSeedMatcher` 纳入别名匹配（被折叠的长名可召回，召回率
+  不再低于归并前）
+- **M-3 归一化单源**：`sameNameBorn` 与 existing 查找统一 SQL LOWER 谓词（非 ASCII 名不再
+  重复出生）；LIMIT 1 替代全表扫
+- **M-4 清洗收紧**：`splitIdentifierMixed` 只剥离代码标识符形态前缀——`LLM 提供方`、
+  `SQLite 概念图` 不再被拆（防概念名过度泛化）
+- minor：resolveMerge 并入 right 的名字与别名（合并不丢名）、候选区回写带别名、出生后清
+  同键幽灵候选（票并入概念）、包含归并限 CJK 短名（防 run⊂runtime 误并）、别名去重、
+  合并不受容量门拦、arch §11.1 登记新 reason codes
+- 裁定接受（记 open-problems）：PascalCase 专名放行、小写起始专名（iOS/eBPF）硬拒、无票
+  计次语义（既有契约边界）
+- 测试：6159 passed / 9 skipped（含 B-1/M-2/M-4/m-6 回归用例）；build 绿
+
 ## v0.135.2 (2026-11-27)
 
 ### feat(memory): 命名卫生门 + 兄弟面别名归并 + 支撑票路由修正（R7′ commit 3）

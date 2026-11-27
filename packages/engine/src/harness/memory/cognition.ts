@@ -74,7 +74,8 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       (n) => normName(n.name) === nameKey && n.kind === input.kind,
     );
     const gate = evaluateConceptGate(input, {
-      capacityAdmitStop: this.capacityStop,
+      // 合并不新增节点，不受容量门拦（m-14）
+      capacityAdmitStop: this.capacityStop && !sameNameBorn,
       skipMdl: isDefinition || sameNameBorn,
     });
     if (!gate.ok) {
@@ -123,18 +124,39 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       } else if (input.description && sameName.description == null) {
         sameName.description = input.description;
       }
+      this.clearBirthCandidate(nameKey, input.kind, sameName.id);
       return { action: 'merged', id: sameName.id, reason: 'ok' };
     }
 
     if (conflicts.length) {
       const id = this.insertNode(input);
+      this.clearBirthCandidate(nameKey, input.kind, id);
       const candidateId = this.pushMergeCandidate(conflicts[0]!.node.id, id, conflicts[0]!.reason);
       return { action: 'merge_candidate', id, candidateId, reason: 'fingerprint_conflict' };
     }
 
     // 无 embedding 注入的近邻候选不在此实现（有向量的近邻路径在 SqliteConceptGraph）
     const id = this.insertNode(input);
+    this.clearBirthCandidate(nameKey, input.kind, id);
     return { action: 'created', id, reason: 'ok' };
+  }
+
+  /** 概念出生/合并成功后清同键出生候选（m-6）：候选攒的票与别名并入概念再删（与 Sqlite 同构） */
+  private clearBirthCandidate(nameKey: string, kind: string, bornId: string): void {
+    const node = this.nodes.get(bornId);
+    if (!node) return;
+    for (const [cid, c] of this.birthCandidates) {
+      if (c.nameKey !== nameKey || c.kind !== kind) continue;
+      for (const mid of c.memoryIds) {
+        if (!node.memoryIds.includes(mid)) node.memoryIds.push(mid);
+      }
+      if (!node.aliases) node.aliases = [];
+      for (const a of c.aliases) {
+        if (!node.aliases.includes(a)) node.aliases.push(a);
+      }
+      node.frequency = Math.max(1, node.memoryIds.length);
+      this.birthCandidates.delete(cid);
+    }
   }
 
   private insertNode(input: AdmitConceptInput): string {
@@ -217,6 +239,9 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
       existing.memoryIds = [...memIds];
       for (const d of domains) {
         if (!existing.domain.includes(d)) existing.domain.push(d);
+      }
+      for (const a of input.aliases ?? []) {
+        if (!existing.aliases.includes(a)) existing.aliases.push(a);
       }
       if (input.description && !existing.description) existing.description = input.description;
       existing.updatedAt = now;
@@ -481,6 +506,11 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
           ].slice(0, DESCRIPTION_HISTORY_CAP)
         : [...(left.descriptionHistory ?? []), ...(right.descriptionHistory ?? [])].slice(0, DESCRIPTION_HISTORY_CAP);
     if (mergedHistory.length > 0) left.descriptionHistory = mergedHistory;
+    // 合并不丢名字：right 的 canonical name 与 aliases 全部并入 left aliases（m-1）
+    if (!left.aliases) left.aliases = [];
+    for (const a of [...(right.aliases ?? []), right.name]) {
+      if (!left.aliases.includes(a) && normName(a) !== normName(left.name)) left.aliases.push(a);
+    }
     if (left.description == null && right.description) {
       left.description = right.description;
     }
@@ -627,7 +657,7 @@ export class InMemoryConceptGraph implements ConceptGraphStore {
 
     for (const n of this.nodes.values()) {
       if (!statuses.has(n.status)) continue;
-      if (seedMatcher(n.name, n.description)) {
+      if (seedMatcher(n.name, n.description, n.aliases)) {
         seedIds.push(n.id);
         activation.set(n.id, 1);
       }

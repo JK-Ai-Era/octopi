@@ -24,6 +24,7 @@ import {
   type EdgeLicenseOutcome,
 } from './cognition-gates.js';
 import { normName } from './cognition-seeds.js';
+const CJK = /[一-鿿]/;
 
 /** 概念化输入包 — 语境切片是消歧必需品 */
 export interface ConceptualizerInput {
@@ -190,6 +191,10 @@ export async function conceptualizeAndAdmit(
       for (const n of full.nodes) {
         const key = n.name.trim().toLowerCase();
         if (!nameToId.has(key)) nameToId.set(key, n.id);
+        for (const alias of n.aliases ?? []) {
+          const ak = alias.trim().toLowerCase();
+          if (!nameToId.has(ak)) nameToId.set(ak, n.id);
+        }
       }
     } catch {
       // 读图失败时仅能连本批节点
@@ -200,29 +205,58 @@ export async function conceptualizeAndAdmit(
   const rawNodes = Array.isArray(parsed.nodes) ? parsed.nodes : [];
   const nodes: ConceptualizerNodeOut[] = [];
 
-  // 命名清洗 + 同批兄弟面归并（R7′ commit 3）：
+  // 命名清洗 + 同批兄弟面归并（R7′ commit 3，B-1 修正版）：
   // ①「标识符+中文」混合名 → 中文主体为 name、标识符提为 alias（命名卫生）；
-  // ②同一命题裂出的双向包含对（含同名）→ 短名为主名、长名入别名（兄弟面归并）。
+  // ② 只并**同 kind**（异 kind 是义项，各自走 store 的 merge_candidate 裁决）；
+  // ③ 同名或包含对且短名含 CJK（拉丁词包含多为巧合：run⊂runtime 不并）；
+  // ④ 先见者为主名，承接 definition/description/domain，被并名留痕 rejected('merged_into_sibling')。
   const cleaned = rawNodes.slice(0, MAX_NODES * 2).flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
     const o = item as Record<string, unknown>;
     const split = splitIdentifierMixed(asString(o.name));
-    return [{ o, name: split.name, aliases: split.alias ? [split.alias] : [] }];
+    return [{ o, name: split.name, rawName: asString(o.name), aliases: split.alias ? [split.alias] : [] }];
   });
   const merged: typeof cleaned = [];
-  outer: for (const c of cleaned) {
-    for (const m of merged) {
+  for (const c of cleaned) {
+    const target = merged.find((m) => {
       const a = normName(m.name);
       const b = normName(c.name);
-      if (a.length < 2 || b.length < 2) continue;
-      if (!(a === b || a.includes(b) || b.includes(a))) continue;
-      const shorter = a.length <= b.length ? m : c;
-      const longer = shorter === m ? c : m;
-      shorter.aliases.push(longer.name, ...longer.aliases);
-      if (shorter === c) merged[merged.indexOf(m)] = c;
-      continue outer;
+      if (a.length < 2 || b.length < 2) return false;
+      // 只并同 kind：异 kind 是不同义项，禁止自动归并（契约：义项冲突走 merge_candidate）
+      const kindA = asString(m.o.kind) || 'construct';
+      const kindB = asString(c.o.kind) || 'construct';
+      if (kindA !== kindB) return false;
+      const same = a === b;
+      const contained =
+        (CJK.test(m.name) || CJK.test(c.name)) && (a.includes(b) || b.includes(a));
+      return same || contained;
+    });
+    if (!target) {
+      merged.push(c);
+      continue;
     }
-    merged.push(c);
+    // 审计留痕：被并名不作为独立概念产出
+    rejected.push({ name: c.name, reason: 'merged_into_sibling' });
+    // 承接（B-1）：定义标记与口径原文优先于长度/顺序——不许静默丢
+    const cDef = c.o.definition === true;
+    const tDef = target.o.definition === true;
+    if (cDef && !tDef) {
+      target.o.definition = true;
+      if (asString(c.o.description)) target.o.description = c.o.description;
+    } else if (!asString(target.o.description) && asString(c.o.description)) {
+      target.o.description = c.o.description;
+    }
+    const tDomain = Array.isArray(target.o.domain) ? (target.o.domain as unknown[]) : [];
+    const cDomain = Array.isArray(c.o.domain) ? (c.o.domain as unknown[]) : [];
+    target.o.domain = [...new Set([...tDomain, ...cDomain])];
+    // 别名：被并名与其别名并入（去重、不把主名收进自己的别名）
+    for (const alias of [c.name, c.rawName, ...c.aliases]) {
+      if (!alias || normName(alias) === normName(target.name)) continue;
+      if (!target.aliases.includes(alias)) target.aliases.push(alias);
+    }
+    if (c.rawName && !target.aliases.includes(c.rawName) && normName(c.rawName) !== normName(target.name)) {
+      target.aliases.push(c.rawName);
+    }
   }
 
   for (const item of merged) {
@@ -300,7 +334,12 @@ export async function conceptualizeAndAdmit(
       admit = { action: 'created', reason: 'ok' };
     }
 
-    if (admit.id) nameToId.set(name.toLowerCase(), admit.id);
+    // 边端点解析要能命中改名/归并后的节点：canonical 名、清洗前原名、别名全部登记（M-1）
+    if (admit.id) {
+      nameToId.set(name.toLowerCase(), admit.id);
+      for (const alias of item.aliases) nameToId.set(alias.toLowerCase(), admit.id);
+      if (item.rawName) nameToId.set(item.rawName.toLowerCase(), admit.id);
+    }
     nodes.push({
       name,
       kind: resolvedKind,

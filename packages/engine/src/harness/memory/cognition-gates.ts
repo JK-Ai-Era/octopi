@@ -57,14 +57,15 @@ export function isIdentifierName(raw: string): boolean {
 }
 
 /**
- * 「标识符 + 中文注释」混合名清洗：name 取中文主体（≥2 字），开头的标识符提为 alias。
- * 纯中文/纯短语名原样返回。
+ * 「标识符 + 中文注释」混合名清洗：仅当前导词是**代码标识符形态**时才剥离
+ * （`historyPrependRef 瞬态闸门` → `瞬态闸门` + alias）；专名/缩写/普通英文词
+ * （`LLM 提供方`、`SQLite 概念图`）不剥，防止概念名过度泛化。
  */
 export function splitIdentifierMixed(raw: string): { name: string; alias?: string } {
   const t = raw.trim();
   if (!CJK.test(t)) return { name: t };
-  const m = t.match(/^([A-Za-z_$][\w$.()$/]*)\s+(\S[\s\S]*)$/);
-  if (m) {
+  const m = t.match(/^(\S+)\s+(\S[\s\S]*)$/);
+  if (m && isIdentifierName(m[1]!)) {
     const rest = m[2]!.trim();
     if (rest.length >= 2 && CJK.test(rest)) return { name: rest, alias: m[1] };
   }
@@ -75,7 +76,7 @@ export function splitIdentifierMixed(raw: string): { name: string; alias?: strin
  * 概念结构门控。
  *
  * @param input - 候选概念
- * @param options - capacityAdmitStop 时禁止新生；skipMdl 跳过计票门槛（定义直生通道）
+ * @param options - capacityAdmitStop 时禁止新生；skipMdl 跳过计票门槛（定义直生或同名已出生合并）
  * @returns 是否准入与 reason code
  */
 export function evaluateConceptGate(
@@ -99,7 +100,7 @@ export function evaluateConceptGate(
   }
   // 命名卫生（在 secret/pseudo 安全检查之后）：代码标识符形态禁做 name（可作 alias）
   if (isIdentifierName(name)) {
-    return { ok: false, reason: 'identifier_name', message: name };
+    return { ok: false, reason: 'identifier_name', message: 'code identifier as name (use as alias instead)' };
   }
 
   // 复现计票门槛（MDL）：≥2 票（不同命题）才直接出生；1 票走出生候选区，

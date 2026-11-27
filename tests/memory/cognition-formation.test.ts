@@ -293,10 +293,56 @@ describe('conceptualizer', () => {
       },
       store,
     );
-    // 双向包含对（同批）→ 短名主名、长名入别名，只出一个节点
+    // 异 kind 不并（义项冲突交 store 裁决）：两节点各自产出
+    expect(r.nodes).toHaveLength(2);
+  });
+
+  it('R7′ merge keeps definition/description from the folded side (B-1 regression)', async () => {
+    const store = new InMemoryConceptGraph();
+    const r = await conceptualizeAndAdmit(
+      {
+        nodes: [
+          { name: '确认闸', kind: 'construct', description: '闸族' },
+          { name: '确认闸三档取值', kind: 'construct', description: '口径：三档枚举 off/auto/on', definition: true },
+        ],
+      },
+      {
+        proposition: '确认闸三档取值口径',
+        memoryId: 'm1',
+        memoryType: 'norm',
+        memoryStatus: 'active',
+        evidence: '确认闸三档取值口径',
+        contextSlice: 'gates have three levels.',
+      },
+      store,
+    );
+    // 归并后 definition 与口径原文被承接，不静默丢（B-1）
     expect(r.nodes).toHaveLength(1);
-    expect(r.nodes[0]!.name).toBe('浏览器确认闸');
-    expect(r.nodes[0]!.aliases).toContain('浏览器确认闸三档取值');
+    expect(r.nodes[0]!.name).toBe('确认闸');
+    expect(r.nodes[0]!.aliases).toContain('确认闸三档取值');
+    expect(r.nodes[0]!.description).toBe('口径：三档枚举 off/auto/on');
+    expect(r.nodes[0]!.birthChannel).toBe('definition');
+    // 审计留痕
+    expect(r.rejected.some((x) => x.reason === 'merged_into_sibling')).toBe(true);
+  });
+
+  it('R7′ proper nouns are not split: 「LLM 提供方」 keeps full name (M-4 regression)', async () => {
+    const store = new InMemoryConceptGraph();
+    const r = await conceptualizeAndAdmit(
+      {
+        nodes: [{ name: 'LLM 提供方', kind: 'entity', description: '模型接入方' }],
+      },
+      {
+        proposition: 'LLM 提供方',
+        memoryId: 'm1',
+        memoryType: 'fact',
+        evidence: 'LLM 提供方',
+        contextSlice: 'LLM provider.',
+      },
+      store,
+    );
+    expect(r.nodes[0]!.name).toBe('LLM 提供方');
+    expect(r.nodes[0]!.aliases ?? []).not.toContain('LLM');
   });
 
   it('1-vote nodes park in birth candidates; unlicensed causes demote to related', async () => {
@@ -812,6 +858,30 @@ describe.each([
     expect(node.aliases).toContain('confirmGate');
     expect(node.aliases).toContain('文档级确认闸');
     expect(node.aliases).toContain('确认闸三档取值');
+  });
+
+  it('R7′ folded long names stay recallable via aliases (M-2 regression)', async () => {
+    await store.admitConcept({
+      name: '确认闸',
+      kind: 'construct',
+      memoryIds: ['m1', 'm2'],
+      aliases: ['浏览器确认闸三档取值'],
+    });
+    // 用被折叠的长名做种子：经 alias 命中
+    const hit = await store.spreadingActivate(['浏览器确认闸三档取值']);
+    expect(hit.nodes.some((n) => n.name === '确认闸')).toBe(true);
+  });
+
+  it('R7′ born concept votes merge in, and birth candidates are cleared (m-6 regression)', async () => {
+    // 1 票进候选区
+    await store.admitConcept({ name: '幽灵候选', kind: 'construct', memoryIds: ['m1'] });
+    expect(await store.listBirthCandidates()).toHaveLength(1);
+    // 直接 2 票出生（不走候选转正）
+    await store.admitConcept({ name: '幽灵候选', kind: 'construct', memoryIds: ['m2', 'm3'] });
+    // 出生后同键候选被清，票并入概念
+    expect(await store.listBirthCandidates()).toHaveLength(0);
+    const node = (await store.getFullGraph()).nodes[0]!;
+    expect(node.memoryIds.sort()).toEqual(['m1', 'm2', 'm3']);
   });
 
   it('multi-evidence across admitEdge calls licenses causes', async () => {

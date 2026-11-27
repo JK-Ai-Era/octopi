@@ -48,7 +48,7 @@ export function deriveQuerySeeds(query: string, options?: DeriveQuerySeedsOption
   return strong.length ? strong : whole ? [whole] : [];
 }
 
-export type SeedMatcher = (name: string, description?: string | null) => boolean;
+export type SeedMatcher = (name: string, description?: string | null, aliases?: readonly string[]) => boolean;
 
 /**
  * 构造种子命中谓词（两个 store 实现共用，禁止各写一份）。
@@ -62,12 +62,22 @@ export type SeedMatcher = (name: string, description?: string | null) => boolean
  */
 export function createSeedMatcher(seeds: readonly string[]): SeedMatcher {
   const keys = seeds.map((s) => normName(s)).filter((s) => s.length > 0);
-  return (name, description) => {
+  return (name, description, aliases) => {
     const nameKey = normName(name);
     for (const s of keys) {
       if (nameKey === s) return true;
       if (s.length >= 2 && nameKey.includes(s)) return true;
       if (nameKey.length >= 2 && s.includes(nameKey)) return true;
+    }
+    // 别名同规则命中（M-2：被折叠的长名可召回）
+    for (const a of aliases ?? []) {
+      const ak = normName(a);
+      if (!ak) continue;
+      for (const s of keys) {
+        if (ak === s) return true;
+        if (s.length >= 2 && ak.includes(s)) return true;
+        if (ak.length >= 2 && s.includes(ak)) return true;
+      }
     }
     if (!description) return false;
     const descKey = normName(description);
