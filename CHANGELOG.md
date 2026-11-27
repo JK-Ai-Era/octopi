@@ -140,6 +140,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.6 (2026-11-28)
+
+### fix(webui): 知识项目挂载勾选记账到被勾行 agent——修复「无论选哪个只落第一个 agent」
+
+- 根因：`KnowledgeAdminPanel.toggleMount` 调 `setKnowledgeVisibility` 用的是面板 props
+  `agentId`（App 当前 agent，兜底 `'default'`），而非挂载列表复选框所在行的 agent；
+  服务端按 `/agents/:id/knowledge/visibility` 记账，导致整列勾选都落到同一个 agent
+- 修复：`toggleMount` 显式接收目标 agent 并按行记账；同文件隐藏列表 `toggle`
+  本就按行传参，不受影响
+- 回归测试：`KnowledgeAdminPanel.test.tsx` 锁「assign/unassignProject 首参 = 被勾行
+  agent」；变异检查（临时回退 bug 逻辑）精确复现症状并变红
+- 验证：webui 155 tests passed；`npm run lint`（eslint + typecheck-tests +
+  `tsc -p packages/webui --noEmit`）通过
+
 ## v0.136.5 (2026-11-27)
 
 ### fix(test): CI lint TS18048——runtimeSnapshot 可空收窄

@@ -572,9 +572,9 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
     }
   };
 
-  const toggleMount = async (projectKey: string, mounted: boolean) => {
+  const toggleMount = async (agent: string, projectKey: string, mounted: boolean) => {
     try {
-      await client.setKnowledgeVisibility(agentId, {
+      await client.setKnowledgeVisibility(agent, {
         op: mounted ? 'unassignProject' : 'assignProject',
         projectKey,
       });
@@ -920,7 +920,7 @@ export function KnowledgeAdminPanel({ agentId }: { agentId: string }) {
                           <input
                             type="checkbox"
                             checked={mounted}
-                            onChange={() => void toggleMount(selected.projectKey, mounted)}
+                            onChange={() => void toggleMount(a, selected.projectKey, mounted)}
                           />
                           <span className="mono">{a}</span>
                           <span className="small muted">
