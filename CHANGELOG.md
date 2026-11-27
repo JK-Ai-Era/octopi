@@ -146,6 +146,20 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.10 (2026-11-28)
+
+### feat(doctor): 知识面归属归一化——R4 归属回填落地（KN012–KN015）
+
+- 大哥拍板「做归属回填」。doctor 新增 `knowledge-attribution` 模块：按「行的域 = 归属对象
+  的域」检测并归位断言收口前的错域残行——agent 键行（project_agents/agent_visibility）→
+  agent 归属域；session overlay 行 → 会话 agent 归属域（state.json 解析）；project 域源 →
+  其项目登记行域（M1）。目标域已有同键行 → 删残行保规范行；歧义/解析不了只报不动（KN015）；
+  整批事务、幂等、`--fix data` 显式执行、支持 dry-run
+- 归属判定抽 `agentOwnershipTenantOf` 单源（registry service 导出，gateway 与 doctor 共用）
+- 实测（大哥单租户实例）：`doctor` 报「2 row(s) checked, all aligned」——用户∈default 租户、
+  agent 全 config 的形态下存量资产本就自洽，无需迁移；工具面向第二租户出现后的多租户部署
+- 回归测试 5 例（移归/删残/歧义/会话解析/dry-run）；全量 6211 tests passed；lint 绿
+
 ## v0.136.9 (2026-11-28)
 
 ### fix(knowledge): 管理面创建链按写者租户落域——回到「用户建的项目/源挂用户所属租户」设计

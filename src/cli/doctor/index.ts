@@ -49,6 +49,10 @@ import {
   detectArchiveResidue,
 } from './archive-residue.js';
 import {
+  applyKnowledgeAttributionFixes,
+  detectKnowledgeAttribution,
+} from './knowledge-attribution.js';
+import {
   latestConfigBackup,
   listConfigBackups,
   restoreConfigFromBackup,
@@ -481,6 +485,8 @@ async function diagnoseConfigLayoutData(
   // knowledge 源注册健康（不自动删源）
   findings.push(...(await detectKnowledgeSourcesAsync()));
   findings.push(...(await detectKnowledgeStorageHealth()));
+  // 知识面归属归一化（KN012–KN015；--fix 归位断言收口前的错域残行）
+  findings.push(...(await detectKnowledgeAttribution()));
   // 归档/删除残留（ARC001–ARC007；--fix 清孤儿 dump/会话目录/knowledge session 残留）
   findings.push(...(await detectArchiveResidue()));
   if (configPath) {
@@ -645,6 +651,8 @@ export async function runDoctor(
       fixFindings.push(...dataResult.findings);
       const residueResult = await applyArchiveResidueFixes({ dryRun: false });
       fixFindings.push(...residueResult.findings);
+      const attributionResult = await applyKnowledgeAttributionFixes({ dryRun: false });
+      fixFindings.push(...attributionResult.findings);
     }
 
     diagnosis = await diagnoseConfigLayoutData(
@@ -659,6 +667,7 @@ export async function runDoctor(
     const applied = probe ? applyConfigMigrations(probe) : { notes: [] as string[] };
     const dataDry = await applyDataLayerFixes(diagnosis.targets, { dryRun: true });
     const residueDry = await applyArchiveResidueFixes({ dryRun: true });
+    const attributionDry = await applyKnowledgeAttributionFixes({ dryRun: true });
     fixFindings.push({
       id: 'FIX000',
       domain: 'config',
@@ -669,6 +678,7 @@ export async function runDoctor(
     });
     fixFindings.push(...dataDry.findings);
     fixFindings.push(...residueDry.findings);
+    fixFindings.push(...attributionDry.findings);
   }
 
   const filtered = diagnosis.findings
@@ -949,4 +959,6 @@ export {
   applyArchiveResidueFixes,
   collectArchiveResidue,
   collectLiveSessionRoster,
+  detectKnowledgeAttribution,
+  applyKnowledgeAttributionFixes,
 };

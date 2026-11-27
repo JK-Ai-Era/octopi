@@ -40,6 +40,22 @@ import type {
 const VISIBILITIES: readonly AgentVisibility[] = ['private', 'tenant'];
 const SESSION_POLICIES: readonly SessionPolicy[] = ['per-user', 'per-chat', 'per-message'];
 
+/**
+ * agent 归属租户单源判定（arch/multi-tenancy.md §5/§6；Q13「default=存量域」）：
+ * registry 是归属权威；config/未注册 agent = DEFAULT 存量域。gateway 管理面写归属
+ * （T3c/T3d）与 doctor 知识面归属归一化共用此判定，勿再各自内联。
+ *
+ * @param registry - registry 服务（可空：无 registry 即全存量）
+ * @param agentId - 目标 agent
+ * @returns 归属租户 id
+ */
+export function agentOwnershipTenantOf(
+  registry: { getAgent(agentId: string): { tenantId?: string } | null } | null | undefined,
+  agentId: string,
+): string {
+  return registry?.getAgent(agentId)?.tenantId ?? 'default';
+}
+
 export interface RegisterUserInput {
   name: string;
 }

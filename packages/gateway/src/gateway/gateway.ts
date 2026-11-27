@@ -18,6 +18,7 @@
  */
 
 import type { RegisteredTool, SessionMeta } from '@octopi-agent/core/types.js';
+import { agentOwnershipTenantOf } from '@octopi-agent/engine/harness/governance/registry/service.js';
 import { DEFAULT_TENANT_ID, PLATFORM_TENANT_ID } from '@octopi-agent/core/types.js';
 import type { AgentId, Binding, TenantId } from '@octopi-agent/engine/harness/governance/registry/types.js';
 import { isContextSizeSnapshot } from '@octopi-agent/engine/harness/context/types.js';
@@ -5438,9 +5439,9 @@ export class Gateway {
     }
   }
 
-  /** agent 归属租户（arch/multi-tenancy.md §5/§6 单源）：registry 是归属权威；config agent = DEFAULT 存量域 */
+  /** agent 归属租户（arch/multi-tenancy.md §5/§6 单源，agentOwnershipTenantOf）：registry 是归属权威；config agent = DEFAULT 存量域 */
   agentOwnershipTenant(agentId: string): string {
-    return this.registry?.getAgent(agentId as AgentId)?.tenantId ?? DEFAULT_TENANT_ID;
+    return agentOwnershipTenantOf(this.registry, agentId);
   }
 
   /**
