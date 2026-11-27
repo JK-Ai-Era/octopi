@@ -486,36 +486,28 @@ export class CognitionLayer extends BaseLayer {
     if (!graph.nodes.length) return null;
 
     const nameOf = new Map(graph.nodes.map((n) => [n.id, n.name]));
-    const strong: string[] = [];
-    const weakNames = new Set<string>();
+    const gloss = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 200);
 
+    // 关系行（强边，约束边一等公民带释义）；弱边（related/shadow）只作邻域成员资格，不伪造成因果格式
+    const strong: string[] = [];
     for (const edge of graph.edges) {
       const source = nameOf.get(edge.sourceId);
       const target = nameOf.get(edge.targetId);
       if (!source || !target) continue;
-      if (edge.relationType === 'related' || edge.status === 'shadow') {
-        weakNames.add(source);
-        weakNames.add(target);
-        continue;
-      }
-      const desc = edge.description
-        ? ` (${edge.description.replace(/\s+/g, ' ').trim().slice(0, 200)})`
-        : '';
+      if (edge.relationType === 'related' || edge.status === 'shadow') continue;
+      const desc = edge.description ? ` (${gloss(edge.description)})` : '';
       strong.push(`- ${source} —[${edge.relationType}]→ ${target}${desc}`);
     }
 
-    // 弱边只作折叠相关，不伪造成因果格式
+    // 概念卡（R6 格式）：名字（kind）：description——术语触发的定义卡与影响面邻域一视同仁，
+    // 语义本体（kind/description）不丢弃；废除裸名折叠行（「相关：…」零信息量病根）
+    const cards: string[] = [];
     for (const n of graph.nodes) {
-      if (!weakNames.has(n.name) && !strong.some((l) => l.includes(n.name))) {
-        weakNames.add(n.name);
-      }
+      const desc = n.description ? `：${gloss(n.description)}` : '';
+      cards.push(`- ${n.name}（${n.kind}）${desc}`);
     }
 
-    const lines: string[] = [...strong];
-    const weak = [...weakNames].filter((name) => !strong.some((l) => l.includes(name)));
-    if (weak.length) {
-      lines.push(`相关：${weak.join('、')}`);
-    }
+    const lines = [...cards, ...(strong.length ? ['', ...strong] : [])];
     if (lines.length === 0) return null;
 
     const text = `# 相关概念\n\n${lines.join('\n')}`;

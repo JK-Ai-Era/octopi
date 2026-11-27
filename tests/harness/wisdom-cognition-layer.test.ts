@@ -130,6 +130,80 @@ describe('Wisdom/Cognition 层接入默认 Assembler', () => {
     expect(glossLine.length).toBeLessThan(300);
   });
 
+  it('R5′ 术语触发：出生定义卡在术语出现时注入（口径原文上屏），术语缺席时非常驻', async () => {
+    const graph = new InMemoryConceptGraph();
+    // 出生定义卡（孤点，无边）：run 的内部口径
+    await graph.admitConcept({
+      name: 'run',
+      kind: 'construct',
+      description: '一次 Agent.run() 执行',
+      supportCount: 2,
+    });
+
+    const asm = createDefaultSystemPromptAssembler({ cognitionStore: graph });
+    // 术语出现 → 定义卡注入（概念卡格式带口径原文）
+    const hit = await asm.assemble({
+      sessionId: 's',
+      messages: [userMsg('这次 run 为什么超时')],
+      persona: 'You are test.',
+      contextWindow: 32000,
+    });
+    expect(hit.runtimeSnapshot).toContain('run（construct）：一次 Agent.run() 执行');
+    // 术语缺席 → 不注入（非常驻——与已否决 A 的边界）
+    const miss = await asm.assemble({
+      sessionId: 's',
+      messages: [userMsg('今天天气怎么样')],
+      persona: 'You are test.',
+      contextWindow: 32000,
+    });
+    expect(miss.runtimeSnapshot ?? '').not.toContain('Agent.run()');
+  });
+
+  it('R5′ 影响面：命中概念的 1–2 跳关系邻域上屏（关系行+邻点概念卡），无裸名折叠行', async () => {
+    const graph = new InMemoryConceptGraph();
+    const a = await graph.admitConcept({
+      name: 'MutexLease',
+      kind: 'construct',
+      description: '会话级互斥租约',
+      supportCount: 2,
+    });
+    const b = await graph.admitConcept({
+      name: 'Session',
+      kind: 'entity',
+      description: '会话运行时实体',
+      supportCount: 2,
+    });
+    await graph.admitEdge({
+      sourceId: a.id!,
+      targetId: b.id!,
+      relationType: 'part_of',
+      strength: 0.9,
+      description: '租约是会话级互斥的持有凭证',
+      basis: {
+        memoryIds: ['m1', 'm2'],
+        cue: '会话租约是 Session 级互斥租约',
+        evidenceClass: 'mereonymy',
+        licensedAt: Date.now(),
+      },
+      evidenceText: '会话租约是 Session 级互斥租约。',
+    });
+
+    const asm = createDefaultSystemPromptAssembler({ cognitionStore: graph });
+    const result = await asm.assemble({
+      sessionId: 's',
+      messages: [userMsg('MutexLease 和会话的关系')],
+      persona: 'You are test.',
+      contextWindow: 32000,
+    });
+    // 邻点概念卡（P2 影响面 1 跳）
+    expect(result.runtimeSnapshot).toContain('Session（entity）：会话运行时实体');
+    expect(result.runtimeSnapshot).toContain('MutexLease（construct）：会话级互斥租约');
+    // 约束/关系行带释义
+    expect(result.runtimeSnapshot).toContain('MutexLease —[part_of]→ Session (租约是会话级互斥的持有凭证)');
+    // 裸名折叠行废除
+    expect(result.runtimeSnapshot).not.toContain('相关：');
+  });
+
   it('未提供 wisdom/cognition 时 manifest 不出现这两层', async () => {
     const asm = createDefaultSystemPromptAssembler({});
     const result = await asm.assemble({
