@@ -501,21 +501,19 @@ pre { font-family: var(--font-mono); font-size: 13px; }
   overflow: hidden;
 }
 
-.md-code-block pre {
-  margin: 0;
-  padding: 12px 14px;
-  overflow-x: auto;
-  white-space: pre;
-  background: transparent;
-  color: inherit;
-}
-
+/* 滚动/换行必须落在 .md-code 上：MarkdownMessage 的 pre renderer 把 <pre> 换成
+ * div.md-code-block，旧选择器 .md-code-block pre 命中不到任何节点——padding/overflow
+ * 整体失效，超宽行被 .md-code-block 的 overflow:hidden 直接裁掉（代码块显示不全）。
+ * pre-wrap 软换行 + break-word 断长 token；软换行不影响复制文本。 */
 .md-code {
   display: block;
+  margin: 0;
+  padding: 12px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .md-code-lang {

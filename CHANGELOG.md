@@ -146,6 +146,18 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.17 (2026-11-28)
+
+### fix(webui): restore code-block wrapping — dead `.md-code-block pre` selector left blocks clipped
+
+- MarkdownMessage 的 pre renderer 把 `<pre>` 换成 `div.md-code-block`（承载复制按钮/语言角标），
+  样式表 `.md-code-block pre { padding/overflow-x }` 因此成为死选择器从未命中任何节点——实际显示
+  由 `.md-code { white-space: pre }`（不换行）+ `.md-code-block { overflow: hidden }`（裁剪）决定，
+  超宽行既不换行也不出滚动条、被直接裁掉（用户可见：长行代码块/引用块显示不全）
+- 修法：滚动/换行职责移回真实节点 `.md-code`——`white-space: pre-wrap` + `word-break: break-word`
+  （长 token 亦可断），并救回死规则中设计本意的 `padding: 12px 14px`；死选择器删除并留注释说明
+  renderer/样式漂移成因。软换行不影响 CopyButton 提取的文本与复制内容
+
 ## v0.136.16 (2026-11-28)
 
 ### test(knowledge): 形态闸用例改平台无关构造——修 CI Linux 假绿
