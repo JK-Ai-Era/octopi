@@ -6,6 +6,14 @@ of the entry section — write rules live in `AGENTS.md` → Changelog Disciplin
 
 ---
 
+## v0.136.21 (2026-11-29)
+
+### feat(engine): file_read numbered line output for citation-ready reads
+
+- `file_read` 新增 `numbered` 可选布尔参数：为 `true` 时返回正文每行行首带绝对行号（`12: code`），与 `file_search` 的 `file:line` 引用口径一致；offset 分页行号连续；在输出门控之前标号——数字随行走，任何截断保留策略下与内容对齐（已知 give-up：前缀计入截断预算并进入摘要输入，换取行号绝不漂移）；结果带 `numbered` 回执字段（正文被摘要取代时回报 `false`，杜绝「以为拿到了行号」）
+- `offset` / `limit` 非法值（非正整数）fail-loud——与 `view`/`numbered` 同族；此前非整数 `offset` 会产出小数行号锚点（`2.5: line`）且静默放行
+- 测试：`tests/harness/file-read-numbered.test.ts` 7 用例（全量/分页/缺省/非法值/回执/offset-limit 校验/截断对齐）
+
 ## v0.136.20 (2026-11-29)
 
 ### docs(changelog): entries first, archive index moved to the end

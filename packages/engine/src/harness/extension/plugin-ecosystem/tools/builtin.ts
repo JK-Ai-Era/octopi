@@ -438,6 +438,25 @@ function parseViewArg(viewArg: string | undefined): ViewMode {
   return view;
 }
 
+/**
+ * 正整数参数解析（offset/limit 校验单一落点）：缺省回落默认值，显式非法值 fail-loud。
+ * 与 view/numbered 同哲学——非整数 offset 会产出小数行号锚点（`2.5: line`），
+ * 调用方却以为拿到了可引用的内容，不能静默放行。
+ *
+ * @param name - 参数名（错误信息用）
+ * @param value - 原始参数值（undefined = 未传）
+ * @param fallback - 缺省值
+ * @returns 正整数
+ * @throws 非数字 / 非整数 / 小于 1
+ */
+function parsePositiveInt(name: string, value: unknown, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`invalid ${name} \"${String(value)}\": must be a positive integer`);
+  }
+  return value;
+}
+
 /** 路径 basename（alt 标注用；多图历史里区分是哪张） */
 function baseName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
@@ -683,7 +702,8 @@ export function createFileReadTool(options?: {
         'Raster images (png/jpeg/gif/webp — detected by content, not extension; bmp is detected but metadata-only) are attached as an inline image ' +
         'for vision-capable models and return a pointer with dimensions (use view=text for metadata only, no image tokens). ' +
         'SVG files return their source as text by default; view=render rasterizes them with a non-scripting renderer ' +
-        '(embedded <script> is never executed, external references are never fetched) and view=both returns source plus the rendering.',
+        '(embedded <script> is never executed, external references are never fetched) and view=both returns source plus the rendering. ' +
+        'Pass numbered=true to prefix each returned line with its absolute line number (citation-ready).',
       parameters: {
         path: {
           type: 'string',
@@ -705,6 +725,13 @@ export function createFileReadTool(options?: {
         limit: {
           type: 'number',
           description: 'Maximum number of lines to read (default: 2000)',
+        },
+        numbered: {
+          type: 'boolean',
+          description:
+            'Prefix each returned line with its absolute line number (e.g. `12: code`) for citation-ready output. ' +
+            'Applies to raw text lines; summarized results are not numbered — the result field `numbered` reports ' +
+            'whether the returned lines actually carry numbers.',
         },
         summarize: {
           type: 'string',
@@ -734,10 +761,15 @@ export function createFileReadTool(options?: {
       const rawPath = args.path as string;
       const cwd = context?.cwd ?? process.cwd();
       const path = resolveReadableToolPath(rawPath, cwd, context?.attachmentRoots, containmentOptions(context));
-      const offset = (args.offset as number) ?? 1;
-      const limit = (args.limit as number) ?? 2000;
+      const offset = parsePositiveInt('offset', args.offset, 1);
+      const limit = parsePositiveInt('limit', args.limit, 2000);
       // view 一律校验（文本文件忽略语义值，但非法值 fail-loud——不能让打错字的调用以为拿到了图）
       parseViewArg(args.view as string | undefined);
+      // numbered 同理 fail-loud：打错字的调用不能以为自己拿到了行号（引用会错位）
+      const numberedArg = args.numbered;
+      if (numberedArg !== undefined && typeof numberedArg !== 'boolean') {
+        throw new Error(`invalid numbered "${String(numberedArg)}": must be boolean`);
+      }
 
       try {
         // 二进制读入后嗅探（魔数认内容不认扩展名）：图像走图像分支，其余按 utf-8 文本
@@ -800,7 +832,14 @@ export function createFileReadTool(options?: {
 
         const start = Math.max(0, offset - 1);
         const end = Math.min(totalLines, start + limit);
-        const selected = lines.slice(start, end).join('\n');
+        const sliced = lines.slice(start, end);
+        // numbered：行首带绝对行号（与 file_search 的 file:line 引用口径一致）。在门控之前
+        // 标号——数字随行走，任何截断保留策略/摘要下都与内容对齐（不变量优先）。已知
+        // give-up：前缀计入截断预算、且会进入 L2 摘要输入；换来的正是「截断后行号绝不漂移」。
+        const selected =
+          numberedArg === true
+            ? sliced.map((line, i) => `${start + i + 1}: ${line}`).join('\n')
+            : sliced.join('\n');
 
         const { applyToolOutputGate, resolveSupportBinding } = await import(
           '../../../context/capabilities/summary/index.js'
@@ -822,6 +861,7 @@ export function createFileReadTool(options?: {
             'Use file_read with offset/limit to continue reading, or summarize=force for an overview.',
         });
 
+        const summaryApplied = (applied.summary as { applied?: boolean } | undefined)?.applied === true;
         const textResult = {
           content: applied.body,
           totalLines,
@@ -831,6 +871,9 @@ export function createFileReadTool(options?: {
           rawLength: applied.rawLength,
           summary: applied.summary,
           summaryUsage: applied.usage,
+          // 回执：请求 numbered 但正文被摘要取代时显式回报 false——调用方必须能区分
+          // 「拿到了行号」与「行号被摘要吞掉」，否则恰是本特性要防的引用错位
+          ...(numberedArg === true ? { numbered: !summaryApplied } : {}),
         };
         // view=both：源码文本 + 渲染图（片段字段覆盖指针元信息）
         return svgAttach ? { ...textResult, ...svgAttach } : textResult;
