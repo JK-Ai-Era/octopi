@@ -108,6 +108,14 @@ function rowRoleLabel(layer: LayerRow): string | undefined {
     : tNow('contextRuntime.rowRoleAnchor');
 }
 
+/** skill 层的易变份是 skill-delta（会话中途临时新增），显示名区别于稳定份的技能索引 */
+function layerDisplayName(layer: LayerRow, labelKey: MessageKey): string {
+  if (layer.id === 'skill' && rowPlacement(layer) === 'snapshot') {
+    return tNow('contextRuntime.layerSkillSnapshot');
+  }
+  return tNow(labelKey);
+}
+
 export interface ContextRuntimePanelProps {
   inspector: InspectorState;
   viewMode: ViewMode;
@@ -253,7 +261,7 @@ export function ContextRuntimePanel({
           <div className="ctx-band-top">
             <div className="ctx-band-name">
               <span className="ctx-layer-n">L{meta.n}</span>
-              {t(meta.labelKey)} <span className="ctx-band-id">{layer.id}</span>
+              {layerDisplayName(layer, meta.labelKey)} <span className="ctx-band-id">{layer.id}</span>
               {rowRoleLabel(layer) && (
                 <span className="ctx-layer-note">
                   {t('contextRuntime.runtimeRowNote', { role: rowRoleLabel(layer) ?? '' })}
@@ -516,7 +524,7 @@ export function ContextRuntimePanel({
                     <div
                       key={rowKey(l)}
                       className="ctx-budget-seg"
-                      title={`${t(meta.labelKey)}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
+                      title={`${layerDisplayName(l, meta.labelKey)}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
                       style={{ width: `${Math.max(pct, 0.4)}%`, background: meta.hue }}
                     />
                   );
@@ -568,7 +576,7 @@ export function ContextRuntimePanel({
                       <div
                         key={rowKey(l)}
                         className="ctx-budget-seg"
-                        title={`${t(meta.labelKey)}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
+                        title={`${layerDisplayName(l, meta.labelKey)}${rowRoleLabel(l) ? ` · ${rowRoleLabel(l)}` : ''} ${l.tokens}`}
                         style={{ width: `${Math.max(pct, 0.4)}%`, background: meta.hue }}
                       />
                     );

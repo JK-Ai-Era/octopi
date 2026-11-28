@@ -146,6 +146,16 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.19 (2026-11-28)
+
+### fix(webui): rename skill layer's snapshot row to「临时新增技能」in context panel
+
+- 上下文面板 L3「技能」的易变份是 skill-delta（会话中途临时新增的技能增量块），与稳定份的
+  技能索引同名易误导；易变份显示名改为「临时新增技能」（en: Session-added skills），稳定份
+  保持「技能」
+- 实现：`layerDisplayName` 按 placement 分流（沿用 rowRoleLabel 先例），卡片标题与两处预算条
+  tooltip 三处同源替换；i18n zh/en 补 `contextRuntime.layerSkillSnapshot`
+
 ## v0.136.18 (2026-11-28)
 
 ### fix(webui): copy button dead in non-secure contexts — silent catch hid total failure
