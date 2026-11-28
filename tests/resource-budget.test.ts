@@ -85,6 +85,28 @@ describe('RunBudget（P0 安全阀）', () => {
   });
 });
 
+describe('预算配置入口 fail-loud（单一落点）', () => {
+  it('未知键抛错（旧词汇 maxIterations 不得被静默吞成「无上限」）', () => {
+    expect(() => new BudgetPolicyEngine({ maxIterations: 5 } as never)).toThrow(/unknown budget config key/);
+  });
+
+  it('显式 undefined 不覆盖出厂安全阀（wireBudget 未设键即此形状）', () => {
+    const budget = new BudgetPolicyEngine({ maxWallClockMs: undefined, maxSteps: undefined });
+    expect(budget.getConfig().maxWallClockMs).toBe(DEFAULT_BUDGET.maxWallClockMs);
+  });
+
+  it('maxSteps / maxToolCalls 须为正整数', () => {
+    expect(() => new BudgetPolicyEngine({ maxSteps: 0 })).toThrow(/maxSteps/);
+    expect(() => new BudgetPolicyEngine({ maxToolCalls: -1 })).toThrow(/maxToolCalls/);
+    expect(() => new BudgetPolicyEngine({ maxSteps: 2.5 })).toThrow(/maxSteps/);
+  });
+
+  it('maxWallClockMs 须为正数', () => {
+    expect(() => new BudgetPolicyEngine({ maxWallClockMs: 0 })).toThrow(/maxWallClockMs/);
+    expect(() => new BudgetPolicyEngine({ maxWallClockMs: Number.NaN })).toThrow(/maxWallClockMs/);
+  });
+});
+
 describe('wall-clock 口径：人类输入等待不计入（方案A）', () => {
   it('addHumanWaitMs 从 wall-clock 扣除，等人不触发 hard', () => {
     vi.useFakeTimers();
@@ -343,11 +365,9 @@ describe('beforeToolCall hard 闸（steps）', () => {
     const agent = new Agent({ model, systemPrompt: 't', tools });
     agent.context.messages.push({ role: 'user', content: 'go', timestamp: Date.now() });
 
-    const budget = new BudgetPolicyEngine( { maxSteps: 0 });
-    // maxSteps 0 视为未启用（配置约定 >0）；改用极小 wall-clock 无法稳定
-    // 使用 maxToolCalls: 0 同样无效。改为 maxSteps: 1 — 首轮 turn_end 后 hard
-    const budget2 = new BudgetPolicyEngine( { maxSteps: 1 });
-    const harness: ReliabilityHarness = { config: {}, budget: budget2, sessionId: 's', agentId: 'a' };
+    // maxSteps: 1 — 首轮 turn_end 后 hard（0/负数现为构造期报错；「0=未启用」的静默约定已废除）
+    const budget = new BudgetPolicyEngine({ maxSteps: 1 });
+    const harness: ReliabilityHarness = { config: {}, budget, sessionId: 's', agentId: 'a' };
 
     const events: string[] = [];
     for await (const e of runAgentWithReliability(agent.context, { model }, harness)) {

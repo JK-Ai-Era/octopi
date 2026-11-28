@@ -6,6 +6,15 @@ of the entry section — write rules live in `AGENTS.md` → Changelog Disciplin
 
 ---
 
+## v0.136.22 (2026-11-29)
+
+### fix(engine): budget config entry fail-loud; stop default clobber
+
+- `BudgetPolicyEngine` 构造入口新增 `normalizeBudgetConfig`（校验单一落点，`satisfies` 锁定键集防漂移）：未知预算键抛错（`maxIterations` 等旧词汇不再被静默吞成「无上限」——官网 `.budget({maxIterations})` 事故的病灶）；`maxSteps`/`maxToolCalls` 须为正整数（0/负数此前等价「未设」，静默丢意图）、`maxWallClockMs` 须为正数
+- 修复隐性缺陷：显式 `undefined` 预算键（`wireBudget` 对未设键恒传此形状）会经 spread 覆盖出厂 6h wall-clock 安全阀——只配 `maxSteps` 的部署此前实际没有 wall-clock 兜底；现剥离未设键，出厂安全阀恒在
+- JSON 配置（octopi.json）未知键维持既有 P3 政策不变（启动告警不阻断、写回路径 fail-loud），本次只收紧编程 API 入口
+- 测试：`tests/resource-budget.test.ts` 新增入口校验 4 用例；清掉一行 `maxSteps: 0` 死代码（其注释正是「0=未启用」旧静默约定残留）
+
 ## v0.136.21 (2026-11-29)
 
 ### feat(engine): file_read numbered line output for citation-ready reads

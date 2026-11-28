@@ -73,6 +73,49 @@ export const DEFAULT_BUDGET: BudgetPolicyConfig = {
   maxWallClockMs: 6 * 3_600_000, // 6h
 };
 
+/** 预算配置合法键（构造期校验单一落点；satisfies 保证与 BudgetPolicyConfig 键集零漂移） */
+const BUDGET_CONFIG_KEYS = new Set(
+  Object.keys({
+    maxSteps: true,
+    maxToolCalls: true,
+    maxWallClockMs: true,
+  } satisfies Record<keyof BudgetPolicyConfig, true>),
+);
+
+/**
+ * 预算配置入口清洗（fail-loud，单一落点）：
+ * - 未知键抛错——静默吞键会把打错字的上限变成「无上限」（历史教训：maxIterations
+ *   改名 maxSteps 后无别名，旧词汇调用曾被静默忽略）
+ * - 显式 `undefined` 视为未设——spread 会用显式 undefined 覆盖 DEFAULT_BUDGET 的
+ *   出厂安全阀（wireBudget 未设的键即此形状），必须先剥掉
+ * - maxSteps / maxToolCalls 须为正整数（0/负数在裁决里等价「未设」，属意图丢失）
+ * - maxWallClockMs 须为正数（0 = 启动即 hard，不接受）
+ *
+ * @param config - 调用方预算配置（可缺省）
+ * @returns 清洗后的配置覆盖层（仅含显式设置的合法键）
+ * @throws 未知键 / 类型不符 / 非正数
+ */
+function normalizeBudgetConfig(config?: Partial<BudgetPolicyConfig>): Partial<BudgetPolicyConfig> {
+  if (config === undefined) return {};
+  const cleaned: Partial<BudgetPolicyConfig> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (!BUDGET_CONFIG_KEYS.has(key)) {
+      throw new Error(
+        `unknown budget config key "${key}"; expected one of: ${[...BUDGET_CONFIG_KEYS].join(', ')}`,
+      );
+    }
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      throw new Error(`invalid budget config ${key}: ${String(value)} (must be a positive number)`);
+    }
+    if (key !== 'maxWallClockMs' && !Number.isInteger(value)) {
+      throw new Error(`invalid budget config ${key}: ${String(value)} (must be a positive integer)`);
+    }
+    (cleaned as Record<string, unknown>)[key] = value;
+  }
+  return cleaned;
+}
+
 // ── 实现 ──
 
 /**
@@ -90,7 +133,7 @@ export class BudgetPolicyEngine {
   private startTime: number;
 
   constructor(config?: Partial<BudgetPolicyConfig>) {
-    this.config = { ...DEFAULT_BUDGET, ...config };
+    this.config = { ...DEFAULT_BUDGET, ...normalizeBudgetConfig(config) };
     this.startTime = Date.now();
   }
 
