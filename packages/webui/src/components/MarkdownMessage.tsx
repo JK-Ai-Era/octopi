@@ -1,18 +1,56 @@
-import { memo, type ReactNode } from 'react';
+import { memo, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import type { Components } from 'react-markdown';
 import { useT } from '../i18n/react';
 
+/**
+ * Copy text to the clipboard, tolerating non-secure contexts.
+ * navigator.clipboard exists only in secure contexts (HTTPS / localhost); over
+ * plain http on a LAN address it is undefined, so fall back to the legacy
+ * textarea + execCommand('copy') path. Returns false only when both paths fail.
+ */
+function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text).then(
+      () => true,
+      () => copyViaExecCommand(text),
+    );
+  }
+  return Promise.resolve(copyViaExecCommand(text));
+}
+
+function copyViaExecCommand(text: string): boolean {
+  // Swallow DOM/execCommand failures here only: the caller surfaces the boolean
+  // as explicit UI feedback, so a swallowed error is never silent to the user.
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 function CopyButton({ text }: { text: string }) {
   const t = useT();
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // Ignore clipboard failures in sandboxed environments.
-    }
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  const handleCopy = () => {
+    void copyText(text).then((ok) => {
+      setState(ok ? 'copied' : 'failed');
+      window.setTimeout(() => setState('idle'), 2000);
+    });
   };
 
   return (
@@ -23,7 +61,11 @@ function CopyButton({ text }: { text: string }) {
       aria-label={t('markdownMessage.copyCode')}
       title={t('markdownMessage.copyCode')}
     >
-      {t('markdownMessage.copy')}
+      {state === 'copied'
+        ? t('markdownMessage.copied')
+        : state === 'failed'
+          ? t('markdownMessage.copyFailed')
+          : t('markdownMessage.copy')}
     </button>
   );
 }
@@ -51,7 +93,7 @@ const components: Components = {
   },
   code({ className, children }) {
     const text = extractText(children);
-    const language = className?.replace('language-', '') ?? '';
+    const language = className?.match(/language-(\S+)/)?.[1] ?? '';
 
     if (className) {
       return (

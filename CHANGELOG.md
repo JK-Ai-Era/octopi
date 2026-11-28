@@ -146,6 +146,19 @@ the index — write rules live in `AGENTS.md` → Changelog Discipline.
 
 ---
 
+## v0.136.18 (2026-11-28)
+
+### fix(webui): copy button dead in non-secure contexts — silent catch hid total failure
+
+- CopyButton 只用 `navigator.clipboard.writeText`——该 API 仅存在于安全上下文（HTTPS/localhost），
+  经 http + 局域网 IP 访问 webui 时 `navigator.clipboard` 为 undefined，点击抛 TypeError 被空
+  catch 静默吞掉（真机报告：点复制没有任何效果）；且原实现即使成功亦零反馈
+- 修法：①Clipboard API 不可用/失败时兜底 textarea + `execCommand('copy')`（全上下文可用）；
+  ②按钮两秒「已复制 / 复制失败」反馈，失败不再静默（fail loud）；补 CopyButton 三态回归测试
+  （API 路径 / 兜底路径 / 双失败显式反馈）
+- 顺手修语言角标误显 "hljs js"：`replace('language-','')` 未考虑 rehype-highlight 注入的 `hljs`
+  类，改 `match(/language-(\S+)/)` 提取
+
 ## v0.136.17 (2026-11-28)
 
 ### fix(webui): restore code-block wrapping — dead `.md-code-block pre` selector left blocks clipped

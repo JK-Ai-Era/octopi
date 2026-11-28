@@ -54,6 +54,8 @@ export const zh = {
 
   'markdownMessage.copyCode': '复制代码',
   'markdownMessage.copy': '复制',
+  'markdownMessage.copied': '已复制',
+  'markdownMessage.copyFailed': '复制失败',
 
   'opFeedback.processing': '处理中…',
   'opFeedback.timeoutWithSeconds':
@@ -117,6 +119,8 @@ export const en: Record<keyof typeof zh, string> = {
 
   'markdownMessage.copyCode': 'Copy code',
   'markdownMessage.copy': 'Copy',
+  'markdownMessage.copied': 'Copied!',
+  'markdownMessage.copyFailed': 'Copy failed',
 
   'opFeedback.processing': 'Processing…',
   'opFeedback.timeoutWithSeconds':
