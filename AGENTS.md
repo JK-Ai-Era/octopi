@@ -256,7 +256,7 @@ Version format is `X.Y.Z` (semantic versioning), updated as follows:
 
 1. Pick `X` / `Y` / `Z` from the table above.
 2. Run `npm run release:prep -- <X.Y.Z>` (skip only if that version is already set on all five packages).
-3. Prepend a `## v<X.Y.Z> (YYYY-MM-DD)` section to `CHANGELOG.md` per **Changelog Discipline** (directly below the index table).
+3. Prepend a `## v<X.Y.Z> (YYYY-MM-DD)` section to `CHANGELOG.md` per **Changelog Discipline** (at the top of the entry section, above the archive index).
 4. Commit code + version files + CHANGELOG together.
 
 **No tag here.** Version numbers advance on every content commit; **a tag marks a release**, so only a release gets one.
@@ -285,17 +285,17 @@ git push origin v<X.Y.Z>      # ← the release action
 
 `CHANGELOG.md` is the landing-record ledger (`arch/NEXT-STEPS.md` routes completed work here). The layout is mechanical — never improvise a new one:
 
-- `CHANGELOG.md` = intro + **index table of all minor segments** + entries of the **current (in-progress) minor only**.
+- `CHANGELOG.md` = intro + entries of the **current (in-progress) minor only** (newest first) + **archive index table** at the end.
 - Each completed minor segment is archived in `changelog/v<X.Y>.md` (newest first, moved verbatim).
 
 Write rules (every content commit):
 
-1. **Where** — prepend the new `## v<X.Y.Z> (YYYY-MM-DD)` section directly below the `---` that follows the index table, above all existing entries. Never reorder, reflow, or edit other entries.
+1. **Where** — prepend the new `## v<X.Y.Z> (YYYY-MM-DD)` section at the top of the entry section (right after the intro's `---`), above all existing entries. Never reorder, reflow, or edit other entries.
 2. **Shape** (new entries) — `## v<X.Y.Z> (YYYY-MM-DD)` heading; below it one or more `### <type>(<scope>): <summary>` blocks (same `type` vocabulary as commits); a blank line on each side of the `---` separator. Historical headings predate this rule and stay as-is.
 3. **Content** — record conclusions: what changed and why, decisions/trade-offs not derivable from code, verification results, and any **breaking note** (mandatory when applicable). Do **not** write process narrative (review back-and-forth, step-by-step debugging, derivations of rejected alternatives) — it belongs to git log and `arch/`. A reader must be able to tell "does this affect me" without reading the diff.
 4. **Roll rule** — when writing the **first entry of a new minor**: (a) move the previous minor's complete block (all its `## v<prev>.*` sections) into `changelog/v<prev>.md`, creating the file with the standard preamble if missing — `# Changelog v<prev>.x`, then ``> Archived minor segment (<N> entries, <oldest date> – <newest date>). Moved verbatim from `CHANGELOG.md`.`` and ``> Append-only history: corrections go into newer entries, never rewrite these.``, then `---`; (b) change that minor's index row from `this file (current)` to its link row. `CHANGELOG.md` must not carry a completed minor nor two `this file (current)` rows.
 5. **Archives are append-only** — never rewrite archived entries, including their dates; corrections go into the newer entry that made them. A late entry for an already-archived minor is inserted directly below the preamble (keeping newest-first), never appended at EOF.
-6. **Index** — keep the table header (`| Segment | Location |`) and exactly one row per minor, newest first; archived rows link `[changelog/v<X.Y>.md](./changelog/v<X.Y>.md)`, the current minor's row says `this file (current)`.
-7. **Anchor on the insertion point, never on the heading being replaced** — use the `---\n\n## v<X.Y.Z>` boundary you are inserting before as `old_text`; never the previous entry's heading. After any `CHANGELOG.md` edit, verify the version set against `HEAD` (`git show HEAD:CHANGELOG.md`): every pre-existing `## v` line still present, plus exactly the new one.
+6. **Index** — the archive index table sits at the **end** of the file, after all entries. Keep the table header (`| Segment | Location |`) and exactly one row per minor, newest first; archived rows link `[changelog/v<X.Y>.md](./changelog/v<X.Y>.md)`, the current minor's row says `this file (current)`.
+7. **Anchor on the insertion point, never on the heading being replaced** — use the boundary you are inserting before as `old_text` (the intro's trailing `---` before the first entry, or a `---\n\n## v<X.Y.Z>` boundary between entries); never the previous entry's heading. After any `CHANGELOG.md` edit, verify the version set against `HEAD` (`git show HEAD:CHANGELOG.md`): every pre-existing `## v` line still present, plus exactly the new one.
 
 ---

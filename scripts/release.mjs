@@ -116,7 +116,7 @@ function prep(version) {
   }
   syncLockfile(version, lockKeys);
   console.log('\nNext:');
-  console.log('  1. Prepend "## v' + version + ' (YYYY-MM-DD)" to CHANGELOG.md below the index (AGENTS.md → Changelog Discipline)');
+  console.log('  1. Prepend "## v' + version + ' (YYYY-MM-DD)" to CHANGELOG.md at the top of the entry section (AGENTS.md → Changelog Discipline)');
   console.log('  2. Commit code + version files (incl. package-lock.json) + CHANGELOG together');
   console.log('     (stage the intended paths explicitly; avoid `git add -A`)');
   console.log('  3. Commit. No tag: a tag marks a release, not a version bump (AGENTS.md → Release)');
